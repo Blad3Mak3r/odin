@@ -50,7 +50,7 @@ pub fn run(paths: &Paths, server_name: &str, action: ConfigAction) -> Result<()>
             if lifecycle::is_running(&instance)? {
                 tracing::warn!(
                     instance = server_name,
-                    "instance is currently running; changes take effect on next `valheim restart {server_name}`"
+                    "instance is currently running; changes take effect on next `odin restart {server_name}`"
                 );
             }
 

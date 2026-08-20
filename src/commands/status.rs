@@ -8,7 +8,7 @@ pub fn run(paths: &Paths) -> Result<()> {
     let instances = instance::list_all(paths)?;
 
     if instances.is_empty() {
-        println!("no instances found; create one with `valheim start <server-name>`");
+        println!("no instances found; create one with `odin start <server-name>`");
         return Ok(());
     }
 

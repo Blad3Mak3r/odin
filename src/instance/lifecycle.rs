@@ -26,7 +26,7 @@ pub fn start(paths: &Paths, name: &str) -> Result<Instance> {
     let server_binary = paths.shared_install_dir().join("valheim_server.x86_64");
     if !server_binary.is_file() {
         bail!(
-            "Valheim dedicated server is not installed (expected {}); run `valheim install` first",
+            "Valheim dedicated server is not installed (expected {}); run `odin install` first",
             server_binary.display()
         );
     }

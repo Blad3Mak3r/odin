@@ -1,10 +1,11 @@
 [package]
-name = "valheim-manager"
+name = "odin"
 version = "0.1.0"
 edition = "2024"
+description = "Odin manages the full lifecycle of Valheim dedicated game servers: install, update, mod, and run."
 
 [[bin]]
-name = "valheim"
+name = "odin"
 path = "src/main.rs"
 
 [dependencies]

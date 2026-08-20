@@ -75,7 +75,7 @@ pub fn restore(instance: &Instance, backup_id: &str) -> Result<()> {
     let backup_path = backups_dir(&instance.dir).join(format!("{backup_id}.zip"));
     if !backup_path.is_file() {
         bail!(
-            "backup '{backup_id}' not found for instance '{}'; run `valheim restore {}` with no id to list available backups",
+            "backup '{backup_id}' not found for instance '{}'; run `odin restore {}` with no id to list available backups",
             instance.state.name,
             instance.state.name
         );

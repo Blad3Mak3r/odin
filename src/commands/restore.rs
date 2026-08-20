@@ -10,9 +10,7 @@ pub fn run(paths: &Paths, server_name: &str, backup_id: Option<&str>) -> Result<
     let Some(backup_id) = backup_id else {
         let backups = backup::list(&instance.dir)?;
         if backups.is_empty() {
-            println!(
-                "no backups found for '{server_name}'; run `valheim backup {server_name}` first"
-            );
+            println!("no backups found for '{server_name}'; run `odin backup {server_name}` first");
         } else {
             println!("{:<20} {:<20} SIZE", "ID", "CREATED");
             for b in backups {
@@ -28,7 +26,7 @@ pub fn run(paths: &Paths, server_name: &str, backup_id: Option<&str>) -> Result<
     };
 
     if lifecycle::is_running(&instance)? {
-        bail!("'{server_name}' is running; stop it first with `valheim stop {server_name}`");
+        bail!("'{server_name}' is running; stop it first with `odin stop {server_name}`");
     }
 
     backup::restore(&instance, backup_id)?;

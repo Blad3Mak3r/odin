@@ -21,7 +21,7 @@ pub enum InstanceError {
     AlreadyRunning(String),
     #[error("instance '{0}' is not running")]
     NotRunning(String),
-    #[error("instance '{0}' does not exist; run `valheim start {0}` to create it")]
+    #[error("instance '{0}' does not exist; run `odin start {0}` to create it")]
     NotFound(String),
     #[error("invalid server name: {0}")]
     InvalidName(String),

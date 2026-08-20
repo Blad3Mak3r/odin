@@ -8,7 +8,7 @@ pub fn run(paths: &Paths) -> Result<()> {
     let running = instance::running_instance_names(paths)?;
     if !running.is_empty() {
         bail!(
-            "refusing to install/update while instance(s) are running: {}; stop them first with `valheim stop <name>`",
+            "refusing to install/update while instance(s) are running: {}; stop them first with `odin stop <name>`",
             running.join(", ")
         );
     }

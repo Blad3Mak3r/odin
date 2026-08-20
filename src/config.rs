@@ -8,7 +8,7 @@ use crate::paths::Paths;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GlobalConfig {
     /// Override for the data dir; if None, `Paths::resolve` falls back to the
-    /// XDG default (or the `VALHEIM_MANAGER_DATA_DIR` env var).
+    /// XDG default (or the `ODIN_DATA_DIR` env var).
     #[serde(default)]
     pub data_dir: Option<PathBuf>,
 }

@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 
-/// Resolved filesystem layout for valheim-manager, rooted at a data directory.
+/// Resolved filesystem layout for Odin, rooted at a data directory.
 ///
 /// Precedence for the data dir: explicit override (config/env) > XDG default
-/// (`~/.local/share/valheim-manager`).
+/// (`~/.local/share/odin`).
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub data_dir: PathBuf,
@@ -15,11 +15,11 @@ pub struct Paths {
 
 impl Paths {
     pub fn resolve(data_dir_override: Option<PathBuf>) -> Result<Self> {
-        let project_dirs = ProjectDirs::from("", "", "valheim-manager")
+        let project_dirs = ProjectDirs::from("", "", "odin")
             .context("could not determine home directory for XDG paths")?;
 
         let data_dir = data_dir_override
-            .or_else(|| std::env::var_os("VALHEIM_MANAGER_DATA_DIR").map(PathBuf::from))
+            .or_else(|| std::env::var_os("ODIN_DATA_DIR").map(PathBuf::from))
             .unwrap_or_else(|| project_dirs.data_dir().to_path_buf());
 
         let config_dir = project_dirs.config_dir().to_path_buf();
@@ -80,5 +80,5 @@ pub fn instance_server_symlink(instance_dir: &std::path::Path) -> PathBuf {
 }
 
 pub fn tmux_session_name(instance_name: &str) -> String {
-    format!("valheim-manager-{instance_name}")
+    format!("odin-{instance_name}")
 }

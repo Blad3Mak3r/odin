@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 
-/// Manage the lifecycle of one or more Valheim dedicated game server instances.
+/// Odin: manage the lifecycle of one or more Valheim dedicated game server instances.
 #[derive(Parser, Debug)]
-#[command(name = "valheim", version, about)]
+#[command(name = "odin", version, about)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

@@ -10,7 +10,7 @@ pub fn run(paths: &Paths, server_name: &str, follow: bool, lines: usize) -> Resu
     let instance = Instance::load_existing(paths, server_name)?;
     let log_file = paths::instance_logs_dir(&instance.dir).join("console.log");
     if !log_file.is_file() {
-        bail!("no logs yet for '{server_name}'; start it first with `valheim start {server_name}`");
+        bail!("no logs yet for '{server_name}'; start it first with `odin start {server_name}`");
     }
 
     let content = std::fs::read_to_string(&log_file)

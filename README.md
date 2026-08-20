@@ -115,6 +115,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
 | Command | Description |
 |---|---|
+| `odin create <server-name>` | Create a new instance (auto-assigning a free port and a random password) without starting it. Fails if the name is already taken — use this when you want to `config set` a world/port/password before the first start. |
 | `odin start <server-name>` | Create the instance if it doesn't exist yet (auto-assigning a free port and a random password) and start it, always detached in its own `tmux` session. |
 | `odin stop <server-name>` | Gracefully stop a running instance (sends `Ctrl-C` for a clean world save, then force-kills the session if it doesn't exit in time). |
 | `odin restart <server-name>` | Stop the instance if it's running, then start it again. Useful after installing mods or changing config. |

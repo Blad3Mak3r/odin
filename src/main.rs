@@ -45,6 +45,7 @@ fn run() -> Result<()> {
 
     match cli.command {
         Command::Install => commands::install::run(&paths),
+        Command::Create { server_name } => commands::create::run(&paths, &server_name),
         Command::Start { server_name } => commands::start::run(&paths, &server_name),
         Command::Stop { server_name } => commands::stop::run(&paths, &server_name),
         Command::Console { server_name } => commands::console::run(&paths, &server_name),

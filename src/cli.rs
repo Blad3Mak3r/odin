@@ -14,6 +14,12 @@ pub enum Command {
     /// Refuses to run while any instance is currently running.
     Install,
 
+    /// Create a new instance (auto-assigning a port and password) without starting it.
+    Create {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+    },
+
     /// Create (if new) and start an instance, always detached in a tmux session.
     Start {
         #[arg(value_parser = parse_instance_name)]

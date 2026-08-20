@@ -23,6 +23,8 @@ pub enum InstanceError {
     NotRunning(String),
     #[error("instance '{0}' does not exist; run `odin start {0}` to create it")]
     NotFound(String),
+    #[error("instance '{0}' already exists")]
+    AlreadyExists(String),
     #[error("invalid server name: {0}")]
     InvalidName(String),
 }
@@ -63,6 +65,19 @@ impl Instance {
         if let Some(instance) = Self::load(paths, name)? {
             return Ok(instance);
         }
+        Self::create_new(paths, name)
+    }
+
+    /// Creates a new instance, failing if one with this name already exists.
+    /// Unlike `load_or_create`, this never returns an already-existing instance.
+    pub fn create(paths: &Paths, name: &str) -> Result<Self> {
+        if Self::load(paths, name)?.is_some() {
+            anyhow::bail!(InstanceError::AlreadyExists(name.to_string()));
+        }
+        Self::create_new(paths, name)
+    }
+
+    fn create_new(paths: &Paths, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
 
         let used_ports: Vec<u16> = list_all(paths)?.iter().map(|i| i.state.port).collect();

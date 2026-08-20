@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod config_cmd;
 pub mod console;
+pub mod create;
 pub mod doctor;
 pub mod exec;
 pub mod install;

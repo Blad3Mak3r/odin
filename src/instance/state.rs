@@ -14,12 +14,25 @@ fn generate_password() -> String {
         .collect()
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledMod {
     /// Thunderstore package id, `<namespace>-<name>`.
     pub mod_id: String,
     pub version: String,
     pub installed_at: DateTime<Utc>,
+    /// Whether `BepInEx/plugins/<mod_id>` currently exists as a symlink into
+    /// the global mod store (loaded) or is absent (parked/disabled). The
+    /// downloaded mod files themselves always live in the global store, one
+    /// shared copy per mod_id — every instance referencing it sees whichever
+    /// version was most recently fetched there (`version` below just
+    /// records what this instance last saw, and can lag if another
+    /// instance updates the shared copy).
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +117,7 @@ mod tests {
             mod_id: "owner-mod".to_string(),
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
+            enabled: true,
         });
 
         original.save(&state_file).unwrap();

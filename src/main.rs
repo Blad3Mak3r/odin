@@ -51,6 +51,14 @@ fn run() -> Result<()> {
         Command::Console { server_name } => commands::console::run(&paths, &server_name),
         Command::Status => commands::status::run(&paths),
         Command::Restart { server_name } => commands::restart::run(&paths, &server_name),
+        Command::Rename { old_name, new_name } => {
+            commands::rename::run(&paths, &old_name, &new_name)
+        }
+        Command::Delete {
+            server_name,
+            yes,
+            keep_backups,
+        } => commands::delete::run(&paths, &server_name, yes, keep_backups),
         Command::Config {
             server_name,
             action,
@@ -82,6 +90,18 @@ fn run() -> Result<()> {
                 mod_id,
             } => commands::mods_remove::run(&paths, &server_name, &mod_id),
             ModsCommand::Search { query } => commands::mods_search::run(&paths, &query),
+            ModsCommand::Enable {
+                server_name,
+                mod_id,
+            } => commands::mods_enable::run(&paths, &server_name, &mod_id),
+            ModsCommand::Disable {
+                server_name,
+                mod_id,
+            } => commands::mods_disable::run(&paths, &server_name, &mod_id),
         },
+        Command::Completions { shell } => {
+            commands::completions::run(shell);
+            Ok(())
+        }
     }
 }

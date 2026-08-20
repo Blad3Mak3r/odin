@@ -57,6 +57,18 @@ impl Paths {
     pub fn thunderstore_index_cache(&self) -> PathBuf {
         self.cache_dir().join("thunderstore-index.json")
     }
+
+    /// Root of the global mod store, shared across every instance.
+    pub fn mods_dir(&self) -> PathBuf {
+        self.data_dir.join("mods")
+    }
+
+    /// A mod's payload in the global store — one shared copy per mod_id,
+    /// whichever version was most recently fetched. Instances symlink into
+    /// this rather than each keeping their own copy.
+    pub fn mod_dir(&self, mod_id: &str) -> PathBuf {
+        self.mods_dir().join(mod_id)
+    }
 }
 
 pub fn instance_state_file(instance_dir: &std::path::Path) -> PathBuf {

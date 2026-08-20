@@ -11,12 +11,16 @@ pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<40} {:<15} INSTALLED", "MOD", "VERSION");
+    println!(
+        "{:<40} {:<15} {:<8} INSTALLED",
+        "MOD", "VERSION", "ENABLED"
+    );
     for m in installed {
         println!(
-            "{:<40} {:<15} {}",
+            "{:<40} {:<15} {:<8} {}",
             m.mod_id,
             m.version,
+            if m.enabled { "yes" } else { "no" },
             m.installed_at.format("%Y-%m-%d %H:%M")
         );
     }

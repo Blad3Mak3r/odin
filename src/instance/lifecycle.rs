@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 
 use super::{Instance, InstanceError};
+use crate::cli::validate_instance_name;
 use crate::paths::{self, Paths};
 use crate::tmux;
 
@@ -92,6 +93,45 @@ pub fn restart(paths: &Paths, name: &str) -> Result<Instance> {
         stop(paths, name)?;
     }
     start(paths, name)
+}
+
+/// Renames an instance on disk and in its state, provided it isn't running
+/// and no instance already exists under `new_name`. The world name (and thus
+/// its save files) is left untouched — only the instance's own identity moves.
+pub fn rename(paths: &Paths, old_name: &str, new_name: &str) -> Result<Instance> {
+    validate_instance_name(new_name).map_err(InstanceError::InvalidName)?;
+
+    if old_name == new_name {
+        bail!("new name is the same as the current name");
+    }
+
+    let mut instance = Instance::load_existing(paths, old_name)?;
+
+    if is_running(&instance)? {
+        bail!(
+            "instance '{old_name}' is currently running; run `odin stop {old_name}` before renaming it"
+        );
+    }
+
+    if Instance::load(paths, new_name)?.is_some() {
+        bail!(InstanceError::AlreadyExists(new_name.to_string()));
+    }
+
+    let new_dir = paths.instance_dir(new_name);
+    std::fs::rename(&instance.dir, &new_dir).with_context(|| {
+        format!(
+            "failed to move instance directory {} to {}",
+            instance.dir.display(),
+            new_dir.display()
+        )
+    })?;
+
+    instance.dir = new_dir;
+    instance.state.name = new_name.to_string();
+    instance.state.tmux_session = paths::tmux_session_name(new_name);
+    instance.save()?;
+
+    Ok(instance)
 }
 
 fn check_port_available(paths: &Paths, instance: &Instance) -> Result<()> {

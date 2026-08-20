@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 /// Odin: manage the lifecycle of one or more Valheim dedicated game server instances.
 #[derive(Parser, Debug)]
@@ -47,6 +48,27 @@ pub enum Command {
         server_name: String,
     },
 
+    /// Rename an existing instance (must be stopped first). Only the instance's
+    /// identity changes; its world name and save files are left untouched.
+    Rename {
+        #[arg(value_parser = parse_instance_name)]
+        old_name: String,
+        #[arg(value_parser = parse_instance_name)]
+        new_name: String,
+    },
+
+    /// Permanently delete an instance (must be stopped first).
+    Delete {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Keep the instance's `backups/` directory on disk instead of deleting it too.
+        #[arg(long)]
+        keep_backups: bool,
+    },
+
     /// Get or set an instance's world/port/password/visibility.
     Config {
         #[arg(value_parser = parse_instance_name)]
@@ -93,6 +115,9 @@ pub enum Command {
         #[command(subcommand)]
         command: ModsCommand,
     },
+
+    /// Print a shell completion script to stdout.
+    Completions { shell: Shell },
 }
 
 #[derive(Subcommand, Debug)]
@@ -143,6 +168,20 @@ pub enum ModsCommand {
 
     /// Search the Thunderstore package index by name/owner.
     Search { query: String },
+
+    /// Enable a previously-disabled mod without reinstalling it.
+    Enable {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        mod_id: String,
+    },
+
+    /// Disable a mod without uninstalling it (BepInEx stops loading it).
+    Disable {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        mod_id: String,
+    },
 }
 
 /// Validates that a server name is DNS-friendly (RFC 1123 label): lowercase

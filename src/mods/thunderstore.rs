@@ -35,6 +35,10 @@ pub struct ThunderstorePackage {
 pub struct ThunderstoreVersion {
     pub version_number: String,
     pub download_url: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub downloads: u64,
 }
 
 pub struct ModRef {
@@ -118,6 +122,15 @@ pub fn fetch_index(paths: &Paths) -> Result<Vec<ThunderstorePackage>> {
     std::fs::write(&cache_file, &raw).ok();
 
     Ok(packages)
+}
+
+/// Case-insensitive substring match on package name/owner.
+pub fn search<'a>(index: &'a [ThunderstorePackage], query: &str) -> Vec<&'a ThunderstorePackage> {
+    let q = query.to_lowercase();
+    index
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&q) || p.owner.to_lowercase().contains(&q))
+        .collect()
 }
 
 pub fn resolve<'a>(

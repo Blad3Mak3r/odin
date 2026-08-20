@@ -105,6 +105,45 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Reads an instance's installed mods from its state — no network call.
+pub fn list(paths: &Paths, server_name: &str) -> Result<Vec<InstalledMod>> {
+    let instance = Instance::load_existing(paths, server_name)?;
+    Ok(instance.state.installed_mods)
+}
+
+pub fn remove(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
+    let mut instance = Instance::load_existing(paths, server_name)?;
+
+    if !instance
+        .state
+        .installed_mods
+        .iter()
+        .any(|m| m.mod_id == mod_id)
+    {
+        anyhow::bail!("mod '{mod_id}' is not installed on '{server_name}'");
+    }
+
+    let plugin_dir = paths::instance_bepinex_dir(&instance.dir)
+        .join("plugins")
+        .join(mod_id);
+    if plugin_dir.is_dir() {
+        std::fs::remove_dir_all(&plugin_dir)
+            .with_context(|| format!("failed to remove {}", plugin_dir.display()))?;
+    }
+
+    instance.state.installed_mods.retain(|m| m.mod_id != mod_id);
+    instance.save()?;
+
+    if crate::instance::lifecycle::is_running(&instance)? {
+        tracing::warn!(
+            instance = server_name,
+            "instance is currently running; the mod stays loaded until it's restarted"
+        );
+    }
+
+    Ok(())
+}
+
 fn install_plugin(instance_dir: &Path, mod_ref: &ModRef, download_url: &str) -> Result<()> {
     let tmp_dir = instance_dir.join(format!(".mod-install-tmp-{}", mod_ref.mod_id()));
     std::fs::create_dir_all(&tmp_dir)?;

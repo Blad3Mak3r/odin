@@ -35,10 +35,75 @@ pub enum Command {
     /// List all known instances and their derived state.
     Status,
 
+    /// Stop (if running) and start an instance again.
+    Restart {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+    },
+
+    /// Get or set an instance's world/port/password/visibility.
+    Config {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Snapshot an instance's world save to `<instance>/backups/<id>.zip`.
+    Backup {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+    },
+
+    /// List available backups, or restore one (instance must be stopped).
+    Restore {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        backup_id: Option<String>,
+    },
+
+    /// Print (and optionally follow) an instance's captured console log.
+    Logs {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        #[arg(short, long)]
+        follow: bool,
+        #[arg(short = 'n', long, default_value_t = 50)]
+        lines: usize,
+    },
+
+    /// Send a command to a running instance's console without attaching.
+    Exec {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        command: String,
+    },
+
+    /// Check the environment: tmux, SteamCMD, install, data dir, network.
+    Doctor,
+
     /// Manage mods for an instance.
     Mods {
         #[command(subcommand)]
         command: ModsCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Print the instance's current world/port/password/visibility.
+    Get,
+
+    /// Update one or more fields; unset flags are left unchanged.
+    Set {
+        #[arg(long)]
+        world: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
+        public: Option<bool>,
     },
 }
 
@@ -56,6 +121,22 @@ pub enum ModsCommand {
         #[arg(value_parser = parse_instance_name)]
         server_name: String,
     },
+
+    /// List an instance's installed mods (no network call).
+    List {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+    },
+
+    /// Uninstall a mod from an instance.
+    Remove {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
+        mod_id: String,
+    },
+
+    /// Search the Thunderstore package index by name/owner.
+    Search { query: String },
 }
 
 /// Validates that a server name is DNS-friendly (RFC 1123 label): lowercase

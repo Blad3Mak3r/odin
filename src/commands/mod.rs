@@ -1,7 +1,17 @@
+pub mod backup;
+pub mod config_cmd;
 pub mod console;
+pub mod doctor;
+pub mod exec;
 pub mod install;
+pub mod logs;
 pub mod mods_add;
+pub mod mods_list;
+pub mod mods_remove;
+pub mod mods_search;
 pub mod mods_update;
+pub mod restart;
+pub mod restore;
 pub mod start;
 pub mod status;
 pub mod stop;

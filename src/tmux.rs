@@ -87,6 +87,21 @@ pub fn send_ctrl_c(session: &str) -> Result<()> {
     Ok(())
 }
 
+/// Sends literal text followed by Enter, as if typed into the session's console.
+pub fn send_keys_line(session: &str, text: &str) -> Result<()> {
+    require_binary()?;
+    let status = Command::new("tmux")
+        .args(["send-keys", "-t", session, text, "Enter"])
+        .status()
+        .context("failed to invoke tmux send-keys")?;
+    if !status.success() {
+        anyhow::bail!(TmuxError::CommandFailed(format!(
+            "tmux send-keys -t {session} exited with {status}"
+        )));
+    }
+    Ok(())
+}
+
 pub fn kill_session(session: &str) -> Result<()> {
     require_binary()?;
     let status = Command::new("tmux")

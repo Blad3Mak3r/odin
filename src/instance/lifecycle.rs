@@ -84,6 +84,16 @@ pub fn stop(paths: &Paths, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stops the instance if it's running, then starts it again. Requires the
+/// instance to already exist (unlike `start`, which creates it on demand).
+pub fn restart(paths: &Paths, name: &str) -> Result<Instance> {
+    let instance = Instance::load_existing(paths, name)?;
+    if is_running(&instance)? {
+        stop(paths, name)?;
+    }
+    start(paths, name)
+}
+
 fn check_port_available(paths: &Paths, instance: &Instance) -> Result<()> {
     for other in super::list_all(paths)? {
         if other.state.name == instance.state.name {

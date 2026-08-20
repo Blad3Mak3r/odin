@@ -31,7 +31,15 @@ them, side by side — is a single, predictable command away.
 - **Mod support out of the box.** `odin mods add` bootstraps
   [BepInEx](https://github.com/BepInEx/BepInEx) automatically and installs
   mods straight from the [Thunderstore](https://thunderstore.io/c/valheim)
-  API by name — no manual unzipping into the right folder.
+  API by name — no manual unzipping into the right folder. Mods download
+  once into a shared global store and get symlinked into every instance
+  that wants them, so running the same mod on several servers doesn't mean
+  downloading it several times; `odin mods enable`/`disable` toggles a mod
+  per instance without reinstalling it.
+- **Ready-to-share connect info.** `odin status` prints each instance's
+  public address and password alongside its live state, so getting a
+  friend into your world doesn't mean a round-trip through `config get`
+  and "what's my IP".
 - **Backups with a safety net.** `odin backup`/`odin restore` snapshot a
   world's save files to a zip archive; restoring always takes a fresh
   snapshot of the current state first, so a restore is never a one-way,
@@ -97,6 +105,10 @@ odin restart my-server
 # Snapshot the world, then stop the server
 odin backup my-server
 odin stop my-server
+
+# Rename it, or tear it down entirely when you're done with it
+odin rename my-server my-old-server
+odin delete my-old-server
 ```
 
 ## Command reference
@@ -119,7 +131,9 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 | `odin start <server-name>` | Create the instance if it doesn't exist yet (auto-assigning a free port and a random password) and start it, always detached in its own `tmux` session. |
 | `odin stop <server-name>` | Gracefully stop a running instance (sends `Ctrl-C` for a clean world save, then force-kills the session if it doesn't exit in time). |
 | `odin restart <server-name>` | Stop the instance if it's running, then start it again. Useful after installing mods or changing config. |
-| `odin status` | List every known instance with its live status, port, world, uptime, and mod count. |
+| `odin rename <old-name> <new-name>` | Rename an instance. Must be stopped first. Only its identity changes — the world name and save files are left untouched. |
+| `odin delete <server-name> [-y\|--yes] [--keep-backups]` | Permanently delete an instance. Must be stopped first, and asks for confirmation unless `-y` is given. `--keep-backups` deletes everything except the `backups/` directory. |
+| `odin status` | List every known instance with its live status, address (public IP:port), world, uptime, mod count, and password — everything needed to hand a friend a join string. |
 | `odin console <server-name>` | Attach interactively to a running instance's console via `tmux attach`. |
 | `odin logs <server-name> [-f\|--follow] [-n\|--lines N]` | Print (and optionally follow) the instance's captured console output, without attaching to `tmux`. Default 50 lines. |
 | `odin exec <server-name> <command>` | Send a line of input to a running instance's console without attaching — handy for scripting. |
@@ -143,16 +157,24 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 | Command | Description |
 |---|---|
 | `odin mods search <query>` | Search the Thunderstore package index by name or author. |
-| `odin mods add <server-name> <mod-id>` | Install a mod by its Thunderstore id (`namespace-name` or `namespace-name-version`). Bootstraps BepInEx into the instance automatically on first use. |
-| `odin mods update <server-name>` | Update all of an instance's installed mods to their latest available versions. |
-| `odin mods list <server-name>` | List installed mods and their versions (reads local state only, no network call). |
-| `odin mods remove <server-name> <mod-id>` | Uninstall a mod. |
+| `odin mods add <server-name> <mod-id>` | Install a mod by its Thunderstore id (`namespace-name` or `namespace-name-version`). Bootstraps BepInEx into the instance automatically on first use. Downloads into the shared global mod store only if it isn't already there. |
+| `odin mods update <server-name>` | Update all of an instance's installed mods to their latest available versions. Replaces the one shared copy in the global store, so this affects every other instance currently linking that mod too. |
+| `odin mods list <server-name>` | List installed mods, their versions, and whether each is currently enabled (reads local state only, no network call). |
+| `odin mods enable <server-name> <mod-id>` | Re-enable a previously disabled mod — relinks it from the global store, no reinstall needed. |
+| `odin mods disable <server-name> <mod-id>` | Disable a mod without uninstalling it, so BepInEx stops loading it for this instance. |
+| `odin mods remove <server-name> <mod-id>` | Uninstall a mod from this instance (the shared download stays in the global store for other instances still using it). |
 
 ### Diagnostics
 
 | Command | Description |
 |---|---|
 | `odin doctor` | Check that `tmux` and SteamCMD are available, the game is installed, the data directory is writable, and Thunderstore/Steam are reachable. Exits non-zero only on a critical failure (e.g. missing `tmux`). |
+
+### Shell completions
+
+| Command | Description |
+|---|---|
+| `odin completions <shell>` | Print a completion script for `bash`, `zsh`, `fish`, `elvish`, or `powershell` to stdout — e.g. `odin completions zsh > ~/.zfunc/_odin`. |
 
 ## Configuration
 
@@ -170,21 +192,28 @@ order:
   steamcmd/                     # SteamCMD installation
   install/valheim/               # shared Valheim dedicated server binaries — every instance
                                   # symlinks to this, so `odin install` updates them all at once
+  mods/<mod-id>/                 # shared, global mod store — one download per mod, no matter
+                                  # how many instances have it enabled
   servers/<name>/
     state.json                   # instance metadata: port, world, password, visibility, mods, timestamps
     server -> ../../install/valheim
     saves/                       # the world's save files
     backups/<id>.zip              # snapshots created by `odin backup`
     logs/console.log              # captured console output, tailed by `odin logs`
-    BepInEx/plugins/<mod-id>/     # per-instance mods — each instance can run a different mod set
+    BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>  # present only while enabled
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
 
 Each instance's game binaries are a symlink into one shared, SteamCMD-managed
 install — so every instance always runs the same game version, and updating
-is a single `odin install` rather than one download per server. Mods,
-however, are entirely per-instance, so different servers can run completely
-different mod sets against that same shared binary.
+is a single `odin install` rather than one download per server. Mods work
+the same way: `odin mods add` downloads a mod once into the shared `mods/`
+store, and every instance that has it enabled just symlinks to that same
+copy — `odin mods enable`/`disable` add or remove that symlink instead of
+copying or moving files around. Because the store isn't versioned per mod,
+`odin mods update` replaces the one shared copy wherever it's linked; if you
+need two servers pinned to two different versions of the same mod at the
+same time, that isn't currently supported.
 
 An instance's **running/stopped status is never stored** — it's always
 derived on demand by checking whether its `tmux` session exists. That way

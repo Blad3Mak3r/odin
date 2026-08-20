@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::thunderstore::{self, BEPINEX_MOD_ID, ModRef};
-use super::{extract_zip_to_dir, flatten_single_root_dir};
+use super::{effective_source_root, extract_zip_to_dir};
 use crate::paths::Paths;
 
 /// Downloads and unpacks the BepInEx pack for Valheim directly into the
@@ -20,7 +20,7 @@ pub fn bootstrap(paths: &Paths, instance_dir: &Path) -> Result<String> {
     let extract_dir = tmp_dir.join("extracted");
     extract_zip_to_dir(&zip_path, &extract_dir)?;
 
-    let source_root = flatten_single_root_dir(&extract_dir)?;
+    let source_root = effective_source_root(&extract_dir)?;
     super::copy_dir_contents_excluding_metadata(&source_root, instance_dir)
         .context("failed to install BepInEx pack into instance directory")?;
 

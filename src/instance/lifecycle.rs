@@ -141,12 +141,18 @@ fn write_run_script(instance: &Instance) -> Result<PathBuf> {
     );
 
     if instance.state.bepinex_installed {
+        // Matches the BepInExPack Valheim's own `start_server_bepinex.sh`
+        // (Doorstop 4.x env var names), but with absolute paths since our
+        // tmux session's cwd is the shared install dir, not this instance
+        // dir where BepInEx/doorstop_libs actually live.
+        let doorstop_libs_dir = instance.dir.join("doorstop_libs");
         script.push_str(&format!(
-            "export DOORSTOP_ENABLE=TRUE\n\
-             export DOORSTOP_INVOKE_DLL_PATH=\"{bepinex_dir}/core/BepInEx.Preloader.dll\"\n\
-             export DOORSTOP_CORLIB_OVERRIDE_PATH=\"{bepinex_dir}/unstripped_corlib\"\n\
-             export LD_LIBRARY_PATH=\"{bepinex_dir}/core:${{LD_LIBRARY_PATH:-}}\"\n\n",
-            bepinex_dir = bepinex_dir.display()
+            "export DOORSTOP_ENABLED=1\n\
+             export DOORSTOP_TARGET_ASSEMBLY=\"{bepinex_dir}/core/BepInEx.Preloader.dll\"\n\
+             export LD_LIBRARY_PATH=\"{doorstop_libs_dir}:${{LD_LIBRARY_PATH:-}}\"\n\
+             export LD_PRELOAD=\"libdoorstop_x64.so:${{LD_PRELOAD:-}}\"\n\n",
+            bepinex_dir = bepinex_dir.display(),
+            doorstop_libs_dir = doorstop_libs_dir.display()
         ));
     }
 

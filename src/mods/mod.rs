@@ -151,6 +151,7 @@ fn install_plugin(instance_dir: &Path, mod_ref: &ModRef, download_url: &str) -> 
     let zip_path = thunderstore::download_zip(download_url, &tmp_dir)?;
     let extract_dir = tmp_dir.join("extracted");
     extract_zip_to_dir(&zip_path, &extract_dir)?;
+    let source_root = effective_source_root(&extract_dir)?;
 
     let plugin_dir = paths::instance_bepinex_dir(instance_dir)
         .join("plugins")
@@ -160,7 +161,7 @@ fn install_plugin(instance_dir: &Path, mod_ref: &ModRef, download_url: &str) -> 
     }
     std::fs::create_dir_all(&plugin_dir)?;
 
-    copy_dir_contents_excluding_metadata(&extract_dir, &plugin_dir)
+    copy_dir_contents_excluding_metadata(&source_root, &plugin_dir)
         .with_context(|| format!("failed to install mod '{}'", mod_ref.mod_id()))?;
 
     std::fs::remove_dir_all(&tmp_dir).ok();
@@ -178,13 +179,22 @@ pub fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<()> {
         .with_context(|| format!("failed to extract zip {}", zip_path.display()))
 }
 
-/// If `dir` contains exactly one entry and it's a directory, returns that
-/// subdirectory (unwrapping a package's top-level wrapper folder). Otherwise
-/// returns `dir` itself.
-pub fn flatten_single_root_dir(dir: &Path) -> Result<PathBuf> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<std::result::Result<_, _>>()?;
+/// Ignoring known Thunderstore metadata files, if exactly one entry remains
+/// and it's a directory, returns that subdirectory (unwrapping a package's
+/// top-level wrapper folder, e.g. `BepInExPack_Valheim/`). Otherwise returns
+/// `dir` itself.
+pub fn effective_source_root(dir: &Path) -> Result<PathBuf> {
+    let entries: Vec<_> = std::fs::read_dir(dir)?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|e| {
+            !METADATA_ENTRIES
+                .iter()
+                .any(|m| e.file_name().to_string_lossy() == *m)
+        })
+        .collect();
     if entries.len() == 1 && entries[0].file_type()?.is_dir() {
-        return Ok(entries.remove(0).path());
+        return Ok(entries[0].path());
     }
     Ok(dir.to_path_buf())
 }

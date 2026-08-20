@@ -208,3 +208,7 @@ make help            # list all targets
 The release profile (`[profile.release]` in `Cargo.toml`) is tuned for a
 small, fast binary: full LTO, a single codegen unit, symbol stripping, and
 `panic = "abort"`.
+
+## License
+
+[MIT](LICENSE)

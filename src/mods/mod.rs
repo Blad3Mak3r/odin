@@ -306,13 +306,15 @@ pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
 /// Removes a mod's payload from the global store. Refuses if any instance
 /// still references it — it must be removed per-instance first via `remove`.
 pub fn prune_global(paths: &Paths, mod_id: &str) -> Result<()> {
-    let in_use = crate::instance::list_all(paths)?.into_iter().any(|instance| {
-        instance
-            .state
-            .installed_mods
-            .iter()
-            .any(|m| m.mod_id == mod_id)
-    });
+    let in_use = crate::instance::list_all(paths)?
+        .into_iter()
+        .any(|instance| {
+            instance
+                .state
+                .installed_mods
+                .iter()
+                .any(|m| m.mod_id == mod_id)
+        });
     if in_use {
         anyhow::bail!(
             "mod '{mod_id}' is still installed on at least one instance; remove it there first"

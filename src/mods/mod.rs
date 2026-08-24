@@ -1,3 +1,13 @@
+//! Manages mods installed from Thunderstore.
+//!
+//! Downloaded mod payloads live in one global store (`paths.mod_dir(mod_id)`),
+//! one copy per mod id shared across every instance. An instance "has" a mod
+//! by symlinking `BepInEx/plugins/<mod_id>` into that shared copy
+//! (`link_into_instance`); disabling a mod just removes that symlink
+//! (`remove_link_if_present`) without touching the shared download. Each
+//! instance's own state (`InstalledMod`) only records which version it last
+//! saw and whether it's currently linked in.
+
 pub mod bepinex;
 pub mod thunderstore;
 
@@ -62,9 +72,27 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, server_name)?;
     let index = thunderstore::fetch_index(paths)?;
 
+    // Mod ids are collected up front (rather than cloning the whole
+    // `Vec<InstalledMod>`) so the loop can still mutate `installed_mods` by
+    // id lookup without holding a borrow across the loop body.
+    let mod_ids: Vec<String> = instance
+        .state
+        .installed_mods
+        .iter()
+        .map(|m| m.mod_id.clone())
+        .collect();
+
     let mut any_updated = false;
-    for installed in instance.state.installed_mods.clone() {
-        let mod_ref = ModRef::parse(&installed.mod_id)?;
+    for mod_id in mod_ids {
+        let installed_idx = instance
+            .state
+            .installed_mods
+            .iter()
+            .position(|m| m.mod_id == mod_id)
+            .expect("mod_id came from installed_mods and is never removed mid-loop");
+        let installed = &instance.state.installed_mods[installed_idx];
+
+        let mod_ref = ModRef::parse(&mod_id)?;
         let (_package, latest) = thunderstore::resolve(&mod_ref, &index)?;
         if latest.version_number == installed.version {
             continue;
@@ -72,28 +100,24 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
 
         tracing::info!(
             instance = server_name,
-            mod_id = installed.mod_id,
+            mod_id = mod_id,
             from = installed.version,
             to = latest.version_number,
             "updating mod"
         );
-        let global_dir =
-            ensure_global_mod(paths, &mod_ref, &latest.version_number, &latest.download_url)?;
         // A disabled mod stays disabled: just record the new version so a
         // later `enable` links to it; don't touch `plugins/<mod_id>`.
-        if installed.enabled {
-            link_into_instance(&instance.dir, &installed.mod_id, &global_dir)?;
+        let enabled = installed.enabled;
+
+        let global_dir =
+            ensure_global_mod(paths, &mod_ref, &latest.version_number, &latest.download_url)?;
+        if enabled {
+            link_into_instance(&instance.dir, &mod_id, &global_dir)?;
         }
 
-        if let Some(entry) = instance
-            .state
-            .installed_mods
-            .iter_mut()
-            .find(|m| m.mod_id == installed.mod_id)
-        {
-            entry.version = latest.version_number.clone();
-            entry.installed_at = Utc::now();
-        }
+        let entry = &mut instance.state.installed_mods[installed_idx];
+        entry.version.clone_from(&latest.version_number);
+        entry.installed_at = Utc::now();
         any_updated = true;
     }
 
@@ -357,4 +381,83 @@ fn copy_dir_all(source: &Path, dest: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("odin-test-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn remove_link_if_present_is_noop_when_nothing_exists() {
+        let dir = temp_dir("noop");
+        remove_link_if_present(&dir.join("missing")).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn remove_link_if_present_removes_symlink_without_deleting_target() {
+        let dir = temp_dir("symlink");
+        let target = dir.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("marker"), b"keep me").unwrap();
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        remove_link_if_present(&link).unwrap();
+
+        assert!(!link.exists());
+        assert!(target.join("marker").is_file());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn remove_link_if_present_removes_dangling_symlink() {
+        let dir = temp_dir("dangling");
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(dir.join("gone"), &link).unwrap();
+        // A dangling symlink reports false for both is_dir() and is_file(), so
+        // this exercises the symlink_metadata branch rather than the plain-dir one.
+        assert!(!link.is_dir());
+
+        remove_link_if_present(&link).unwrap();
+
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn remove_link_if_present_removes_real_directory() {
+        let dir = temp_dir("realdir");
+        let path = dir.join("plain");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("file"), b"data").unwrap();
+
+        remove_link_if_present(&path).unwrap();
+
+        assert!(!path.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn link_into_instance_replaces_existing_link() {
+        let dir = temp_dir("relink");
+        let instance_dir = dir.join("instance");
+        let global_a = dir.join("global-a");
+        let global_b = dir.join("global-b");
+        std::fs::create_dir_all(&global_a).unwrap();
+        std::fs::create_dir_all(&global_b).unwrap();
+
+        link_into_instance(&instance_dir, "owner-mod", &global_a).unwrap();
+        link_into_instance(&instance_dir, "owner-mod", &global_b).unwrap();
+
+        let link = active_plugin_dir(&instance_dir, "owner-mod");
+        assert_eq!(std::fs::read_link(&link).unwrap(), global_b);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

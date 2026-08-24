@@ -37,10 +37,9 @@ fn run() -> Result<()> {
 
     let paths = Paths::resolve(None)?;
     let cfg = config::GlobalConfig::load(&paths)?;
-    let paths = if cfg.data_dir.is_some() {
-        Paths::resolve(cfg.data_dir.clone())?
-    } else {
-        paths
+    let paths = match cfg.data_dir {
+        Some(data_dir) => Paths::resolve(Some(data_dir))?,
+        None => paths,
     };
 
     match cli.command {

@@ -1,1 +1,8 @@
 /target
+
+# Dashboard frontend build artifacts. web/dist/index.html is intentionally
+# tracked as a placeholder so a bare `cargo build` still compiles (rust-embed
+# needs web/dist/ to exist) before `make web-build` has ever been run.
+/web/node_modules
+/web/dist/*
+!/web/dist/index.html

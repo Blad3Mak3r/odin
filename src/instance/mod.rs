@@ -4,6 +4,7 @@
 //! the underlying tmux session and on-disk layout.
 
 pub mod lifecycle;
+pub mod lists;
 pub mod state;
 
 use std::path::PathBuf;

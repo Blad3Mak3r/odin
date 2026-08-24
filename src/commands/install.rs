@@ -17,7 +17,14 @@ pub fn run(paths: &Paths) -> Result<()> {
     let install_dir = paths.shared_install_dir();
     let log_file = paths.data_dir.join("logs").join("steamcmd-install.log");
 
-    steamcmd.update_app(VALHEIM_DEDICATED_SERVER_APP_ID, &install_dir, &log_file)?;
+    steamcmd.update_app(
+        VALHEIM_DEDICATED_SERVER_APP_ID,
+        &install_dir,
+        &log_file,
+        |line| {
+            println!("{line}");
+        },
+    )?;
 
     println!(
         "Valheim dedicated server installed/updated at {}",

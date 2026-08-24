@@ -1,32 +1,37 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use serde::Serialize;
 
 use crate::paths::Paths;
 use crate::tmux;
 
-struct Check {
-    label: &'static str,
-    ok: bool,
-    critical: bool,
-    detail: Option<String>,
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckResult {
+    pub label: &'static str,
+    pub ok: bool,
+    pub critical: bool,
+    pub detail: Option<String>,
 }
 
-pub fn run(paths: &Paths) -> Result<()> {
-    let checks = vec![
-        Check {
+/// Runs every environment check and returns their results, without printing
+/// or failing anything itself — the CLI (`commands::doctor::run`) and the
+/// web dashboard's `/api/doctor` both format this shared list their own way.
+pub fn run_checks(paths: &Paths) -> Vec<CheckResult> {
+    vec![
+        CheckResult {
             label: "tmux installed",
             ok: tmux::has_binary(),
             critical: true,
             detail: None,
         },
-        Check {
+        CheckResult {
             label: "SteamCMD installed",
             ok: paths.steamcmd_dir().join("steamcmd.sh").is_file(),
             critical: false,
             detail: None,
         },
-        Check {
+        CheckResult {
             label: "Valheim dedicated server installed",
             ok: paths
                 .shared_install_dir()
@@ -35,25 +40,29 @@ pub fn run(paths: &Paths) -> Result<()> {
             critical: false,
             detail: None,
         },
-        Check {
+        CheckResult {
             label: "data directory writable",
             ok: is_writable(&paths.data_dir),
             critical: true,
             detail: Some(paths.data_dir.display().to_string()),
         },
-        Check {
+        CheckResult {
             label: "Thunderstore API reachable",
             ok: url_reachable("https://thunderstore.io/c/valheim/api/v1/package/"),
             critical: false,
             detail: None,
         },
-        Check {
+        CheckResult {
             label: "Steam CDN reachable",
             ok: url_reachable("https://steamcdn-a.akamaihd.net/"),
             critical: false,
             detail: None,
         },
-    ];
+    ]
+}
+
+pub fn run(paths: &Paths) -> Result<()> {
+    let checks = run_checks(paths);
 
     let mut critical_failed = false;
     for check in &checks {

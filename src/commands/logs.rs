@@ -47,7 +47,7 @@ pub fn run(paths: &Paths, server_name: &str, follow: bool, lines: usize) -> Resu
 /// newlines have been seen (or the start of the file is reached), instead of
 /// loading the whole file — the console log can grow to many MB over a long
 /// server run, and callers here only ever want a small tail of it.
-fn read_tail(path: &Path, max_lines: usize) -> std::io::Result<String> {
+pub fn read_tail(path: &Path, max_lines: usize) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let file_len = file.metadata()?.len();
 

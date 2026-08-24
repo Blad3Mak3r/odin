@@ -1,0 +1,7 @@
+pub mod doctor;
+pub mod install;
+pub mod instances;
+pub mod jobs;
+pub mod lists;
+pub mod mods;
+pub mod resources;

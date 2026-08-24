@@ -11,10 +11,12 @@
 pub mod bepinex;
 pub mod thunderstore;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use serde::Serialize;
 
 use crate::instance::Instance;
 use crate::instance::state::InstalledMod;
@@ -231,6 +233,98 @@ pub fn set_enabled(paths: &Paths, server_name: &str, mod_id: &str, enabled: bool
     }
 
     Ok(true)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlobalModInstanceEntry {
+    pub instance: String,
+    pub version: String,
+    pub enabled: bool,
+    pub running: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GlobalMod {
+    pub mod_id: String,
+    /// Version currently held in the shared store, if it's still there
+    /// (`None` for a mod that some instance's state still references but
+    /// whose download was manually removed from `paths.mods_dir()`).
+    pub global_version: Option<String>,
+    pub instances: Vec<GlobalModInstanceEntry>,
+}
+
+/// Aggregates the shared mod store (`paths.mods_dir()`) with what each
+/// instance currently has installed, for a cross-instance view. A mod
+/// present in the store but installed on zero instances is still included —
+/// it's an orphaned download taking up disk space.
+pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
+    let mut mods: BTreeMap<String, GlobalMod> = BTreeMap::new();
+
+    let mods_dir = paths.mods_dir();
+    if mods_dir.is_dir() {
+        for entry in std::fs::read_dir(&mods_dir)
+            .with_context(|| format!("failed to read {}", mods_dir.display()))?
+        {
+            let entry = entry?;
+            let mod_id = entry.file_name().to_string_lossy().into_owned();
+            // Skip the staging dirs `ensure_global_mod` uses while installing.
+            if mod_id.starts_with('.') || !entry.file_type()?.is_dir() {
+                continue;
+            }
+            mods.entry(mod_id.clone())
+                .or_insert_with(|| GlobalMod {
+                    mod_id: mod_id.clone(),
+                    global_version: None,
+                    instances: Vec::new(),
+                })
+                .global_version = current_marker_version(&entry.path());
+        }
+    }
+
+    for instance in crate::instance::list_all(paths)? {
+        let running = crate::instance::lifecycle::is_running(&instance)?;
+        for installed in &instance.state.installed_mods {
+            mods.entry(installed.mod_id.clone())
+                .or_insert_with(|| GlobalMod {
+                    mod_id: installed.mod_id.clone(),
+                    global_version: None,
+                    instances: Vec::new(),
+                })
+                .instances
+                .push(GlobalModInstanceEntry {
+                    instance: instance.state.name.clone(),
+                    version: installed.version.clone(),
+                    enabled: installed.enabled,
+                    running,
+                });
+        }
+    }
+
+    Ok(mods.into_values().collect())
+}
+
+/// Removes a mod's payload from the global store. Refuses if any instance
+/// still references it — it must be removed per-instance first via `remove`.
+pub fn prune_global(paths: &Paths, mod_id: &str) -> Result<()> {
+    let in_use = crate::instance::list_all(paths)?.into_iter().any(|instance| {
+        instance
+            .state
+            .installed_mods
+            .iter()
+            .any(|m| m.mod_id == mod_id)
+    });
+    if in_use {
+        anyhow::bail!(
+            "mod '{mod_id}' is still installed on at least one instance; remove it there first"
+        );
+    }
+
+    let dir = paths.mod_dir(mod_id);
+    if dir.is_dir() {
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("failed to remove {}", dir.display()))?;
+    }
+    Ok(())
 }
 
 fn active_plugin_dir(instance_dir: &Path, mod_id: &str) -> PathBuf {

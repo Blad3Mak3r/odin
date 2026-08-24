@@ -4,10 +4,25 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::instance::state::InstalledMod;
-use crate::mods::{self, thunderstore};
+use crate::mods::{self, GlobalMod, thunderstore};
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::state::AppState;
+
+pub async fn list_global_mods(State(state): State<AppState>) -> ApiResult<Json<Vec<GlobalMod>>> {
+    let paths = state.paths.clone();
+    let mods = run_blocking(move || mods::list_global(&paths)).await?;
+    Ok(Json(mods))
+}
+
+pub async fn prune_mod(
+    State(state): State<AppState>,
+    Path(mod_id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    run_blocking(move || mods::prune_global(&paths, &mod_id)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 pub async fn list_mods(
     State(state): State<AppState>,

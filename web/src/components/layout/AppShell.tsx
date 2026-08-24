@@ -1,4 +1,4 @@
-import { LayoutDashboard, Server } from 'lucide-react'
+import { Blocks, LayoutDashboard, Server } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
@@ -7,6 +7,7 @@ import { ThemeToggle } from './ThemeToggle'
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/instances', label: 'Instances', icon: Server, end: false },
+  { to: '/mods', label: 'Mods', icon: Blocks, end: false },
 ]
 
 export function AppShell({ children }: { children: ReactNode }) {

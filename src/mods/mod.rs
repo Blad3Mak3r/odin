@@ -353,9 +353,15 @@ fn ensure_global_mod(
         return Ok(final_dir);
     }
 
-    let staging_dir = paths
-        .mods_dir()
-        .join(format!(".install-tmp-{}", mod_ref.mod_id()));
+    // Suffixed with a fresh uuid (not just the mod_id) so two concurrent
+    // installs of the same mod for different instances — e.g. installing to
+    // several instances at once from the dashboard — don't share, and race
+    // on cleaning up, the same staging directory.
+    let staging_dir = paths.mods_dir().join(format!(
+        ".install-tmp-{}-{}",
+        mod_ref.mod_id(),
+        uuid::Uuid::new_v4()
+    ));
     std::fs::create_dir_all(&staging_dir)?;
 
     let zip_path = thunderstore::download_zip(download_url, &staging_dir)?;

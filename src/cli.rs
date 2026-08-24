@@ -166,8 +166,16 @@ pub enum ModsCommand {
         mod_id: String,
     },
 
-    /// Search the Thunderstore package index by name/owner.
-    Search { query: String },
+    /// Search the Thunderstore package index by name/owner, ranked by relevance.
+    Search {
+        query: String,
+        /// Show install status against this instance.
+        #[arg(short, long, value_parser = parse_instance_name)]
+        server: Option<String>,
+        /// After listing results, prompt to pick one to install (requires --server).
+        #[arg(short, long)]
+        interactive: bool,
+    },
 
     /// Enable a previously-disabled mod without reinstalling it.
     Enable {

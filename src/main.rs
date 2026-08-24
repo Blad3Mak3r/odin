@@ -88,7 +88,11 @@ fn run() -> Result<()> {
                 server_name,
                 mod_id,
             } => commands::mods_remove::run(&paths, &server_name, &mod_id),
-            ModsCommand::Search { query } => commands::mods_search::run(&paths, &query),
+            ModsCommand::Search {
+                query,
+                server,
+                interactive,
+            } => commands::mods_search::run(&paths, &query, server.as_deref(), interactive),
             ModsCommand::Enable {
                 server_name,
                 mod_id,

@@ -123,13 +123,40 @@ pub fn fetch_index(paths: &Paths) -> Result<Vec<ThunderstorePackage>> {
     Ok(packages)
 }
 
-/// Case-insensitive substring match on package name/owner.
+/// Case-insensitive substring match on package name/owner, best matches first:
+/// an exact/prefix/substring match on the name outranks one on the owner, and
+/// ties are broken by download count so popular mods surface first.
 pub fn search<'a>(index: &'a [ThunderstorePackage], query: &str) -> Vec<&'a ThunderstorePackage> {
     let q = query.to_lowercase();
-    index
+    let mut scored: Vec<(u8, u64, &ThunderstorePackage)> = index
         .iter()
-        .filter(|p| p.name.to_lowercase().contains(&q) || p.owner.to_lowercase().contains(&q))
-        .collect()
+        .filter_map(|p| {
+            let name = p.name.to_lowercase();
+            let owner = p.owner.to_lowercase();
+            if !name.contains(&q) && !owner.contains(&q) {
+                return None;
+            }
+            let downloads = p.versions.first().map_or(0, |v| v.downloads);
+            Some((relevance_rank(&q, &name, &owner), downloads, p))
+        })
+        .collect();
+
+    scored.sort_by_key(|(rank, downloads, _)| std::cmp::Reverse((*rank, *downloads)));
+    scored.into_iter().map(|(_, _, p)| p).collect()
+}
+
+fn relevance_rank(query: &str, name_lower: &str, owner_lower: &str) -> u8 {
+    if name_lower == query {
+        4
+    } else if name_lower.starts_with(query) {
+        3
+    } else if name_lower.contains(query) {
+        2
+    } else if owner_lower == query || owner_lower.starts_with(query) {
+        1
+    } else {
+        0
+    }
 }
 
 pub fn resolve<'a>(
@@ -220,5 +247,47 @@ mod tests {
     #[test]
     fn rejects_mod_id_without_name() {
         assert!(ModRef::parse("justnamespace").is_err());
+    }
+
+    fn package(owner: &str, name: &str, downloads: u64) -> ThunderstorePackage {
+        ThunderstorePackage {
+            name: name.to_string(),
+            owner: owner.to_string(),
+            versions: vec![ThunderstoreVersion {
+                version_number: "1.0.0".to_string(),
+                download_url: String::new(),
+                description: String::new(),
+                downloads,
+            }],
+        }
+    }
+
+    #[test]
+    fn search_ranks_name_prefix_above_mere_substring_match() {
+        let index = vec![
+            package("someone", "AutoValheimPlus", 1000),
+            package("nathanhwood", "ValheimPlus", 10),
+        ];
+        let results = search(&index, "ValheimPlus");
+        assert_eq!(results[0].name, "ValheimPlus");
+        assert_eq!(results[1].name, "AutoValheimPlus");
+    }
+
+    #[test]
+    fn search_breaks_ties_by_downloads() {
+        let index = vec![
+            package("owner-a", "CoolMod", 5),
+            package("owner-b", "CoolMod", 500),
+        ];
+        let results = search(&index, "coolmod");
+        assert_eq!(results[0].owner, "owner-b");
+        assert_eq!(results[1].owner, "owner-a");
+    }
+
+    #[test]
+    fn search_matches_owner_when_name_does_not_match() {
+        let index = vec![package("denikson", "BepInExPack_Valheim", 1)];
+        let results = search(&index, "denikson");
+        assert_eq!(results.len(), 1);
     }
 }

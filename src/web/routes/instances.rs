@@ -4,9 +4,9 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::instance::state::InstanceState;
-use crate::instance::{self, Instance, lifecycle};
+use crate::instance::{self, Instance, InstanceError, lifecycle};
 use crate::paths::Paths;
-use crate::web::error::{ApiResult, run_blocking};
+use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -122,7 +122,7 @@ pub async fn delete_instance(
 fn delete_instance_dir(paths: &Paths, name: &str, keep_backups: bool) -> anyhow::Result<()> {
     let instance = Instance::load_existing(paths, name)?;
     if lifecycle::is_running(&instance)? {
-        anyhow::bail!("'{name}' is running; stop it first");
+        return Err(InstanceError::AlreadyRunning(name.to_string()).into());
     }
 
     if keep_backups {
@@ -196,7 +196,10 @@ fn update_config(paths: &Paths, name: &str, req: ConfigUpdateRequest) -> anyhow:
     if let Some(password) = &req.password
         && password.len() < 5
     {
-        anyhow::bail!("password must be at least 5 characters (Valheim's own minimum)");
+        return Err(BadRequest(
+            "password must be at least 5 characters (Valheim's own minimum)".to_string(),
+        )
+        .into());
     }
 
     if let Some(world) = req.world {

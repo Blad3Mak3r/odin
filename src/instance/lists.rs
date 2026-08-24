@@ -7,8 +7,22 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use thiserror::Error;
 
 use crate::paths;
+
+/// Validation failures a caller (e.g. the web API) may want to distinguish
+/// from other, unexpected errors — these always mean "the input was bad",
+/// never "something went wrong on our end".
+#[derive(Debug, Error)]
+pub enum ListsError {
+    #[error("'{0}' is not a valid list kind; expected 'admin', 'banned', or 'permitted'")]
+    UnknownKind(String),
+    #[error("'{0}' is not a valid SteamID64: expected exactly 17 digits")]
+    WrongIdLength(String),
+    #[error("'{0}' is not a valid SteamID64: expected it to start with '7656119'")]
+    WrongIdPrefix(String),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListKind {
@@ -26,14 +40,12 @@ impl ListKind {
         }
     }
 
-    pub fn parse(raw: &str) -> Result<Self, String> {
+    pub fn parse(raw: &str) -> Result<Self, ListsError> {
         match raw {
             "admin" => Ok(ListKind::Admin),
             "banned" => Ok(ListKind::Banned),
             "permitted" => Ok(ListKind::Permitted),
-            other => Err(format!(
-                "'{other}' is not a valid list kind; expected 'admin', 'banned', or 'permitted'"
-            )),
+            other => Err(ListsError::UnknownKind(other.to_string())),
         }
     }
 }
@@ -63,7 +75,7 @@ pub fn read(instance_dir: &Path, kind: ListKind) -> Result<Vec<String>> {
 /// Written atomically (temp file + rename), mirroring `InstanceState::save`.
 pub fn write(instance_dir: &Path, kind: ListKind, ids: &[String]) -> Result<()> {
     for id in ids {
-        validate_steam_id64(id).map_err(|e| anyhow::anyhow!(e))?;
+        validate_steam_id64(id)?;
     }
 
     let path = list_path(instance_dir, kind);
@@ -92,7 +104,7 @@ pub fn write(instance_dir: &Path, kind: ListKind, ids: &[String]) -> Result<()> 
 /// Adds an id if it isn't already present. Returns `false` (no-op) if it was
 /// already in the list.
 pub fn add_id(instance_dir: &Path, kind: ListKind, id: &str) -> Result<bool> {
-    validate_steam_id64(id).map_err(|e| anyhow::anyhow!(e))?;
+    validate_steam_id64(id)?;
 
     let mut ids = read(instance_dir, kind)?;
     if ids.iter().any(|existing| existing == id) {
@@ -119,16 +131,12 @@ pub fn remove_id(instance_dir: &Path, kind: ListKind, id: &str) -> Result<bool> 
 /// prefix every Steam64 account id shares; this rejects pasted SteamID3s,
 /// vanity URLs, or other garbage with a clear error instead of writing it to
 /// a file Valheim will just silently ignore.
-fn validate_steam_id64(id: &str) -> Result<(), String> {
+fn validate_steam_id64(id: &str) -> Result<(), ListsError> {
     if id.len() != 17 || !id.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!(
-            "'{id}' is not a valid SteamID64: expected exactly 17 digits"
-        ));
+        return Err(ListsError::WrongIdLength(id.to_string()));
     }
     if !id.starts_with("7656119") {
-        return Err(format!(
-            "'{id}' is not a valid SteamID64: expected it to start with '7656119'"
-        ));
+        return Err(ListsError::WrongIdPrefix(id.to_string()));
     }
     Ok(())
 }

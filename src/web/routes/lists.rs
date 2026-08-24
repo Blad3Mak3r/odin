@@ -8,7 +8,7 @@ use crate::web::error::{ApiError, ApiResult, run_blocking};
 use crate::web::state::AppState;
 
 fn parse_kind(raw: &str) -> Result<lists::ListKind, ApiError> {
-    lists::ListKind::parse(raw).map_err(|e| anyhow::anyhow!(e).into())
+    Ok(lists::ListKind::parse(raw)?)
 }
 
 #[derive(Serialize)]

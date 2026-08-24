@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -186,14 +187,16 @@ fn write_run_script(instance: &Instance) -> Result<PathBuf> {
         // tmux session's cwd is the shared install dir, not this instance
         // dir where BepInEx/doorstop_libs actually live.
         let doorstop_libs_dir = instance.dir.join("doorstop_libs");
-        script.push_str(&format!(
+        write!(
+            script,
             "export DOORSTOP_ENABLED=1\n\
              export DOORSTOP_TARGET_ASSEMBLY=\"{bepinex_dir}/core/BepInEx.Preloader.dll\"\n\
              export LD_LIBRARY_PATH=\"{doorstop_libs_dir}:${{LD_LIBRARY_PATH:-}}\"\n\
              export LD_PRELOAD=\"libdoorstop_x64.so:${{LD_PRELOAD:-}}\"\n\n",
             bepinex_dir = bepinex_dir.display(),
             doorstop_libs_dir = doorstop_libs_dir.display()
-        ));
+        )
+        .expect("writing to a String never fails");
     }
 
     let mut args = vec![
@@ -215,10 +218,8 @@ fn write_run_script(instance: &Instance) -> Result<PathBuf> {
         args.push(shell_quote(password));
     }
 
-    script.push_str(&format!(
-        "exec ./valheim_server.x86_64 {}\n",
-        args.join(" ")
-    ));
+    writeln!(script, "exec ./valheim_server.x86_64 {}", args.join(" "))
+        .expect("writing to a String never fails");
 
     let run_script = instance.dir.join("run.sh");
     let mut file = std::fs::File::create(&run_script)

@@ -4,6 +4,7 @@ import type {
   CheckResult,
   ConfigUpdateRequest,
   ConfigView,
+  GlobalMod,
   HostResources,
   InstanceResources,
   InstanceView,
@@ -138,42 +139,71 @@ export function useModSearch(query: string) {
   })
 }
 
-export function useAddMod(name: string) {
+// name is passed at mutate-time (rather than bound when the hook is
+// created) so the same mutation can be reused across many instances at
+// once, e.g. from the global mods page.
+export function useAddMod() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (modId: string) => api.post<JobHandle>(`/instances/${name}/mods`, { mod_id: modId }),
-    onSuccess: () => {
+    mutationFn: ({ name, modId }: { name: string; modId: string }) =>
+      api.post<JobHandle>(`/instances/${name}/mods`, { mod_id: modId }),
+    onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+      queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
 }
 
-export function useRemoveMod(name: string) {
+export function useRemoveMod() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (modId: string) => api.delete<void>(`/instances/${name}/mods/${modId}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] }),
+    mutationFn: ({ name, modId }: { name: string; modId: string }) =>
+      api.delete<void>(`/instances/${name}/mods/${modId}`),
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+      queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
+    },
   })
 }
 
-export function useSetModEnabled(name: string) {
+export function useSetModEnabled() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ modId, enabled }: { modId: string; enabled: boolean }) =>
+    mutationFn: ({ name, modId, enabled }: { name: string; modId: string; enabled: boolean }) =>
       api.post<void>(`/instances/${name}/mods/${modId}/${enabled ? 'enable' : 'disable'}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] }),
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+      queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
+    },
   })
 }
 
-export function useUpdateMods(name: string) {
+export function useUpdateMods() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => api.post<JobHandle>(`/instances/${name}/mods/update`),
-    onSuccess: () => {
+    mutationFn: (name: string) => api.post<JobHandle>(`/instances/${name}/mods/update`),
+    onSuccess: (_data, name) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+      queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
+  })
+}
+
+export function useGlobalMods() {
+  return useQuery({
+    queryKey: ['mods', 'global'],
+    queryFn: () => api.get<GlobalMod[]>('/mods'),
+    refetchInterval: 5_000,
+  })
+}
+
+export function usePruneMod() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (modId: string) => api.delete<void>(`/mods/${modId}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mods', 'global'] }),
   })
 }
 

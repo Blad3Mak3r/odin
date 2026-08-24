@@ -76,6 +76,19 @@ export type JobKindDescr =
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
 
+export interface GlobalModInstanceEntry {
+  instance: string
+  version: string
+  enabled: boolean
+  running: boolean
+}
+
+export interface GlobalMod {
+  mod_id: string
+  global_version: string | null
+  instances: GlobalModInstanceEntry[]
+}
+
 export interface ListView {
   ids: string[]
 }

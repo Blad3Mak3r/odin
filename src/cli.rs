@@ -167,14 +167,15 @@ pub enum ModsCommand {
     },
 
     /// Search the Thunderstore package index by name/owner, ranked by relevance.
+    /// Lists results with their install status against `server_name`, then
+    /// prompts to pick one to install (use `-l`/`--list` to skip the prompt).
     Search {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
         query: String,
-        /// Show install status against this instance.
-        #[arg(short, long, value_parser = parse_instance_name)]
-        server: Option<String>,
-        /// After listing results, prompt to pick one to install (requires --server).
+        /// List results only; skip the install prompt.
         #[arg(short, long)]
-        interactive: bool,
+        list: bool,
     },
 
     /// Enable a previously-disabled mod without reinstalling it.
@@ -189,6 +190,13 @@ pub enum ModsCommand {
         #[arg(value_parser = parse_instance_name)]
         server_name: String,
         mod_id: String,
+    },
+
+    /// Interactively enable/disable an instance's already-installed mods via a
+    /// checkbox list. Does not install new mods — use `odin mods search` for that.
+    Manage {
+        #[arg(value_parser = parse_instance_name)]
+        server_name: String,
     },
 }
 

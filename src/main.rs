@@ -89,10 +89,10 @@ fn run() -> Result<()> {
                 mod_id,
             } => commands::mods_remove::run(&paths, &server_name, &mod_id),
             ModsCommand::Search {
+                server_name,
                 query,
-                server,
-                interactive,
-            } => commands::mods_search::run(&paths, &query, server.as_deref(), interactive),
+                list,
+            } => commands::mods_search::run(&paths, &server_name, &query, list),
             ModsCommand::Enable {
                 server_name,
                 mod_id,
@@ -101,6 +101,7 @@ fn run() -> Result<()> {
                 server_name,
                 mod_id,
             } => commands::mods_disable::run(&paths, &server_name, &mod_id),
+            ModsCommand::Manage { server_name } => commands::mods_manage::run(&paths, &server_name),
         },
         Command::Completions { shell } => {
             commands::completions::run(shell);

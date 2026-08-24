@@ -98,7 +98,7 @@ odin logs my-server --follow
 odin console my-server
 
 # Add a mod and restart to load it
-odin mods search valheim-plus --server my-server --interactive
+odin mods search my-server valheim-plus
 odin restart my-server
 
 # Snapshot the world, then stop the server
@@ -155,10 +155,11 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
 | Command | Description |
 |---|---|
-| `odin mods search <query> [-s\|--server <server-name>] [-i\|--interactive]` | Search the Thunderstore package index by name or author, ranked by relevance (name match beats owner match, ties broken by downloads). With `--server`, shows whether each result is already installed on that instance. `--interactive` (requires `--server`) prompts for a result number and installs it directly. |
+| `odin mods search <server-name> <query> [-l\|--list]` | Search the Thunderstore package index by name or author, ranked by relevance (name match beats owner match, ties broken by downloads), showing whether each result is already installed on `<server-name>`. Interactive by default — prompts for a result number to install afterward; pass `-l`/`--list` to just list. |
 | `odin mods add <server-name> <mod-id>` | Install a mod by its Thunderstore id (`namespace-name` or `namespace-name-version`). Bootstraps BepInEx into the instance automatically on first use. Downloads into the shared global mod store only if it isn't already there. |
 | `odin mods update <server-name>` | Update all of an instance's installed mods to their latest available versions. Replaces the one shared copy in the global store, so this affects every other instance currently linking that mod too. |
 | `odin mods list <server-name>` | List installed mods, their versions, and whether each is currently enabled (reads local state only, no network call). |
+| `odin mods manage <server-name>` | Interactively toggle which installed mods are enabled via a checkbox list (space to toggle, enter to confirm, esc to cancel). Doesn't install new mods — use `odin mods search` for that. |
 | `odin mods enable <server-name> <mod-id>` | Re-enable a previously disabled mod — relinks it from the global store, no reinstall needed. |
 | `odin mods disable <server-name> <mod-id>` | Disable a mod without uninstalling it, so BepInEx stops loading it for this instance. |
 | `odin mods remove <server-name> <mod-id>` | Uninstall a mod from this instance (the shared download stays in the global store for other instances still using it). |

@@ -15,6 +15,7 @@ pub mod mods_add;
 pub mod mods_disable;
 pub mod mods_enable;
 pub mod mods_list;
+pub mod mods_manage;
 pub mod mods_remove;
 pub mod mods_search;
 pub mod mods_update;

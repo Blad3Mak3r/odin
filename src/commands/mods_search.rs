@@ -9,11 +9,7 @@ use crate::paths::Paths;
 
 const MAX_RESULTS: usize = 30;
 
-pub fn run(paths: &Paths, query: &str, server_name: Option<&str>, interactive: bool) -> Result<()> {
-    if interactive && server_name.is_none() {
-        bail!("--interactive requires --server <server-name> (there's nowhere to install into)");
-    }
-
+pub fn run(paths: &Paths, server_name: &str, query: &str, list_only: bool) -> Result<()> {
     let index = thunderstore::fetch_index(paths)?;
     let results = thunderstore::search(&index, query);
     if results.is_empty() {
@@ -22,32 +18,22 @@ pub fn run(paths: &Paths, query: &str, server_name: Option<&str>, interactive: b
     }
     let shown: Vec<&ThunderstorePackage> = results.into_iter().take(MAX_RESULTS).collect();
 
-    let installed = match server_name {
-        Some(name) => mods::list(paths, name)?,
-        None => Vec::new(),
-    };
+    let installed = mods::list(paths, server_name)?;
 
-    print_results(&shown, server_name.is_some(), &installed);
+    print_results(&shown, &installed);
 
-    if let Some(server_name) = server_name.filter(|_| interactive) {
+    if !list_only {
         prompt_and_install(paths, server_name, &shown)?;
     }
 
     Ok(())
 }
 
-fn print_results(shown: &[&ThunderstorePackage], show_installed: bool, installed: &[InstalledMod]) {
-    if show_installed {
-        println!(
-            "{:<4} {:<40} {:<12} {:<10} {:<16} DESCRIPTION",
-            "#", "MOD", "VERSION", "DOWNLOADS", "INSTALLED"
-        );
-    } else {
-        println!(
-            "{:<4} {:<40} {:<12} {:<10} DESCRIPTION",
-            "#", "MOD", "VERSION", "DOWNLOADS"
-        );
-    }
+fn print_results(shown: &[&ThunderstorePackage], installed: &[InstalledMod]) {
+    println!(
+        "{:<4} {:<40} {:<12} {:<10} {:<16} DESCRIPTION",
+        "#", "MOD", "VERSION", "DOWNLOADS", "INSTALLED"
+    );
 
     for (i, package) in shown.iter().enumerate() {
         let Some(latest) = package.versions.first() else {
@@ -57,27 +43,20 @@ fn print_results(shown: &[&ThunderstorePackage], show_installed: bool, installed
         let description: String = latest.description.chars().take(50).collect();
         let index = i + 1;
 
-        if show_installed {
-            let status = installed.iter().find(|m| m.mod_id == mod_id).map_or_else(
-                || "-".to_string(),
-                |m| {
-                    if m.enabled {
-                        format!("yes (v{})", m.version)
-                    } else {
-                        format!("disabled (v{})", m.version)
-                    }
-                },
-            );
-            println!(
-                "{index:<4} {mod_id:<40} {:<12} {:<10} {status:<16} {description}",
-                latest.version_number, latest.downloads
-            );
-        } else {
-            println!(
-                "{index:<4} {mod_id:<40} {:<12} {:<10} {description}",
-                latest.version_number, latest.downloads
-            );
-        }
+        let status = installed.iter().find(|m| m.mod_id == mod_id).map_or_else(
+            || "-".to_string(),
+            |m| {
+                if m.enabled {
+                    format!("yes (v{})", m.version)
+                } else {
+                    format!("disabled (v{})", m.version)
+                }
+            },
+        );
+        println!(
+            "{index:<4} {mod_id:<40} {:<12} {:<10} {status:<16} {description}",
+            latest.version_number, latest.downloads
+        );
     }
 }
 

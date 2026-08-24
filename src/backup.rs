@@ -112,7 +112,7 @@ fn add_dir_to_zip(
         let path = entry.path();
         let relative = path
             .strip_prefix(root)
-            .unwrap()
+            .expect("path is produced by walking root, so it is always prefixed by it")
             .to_string_lossy()
             .replace('\\', "/");
         if entry.file_type()?.is_dir() {

@@ -88,13 +88,12 @@ pub fn fetch_index(paths: &Paths) -> Result<Vec<ThunderstorePackage>> {
 
     let is_fresh = std::fs::metadata(&cache_file)
         .and_then(|m| m.modified())
-        .map(|modified| {
+        .is_ok_and(|modified| {
             SystemTime::now()
                 .duration_since(modified)
                 .unwrap_or(Duration::MAX)
                 < INDEX_CACHE_TTL
-        })
-        .unwrap_or(false);
+        });
     if is_fresh
         && let Ok(raw) = std::fs::read_to_string(&cache_file)
         && let Ok(packages) = serde_json::from_str(&raw)
@@ -184,7 +183,7 @@ fn uuid_like() -> String {
         "{:x}",
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .expect("system clock is set before the UNIX epoch")
             .as_nanos()
     )
 }

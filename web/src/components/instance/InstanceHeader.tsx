@@ -1,4 +1,5 @@
-import { ArrowLeft, Loader2, Trash2 } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -84,10 +85,32 @@ export function InstanceHeader({
         <div className="flex gap-6 text-sm text-muted-foreground">
           <span>World: {instance.world_name}</span>
           <span>Port: {instance.port}</span>
-          <span>Password: {instance.password ?? '—'}</span>
+          <PasswordField password={instance.password} />
           <span>Visibility: {instance.public ? 'public' : 'private'}</span>
         </div>
       )}
     </div>
+  )
+}
+
+function PasswordField({ password }: { password: string | null }) {
+  const [visible, setVisible] = useState(false)
+
+  if (!password) {
+    return <span>Password: —</span>
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      Password: {visible ? password : '••••••••'}
+      <button
+        type="button"
+        aria-label={visible ? 'Hide password' : 'Show password'}
+        onClick={() => setVisible((v) => !v)}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        {visible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+      </button>
+    </span>
   )
 }

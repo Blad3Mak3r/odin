@@ -1,3 +1,6 @@
+//! One module per CLI subcommand; each exposes a `run` function called
+//! directly from `main`'s dispatch on `cli::Command`.
+
 pub mod backup;
 pub mod completions;
 pub mod config_cmd;

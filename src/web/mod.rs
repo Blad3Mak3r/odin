@@ -11,7 +11,7 @@ mod state;
 mod static_files;
 mod ws;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -30,9 +30,21 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
 
     tracing::info!(%addr, "odin dashboard listening");
     println!("Odin dashboard listening on http://{addr}");
+    if let Some(ip) = local_network_ip() {
+        println!("Network: http://{ip}:{}", addr.port());
+    }
     axum::serve(listener, router)
         .await
         .context("web server error")
+}
+
+/// Best-effort discovery of the host's LAN IP, for display alongside the bind
+/// address. Doesn't actually send any traffic: connecting a UDP socket only
+/// picks the outbound interface/route, which `local_addr()` then reads back.
+fn local_network_ip() -> Option<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|addr| addr.ip())
 }
 
 /// `sysinfo`'s per-process CPU usage is a delta since the previous refresh,

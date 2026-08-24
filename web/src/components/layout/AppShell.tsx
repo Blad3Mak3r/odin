@@ -2,6 +2,7 @@ import { LayoutDashboard, Server } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { cn } from '@/lib/utils'
+import { ThemeToggle } from './ThemeToggle'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -11,7 +12,7 @@ const NAV_ITEMS = [
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-svh">
-      <aside className="w-56 shrink-0 border-r bg-sidebar text-sidebar-foreground">
+      <aside className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
         <div className="px-4 py-5">
           <span className="text-lg font-semibold tracking-tight">Odin</span>
           <p className="text-xs text-muted-foreground">Valheim server dashboard</p>
@@ -36,6 +37,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             </NavLink>
           ))}
         </nav>
+        <div className="mt-auto px-2 py-3">
+          <ThemeToggle />
+        </div>
       </aside>
       <main className="min-w-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-6 py-8">{children}</div>

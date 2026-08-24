@@ -19,8 +19,7 @@ pub fn has_binary() -> bool {
     Command::new("tmux")
         .arg("-V")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 fn require_binary() -> Result<()> {

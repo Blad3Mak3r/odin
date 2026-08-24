@@ -28,8 +28,7 @@ pub fn run(paths: &Paths) -> Result<()> {
         let uptime = if running {
             inst.state
                 .last_started_at
-                .map(|t| format_duration(Utc::now() - t))
-                .unwrap_or_else(|| "-".to_string())
+                .map_or_else(|| "-".to_string(), |t| format_duration(Utc::now() - t))
         } else {
             "-".to_string()
         };

@@ -96,6 +96,5 @@ fn url_reachable(url: &str) -> bool {
         .timeout(Duration::from_secs(3))
         .build()
         .and_then(|client| client.get(url).send())
-        .map(|resp| resp.status().is_success())
-        .unwrap_or(false)
+        .is_ok_and(|resp| resp.status().is_success())
 }

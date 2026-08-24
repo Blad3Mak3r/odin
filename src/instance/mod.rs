@@ -1,3 +1,8 @@
+//! Instance lookup, creation, and listing. Each instance is a directory under
+//! `<data_dir>/servers/<name>/` holding its `InstanceState` (see `state`) and
+//! save/log/mod files; `lifecycle` handles starting, stopping, and renaming
+//! the underlying tmux session and on-disk layout.
+
 pub mod lifecycle;
 pub mod state;
 
@@ -109,7 +114,7 @@ pub fn list_all(paths: &Paths) -> Result<Vec<Instance>> {
     for entry in entries {
         let entry =
             entry.with_context(|| format!("failed to read entry in {}", servers_dir.display()))?;
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();

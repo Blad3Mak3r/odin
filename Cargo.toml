@@ -34,3 +34,14 @@ directories = "5"
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 dialoguer = { version = "0.12", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "io-util"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["trace"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
+mime_guess = "2"
+sysinfo = "0.33"
+uuid = { version = "1", features = ["v4"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

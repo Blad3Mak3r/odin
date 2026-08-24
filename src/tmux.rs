@@ -130,6 +130,25 @@ pub fn wait_for_session_end(session: &str, timeout: Duration) -> Result<bool> {
     }
 }
 
+/// PIDs of the processes attached to each of a session's panes (normally
+/// just one). Returns an empty list — not an error — if the session doesn't
+/// exist, so callers can treat "not running" and "running with no panes" the
+/// same way.
+pub fn pane_pids(session: &str) -> Result<Vec<u32>> {
+    require_binary()?;
+    let output = Command::new("tmux")
+        .args(["list-panes", "-t", session, "-F", "#{pane_pid}"])
+        .output()
+        .context("failed to invoke tmux list-panes")?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect())
+}
+
 /// Replaces the current process with `tmux attach -t <session>` so terminal
 /// control (Ctrl-b d to detach, etc.) behaves exactly like a normal tmux attach.
 #[cfg(unix)]

@@ -42,7 +42,12 @@ pub fn add(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
     let index = thunderstore::fetch_index(paths)?;
     let (_package, version) = thunderstore::resolve(&mod_ref, &index)?;
 
-    let global_dir = ensure_global_mod(paths, &mod_ref, &version.version_number, &version.download_url)?;
+    let global_dir = ensure_global_mod(
+        paths,
+        &mod_ref,
+        &version.version_number,
+        &version.download_url,
+    )?;
     link_into_instance(&instance.dir, &mod_ref.mod_id(), &global_dir)?;
 
     let entry = InstalledMod {
@@ -109,8 +114,12 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
         // later `enable` links to it; don't touch `plugins/<mod_id>`.
         let enabled = installed.enabled;
 
-        let global_dir =
-            ensure_global_mod(paths, &mod_ref, &latest.version_number, &latest.download_url)?;
+        let global_dir = ensure_global_mod(
+            paths,
+            &mod_ref,
+            &latest.version_number,
+            &latest.download_url,
+        )?;
         if enabled {
             link_into_instance(&instance.dir, &mod_id, &global_dir)?;
         }

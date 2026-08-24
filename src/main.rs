@@ -8,6 +8,7 @@ mod mods;
 mod paths;
 mod steamcmd;
 mod tmux;
+mod web;
 
 use std::process::ExitCode;
 
@@ -107,5 +108,6 @@ fn run() -> Result<()> {
             commands::completions::run(shell);
             Ok(())
         }
+        Command::Serve { bind, port } => commands::serve::run(&paths, &bind, port),
     }
 }

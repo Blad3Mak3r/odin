@@ -4,16 +4,28 @@ BINDIR     := $(PREFIX)/bin
 DEBUG_BIN  := target/debug/$(BIN)
 RELEASE_BIN := target/release/$(BIN)
 
-.PHONY: all build release install uninstall run test lint fmt fmt-check check clean help
+.PHONY: all build release install uninstall run test lint fmt fmt-check check clean help web-install web-build web-dev
 
 all: build
 
-## Build a debug binary (target/debug/odin)
-build:
+## Install the dashboard frontend's npm dependencies
+web-install:
+	npm --prefix web ci
+
+## Build the dashboard frontend (output embedded into the binary from web/dist)
+web-build: web-install
+	npm --prefix web run build
+
+## Run the dashboard frontend's Vite dev server (proxies /api to `odin serve`)
+web-dev:
+	npm --prefix web run dev
+
+## Build a debug binary (target/debug/odin), including the dashboard frontend
+build: web-build
 	cargo build
 
-## Build an optimized release binary (target/release/odin)
-release:
+## Build an optimized release binary (target/release/odin), including the dashboard frontend
+release: web-build
 	cargo build --release
 
 ## Install the release binary to $(BINDIR) (override with `make install PREFIX=/usr/local`)

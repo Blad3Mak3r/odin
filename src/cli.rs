@@ -118,6 +118,18 @@ pub enum Command {
 
     /// Print a shell completion script to stdout.
     Completions { shell: Shell },
+
+    /// Start the embedded web dashboard (JSON API + built frontend).
+    /// No authentication is provided; bind to a private address or put it
+    /// behind your own reverse proxy/SSH tunnel if exposing it remotely.
+    Serve {
+        /// Address to bind the dashboard to.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        /// Port to bind the dashboard to.
+        #[arg(long, default_value_t = 7331)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand, Debug)]

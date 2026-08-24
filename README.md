@@ -51,6 +51,12 @@ them, side by side — is a single, predictable command away.
   game install, disk permissions, network reachability) so a broken setup
   fails with a clear diagnosis instead of a cryptic error three commands
   later.
+- **An optional web dashboard.** `odin serve` starts a single self-contained
+  HTTP server — the built frontend is embedded in the binary, no separate
+  process or database — for managing everything above from a browser: create
+  and control instances, edit config and access lists, search and install
+  mods, watch a live console and logs, and see host/instance resource usage.
+  See [Web dashboard](#web-dashboard) below.
 
 ## Requirements
 
@@ -65,6 +71,11 @@ them, side by side — is a single, predictable command away.
   beforehand.
 - **Outbound network access** to Steam's content servers (to install/update
   the game) and to `thunderstore.io` (to install/update mods).
+- **[Node.js](https://nodejs.org/) is only needed to build the web
+  dashboard's frontend** (`make web-build`, run automatically by `make
+  build`/`release`). The compiled `odin` binary itself has no Node.js or
+  npm runtime dependency — the dashboard is embedded static assets, not a
+  separate process.
 
 ## Installation
 
@@ -176,6 +187,37 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 |---|---|
 | `odin completions <shell>` | Print a completion script for `bash`, `zsh`, `fish`, `elvish`, or `powershell` to stdout — e.g. `odin completions zsh > ~/.zfunc/_odin`. |
 
+### Web dashboard
+
+| Command | Description |
+|---|---|
+| `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. No authentication — see [Web dashboard](#web-dashboard). |
+
+## Web dashboard
+
+`odin serve` starts a JSON API plus the built frontend from one binary:
+
+```sh
+odin serve                            # binds 127.0.0.1:7331 by default
+odin serve --bind 0.0.0.0 --port 8080  # or pick your own address/port
+```
+
+It covers the same ground as the CLI — dependency status, instance
+create/start/stop/restart/rename/delete, per-instance config, mod
+search/install/enable via Thunderstore, a live console and log tail, and
+editing `adminlist.txt`/`bannedlist.txt`/`permittedlist.txt` — plus live
+host and per-instance CPU/RAM usage that isn't exposed by the CLI at all.
+
+**There is no authentication.** `odin serve` binds to `127.0.0.1` by
+default for exactly this reason; if you want to reach it from another
+machine, put it behind an SSH tunnel (`ssh -L 8080:localhost:7331
+your-host`) or your own authenticating reverse proxy rather than binding it
+directly to a public address.
+
+The frontend (`web/`, a Vite + React + TypeScript + Tailwind + shadcn/ui
+project) is embedded into the binary at compile time, so building it is a
+separate step from `cargo build` — see [Development](#development).
+
 ## Configuration
 
 Odin stores everything under a single **data directory**, resolved in this
@@ -223,8 +265,8 @@ kill-session`, or a host reboot.
 ## Development
 
 ```sh
-make build       # debug build
-make release      # optimized release build
+make build       # debug build (builds the dashboard frontend first)
+make release      # optimized release build (ditto)
 make test         # run the test suite
 make lint          # clippy, denying warnings
 make fmt           # format the codebase
@@ -232,12 +274,24 @@ make fmt-check     # check formatting without modifying files
 make check         # fmt-check + lint + test — run before committing
 make install        # install the release binary (PREFIX=... to override, default ~/.local)
 make clean          # remove build artifacts
-make help            # list all targets
+make web-install     # install the dashboard frontend's npm dependencies
+make web-build       # build the dashboard frontend (output embedded into the binary)
+make web-dev          # run the frontend's Vite dev server, proxying /api to `odin serve`
+make help              # list all targets
 ```
 
 The release profile (`[profile.release]` in `Cargo.toml`) is tuned for a
 small, fast binary: full LTO, a single codegen unit, symbol stripping, and
 `panic = "abort"`.
+
+A plain `cargo build`/`cargo run` (bypassing the Makefile) still compiles
+without Node.js — it embeds whatever is currently in `web/dist/` (a
+placeholder page until you run `make web-build` at least once).
+
+To iterate on the frontend without rebuilding the Rust binary on every
+change, run `odin serve` in one terminal and `make web-dev` in another; the
+Vite dev server proxies `/api` requests (including WebSocket upgrades) to
+`odin serve`.
 
 ## License
 

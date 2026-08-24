@@ -29,6 +29,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
         .with_context(|| format!("failed to bind {addr}"))?;
 
     tracing::info!(%addr, "odin dashboard listening");
+    println!("Odin dashboard listening on http://{addr}");
     axum::serve(listener, router)
         .await
         .context("web server error")

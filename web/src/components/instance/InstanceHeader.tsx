@@ -75,7 +75,13 @@ export function InstanceHeader({
               Start
             </Button>
           )}
-          <Button variant="destructive" size="icon" onClick={onDelete} disabled={instance?.running}>
+          <Button
+            variant="destructive"
+            size="icon"
+            aria-label="Delete instance"
+            onClick={onDelete}
+            disabled={instance?.running}
+          >
             <Trash2 className="size-4" />
           </Button>
         </div>

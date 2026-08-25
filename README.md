@@ -194,7 +194,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 | Command | Description |
 |---|---|
 | `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. No authentication — see [Web dashboard](#web-dashboard). |
-| `odin serve install [--bind ADDR] [--port PORT] [--user NAME] [--force]` | Install `odin serve` as a systemd service (must run as root, e.g. via `sudo`). See [Running as a systemd service](#running-as-a-systemd-service). |
+| `odin serve install [--bind ADDR] [--port PORT] [--force]` | Install `odin serve` as a per-user systemd service (`systemctl --user`, no root needed). See [Running as a systemd service](#running-as-a-systemd-service). |
 | `odin serve uninstall [-y]` | Stop, disable, and remove the systemd service installed by `odin serve install`. |
 
 ## Web dashboard
@@ -224,26 +224,29 @@ separate step from `cargo build` — see [Development](#development).
 
 ### Running as a systemd service
 
-To keep the dashboard running across reboots and crashes, install it as a
-system service instead of running `odin serve` in a terminal:
+To keep the dashboard running across crashes (and, with lingering, across
+logouts and reboots too) without a terminal open, install it as a per-user
+systemd service — no root required:
 
 ```sh
-sudo odin serve install                            # binds 127.0.0.1:7331 by default
-sudo odin serve install --bind 0.0.0.0 --port 8080  # or pick your own address/port
+odin serve install                            # binds 127.0.0.1:7331 by default
+odin serve install --bind 0.0.0.0 --port 8080  # or pick your own address/port
 ```
 
-This must be run as root (e.g. via `sudo`), and installs a unit at
-`/etc/systemd/system/odin-serve.service` that runs as the user who invoked
-`sudo` (override with `--user NAME`; pass `--force` to overwrite an
-existing unit). It never runs the dashboard as root. Once installed, manage
-it with the usual `systemctl`/`journalctl` commands, which `odin serve
+This writes a unit to `~/.config/systemd/user/odin-serve.service` (pass
+`--force` to overwrite an existing one) and tries to enable *lingering*
+for your user (`loginctl enable-linger`), so the service keeps running
+after you log out — on some systems this needs elevated privileges, in
+which case `odin serve install` tells you to run `sudo loginctl
+enable-linger $(whoami)` yourself. Once installed, manage it with the
+usual `systemctl --user`/`journalctl --user` commands, which `odin serve
 install` also prints for you:
 
 ```sh
-sudo systemctl enable --now odin-serve.service   # start now and on boot
-sudo systemctl status odin-serve.service         # check it's running
-journalctl -u odin-serve.service -f              # follow logs
-sudo systemctl disable --now odin-serve.service  # stop and disable
+systemctl --user enable --now odin-serve.service   # start now and on boot
+systemctl --user status odin-serve.service         # check it's running
+journalctl --user -u odin-serve.service -f         # follow logs
+systemctl --user disable --now odin-serve.service  # stop and disable
 ```
 
 Remove the service entirely with `odin serve uninstall`.

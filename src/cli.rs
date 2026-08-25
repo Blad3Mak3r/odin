@@ -216,9 +216,9 @@ pub enum ModsCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum ServeCommand {
-    /// Install `odin serve` as a systemd service so it survives reboots and
-    /// crashes. Must be run as root (e.g. via `sudo`); runs the service as
-    /// the invoking `sudo` user unless `--user` is given.
+    /// Install `odin serve` as a per-user systemd service (`systemctl
+    /// --user`) so it survives crashes, without needing root. Also enables
+    /// lingering for your user so it survives logout and reboots too.
     Install {
         /// Address the service will bind the dashboard to.
         #[arg(long, default_value = "127.0.0.1")]
@@ -226,9 +226,6 @@ pub enum ServeCommand {
         /// Port the service will bind the dashboard to.
         #[arg(long, default_value_t = 7331)]
         port: u16,
-        /// System user the service runs as. Defaults to $SUDO_USER.
-        #[arg(long)]
-        user: Option<String>,
         /// Overwrite an already-installed unit file.
         #[arg(long)]
         force: bool,

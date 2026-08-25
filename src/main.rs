@@ -111,12 +111,9 @@ fn run() -> Result<()> {
         }
         Command::Serve { bind, port, action } => match action {
             None => commands::serve::run(&paths, &bind, port),
-            Some(ServeCommand::Install {
-                bind,
-                port,
-                user,
-                force,
-            }) => commands::serve_install::run(&bind, port, user, force),
+            Some(ServeCommand::Install { bind, port, force }) => {
+                commands::serve_install::run(&bind, port, force)
+            }
             Some(ServeCommand::Uninstall { yes }) => commands::serve_uninstall::run(yes),
         },
     }

@@ -1,21 +1,15 @@
 use std::io::{self, Write as _};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::systemd;
 
 pub fn run(yes: bool) -> Result<()> {
-    let unit_path = systemd::unit_path();
+    let unit_path = systemd::user_unit_path()?;
     if !unit_path.exists() {
         println!("no systemd service installed at {}", unit_path.display());
         return Ok(());
-    }
-
-    if !systemd::is_root() {
-        bail!(
-            "must run as root to uninstall the systemd service, e.g. `sudo odin serve uninstall`"
-        );
     }
 
     if !yes
@@ -29,16 +23,22 @@ pub fn run(yes: bool) -> Result<()> {
     }
 
     let status = Command::new("systemctl")
-        .args(["disable", "--now", systemd::UNIT_NAME])
+        .args(["--user", "disable", "--now", systemd::UNIT_NAME])
         .status()
-        .context("failed to run `systemctl disable --now`")?;
+        .context("failed to run `systemctl --user disable --now`")?;
     if !status.success() {
-        tracing::warn!(%status, "`systemctl disable --now` did not exit cleanly; continuing anyway");
+        tracing::warn!(
+            %status,
+            "`systemctl --user disable --now` did not exit cleanly; continuing anyway"
+        );
     }
 
     std::fs::remove_file(&unit_path)
         .with_context(|| format!("failed to remove {}", unit_path.display()))?;
-    systemd::daemon_reload()?;
+
+    if let Err(e) = systemd::daemon_reload() {
+        tracing::warn!(error = %e, "could not reload the user systemd instance automatically");
+    }
 
     println!("removed {}", unit_path.display());
     Ok(())

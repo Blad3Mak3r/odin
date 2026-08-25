@@ -54,7 +54,12 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
         {ids.map((id) => (
           <div key={id} className="flex items-center justify-between rounded-md border px-3 py-2">
             <span className="font-mono text-sm">{id}</span>
-            <Button size="icon" variant="ghost" onClick={() => removeId(id)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={`Remove ${id}`}
+              onClick={() => removeId(id)}
+            >
               <X className="size-4" />
             </Button>
           </div>

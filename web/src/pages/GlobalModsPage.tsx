@@ -1,5 +1,7 @@
+import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ModSearch } from '@/components/ModSearch'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,14 +12,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import {
   useAddMod,
   useGlobalMods,
   useInstances,
-  useModSearch,
   usePruneMod,
   useRemoveMod,
   useSetModEnabled,
@@ -40,7 +40,7 @@ export function GlobalModsPage() {
       {instances.isError && <QueryError error={instances.error} />}
 
       <InstalledMods instanceNames={instanceNames} />
-      <ModSearch instanceNames={instanceNames} />
+      <ModSearchSection instanceNames={instanceNames} />
     </div>
   )
 }
@@ -168,44 +168,12 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
   )
 }
 
-function ModSearch({ instanceNames }: { instanceNames: string[] }) {
-  const [query, setQuery] = useState('')
-  const results = useModSearch(query)
+function ModSearchSection({ instanceNames }: { instanceNames: string[] }) {
   const [dialogModId, setDialogModId] = useState<string | null>(null)
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Search Thunderstore</h2>
-      <Input
-        placeholder="Search mods by name or author…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-
-      {results.isLoading && <p className="text-sm text-muted-foreground">Searching…</p>}
-
-      <div className="flex flex-col gap-2">
-        {results.data?.slice(0, 20).map((mod) => (
-          <div
-            key={mod.mod_id}
-            className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
-              <p className="text-sm font-medium">
-                {mod.name} <span className="text-muted-foreground">by {mod.owner}</span>
-              </p>
-              <p className="line-clamp-1 text-xs text-muted-foreground">{mod.description}</p>
-              <div className="mt-1 flex gap-2">
-                <Badge variant="outline">v{mod.version}</Badge>
-                <Badge variant="outline">{mod.downloads.toLocaleString()} downloads</Badge>
-              </div>
-            </div>
-            <Button size="sm" onClick={() => setDialogModId(mod.mod_id)}>
-              Install
-            </Button>
-          </div>
-        ))}
-      </div>
+      <ModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
 
       <InstallOnInstancesDialog
         open={dialogModId !== null}
@@ -229,21 +197,24 @@ function InstallOnInstancesDialog({
   candidateInstances: string[]
 }) {
   const [selected, setSelected] = useState<string[]>([])
+  const [installing, setInstalling] = useState(false)
   const addMod = useAddMod()
 
   const toggle = (name: string) =>
     setSelected((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]))
 
-  const handleInstall = () => {
-    for (const name of selected) {
-      addMod.mutate(
-        { name, modId },
-        {
-          onSuccess: () => toast.success(`Installing '${modId}' on '${name}'`),
-          onError: (e) => toast.error(`${name}: ${e.message}`),
-        },
-      )
-    }
+  const handleInstall = async () => {
+    const targets = selected
+    setInstalling(true)
+    await Promise.all(
+      targets.map((name) =>
+        addMod
+          .mutateAsync({ name, modId })
+          .then(() => toast.success(`Installing '${modId}' on '${name}'`))
+          .catch((e: Error) => toast.error(`${name}: ${e.message}`)),
+      ),
+    )
+    setInstalling(false)
     setSelected([])
     onOpenChange(false)
   }
@@ -273,7 +244,8 @@ function InstallOnInstancesDialog({
           ))}
         </div>
         <DialogFooter>
-          <Button disabled={selected.length === 0} onClick={handleInstall}>
+          <Button disabled={selected.length === 0 || installing} onClick={handleInstall}>
+            {installing && <Loader2 className="size-4 animate-spin" />}
             Install
           </Button>
         </DialogFooter>

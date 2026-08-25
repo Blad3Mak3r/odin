@@ -11,7 +11,7 @@ import type {
   InstanceResources,
   InstanceView,
   JobHandle,
-  JobSnapshot,
+  JobSummary,
   ListKind,
   ListView,
   LogsView,
@@ -263,7 +263,7 @@ export function useInstallServer() {
 export function useJobs() {
   return useQuery({
     queryKey: ['jobs'],
-    queryFn: () => api.get<JobSnapshot[]>('/jobs'),
+    queryFn: () => api.get<JobSummary[]>('/jobs'),
     refetchInterval: 3_000,
   })
 }

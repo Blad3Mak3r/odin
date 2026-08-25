@@ -71,6 +71,12 @@ export interface JobSnapshot {
   log: string[]
 }
 
+export interface JobSummary {
+  id: string
+  kind: JobKindDescr
+  status: JobStatus
+}
+
 export type JobKindDescr =
   | { kind: 'steamcmd_install' }
   | { kind: 'mod_add'; instance: string; mod_id: string }

@@ -251,13 +251,19 @@ pub struct GlobalMod {
     /// (`None` for a mod that some instance's state still references but
     /// whose download was manually removed from `paths.mods_dir()`).
     pub global_version: Option<String>,
+    /// Icon URL, best-effort looked up from the Thunderstore index. `None`
+    /// if the index couldn't be fetched or the mod isn't listed there.
+    pub icon: Option<String>,
     pub instances: Vec<GlobalModInstanceEntry>,
 }
 
 /// Aggregates the shared mod store (`paths.mods_dir()`) with what each
 /// instance currently has installed, for a cross-instance view. A mod
 /// present in the store but installed on zero instances is still included —
-/// it's an orphaned download taking up disk space.
+/// it's an orphaned download taking up disk space. Also attaches an icon per
+/// mod via a best-effort Thunderstore index lookup: a fetch failure (offline,
+/// Thunderstore down) doesn't fail the whole listing, mods just show without
+/// icons.
 pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
     let mut mods: BTreeMap<String, GlobalMod> = BTreeMap::new();
 
@@ -276,6 +282,7 @@ pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
                 .or_insert_with(|| GlobalMod {
                     mod_id: mod_id.clone(),
                     global_version: None,
+                    icon: None,
                     instances: Vec::new(),
                 })
                 .global_version = current_marker_version(&entry.path());
@@ -289,6 +296,7 @@ pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
                 .or_insert_with(|| GlobalMod {
                     mod_id: installed.mod_id.clone(),
                     global_version: None,
+                    icon: None,
                     instances: Vec::new(),
                 })
                 .instances
@@ -301,7 +309,22 @@ pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
         }
     }
 
-    Ok(mods.into_values().collect())
+    let index = thunderstore::fetch_index(paths).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to fetch Thunderstore index; mods will show without icons");
+        Vec::new()
+    });
+    let mut mods: Vec<GlobalMod> = mods.into_values().collect();
+    for m in &mut mods {
+        let version_for_icon = m
+            .global_version
+            .clone()
+            .or_else(|| m.instances.first().map(|i| i.version.clone()));
+        if let Some(version) = version_for_icon {
+            m.icon = thunderstore::find_icon(&index, &m.mod_id, &version);
+        }
+    }
+
+    Ok(mods)
 }
 
 /// Removes a mod's payload from the global store. Refuses if any instance

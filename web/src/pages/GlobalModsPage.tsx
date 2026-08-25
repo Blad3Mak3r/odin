@@ -1,10 +1,12 @@
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -13,6 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import {
   useAddMod,
@@ -39,8 +42,18 @@ export function GlobalModsPage() {
 
       {instances.isError && <QueryError error={instances.error} />}
 
-      <InstalledMods instanceNames={instanceNames} />
-      <ModSearchSection instanceNames={instanceNames} />
+      <Tabs defaultValue="installed">
+        <TabsList>
+          <TabsTrigger value="installed">Installed</TabsTrigger>
+          <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
+        </TabsList>
+        <TabsContent value="installed">
+          <InstalledMods instanceNames={instanceNames} />
+        </TabsContent>
+        <TabsContent value="marketplace">
+          <ModSearchSection instanceNames={instanceNames} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -97,14 +110,17 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
   }
 
   return (
-    <div className="rounded-md border p-3">
+    <Card>
       {dialog}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm font-medium">{mod.mod_id}</p>
-          <p className="text-xs text-muted-foreground">
-            {mod.global_version ? `v${mod.global_version} in the shared store` : 'missing from the shared store'}
-          </p>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <div className="flex items-center gap-3">
+          <ModIcon src={mod.icon} />
+          <div>
+            <p className="text-sm font-medium">{mod.mod_id}</p>
+            <p className="text-xs text-muted-foreground">
+              {mod.global_version ? `v${mod.global_version} in the shared store` : 'missing from the shared store'}
+            </p>
+          </div>
         </div>
         {mod.instances.length === 0 ? (
           <Button size="sm" variant="ghost" disabled={pruneMod.isPending} onClick={handlePrune}>
@@ -117,46 +133,48 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
             </Button>
           )
         )}
-      </div>
+      </CardHeader>
 
-      {mod.instances.length === 0 ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Not installed on any instance — an orphaned download.
-        </p>
-      ) : (
-        <div className="mt-3 flex flex-col gap-2">
-          {mod.instances.map((entry) => (
-            <div
-              key={entry.instance}
-              className="flex flex-col gap-2 rounded-md bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="flex items-center gap-2 text-sm">
-                <span className="font-medium">{entry.instance}</span>
-                <span className="text-xs text-muted-foreground">v{entry.version}</span>
-                {entry.running && <Badge variant="outline">running</Badge>}
+      <CardContent>
+        {mod.instances.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Not installed on any instance — an orphaned download.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {mod.instances.map((entry) => (
+              <div
+                key={entry.instance}
+                className="flex flex-col gap-2 rounded-md bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-medium">{entry.instance}</span>
+                  <span className="text-xs text-muted-foreground">v{entry.version}</span>
+                  {entry.running && <Badge variant="outline">running</Badge>}
+                </div>
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={entry.enabled}
+                    onCheckedChange={(enabled) =>
+                      setEnabled.mutate(
+                        { name: entry.instance, modId: mod.mod_id, enabled },
+                        { onError: (e) => toast.error(e.message) },
+                      )
+                    }
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleRemove(entry.instance)}
+                  >
+                    Remove
+                  </Button>
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={entry.enabled}
-                  onCheckedChange={(enabled) =>
-                    setEnabled.mutate(
-                      { name: entry.instance, modId: mod.mod_id, enabled },
-                      { onError: (e) => toast.error(e.message) },
-                    )
-                  }
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => handleRemove(entry.instance)}
-                >
-                  Remove
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </CardContent>
 
       <InstallOnInstancesDialog
         open={installOpen}
@@ -164,7 +182,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
         modId={mod.mod_id}
         candidateInstances={candidateInstances}
       />
-    </div>
+    </Card>
   )
 }
 

@@ -2,7 +2,7 @@ use axum::Router;
 use axum::routing::{delete, get, post};
 use tower_http::trace::TraceLayer;
 
-use crate::web::routes::{doctor, install, instances, jobs, lists, mods, resources};
+use crate::web::routes::{config_files, doctor, install, instances, jobs, lists, mods, resources};
 use crate::web::state::AppState;
 use crate::web::{static_files, ws};
 
@@ -44,6 +44,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{name}/mods/{mod_id}/disable",
             post(mods::disable_mod),
+        )
+        .route(
+            "/instances/{name}/bepinex/config",
+            get(config_files::list_config_files),
+        )
+        .route(
+            "/instances/{name}/bepinex/config/{filename}",
+            get(config_files::get_config_file).put(config_files::set_config_file),
         )
         .route("/mods/search", get(mods::search_mods))
         .route("/mods", get(mods::list_global_mods))

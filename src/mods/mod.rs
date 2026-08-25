@@ -351,7 +351,8 @@ fn ensure_global_mod(
     version_number: &str,
     download_url: &str,
 ) -> Result<PathBuf> {
-    let final_dir = paths.mod_dir(&mod_ref.mod_id());
+    let mod_id = mod_ref.mod_id();
+    let final_dir = paths.mod_dir(&mod_id);
     if current_marker_version(&final_dir).as_deref() == Some(version_number) {
         return Ok(final_dir);
     }
@@ -360,11 +361,10 @@ fn ensure_global_mod(
     // installs of the same mod for different instances — e.g. installing to
     // several instances at once from the dashboard — don't share, and race
     // on cleaning up, the same staging directory.
-    let staging_dir = paths.mods_dir().join(format!(
-        ".install-tmp-{}-{}",
-        mod_ref.mod_id(),
-        uuid::Uuid::new_v4()
-    ));
+    let staging_dir =
+        paths
+            .mods_dir()
+            .join(format!(".install-tmp-{}-{}", mod_id, uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&staging_dir)?;
 
     let zip_path = thunderstore::download_zip(download_url, &staging_dir)?;
@@ -380,9 +380,9 @@ fn ensure_global_mod(
         std::fs::create_dir_all(parent)?;
     }
     copy_dir_contents_excluding_metadata(&source_root, &final_dir)
-        .with_context(|| format!("failed to install mod '{}'", mod_ref.mod_id()))?;
+        .with_context(|| format!("failed to install mod '{mod_id}'"))?;
     std::fs::write(final_dir.join(VERSION_MARKER), version_number)
-        .with_context(|| format!("failed to record version for '{}'", mod_ref.mod_id()))?;
+        .with_context(|| format!("failed to record version for '{mod_id}'"))?;
 
     std::fs::remove_dir_all(&staging_dir).ok();
     Ok(final_dir)
@@ -443,15 +443,13 @@ pub fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<()> {
 /// top-level wrapper folder, e.g. `BepInExPack_Valheim/`). Otherwise returns
 /// `dir` itself.
 pub fn effective_source_root(dir: &Path) -> Result<PathBuf> {
-    let entries: Vec<_> = std::fs::read_dir(dir)?
-        .collect::<std::result::Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter(|e| {
-            !METADATA_ENTRIES
-                .iter()
-                .any(|m| e.file_name().to_string_lossy() == *m)
-        })
-        .collect();
+    let mut entries: Vec<_> =
+        std::fs::read_dir(dir)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    entries.retain(|e| {
+        !METADATA_ENTRIES
+            .iter()
+            .any(|m| e.file_name().to_string_lossy() == *m)
+    });
     if entries.len() == 1 && entries[0].file_type()?.is_dir() {
         return Ok(entries[0].path());
     }

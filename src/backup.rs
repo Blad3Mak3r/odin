@@ -1,4 +1,3 @@
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -119,8 +118,8 @@ fn add_dir_to_zip(
             add_dir_to_zip(writer, root, &path, options)?;
         } else {
             writer.start_file(relative, options)?;
-            let bytes = std::fs::read(&path)?;
-            writer.write_all(&bytes)?;
+            let mut file = std::fs::File::open(&path)?;
+            std::io::copy(&mut file, writer)?;
         }
     }
     Ok(())

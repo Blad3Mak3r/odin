@@ -1,10 +1,11 @@
 import { StreamLanguage } from '@codemirror/language'
 import { properties } from '@codemirror/legacy-modes/mode/properties'
+import { yaml } from '@codemirror/legacy-modes/mode/yaml'
 import { githubDark, githubLight } from '@uiw/codemirror-theme-github'
 import CodeMirror from '@uiw/react-codemirror'
 import { Loader2 } from 'lucide-react'
 import { useTheme } from 'next-themes'
-import { useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,7 +17,15 @@ import {
 } from '@/components/ui/dialog'
 import { useConfigFileContent, useConfigFiles, useSetConfigFileContent } from '@/lib/queries'
 
+// Module-scope so these extension instances are referentially stable across
+// renders — CodeMirror reconfigures on every `extensions` array identity
+// change, so a new array is fine, but its contents shouldn't be.
 const CFG_LANGUAGE = StreamLanguage.define(properties)
+const YAML_LANGUAGE = StreamLanguage.define(yaml)
+
+function languageFor(filename: string) {
+  return filename.endsWith('.yml') || filename.endsWith('.yaml') ? YAML_LANGUAGE : CFG_LANGUAGE
+}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -85,6 +94,9 @@ function ConfigFileEditDialog({
   const value = draft ?? original ?? ''
   const dirty = draft !== null && draft !== original
 
+  const extensions = useMemo(() => [languageFor(filename)], [filename])
+  const handleChange = useCallback((next: string) => setDraft(next), [])
+
   const handleSave = () => {
     if (draft === null) return
     setContent.mutate(
@@ -120,8 +132,8 @@ function ConfigFileEditDialog({
             value={value}
             height="60vh"
             theme={resolvedTheme === 'dark' ? githubDark : githubLight}
-            extensions={[CFG_LANGUAGE]}
-            onChange={(next) => setDraft(next)}
+            extensions={extensions}
+            onChange={handleChange}
           />
         )}
 

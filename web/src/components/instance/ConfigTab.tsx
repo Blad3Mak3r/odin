@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { useConfig, useUpdateConfig } from '@/lib/queries'
+
+const MIN_PORT = 1
+const MAX_PORT = 65535
 
 export function ConfigTab({ name }: { name: string }) {
   const config = useConfig(name)
@@ -23,13 +27,21 @@ export function ConfigTab({ name }: { name: string }) {
     setIsPublic(config.data.public)
   }, [config.data])
 
+  if (config.isError) {
+    return <QueryError error={config.error} />
+  }
+
   if (config.isLoading || !config.data) {
     return <p className="text-sm text-muted-foreground">Loading…</p>
   }
 
+  const portNumber = Number(port)
+  const portInvalid = port.trim() === '' || Number.isNaN(portNumber) || portNumber < MIN_PORT || portNumber > MAX_PORT
+
   const handleSave = () => {
+    if (portInvalid) return
     updateConfig.mutate(
-      { world, port: Number(port), password, public: isPublic },
+      { world, port: portNumber, password, public: isPublic },
       {
         onSuccess: () => toast.success('Config updated — restart the instance to apply it'),
         onError: (e) => toast.error(e.message),
@@ -46,6 +58,9 @@ export function ConfigTab({ name }: { name: string }) {
       <div className="flex flex-col gap-2">
         <Label htmlFor="port">Port</Label>
         <Input id="port" type="number" value={port} onChange={(e) => setPort(e.target.value)} />
+        {portInvalid && (
+          <p className="text-xs text-destructive">Enter a valid port number ({MIN_PORT}-{MAX_PORT}).</p>
+        )}
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor="password">Password</Label>
@@ -57,7 +72,7 @@ export function ConfigTab({ name }: { name: string }) {
         <Switch id="public" checked={isPublic} onCheckedChange={setIsPublic} />
       </div>
 
-      <Button className="w-fit" onClick={handleSave} disabled={updateConfig.isPending}>
+      <Button className="w-fit" onClick={handleSave} disabled={updateConfig.isPending || portInvalid}>
         Save
       </Button>
       <p className="text-xs text-muted-foreground">

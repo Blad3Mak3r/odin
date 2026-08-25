@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -47,6 +48,13 @@ export function InstancesPage() {
           </TableRow>
         </TableHeader>
         <TableBody>
+          {instances.isError && (
+            <TableRow>
+              <TableCell colSpan={6}>
+                <QueryError error={instances.error} />
+              </TableCell>
+            </TableRow>
+          )}
           {instances.data?.length === 0 && (
             <TableRow>
               <TableCell colSpan={6} className="text-center text-muted-foreground">

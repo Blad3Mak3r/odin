@@ -1,4 +1,6 @@
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { toast } from 'sonner'
+import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -35,8 +37,10 @@ export function DashboardPage() {
   const installNeeded = doctor.data?.some(
     (c) => c.label === 'Valheim dedicated server installed' && !c.ok,
   )
-  const runningJob = jobs.data?.find(
-    (j) => j.status.status === 'queued' || j.status.status === 'running',
+  const runningInstallJob = jobs.data?.find(
+    (j) =>
+      j.kind.kind === 'steamcmd_install' &&
+      (j.status.status === 'queued' || j.status.status === 'running'),
   )
 
   return (
@@ -53,10 +57,14 @@ export function DashboardPage() {
             {installNeeded && (
               <Button
                 size="sm"
-                disabled={installServer.isPending || Boolean(runningJob)}
-                onClick={() => installServer.mutate()}
+                disabled={installServer.isPending || Boolean(runningInstallJob)}
+                onClick={() =>
+                  installServer.mutate(undefined, {
+                    onError: (e) => toast.error(e.message),
+                  })
+                }
               >
-                {installServer.isPending || runningJob ? (
+                {installServer.isPending || runningInstallJob ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : null}
                 Install / update server
@@ -65,6 +73,7 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             {doctor.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+            {doctor.isError && <QueryError error={doctor.error} />}
             {doctor.data?.map((check) => <CheckRow key={check.label} check={check} />)}
           </CardContent>
         </Card>
@@ -74,6 +83,7 @@ export function DashboardPage() {
             <CardTitle className="text-base">Host resources</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm">
+            {resources.isError && <QueryError error={resources.error} />}
             {resources.data ? (
               <>
                 <div className="flex items-center justify-between">

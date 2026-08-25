@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -35,6 +36,8 @@ export function GlobalModsPage() {
         </p>
       </div>
 
+      {instances.isError && <QueryError error={instances.error} />}
+
       <InstalledMods instanceNames={instanceNames} />
       <ModSearch instanceNames={instanceNames} />
     </div>
@@ -48,6 +51,7 @@ function InstalledMods({ instanceNames }: { instanceNames: string[] }) {
     <div className="flex flex-col gap-3">
       <h2 className="text-sm font-medium">Installed mods</h2>
 
+      {globalMods.isError && <QueryError error={globalMods.error} />}
       {globalMods.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">No mods installed anywhere yet.</p>
       )}

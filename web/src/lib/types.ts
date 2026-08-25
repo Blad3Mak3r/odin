@@ -93,6 +93,15 @@ export interface ListView {
   ids: string[]
 }
 
+export interface ConfigFileEntry {
+  filename: string
+  size_bytes: number
+}
+
+export interface ConfigFileView {
+  content: string
+}
+
 export type ListKind = 'admin' | 'banned' | 'permitted'
 
 export interface HostResources {

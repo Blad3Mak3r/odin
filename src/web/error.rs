@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
+use crate::mods::config::ConfigFileError;
 
 /// A catch-all for ad-hoc input validation in route handlers that doesn't
 /// warrant its own domain error type (e.g. "password too short"). Always
@@ -49,6 +50,11 @@ impl IntoResponse for ApiError {
 fn classify(err: &anyhow::Error) -> StatusCode {
     if err.downcast_ref::<ListsError>().is_some() || err.downcast_ref::<BadRequest>().is_some() {
         return StatusCode::BAD_REQUEST;
+    }
+    match err.downcast_ref::<ConfigFileError>() {
+        Some(ConfigFileError::InvalidFilename(_)) => return StatusCode::BAD_REQUEST,
+        Some(ConfigFileError::NotFound(_)) => return StatusCode::NOT_FOUND,
+        None => {}
     }
     match err.downcast_ref::<InstanceError>() {
         Some(InstanceError::NotFound(_)) => StatusCode::NOT_FOUND,

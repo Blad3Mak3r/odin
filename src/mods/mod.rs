@@ -9,6 +9,7 @@
 //! saw and whether it's currently linked in.
 
 pub mod bepinex;
+pub mod config;
 pub mod thunderstore;
 
 use std::collections::BTreeMap;

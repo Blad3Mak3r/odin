@@ -87,6 +87,10 @@ pub fn instance_bepinex_dir(instance_dir: &std::path::Path) -> PathBuf {
     instance_dir.join("BepInEx")
 }
 
+pub fn instance_bepinex_config_dir(instance_dir: &std::path::Path) -> PathBuf {
+    instance_bepinex_dir(instance_dir).join("config")
+}
+
 pub fn instance_server_symlink(instance_dir: &std::path::Path) -> PathBuf {
     instance_dir.join("server")
 }

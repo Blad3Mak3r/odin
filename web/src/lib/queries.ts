@@ -16,7 +16,16 @@ import type {
   ListView,
   LogsView,
   ModSearchResult,
+  VersionView,
 } from './types'
+
+export function useVersion() {
+  return useQuery({
+    queryKey: ['version'],
+    queryFn: () => api.get<VersionView>('/version'),
+    staleTime: Infinity,
+  })
+}
 
 export function useDoctor() {
   return useQuery({

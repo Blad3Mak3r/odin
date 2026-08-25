@@ -2,12 +2,15 @@ use axum::Router;
 use axum::routing::{delete, get, post};
 use tower_http::trace::TraceLayer;
 
-use crate::web::routes::{config_files, doctor, install, instances, jobs, lists, mods, resources};
+use crate::web::routes::{
+    config_files, doctor, install, instances, jobs, lists, mods, resources, version,
+};
 use crate::web::state::AppState;
 use crate::web::{static_files, ws};
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
+        .route("/version", get(version::get_version))
         .route("/doctor", get(doctor::get_doctor))
         .route("/install", post(install::install_server))
         .route(

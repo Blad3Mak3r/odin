@@ -3,6 +3,7 @@ import { Blocks, LayoutDashboard, Menu, Server, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
+import { useVersion } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from './ThemeToggle'
 
@@ -13,6 +14,8 @@ const NAV_ITEMS = [
 ]
 
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+  const version = useVersion()
+
   return (
     <>
       <div className="flex items-center gap-2 px-4 py-5">
@@ -43,8 +46,11 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
           </NavLink>
         ))}
       </nav>
-      <div className="mt-auto px-2 py-3">
+      <div className="mt-auto flex items-center justify-between px-3 py-3">
         <ThemeToggle />
+        {version.data && (
+          <span className="text-xs text-muted-foreground">v{version.data.version}</span>
+        )}
       </div>
     </>
   )

@@ -1,3 +1,7 @@
+export interface VersionView {
+  version: string
+}
+
 export interface CheckResult {
   label: string
   ok: boolean

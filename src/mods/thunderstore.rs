@@ -190,7 +190,7 @@ pub fn resolve<'a>(
 /// Downloads a package zip to a temp file and returns its path.
 pub fn download_zip(url: &str, dest_dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(dest_dir)?;
-    let dest_file = dest_dir.join(format!("download-{}.zip", uuid_like()));
+    let dest_file = dest_dir.join(format!("download-{}.zip", uuid::Uuid::new_v4()));
 
     let mut response = reqwest::blocking::get(url)
         .with_context(|| format!("failed to download {url}"))?
@@ -203,16 +203,6 @@ pub fn download_zip(url: &str, dest_dir: &Path) -> Result<PathBuf> {
     file.flush()?;
 
     Ok(dest_file)
-}
-
-fn uuid_like() -> String {
-    format!(
-        "{:x}",
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("system clock is set before the UNIX epoch")
-            .as_nanos()
-    )
 }
 
 #[cfg(test)]

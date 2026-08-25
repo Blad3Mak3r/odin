@@ -21,7 +21,9 @@ them, side by side — is a single, predictable command away.
 ## Features
 
 - **One binary, no runtime dependencies** beyond `tmux` and (transparently
-  managed) SteamCMD — no Python, no Docker, no systemd required.
+  managed) SteamCMD — no Python, no Docker required. `systemd` is entirely
+  optional, only used if you choose to install the dashboard as a service
+  (`odin serve install`).
 - **Multiple named instances.** Run several independent Valheim servers on
   one host, each with its own world, port, password, visibility, and mod
   set, sharing a single downloaded copy of the game binaries.
@@ -192,6 +194,8 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 | Command | Description |
 |---|---|
 | `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. No authentication — see [Web dashboard](#web-dashboard). |
+| `odin serve install [--bind ADDR] [--port PORT] [--user NAME] [--force]` | Install `odin serve` as a systemd service (must run as root, e.g. via `sudo`). See [Running as a systemd service](#running-as-a-systemd-service). |
+| `odin serve uninstall [-y]` | Stop, disable, and remove the systemd service installed by `odin serve install`. |
 
 ## Web dashboard
 
@@ -217,6 +221,32 @@ directly to a public address.
 The frontend (`web/`, a Vite + React + TypeScript + Tailwind + shadcn/ui
 project) is embedded into the binary at compile time, so building it is a
 separate step from `cargo build` — see [Development](#development).
+
+### Running as a systemd service
+
+To keep the dashboard running across reboots and crashes, install it as a
+system service instead of running `odin serve` in a terminal:
+
+```sh
+sudo odin serve install                            # binds 127.0.0.1:7331 by default
+sudo odin serve install --bind 0.0.0.0 --port 8080  # or pick your own address/port
+```
+
+This must be run as root (e.g. via `sudo`), and installs a unit at
+`/etc/systemd/system/odin-serve.service` that runs as the user who invoked
+`sudo` (override with `--user NAME`; pass `--force` to overwrite an
+existing unit). It never runs the dashboard as root. Once installed, manage
+it with the usual `systemctl`/`journalctl` commands, which `odin serve
+install` also prints for you:
+
+```sh
+sudo systemctl enable --now odin-serve.service   # start now and on boot
+sudo systemctl status odin-serve.service         # check it's running
+journalctl -u odin-serve.service -f              # follow logs
+sudo systemctl disable --now odin-serve.service  # stop and disable
+```
+
+Remove the service entirely with `odin serve uninstall`.
 
 ## Configuration
 

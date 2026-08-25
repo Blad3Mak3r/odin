@@ -23,6 +23,8 @@ pub mod rename;
 pub mod restart;
 pub mod restore;
 pub mod serve;
+pub mod serve_install;
+pub mod serve_uninstall;
 pub mod start;
 pub mod status;
 pub mod stop;

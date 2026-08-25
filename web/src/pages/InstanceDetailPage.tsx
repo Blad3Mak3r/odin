@@ -48,14 +48,16 @@ export function InstanceDetailPage() {
       />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <TabsList>
-          <TabsTrigger value="console">Console</TabsTrigger>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
-          <TabsTrigger value="config">Config</TabsTrigger>
-          <TabsTrigger value="mods">Mods</TabsTrigger>
-          <TabsTrigger value="lists">Access lists</TabsTrigger>
-          <TabsTrigger value="resources">Resources</TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto">
+          <TabsList className="w-max">
+            <TabsTrigger value="console">Console</TabsTrigger>
+            <TabsTrigger value="logs">Logs</TabsTrigger>
+            <TabsTrigger value="config">Config</TabsTrigger>
+            <TabsTrigger value="mods">Mods</TabsTrigger>
+            <TabsTrigger value="lists">Access lists</TabsTrigger>
+            <TabsTrigger value="resources">Resources</TabsTrigger>
+          </TabsList>
+        </div>
         <TabsContent value="console">
           <ConsoleTab name={name} />
         </TabsContent>

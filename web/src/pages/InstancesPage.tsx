@@ -27,7 +27,7 @@ export function InstancesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Instances</h1>
           <p className="text-sm text-muted-foreground">Every Valheim server Odin manages.</p>
@@ -40,9 +40,9 @@ export function InstancesPage() {
           <TableRow>
             <TableHead>Name</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>World</TableHead>
-            <TableHead>Port</TableHead>
-            <TableHead>Mods</TableHead>
+            <TableHead className="hidden md:table-cell">World</TableHead>
+            <TableHead className="hidden md:table-cell">Port</TableHead>
+            <TableHead className="hidden sm:table-cell">Mods</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -66,9 +66,9 @@ export function InstancesPage() {
                   {instance.running ? 'running' : 'stopped'}
                 </Badge>
               </TableCell>
-              <TableCell>{instance.world_name}</TableCell>
-              <TableCell>{instance.port}</TableCell>
-              <TableCell>{instance.installed_mods.length}</TableCell>
+              <TableCell className="hidden md:table-cell">{instance.world_name}</TableCell>
+              <TableCell className="hidden md:table-cell">{instance.port}</TableCell>
+              <TableCell className="hidden sm:table-cell">{instance.installed_mods.length}</TableCell>
               <TableCell className="text-right">
                 <InstanceActions name={instance.name} running={instance.running} />
               </TableCell>

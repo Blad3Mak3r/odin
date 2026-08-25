@@ -46,6 +46,8 @@ pub fn build_router(state: AppState) -> Router {
             post(mods::disable_mod),
         )
         .route("/mods/search", get(mods::search_mods))
+        .route("/mods", get(mods::list_global_mods))
+        .route("/mods/{mod_id}", delete(mods::prune_mod))
         .route(
             "/instances/{name}/lists/{kind}",
             get(lists::get_list)

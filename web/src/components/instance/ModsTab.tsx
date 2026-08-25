@@ -26,9 +26,9 @@ export function ModsTab({ name }: { name: string }) {
 
 function InstalledMods({ name }: { name: string }) {
   const mods = useMods(name)
-  const setEnabled = useSetModEnabled(name)
-  const removeMod = useRemoveMod(name)
-  const updateMods = useUpdateMods(name)
+  const setEnabled = useSetModEnabled()
+  const removeMod = useRemoveMod()
+  const updateMods = useUpdateMods()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
 
@@ -41,7 +41,7 @@ function InstalledMods({ name }: { name: string }) {
           variant="outline"
           disabled={updateMods.isPending}
           onClick={() =>
-            updateMods.mutate(undefined, {
+            updateMods.mutate(name, {
               onSuccess: (handle) => setJobId(handle.id),
               onError: (e) => toast.error(e.message),
             })
@@ -68,7 +68,7 @@ function InstalledMods({ name }: { name: string }) {
                 checked={m.enabled}
                 onCheckedChange={(enabled) =>
                   setEnabled.mutate(
-                    { modId: m.mod_id, enabled },
+                    { name, modId: m.mod_id, enabled },
                     { onError: (e) => toast.error(e.message) },
                   )
                 }
@@ -77,7 +77,10 @@ function InstalledMods({ name }: { name: string }) {
                 size="sm"
                 variant="ghost"
                 onClick={() =>
-                  removeMod.mutate(m.mod_id, { onError: (e) => toast.error(e.message) })
+                  removeMod.mutate(
+                    { name, modId: m.mod_id },
+                    { onError: (e) => toast.error(e.message) },
+                  )
                 }
               >
                 Remove
@@ -95,7 +98,7 @@ function InstalledMods({ name }: { name: string }) {
 function ModSearch({ name }: { name: string }) {
   const [query, setQuery] = useState('')
   const results = useModSearch(query)
-  const addMod = useAddMod(name)
+  const addMod = useAddMod()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
 
@@ -127,10 +130,13 @@ function ModSearch({ name }: { name: string }) {
               size="sm"
               disabled={addMod.isPending}
               onClick={() =>
-                addMod.mutate(mod.mod_id, {
-                  onSuccess: (handle) => setJobId(handle.id),
-                  onError: (e) => toast.error(e.message),
-                })
+                addMod.mutate(
+                  { name, modId: mod.mod_id },
+                  {
+                    onSuccess: (handle) => setJobId(handle.id),
+                    onError: (e) => toast.error(e.message),
+                  },
+                )
               }
             >
               Install

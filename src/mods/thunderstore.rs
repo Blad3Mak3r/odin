@@ -39,6 +39,8 @@ pub struct ThunderstoreVersion {
     pub description: String,
     #[serde(default)]
     pub downloads: u64,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 pub struct ModRef {
@@ -248,6 +250,7 @@ mod tests {
                 download_url: String::new(),
                 description: String::new(),
                 downloads,
+                icon: None,
             }],
         }
     }

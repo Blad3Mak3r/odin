@@ -131,6 +131,7 @@ pub struct ModSearchResult {
     pub owner: String,
     pub version: String,
     pub description: String,
+    pub icon: Option<String>,
     pub downloads: u64,
 }
 
@@ -151,6 +152,7 @@ pub async fn search_mods(
                     owner: pkg.owner.clone(),
                     version: version.version_number.clone(),
                     description: version.description.clone(),
+                    icon: version.icon.clone(),
                     downloads: version.downloads,
                 })
             })

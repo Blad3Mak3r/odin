@@ -51,6 +51,7 @@ export interface ModSearchResult {
   owner: string
   version: string
   description: string
+  icon: string | null
   downloads: number
 }
 

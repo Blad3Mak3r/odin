@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { ModSearchCard } from '@/components/ModSearchCard'
 import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useModSearch } from '@/lib/queries'
 import type { ModSearchResult } from '@/lib/types'
 
@@ -31,6 +31,9 @@ export function ModSearch({
   const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS)
   const results = useModSearch(debouncedQuery)
 
+  const hasQuery = debouncedQuery.trim().length > 0
+  const noResults = hasQuery && !results.isLoading && results.data?.length === 0
+
   return (
     <div className="flex flex-col gap-3">
       <h2 className="text-sm font-medium">Search Thunderstore</h2>
@@ -40,28 +43,31 @@ export function ModSearch({
         onChange={(e) => setQuery(e.target.value)}
       />
 
-      {results.isLoading && <p className="text-sm text-muted-foreground">Searching…</p>}
+      {results.isLoading && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }, (_, i) => (
+            // Placeholder skeletons have no stable id and never reorder.
+            // eslint-disable-next-line react/no-array-index-key
+            <Skeleton key={i} className="h-40 rounded-xl" />
+          ))}
+        </div>
+      )}
 
-      <div className="flex flex-col gap-2">
+      {noResults && (
+        <p className="text-sm text-muted-foreground">
+          No mods found for &lsquo;{debouncedQuery}&rsquo;.
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {results.data?.slice(0, 20).map((mod) => (
-          <div
+          <ModSearchCard
             key={mod.mod_id}
-            className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
-              <p className="text-sm font-medium">
-                {mod.name} <span className="text-muted-foreground">by {mod.owner}</span>
-              </p>
-              <p className="line-clamp-1 text-xs text-muted-foreground">{mod.description}</p>
-              <div className="mt-1 flex gap-2">
-                <Badge variant="outline">v{mod.version}</Badge>
-                <Badge variant="outline">{mod.downloads.toLocaleString()} downloads</Badge>
-              </div>
-            </div>
-            <Button size="sm" disabled={selectDisabled?.(mod)} onClick={() => onSelect(mod)}>
-              {selectLabel}
-            </Button>
-          </div>
+            mod={mod}
+            selectLabel={selectLabel}
+            disabled={selectDisabled?.(mod)}
+            onSelect={onSelect}
+          />
         ))}
       </div>
     </div>

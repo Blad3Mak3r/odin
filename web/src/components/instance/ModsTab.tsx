@@ -4,7 +4,9 @@ import { toast } from 'sonner'
 import { ModSearch } from '@/components/ModSearch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useJobSocket } from '@/hooks/useJobSocket'
 import { useAddMod, useMods, useRemoveMod, useSetModEnabled, useUpdateMods } from '@/lib/queries'
@@ -15,13 +17,23 @@ const ModConfigFiles = lazy(() =>
 
 export function ModsTab({ name }: { name: string }) {
   return (
-    <div className="flex flex-col gap-8">
-      <InstalledMods name={name} />
-      <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
-        <ModConfigFiles name={name} />
-      </Suspense>
-      <ModInstallSearch name={name} />
-    </div>
+    <Tabs defaultValue="installed">
+      <TabsList>
+        <TabsTrigger value="installed">Installed</TabsTrigger>
+        <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
+      </TabsList>
+      <TabsContent value="installed">
+        <div className="flex flex-col gap-8">
+          <InstalledMods name={name} />
+          <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
+            <ModConfigFiles name={name} />
+          </Suspense>
+        </div>
+      </TabsContent>
+      <TabsContent value="marketplace">
+        <ModInstallSearch name={name} />
+      </TabsContent>
+    </Tabs>
   )
 }
 
@@ -71,29 +83,28 @@ function InstalledMods({ name }: { name: string }) {
 
       <div className="flex flex-col gap-2">
         {mods.data?.map((m) => (
-          <div
-            key={m.mod_id}
-            className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
-              <p className="text-sm font-medium">{m.mod_id}</p>
-              <p className="text-xs text-muted-foreground">v{m.version}</p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch
-                checked={m.enabled}
-                onCheckedChange={(enabled) =>
-                  setEnabled.mutate(
-                    { name, modId: m.mod_id, enabled },
-                    { onError: (e) => toast.error(e.message) },
-                  )
-                }
-              />
-              <Button size="sm" variant="ghost" onClick={() => handleRemove(m.mod_id)}>
-                Remove
-              </Button>
-            </div>
-          </div>
+          <Card key={m.mod_id} size="sm">
+            <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium">{m.mod_id}</p>
+                <p className="text-xs text-muted-foreground">v{m.version}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <Switch
+                  checked={m.enabled}
+                  onCheckedChange={(enabled) =>
+                    setEnabled.mutate(
+                      { name, modId: m.mod_id, enabled },
+                      { onError: (e) => toast.error(e.message) },
+                    )
+                  }
+                />
+                <Button size="sm" variant="ghost" onClick={() => handleRemove(m.mod_id)}>
+                  Remove
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
 

@@ -1,7 +1,6 @@
-use std::io::{self, Write as _};
-
 use anyhow::{Context, Result, bail};
 
+use crate::commands::confirm;
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
 
@@ -48,12 +47,4 @@ pub fn run(paths: &Paths, server_name: &str, yes: bool, keep_backups: bool) -> R
 
     println!("deleted '{server_name}'");
     Ok(())
-}
-
-fn confirm(prompt: &str) -> Result<bool> {
-    print!("{prompt} [y/N] ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
 }

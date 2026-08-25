@@ -1,6 +1,10 @@
 //! One module per CLI subcommand; each exposes a `run` function called
 //! directly from `main`'s dispatch on `cli::Command`.
 
+use std::io::{self, Write as _};
+
+use anyhow::Result;
+
 pub mod backup;
 pub mod completions;
 pub mod config_cmd;
@@ -28,3 +32,13 @@ pub mod serve_uninstall;
 pub mod start;
 pub mod status;
 pub mod stop;
+
+/// Prompts the user with `[y/N]` and reads a line from stdin, returning
+/// whether they answered yes.
+pub(crate) fn confirm(prompt: &str) -> Result<bool> {
+    print!("{prompt} [y/N] ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
+}

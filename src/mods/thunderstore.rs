@@ -161,6 +161,24 @@ fn relevance_rank(query: &str, name_lower: &str, owner_lower: &str) -> u8 {
     }
 }
 
+/// Looks up the icon URL for an already-installed mod: matches `mod_id`'s
+/// exact `version` if the package still carries it, falling back to the
+/// package's newest version (e.g. the installed version was since pruned
+/// from Thunderstore). Returns `None` if the mod isn't in the index at all
+/// (deregistered, or the index just failed to fetch and is empty).
+pub fn find_icon(index: &[ThunderstorePackage], mod_id: &str, version: &str) -> Option<String> {
+    let mod_ref = ModRef::parse(mod_id).ok()?;
+    let package = index
+        .iter()
+        .find(|p| p.owner == mod_ref.namespace && p.name == mod_ref.name)?;
+    package
+        .versions
+        .iter()
+        .find(|v| v.version_number == version)
+        .or_else(|| package.versions.first())
+        .and_then(|v| v.icon.clone())
+}
+
 pub fn resolve<'a>(
     mod_ref: &ModRef,
     index: &'a [ThunderstorePackage],
@@ -282,5 +300,66 @@ mod tests {
         let index = vec![package("denikson", "BepInExPack_Valheim", 1)];
         let results = search(&index, "denikson");
         assert_eq!(results.len(), 1);
+    }
+
+    fn package_with_versions(
+        owner: &str,
+        name: &str,
+        versions: Vec<(&str, Option<&str>)>,
+    ) -> ThunderstorePackage {
+        ThunderstorePackage {
+            name: name.to_string(),
+            owner: owner.to_string(),
+            versions: versions
+                .into_iter()
+                .map(|(version_number, icon)| ThunderstoreVersion {
+                    version_number: version_number.to_string(),
+                    download_url: String::new(),
+                    description: String::new(),
+                    downloads: 0,
+                    icon: icon.map(str::to_string),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn find_icon_matches_exact_installed_version() {
+        let index = vec![package_with_versions(
+            "owner",
+            "CoolMod",
+            vec![
+                ("2.0.0", Some("https://example.com/2.0.0.png")),
+                ("1.0.0", Some("https://example.com/1.0.0.png")),
+            ],
+        )];
+        assert_eq!(
+            find_icon(&index, "owner-CoolMod", "1.0.0").as_deref(),
+            Some("https://example.com/1.0.0.png")
+        );
+    }
+
+    #[test]
+    fn find_icon_falls_back_to_newest_version_when_installed_version_is_gone() {
+        // Thunderstore returns versions newest-first, mirroring `resolve`.
+        let index = vec![package_with_versions(
+            "owner",
+            "CoolMod",
+            vec![("2.0.0", Some("https://example.com/2.0.0.png"))],
+        )];
+        assert_eq!(
+            find_icon(&index, "owner-CoolMod", "1.0.0").as_deref(),
+            Some("https://example.com/2.0.0.png")
+        );
+    }
+
+    #[test]
+    fn find_icon_is_none_when_mod_is_not_in_the_index() {
+        let index = vec![package_with_versions(
+            "owner",
+            "CoolMod",
+            vec![("1.0.0", Some("https://example.com/1.0.0.png"))],
+        )];
+        assert_eq!(find_icon(&index, "someone-else-Mod", "1.0.0"), None);
     }
 }

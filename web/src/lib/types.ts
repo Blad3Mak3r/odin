@@ -10,6 +10,7 @@ export interface InstalledMod {
   version: string
   installed_at: string
   enabled: boolean
+  icon: string | null
 }
 
 export interface InstanceView {
@@ -93,6 +94,7 @@ export interface GlobalModInstanceEntry {
 export interface GlobalMod {
   mod_id: string
   global_version: string | null
+  icon: string | null
   instances: GlobalModInstanceEntry[]
 }
 

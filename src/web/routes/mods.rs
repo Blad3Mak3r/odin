@@ -1,9 +1,9 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::instance::state::InstalledMod;
 use crate::mods::{self, GlobalMod, thunderstore};
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::jobs::JobKindDescr;
@@ -24,13 +24,39 @@ pub async fn prune_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Serialize)]
+pub struct InstalledModView {
+    pub mod_id: String,
+    pub version: String,
+    pub installed_at: DateTime<Utc>,
+    pub enabled: bool,
+    pub icon: Option<String>,
+}
+
 pub async fn list_mods(
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> ApiResult<Json<Vec<InstalledMod>>> {
+) -> ApiResult<Json<Vec<InstalledModView>>> {
     let paths = state.paths.clone();
-    let mods = run_blocking(move || mods::list(&paths, &name)).await?;
-    Ok(Json(mods))
+    let views = run_blocking(move || {
+        let installed = mods::list(&paths, &name)?;
+        let index = thunderstore::fetch_index(&paths).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to fetch Thunderstore index; mods will show without icons");
+            Vec::new()
+        });
+        Ok(installed
+            .into_iter()
+            .map(|m| InstalledModView {
+                icon: thunderstore::find_icon(&index, &m.mod_id, &m.version),
+                mod_id: m.mod_id,
+                version: m.version,
+                installed_at: m.installed_at,
+                enabled: m.enabled,
+            })
+            .collect())
+    })
+    .await?;
+    Ok(Json(views))
 }
 
 #[derive(Deserialize)]

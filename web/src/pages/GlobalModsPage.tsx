@@ -1,6 +1,7 @@
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
@@ -112,11 +113,14 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
     <Card>
       {dialog}
       <CardHeader className="flex-row items-center justify-between space-y-0">
-        <div>
-          <p className="text-sm font-medium">{mod.mod_id}</p>
-          <p className="text-xs text-muted-foreground">
-            {mod.global_version ? `v${mod.global_version} in the shared store` : 'missing from the shared store'}
-          </p>
+        <div className="flex items-center gap-3">
+          <ModIcon src={mod.icon} />
+          <div>
+            <p className="text-sm font-medium">{mod.mod_id}</p>
+            <p className="text-xs text-muted-foreground">
+              {mod.global_version ? `v${mod.global_version} in the shared store` : 'missing from the shared store'}
+            </p>
+          </div>
         </div>
         {mod.instances.length === 0 ? (
           <Button size="sm" variant="ghost" disabled={pruneMod.isPending} onClick={handlePrune}>

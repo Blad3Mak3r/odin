@@ -1,6 +1,7 @@
 import { Loader2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { toast } from 'sonner'
+import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -85,9 +86,12 @@ function InstalledMods({ name }: { name: string }) {
         {mods.data?.map((m) => (
           <Card key={m.mod_id} size="sm">
             <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-medium">{m.mod_id}</p>
-                <p className="text-xs text-muted-foreground">v{m.version}</p>
+              <div className="flex items-center gap-3">
+                <ModIcon src={m.icon} />
+                <div>
+                  <p className="text-sm font-medium">{m.mod_id}</p>
+                  <p className="text-xs text-muted-foreground">v{m.version}</p>
+                </div>
               </div>
               <div className="flex items-center gap-3">
                 <Switch

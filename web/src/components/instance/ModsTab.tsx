@@ -1,19 +1,12 @@
 import { Loader2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { toast } from 'sonner'
+import { ModSearch } from '@/components/ModSearch'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useJobSocket } from '@/hooks/useJobSocket'
-import {
-  useAddMod,
-  useModSearch,
-  useMods,
-  useRemoveMod,
-  useSetModEnabled,
-  useUpdateMods,
-} from '@/lib/queries'
+import { useAddMod, useMods, useRemoveMod, useSetModEnabled, useUpdateMods } from '@/lib/queries'
 
 const ModConfigFiles = lazy(() =>
   import('./ModConfigFiles').then((m) => ({ default: m.ModConfigFiles })),
@@ -26,7 +19,7 @@ export function ModsTab({ name }: { name: string }) {
       <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
         <ModConfigFiles name={name} />
       </Suspense>
-      <ModSearch name={name} />
+      <ModInstallSearch name={name} />
     </div>
   )
 }
@@ -105,58 +98,25 @@ function InstalledMods({ name }: { name: string }) {
   )
 }
 
-function ModSearch({ name }: { name: string }) {
-  const [query, setQuery] = useState('')
-  const results = useModSearch(query)
+function ModInstallSearch({ name }: { name: string }) {
   const addMod = useAddMod()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Search Thunderstore</h2>
-      <Input
-        placeholder="Search mods by name or author…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
+      <ModSearch
+        selectDisabled={() => addMod.isPending}
+        onSelect={(mod) =>
+          addMod.mutate(
+            { name, modId: mod.mod_id },
+            {
+              onSuccess: (handle) => setJobId(handle.id),
+              onError: (e) => toast.error(e.message),
+            },
+          )
+        }
       />
-
-      {results.isLoading && <p className="text-sm text-muted-foreground">Searching…</p>}
-
-      <div className="flex flex-col gap-2">
-        {results.data?.slice(0, 20).map((mod) => (
-          <div
-            key={mod.mod_id}
-            className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
-              <p className="text-sm font-medium">
-                {mod.name} <span className="text-muted-foreground">by {mod.owner}</span>
-              </p>
-              <p className="line-clamp-1 text-xs text-muted-foreground">{mod.description}</p>
-              <div className="mt-1 flex gap-2">
-                <Badge variant="outline">v{mod.version}</Badge>
-                <Badge variant="outline">{mod.downloads.toLocaleString()} downloads</Badge>
-              </div>
-            </div>
-            <Button
-              size="sm"
-              disabled={addMod.isPending}
-              onClick={() =>
-                addMod.mutate(
-                  { name, modId: mod.mod_id },
-                  {
-                    onSuccess: (handle) => setJobId(handle.id),
-                    onError: (e) => toast.error(e.message),
-                  },
-                )
-              }
-            >
-              Install
-            </Button>
-          </div>
-        ))}
-      </div>
 
       {jobId && <JobProgress log={job.log} status={job.status} />}
     </div>
@@ -185,6 +145,7 @@ function JobProgress({
       </div>
       <div className="max-h-32 overflow-y-auto font-mono text-xs">
         {log.map((line, i) => (
+          // Job log lines have no stable id and never reorder, only append.
           // eslint-disable-next-line react/no-array-index-key
           <div key={i}>{line}</div>
         ))}

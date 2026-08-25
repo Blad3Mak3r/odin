@@ -84,15 +84,21 @@ pub async fn get_instance_resources(
         }));
     }
 
-    let system = state.resources.lock().expect("resources lock poisoned");
-    let mut cpu_percent = 0.0;
-    let mut memory_bytes = 0;
-    for pid in collect_descendants(&system, &root_pids) {
-        if let Some(process) = system.process(Pid::from_u32(pid)) {
-            cpu_percent += process.cpu_usage();
-            memory_bytes += process.memory();
+    let resources = state.resources.clone();
+    let (cpu_percent, memory_bytes) = tokio::task::spawn_blocking(move || {
+        let system = resources.lock().expect("resources lock poisoned");
+        let mut cpu_percent = 0.0;
+        let mut memory_bytes = 0;
+        for pid in collect_descendants(&system, &root_pids) {
+            if let Some(process) = system.process(Pid::from_u32(pid)) {
+                cpu_percent += process.cpu_usage();
+                memory_bytes += process.memory();
+            }
         }
-    }
+        (cpu_percent, memory_bytes)
+    })
+    .await
+    .unwrap_or((0.0, 0));
 
     Ok(Json(InstanceResources {
         running: true,

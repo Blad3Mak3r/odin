@@ -55,11 +55,10 @@ async fn handle_console_socket(socket: WebSocket, session: String, log_file: Pat
         }
     }
 
-    let recv_session = session.clone();
-    let recv_task = tokio::spawn(async move {
+    let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = stream.next().await {
             let Message::Text(text) = msg else { continue };
-            let session = recv_session.clone();
+            let session = session.clone();
             let command = text.to_string();
             let _ = tokio::task::spawn_blocking(move || {
                 crate::tmux::send_keys_line(&session, &command)
@@ -68,7 +67,7 @@ async fn handle_console_socket(socket: WebSocket, session: String, log_file: Pat
         }
     });
 
-    let send_task = tokio::spawn(async move {
+    let mut send_task = tokio::spawn(async move {
         loop {
             tokio::time::sleep(POLL_INTERVAL).await;
             let file = log_file.clone();
@@ -88,8 +87,8 @@ async fn handle_console_socket(socket: WebSocket, session: String, log_file: Pat
     });
 
     tokio::select! {
-        _ = recv_task => {},
-        _ = send_task => {},
+        _ = &mut recv_task => send_task.abort(),
+        _ = &mut send_task => recv_task.abort(),
     }
 }
 

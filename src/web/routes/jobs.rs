@@ -5,10 +5,10 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Serialize;
 
-use crate::web::jobs::{JobEvent, JobSnapshot};
+use crate::web::jobs::{JobEvent, JobSnapshot, JobSummary};
 use crate::web::state::AppState;
 
-pub async fn list_jobs(State(state): State<AppState>) -> Json<Vec<JobSnapshot>> {
+pub async fn list_jobs(State(state): State<AppState>) -> Json<Vec<JobSummary>> {
     Json(state.jobs.list())
 }
 

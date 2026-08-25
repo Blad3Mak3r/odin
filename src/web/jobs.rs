@@ -41,6 +41,16 @@ pub struct JobSnapshot {
     pub log: Vec<String>,
 }
 
+/// A `JobSnapshot` without its `log`, for list views that don't need it —
+/// avoids cloning every job's full (up to `MAX_LOG_LINES`) log buffer just
+/// to discard it.
+#[derive(Debug, Clone, Serialize)]
+pub struct JobSummary {
+    pub id: JobId,
+    pub kind: JobKindDescr,
+    pub status: JobStatus,
+}
+
 /// A message broadcast to live subscribers of a job as it runs.
 #[derive(Debug, Clone)]
 pub enum JobEvent {
@@ -152,9 +162,9 @@ impl JobRegistry {
         jobs.get(id).map(|r| snapshot(id, r))
     }
 
-    pub fn list(&self) -> Vec<JobSnapshot> {
+    pub fn list(&self) -> Vec<JobSummary> {
         let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
-        jobs.iter().map(|(id, r)| snapshot(id, r)).collect()
+        jobs.iter().map(|(id, r)| summary(id, r)).collect()
     }
 
     /// Returns the log buffered so far plus a receiver for events from this
@@ -175,6 +185,14 @@ fn snapshot(id: &str, record: &JobRecord) -> JobSnapshot {
         kind: record.kind.clone(),
         status: record.status.clone(),
         log: record.log.clone(),
+    }
+}
+
+fn summary(id: &str, record: &JobRecord) -> JobSummary {
+    JobSummary {
+        id: id.to_string(),
+        kind: record.kind.clone(),
+        status: record.status.clone(),
     }
 }
 

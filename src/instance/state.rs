@@ -2,12 +2,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rand::Rng;
-use rand::distributions::Alphanumeric;
+use rand::RngExt;
+use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
 
 fn generate_password() -> String {
-    rand::thread_rng()
+    rand::rng()
         .sample_iter(&Alphanumeric)
         .take(12)
         .map(char::from)

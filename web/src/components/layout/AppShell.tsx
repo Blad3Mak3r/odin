@@ -15,9 +15,12 @@ const NAV_ITEMS = [
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
-      <div className="px-4 py-5">
-        <span className="text-lg font-semibold tracking-tight">Odin</span>
-        <p className="text-xs text-muted-foreground">Valheim server dashboard</p>
+      <div className="flex items-center gap-2 px-4 py-5">
+        <img src="/logo.png" alt="" className="size-8 shrink-0" />
+        <div>
+          <span className="text-lg font-semibold tracking-tight">Odin</span>
+          <p className="text-xs text-muted-foreground">Valheim server dashboard</p>
+        </div>
       </div>
       <nav className="flex flex-col gap-1 px-2">
         {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
@@ -54,7 +57,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex h-svh flex-col overflow-hidden md:flex-row">
       <DialogPrimitive.Root open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
         <header className="flex shrink-0 items-center justify-between border-b bg-sidebar px-3 py-2.5 text-sidebar-foreground md:hidden">
-          <span className="text-base font-semibold tracking-tight">Odin</span>
+          <span className="flex items-center gap-2">
+            <img src="/logo.png" alt="" className="size-6 shrink-0" />
+            <span className="text-base font-semibold tracking-tight">Odin</span>
+          </span>
           <DialogPrimitive.Trigger
             render={<Button variant="ghost" size="icon-sm" aria-label="Open navigation" />}
           >

@@ -1,6 +1,7 @@
 import { StreamLanguage } from '@codemirror/language'
 import { properties } from '@codemirror/legacy-modes/mode/properties'
 import { yaml } from '@codemirror/legacy-modes/mode/yaml'
+import { EditorView } from '@codemirror/view'
 import { githubDark, githubLight } from '@uiw/codemirror-theme-github'
 import CodeMirror from '@uiw/react-codemirror'
 import { Loader2 } from 'lucide-react'
@@ -94,7 +95,10 @@ function ConfigFileEditDialog({
   const value = draft ?? original ?? ''
   const dirty = draft !== null && draft !== original
 
-  const extensions = useMemo(() => [languageFor(filename)], [filename])
+  const extensions = useMemo(
+    () => [languageFor(filename), EditorView.lineWrapping],
+    [filename],
+  )
   const handleChange = useCallback((next: string) => setDraft(next), [])
 
   const handleSave = () => {
@@ -128,13 +132,15 @@ function ConfigFileEditDialog({
         )}
 
         {original !== null && (
-          <CodeMirror
-            value={value}
-            height="60vh"
-            theme={resolvedTheme === 'dark' ? githubDark : githubLight}
-            extensions={extensions}
-            onChange={handleChange}
-          />
+          <div className="min-w-0 overflow-hidden rounded-md border">
+            <CodeMirror
+              value={value}
+              height="60vh"
+              theme={resolvedTheme === 'dark' ? githubDark : githubLight}
+              extensions={extensions}
+              onChange={handleChange}
+            />
+          </div>
         )}
 
         <DialogFooter className="items-center">

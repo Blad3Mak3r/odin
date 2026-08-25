@@ -72,7 +72,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
 
   return (
     <div className="rounded-md border p-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm font-medium">{mod.mod_id}</p>
           <p className="text-xs text-muted-foreground">
@@ -108,7 +108,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
           {mod.instances.map((entry) => (
             <div
               key={entry.instance}
-              className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2"
+              className="flex flex-col gap-2 rounded-md bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex items-center gap-2 text-sm">
                 <span className="font-medium">{entry.instance}</span>
@@ -171,7 +171,10 @@ function ModSearch({ instanceNames }: { instanceNames: string[] }) {
 
       <div className="flex flex-col gap-2">
         {results.data?.slice(0, 20).map((mod) => (
-          <div key={mod.mod_id} className="flex items-center justify-between rounded-md border p-3">
+          <div
+            key={mod.mod_id}
+            className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+          >
             <div>
               <p className="text-sm font-medium">
                 {mod.name} <span className="text-muted-foreground">by {mod.owner}</span>

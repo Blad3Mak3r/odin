@@ -41,7 +41,7 @@ function InstalledMods({ name }: { name: string }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-sm font-medium">Installed mods</h2>
         <Button
           size="sm"
@@ -65,7 +65,10 @@ function InstalledMods({ name }: { name: string }) {
 
       <div className="flex flex-col gap-2">
         {mods.data?.map((m) => (
-          <div key={m.mod_id} className="flex items-center justify-between rounded-md border p-3">
+          <div
+            key={m.mod_id}
+            className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+          >
             <div>
               <p className="text-sm font-medium">{m.mod_id}</p>
               <p className="text-xs text-muted-foreground">v{m.version}</p>
@@ -122,7 +125,10 @@ function ModSearch({ name }: { name: string }) {
 
       <div className="flex flex-col gap-2">
         {results.data?.slice(0, 20).map((mod) => (
-          <div key={mod.mod_id} className="flex items-center justify-between rounded-md border p-3">
+          <div
+            key={mod.mod_id}
+            className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+          >
             <div>
               <p className="text-sm font-medium">
                 {mod.name} <span className="text-muted-foreground">by {mod.owner}</span>

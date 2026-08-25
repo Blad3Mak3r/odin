@@ -31,7 +31,7 @@ export function InstanceHeader({
         Instances
       </Link>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">{instance?.name ?? '…'}</h1>
           {!loading && instance && (
@@ -41,7 +41,7 @@ export function InstanceHeader({
           )}
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {instance?.running ? (
             <>
               <Button
@@ -82,7 +82,7 @@ export function InstanceHeader({
       </div>
 
       {instance && (
-        <div className="flex gap-6 text-sm text-muted-foreground">
+        <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
           <span>World: {instance.world_name}</span>
           <span>Port: {instance.port}</span>
           <PasswordField password={instance.password} />

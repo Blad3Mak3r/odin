@@ -1,8 +1,8 @@
-use std::io::{self, Write as _};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 
+use crate::commands::confirm;
 use crate::systemd;
 
 pub fn run(yes: bool) -> Result<()> {
@@ -42,12 +42,4 @@ pub fn run(yes: bool) -> Result<()> {
 
     println!("removed {}", unit_path.display());
     Ok(())
-}
-
-fn confirm(prompt: &str) -> Result<bool> {
-    print!("{prompt} [y/N] ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(matches!(input.trim().to_lowercase().as_str(), "y" | "yes"))
 }

@@ -43,6 +43,10 @@ pub struct JobHandle {
     pub id: String,
 }
 
+// Returns a bare `Json<JobHandle>` rather than `ApiResult<...>` like other
+// mutating routes: spawning a job onto the registry can't fail synchronously
+// today, so there's nothing for `ApiResult` to wrap. This is intentional,
+// not an oversight.
 pub async fn add_mod(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -93,6 +97,7 @@ pub async fn disable_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// See the comment on `add_mod` above: intentionally not `ApiResult`-wrapped.
 pub async fn update_mods(
     State(state): State<AppState>,
     Path(name): Path<String>,

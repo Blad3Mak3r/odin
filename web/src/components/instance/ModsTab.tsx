@@ -1,12 +1,11 @@
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useJobSocket } from '@/hooks/useJobSocket'
-import { ModConfigFiles } from './ModConfigFiles'
 import {
   useAddMod,
   useModSearch,
@@ -16,11 +15,17 @@ import {
   useUpdateMods,
 } from '@/lib/queries'
 
+const ModConfigFiles = lazy(() =>
+  import('./ModConfigFiles').then((m) => ({ default: m.ModConfigFiles })),
+)
+
 export function ModsTab({ name }: { name: string }) {
   return (
     <div className="flex flex-col gap-8">
       <InstalledMods name={name} />
-      <ModConfigFiles name={name} />
+      <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
+        <ModConfigFiles name={name} />
+      </Suspense>
       <ModSearch name={name} />
     </div>
   )

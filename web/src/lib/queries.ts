@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api-client'
 import type {
   CheckResult,
+  ConfigFileEntry,
+  ConfigFileView,
   ConfigUpdateRequest,
   ConfigView,
   GlobalMod,
@@ -219,6 +221,34 @@ export function useSetList(name: string, kind: ListKind) {
   return useMutation({
     mutationFn: (ids: string[]) => api.put<void>(`/instances/${name}/lists/${kind}`, { ids }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
+  })
+}
+
+export function useConfigFiles(name: string) {
+  return useQuery({
+    queryKey: ['instances', name, 'bepinex-config'],
+    queryFn: () => api.get<ConfigFileEntry[]>(`/instances/${name}/bepinex/config`),
+  })
+}
+
+export function useConfigFileContent(name: string, filename: string | null) {
+  return useQuery({
+    queryKey: ['instances', name, 'bepinex-config', filename],
+    queryFn: () =>
+      api.get<ConfigFileView>(`/instances/${name}/bepinex/config/${encodeURIComponent(filename!)}`),
+    enabled: filename !== null,
+  })
+}
+
+export function useSetConfigFileContent(name: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ filename, content }: { filename: string; content: string }) =>
+      api.put<void>(`/instances/${name}/bepinex/config/${encodeURIComponent(filename)}`, { content }),
+    onSuccess: (_data, { filename }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'bepinex-config', filename] })
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'bepinex-config'] })
+    },
   })
 }
 

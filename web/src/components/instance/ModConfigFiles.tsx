@@ -1,0 +1,145 @@
+import { StreamLanguage } from '@codemirror/language'
+import { properties } from '@codemirror/legacy-modes/mode/properties'
+import { githubDark, githubLight } from '@uiw/codemirror-theme-github'
+import CodeMirror from '@uiw/react-codemirror'
+import { Loader2 } from 'lucide-react'
+import { useTheme } from 'next-themes'
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { useConfigFileContent, useConfigFiles, useSetConfigFileContent } from '@/lib/queries'
+
+const CFG_LANGUAGE = StreamLanguage.define(properties)
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
+
+export function ModConfigFiles({ name }: { name: string }) {
+  const files = useConfigFiles(name)
+  const [editingFilename, setEditingFilename] = useState<string | null>(null)
+
+  return (
+    <div className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">Configuration files</h2>
+
+      {files.data?.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No BepInEx config files found yet. Config files appear here once a mod generates one on
+          first server start.
+        </p>
+      )}
+
+      <div className="flex flex-col gap-2">
+        {files.data?.map((file) => (
+          <div
+            key={file.filename}
+            className="flex items-center justify-between rounded-md border p-3"
+          >
+            <div>
+              <p className="text-sm font-medium">{file.filename}</p>
+              <p className="text-xs text-muted-foreground">{formatSize(file.size_bytes)}</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setEditingFilename(file.filename)}>
+              Edit
+            </Button>
+          </div>
+        ))}
+      </div>
+
+      {editingFilename && (
+        <ConfigFileEditDialog
+          key={editingFilename}
+          name={name}
+          filename={editingFilename}
+          onClose={() => setEditingFilename(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function ConfigFileEditDialog({
+  name,
+  filename,
+  onClose,
+}: {
+  name: string
+  filename: string
+  onClose: () => void
+}) {
+  const { resolvedTheme } = useTheme()
+  const content = useConfigFileContent(name, filename)
+  const setContent = useSetConfigFileContent(name)
+  const [draft, setDraft] = useState<string | null>(null)
+
+  const original = content.data?.content ?? null
+  const value = draft ?? original ?? ''
+  const dirty = draft !== null && draft !== original
+
+  const handleSave = () => {
+    if (draft === null) return
+    setContent.mutate(
+      { filename, content: draft },
+      {
+        onSuccess: () => {
+          toast.success(`Saved ${filename}`)
+          onClose()
+        },
+        onError: (e) => toast.error(e.message),
+      },
+    )
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{filename}</DialogTitle>
+        </DialogHeader>
+
+        {content.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+
+        {content.isError && (
+          <p className="text-sm text-destructive">
+            This config file no longer exists — it may have been removed or regenerated under a
+            different name.
+          </p>
+        )}
+
+        {original !== null && (
+          <CodeMirror
+            value={value}
+            height="60vh"
+            theme={resolvedTheme === 'dark' ? githubDark : githubLight}
+            extensions={[CFG_LANGUAGE]}
+            onChange={(next) => setDraft(next)}
+          />
+        )}
+
+        <DialogFooter className="items-center">
+          {dirty && (
+            <p className="mr-auto text-xs text-muted-foreground">
+              Unsaved changes are discarded on close.
+            </p>
+          )}
+          <Button
+            disabled={!dirty || setContent.isPending}
+            onClick={handleSave}
+          >
+            {setContent.isPending && <Loader2 className="size-4 animate-spin" />}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

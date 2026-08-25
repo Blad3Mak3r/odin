@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useJobSocket } from '@/hooks/useJobSocket'
+import { ModConfigFiles } from './ModConfigFiles'
 import {
   useAddMod,
   useModSearch,
@@ -19,6 +20,7 @@ export function ModsTab({ name }: { name: string }) {
   return (
     <div className="flex flex-col gap-8">
       <InstalledMods name={name} />
+      <ModConfigFiles name={name} />
       <ModSearch name={name} />
     </div>
   )

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
 import { useLogs } from '@/lib/queries'
 
@@ -36,6 +37,7 @@ export function LogsTab({ name }: { name: string }) {
         className="h-96 overflow-y-auto rounded-md border bg-muted/30 p-3 font-mono text-xs"
       >
         {logs.isLoading && <p className="text-muted-foreground">Loading…</p>}
+        {logs.isError && <QueryError error={logs.error} />}
         {logs.data?.lines.length === 0 && (
           <p className="text-muted-foreground">No logs yet — start the instance first.</p>
         )}

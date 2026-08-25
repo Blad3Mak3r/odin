@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useList, useSetList } from '@/lib/queries'
@@ -10,6 +11,10 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
   const list = useList(name, kind)
   const setList = useSetList(name, kind)
   const [newId, setNewId] = useState('')
+
+  if (list.isError) {
+    return <QueryError error={list.error} />
+  }
 
   if (list.isLoading || !list.data) {
     return <p className="text-sm text-muted-foreground">Loading…</p>

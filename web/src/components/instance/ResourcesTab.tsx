@@ -1,3 +1,4 @@
+import { QueryError } from '@/components/QueryError'
 import { useInstanceResources } from '@/lib/queries'
 
 function formatBytes(bytes: number): string {
@@ -12,6 +13,10 @@ export function ResourcesTab({ name, running }: { name: string; running: boolean
 
   if (!running) {
     return <p className="text-sm text-muted-foreground">Instance is stopped — nothing to measure.</p>
+  }
+
+  if (resources.isError) {
+    return <QueryError error={resources.error} />
   }
 
   if (resources.isLoading || !resources.data) {

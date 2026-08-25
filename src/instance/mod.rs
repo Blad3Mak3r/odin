@@ -101,8 +101,8 @@ impl Instance {
 }
 
 /// Lists all instances found under `<data_dir>/servers/*/`. An entry with a
-/// missing/corrupt state file is reported as an error alongside the ones that
-/// loaded successfully, rather than aborting the whole listing.
+/// missing/corrupt state file is logged and skipped, rather than aborting
+/// the whole listing.
 pub fn list_all(paths: &Paths) -> Result<Vec<Instance>> {
     let servers_dir = paths.servers_dir();
     if !servers_dir.is_dir() {
@@ -119,8 +119,16 @@ pub fn list_all(paths: &Paths) -> Result<Vec<Instance>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if let Some(instance) = Instance::load(paths, &name)? {
-            instances.push(instance);
+        match Instance::load(paths, &name) {
+            Ok(Some(instance)) => instances.push(instance),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    name = %name,
+                    %error,
+                    "skipping instance with unreadable/invalid state file"
+                );
+            }
         }
     }
     instances.sort_by(|a, b| a.state.name.cmp(&b.state.name));

@@ -4,6 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Serialize;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::web::jobs::{JobEvent, JobSnapshot, JobSummary};
 use crate::web::state::AppState;
@@ -27,6 +28,9 @@ enum WireEvent<'a> {
     },
     Status {
         status: &'a crate::web::jobs::JobStatus,
+    },
+    Lagged {
+        skipped: u64,
     },
 }
 
@@ -55,12 +59,22 @@ pub async fn job_ws(
             return;
         }
 
-        while let Ok(event) = rx.recv().await {
-            let result = match &event {
-                JobEvent::Line(line) => send_json(&mut socket, &WireEvent::Log { line }).await,
-                JobEvent::Status(status) => {
-                    send_json(&mut socket, &WireEvent::Status { status }).await
+        loop {
+            let result = match rx.recv().await {
+                Ok(JobEvent::Line(line)) => {
+                    send_json(&mut socket, &WireEvent::Log { line: &line }).await
                 }
+                Ok(JobEvent::Status(status)) => {
+                    send_json(&mut socket, &WireEvent::Status { status: &status }).await
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    let result = send_json(&mut socket, &WireEvent::Lagged { skipped }).await;
+                    if result.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                Err(RecvError::Closed) => return,
             };
             if result.is_err() {
                 return;

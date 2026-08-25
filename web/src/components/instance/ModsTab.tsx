@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useJobSocket } from '@/hooks/useJobSocket'
 import {
   useAddMod,
@@ -38,9 +39,21 @@ function InstalledMods({ name }: { name: string }) {
   const updateMods = useUpdateMods()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
+  const { confirm, dialog } = useConfirmDialog()
+
+  const handleRemove = async (modId: string) => {
+    const confirmed = await confirm({
+      title: `Remove '${modId}'?`,
+      description: `Remove '${modId}' from '${name}'? You can reinstall it later from the shared store.`,
+      confirmLabel: 'Remove',
+    })
+    if (!confirmed) return
+    removeMod.mutate({ name, modId }, { onError: (e) => toast.error(e.message) })
+  }
 
   return (
     <div className="flex flex-col gap-3">
+      {dialog}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-sm font-medium">Installed mods</h2>
         <Button
@@ -83,16 +96,7 @@ function InstalledMods({ name }: { name: string }) {
                   )
                 }
               />
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  removeMod.mutate(
-                    { name, modId: m.mod_id },
-                    { onError: (e) => toast.error(e.message) },
-                  )
-                }
-              >
+              <Button size="sm" variant="ghost" onClick={() => handleRemove(m.mod_id)}>
                 Remove
               </Button>
             </div>

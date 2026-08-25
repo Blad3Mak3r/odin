@@ -72,5 +72,9 @@ fn public_ip() -> Option<String> {
         .text()
         .ok()?;
     let ip = ip.trim();
-    if ip.is_empty() { None } else { Some(ip.to_string()) }
+    if ip.is_empty() {
+        None
+    } else {
+        Some(ip.to_string())
+    }
 }

@@ -11,10 +11,7 @@ pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{:<40} {:<15} {:<8} INSTALLED",
-        "MOD", "VERSION", "ENABLED"
-    );
+    println!("{:<40} {:<15} {:<8} INSTALLED", "MOD", "VERSION", "ENABLED");
     for m in installed {
         println!(
             "{:<40} {:<15} {:<8} {}",

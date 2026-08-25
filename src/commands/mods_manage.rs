@@ -82,14 +82,20 @@ mod tests {
 
     #[test]
     fn diff_enabled_states_is_empty_when_selection_matches_current_state() {
-        let installed = vec![installed_mod("owner-a", true), installed_mod("owner-b", false)];
+        let installed = vec![
+            installed_mod("owner-a", true),
+            installed_mod("owner-b", false),
+        ];
         let selected_indices = vec![0]; // only "owner-a" (already enabled) checked
         assert!(diff_enabled_states(&installed, &selected_indices).is_empty());
     }
 
     #[test]
     fn diff_enabled_states_detects_enable_and_disable() {
-        let installed = vec![installed_mod("owner-a", true), installed_mod("owner-b", false)];
+        let installed = vec![
+            installed_mod("owner-a", true),
+            installed_mod("owner-b", false),
+        ];
         let selected_indices = vec![1]; // "owner-a" unchecked (disable), "owner-b" checked (enable)
         assert_eq!(
             diff_enabled_states(&installed, &selected_indices),
@@ -102,7 +108,10 @@ mod tests {
 
     #[test]
     fn diff_enabled_states_disables_all_when_selection_is_empty() {
-        let installed = vec![installed_mod("owner-a", true), installed_mod("owner-b", true)];
+        let installed = vec![
+            installed_mod("owner-a", true),
+            installed_mod("owner-b", true),
+        ];
         assert_eq!(
             diff_enabled_states(&installed, &[]),
             vec![

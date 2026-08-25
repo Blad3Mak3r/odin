@@ -100,7 +100,7 @@ function InstalledMods({ name }: { name: string }) {
         ))}
       </div>
 
-      {jobId && <JobProgress log={job.log} status={job.status} />}
+      {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
     </div>
   )
 }
@@ -158,7 +158,7 @@ function ModSearch({ name }: { name: string }) {
         ))}
       </div>
 
-      {jobId && <JobProgress log={job.log} status={job.status} />}
+      {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
     </div>
   )
 }
@@ -166,18 +166,25 @@ function ModSearch({ name }: { name: string }) {
 function JobProgress({
   log,
   status,
+  connected,
 }: {
   log: string[]
   status: { status: string; message?: string } | null
+  connected: boolean
 }) {
+  const isActive = status?.status === 'running' || status?.status === 'queued'
+  const connectionLost = !connected && isActive
+
   return (
     <div className="rounded-md border bg-muted/30 p-3">
       <div className="mb-2 flex items-center gap-2">
-        {status?.status === 'running' || status?.status === 'queued' ? (
-          <Loader2 className="size-4 animate-spin" />
-        ) : null}
-        <Badge variant={status?.status === 'failed' ? 'destructive' : 'secondary'}>
-          {status?.status ?? 'starting'}
+        {isActive && !connectionLost ? <Loader2 className="size-4 animate-spin" /> : null}
+        <Badge
+          variant={
+            connectionLost ? 'destructive' : status?.status === 'failed' ? 'destructive' : 'secondary'
+          }
+        >
+          {connectionLost ? 'connection lost' : (status?.status ?? 'starting')}
         </Badge>
         {status?.status === 'failed' && (
           <span className="text-xs text-destructive">{status.message}</span>

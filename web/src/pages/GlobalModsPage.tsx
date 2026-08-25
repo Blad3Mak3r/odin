@@ -2,6 +2,7 @@ import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { ModSearch } from '@/components/ModSearch'
+import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
+import { useConfirmDialog } from '@/components/ConfirmDialog'
 import {
   useAddMod,
   useGlobalMods,
@@ -35,6 +37,8 @@ export function GlobalModsPage() {
         </p>
       </div>
 
+      {instances.isError && <QueryError error={instances.error} />}
+
       <InstalledMods instanceNames={instanceNames} />
       <ModSearchSection instanceNames={instanceNames} />
     </div>
@@ -48,6 +52,7 @@ function InstalledMods({ instanceNames }: { instanceNames: string[] }) {
     <div className="flex flex-col gap-3">
       <h2 className="text-sm font-medium">Installed mods</h2>
 
+      {globalMods.isError && <QueryError error={globalMods.error} />}
       {globalMods.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">No mods installed anywhere yet.</p>
       )}
@@ -66,12 +71,34 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
   const removeMod = useRemoveMod()
   const pruneMod = usePruneMod()
   const [installOpen, setInstallOpen] = useState(false)
+  const { confirm, dialog } = useConfirmDialog()
 
   const installedOn = new Set(mod.instances.map((i) => i.instance))
   const candidateInstances = instanceNames.filter((n) => !installedOn.has(n))
 
+  const handlePrune = async () => {
+    const confirmed = await confirm({
+      title: `Remove '${mod.mod_id}' from the store?`,
+      description: `Delete the downloaded copy of '${mod.mod_id}' from the shared mod store. It isn't installed on any instance right now.`,
+      confirmLabel: 'Remove from store',
+    })
+    if (!confirmed) return
+    pruneMod.mutate(mod.mod_id, { onError: (e) => toast.error(e.message) })
+  }
+
+  const handleRemove = async (instanceName: string) => {
+    const confirmed = await confirm({
+      title: `Remove '${mod.mod_id}'?`,
+      description: `Remove '${mod.mod_id}' from '${instanceName}'? You can reinstall it later.`,
+      confirmLabel: 'Remove',
+    })
+    if (!confirmed) return
+    removeMod.mutate({ name: instanceName, modId: mod.mod_id }, { onError: (e) => toast.error(e.message) })
+  }
+
   return (
     <div className="rounded-md border p-3">
+      {dialog}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm font-medium">{mod.mod_id}</p>
@@ -80,14 +107,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
           </p>
         </div>
         {mod.instances.length === 0 ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={pruneMod.isPending}
-            onClick={() =>
-              pruneMod.mutate(mod.mod_id, { onError: (e) => toast.error(e.message) })
-            }
-          >
+          <Button size="sm" variant="ghost" disabled={pruneMod.isPending} onClick={handlePrune}>
             Remove from store
           </Button>
         ) : (
@@ -128,12 +148,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() =>
-                    removeMod.mutate(
-                      { name: entry.instance, modId: mod.mod_id },
-                      { onError: (e) => toast.error(e.message) },
-                    )
-                  }
+                  onClick={() => handleRemove(entry.instance)}
                 >
                   Remove
                 </Button>

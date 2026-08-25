@@ -1,8 +1,10 @@
 import { X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useList, useSetList } from '@/lib/queries'
 import type { ListKind } from '@/lib/types'
 
@@ -10,6 +12,11 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
   const list = useList(name, kind)
   const setList = useSetList(name, kind)
   const [newId, setNewId] = useState('')
+  const { confirm, dialog } = useConfirmDialog()
+
+  if (list.isError) {
+    return <QueryError error={list.error} />
+  }
 
   if (list.isLoading || !list.data) {
     return <p className="text-sm text-muted-foreground">Loading…</p>
@@ -26,7 +33,13 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
     })
   }
 
-  const removeId = (id: string) => {
+  const removeId = async (id: string) => {
+    const confirmed = await confirm({
+      title: 'Remove entry?',
+      description: `Remove '${id}' from this list?`,
+      confirmLabel: 'Remove',
+    })
+    if (!confirmed) return
     setList.mutate(
       ids.filter((existing) => existing !== id),
       { onError: (e) => toast.error(e.message) },
@@ -35,6 +48,7 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
 
   return (
     <div className="flex flex-col gap-3">
+      {dialog}
       {ids.length === 0 && <p className="text-sm text-muted-foreground">No entries.</p>}
       <div className="flex flex-col gap-1">
         {ids.map((id) => (

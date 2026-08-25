@@ -133,9 +133,9 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
         any_updated = true;
     }
 
-    instance.save()?;
-
-    if !any_updated {
+    if any_updated {
+        instance.save()?;
+    } else {
         println!("all mods for '{server_name}' are already up to date");
     }
 
@@ -341,6 +341,17 @@ fn active_plugin_dir(instance_dir: &Path, mod_id: &str) -> PathBuf {
 /// skip re-downloading when it's already the one asked for.
 const VERSION_MARKER: &str = ".odin-version";
 
+/// Removes the wrapped directory when dropped, regardless of whether the
+/// scope exited normally or via an early `?` return — used to guarantee
+/// staging/tmp dirs never leak on a failed install step.
+pub(super) struct CleanupDir<'a>(pub &'a Path);
+
+impl Drop for CleanupDir<'_> {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.0);
+    }
+}
+
 /// Ensures `paths.mod_dir(mod_id)` holds `version_number`, downloading and
 /// replacing its contents if it currently holds a different (or no)
 /// version. There's one shared copy per mod_id (not per version), so
@@ -366,6 +377,7 @@ fn ensure_global_mod(
             .mods_dir()
             .join(format!(".install-tmp-{}-{}", mod_id, uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&staging_dir)?;
+    let _cleanup = CleanupDir(&staging_dir);
 
     let zip_path = thunderstore::download_zip(download_url, &staging_dir)?;
     let extract_dir = staging_dir.join("extracted");
@@ -384,7 +396,6 @@ fn ensure_global_mod(
     std::fs::write(final_dir.join(VERSION_MARKER), version_number)
         .with_context(|| format!("failed to record version for '{mod_id}'"))?;
 
-    std::fs::remove_dir_all(&staging_dir).ok();
     Ok(final_dir)
 }
 

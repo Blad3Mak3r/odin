@@ -9,6 +9,7 @@ import { LogsTab } from '@/components/instance/LogsTab'
 import { ModsTab } from '@/components/instance/ModsTab'
 import { ResourcesTab } from '@/components/instance/ResourcesTab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useDeleteInstance, useInstance } from '@/lib/queries'
 
 const TABS = ['console', 'logs', 'config', 'mods', 'lists', 'resources'] as const
@@ -20,13 +21,17 @@ export function InstanceDetailPage() {
   const [tab, setTab] = useState<Tab>('console')
   const instance = useInstance(name ?? '')
   const deleteInstance = useDeleteInstance()
+  const { confirm, dialog } = useConfirmDialog()
 
   if (!name) return null
 
-  const handleDelete = () => {
-    if (!confirm(`Permanently delete '${name}'? This removes its world saves, config, and mods.`)) {
-      return
-    }
+  const handleDelete = async () => {
+    const confirmed = await confirm({
+      title: `Delete '${name}'?`,
+      description: `Permanently delete '${name}'? This removes its world saves, config, and mods.`,
+      confirmLabel: 'Delete instance',
+    })
+    if (!confirmed) return
     deleteInstance.mutate(
       { name, keepBackups: false },
       {
@@ -41,6 +46,7 @@ export function InstanceDetailPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      {dialog}
       <InstanceHeader
         instance={instance.data}
         loading={instance.isLoading}

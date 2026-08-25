@@ -7,6 +7,10 @@ use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
 use crate::web::state::AppState;
 
+// Returns a bare `Json<JobHandle>` rather than `ApiResult<...>` like other
+// mutating routes: spawning a job onto the registry can't fail synchronously
+// today, so there's nothing for `ApiResult` to wrap. This is intentional,
+// not an oversight.
 pub async fn install_server(State(state): State<AppState>) -> Json<JobHandle> {
     let paths = state.paths.clone();
     let id = state

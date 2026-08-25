@@ -17,14 +17,18 @@ pub struct HostResources {
 }
 
 pub async fn get_host_resources(State(state): State<AppState>) -> Json<HostResources> {
-    let (cpu_percent, memory_total_bytes, memory_used_bytes) = {
-        let system = state.resources.lock().expect("resources lock poisoned");
-        (
-            system.global_cpu_usage(),
-            system.total_memory(),
-            system.used_memory(),
-        )
-    };
+    let resources = state.resources.clone();
+    let (cpu_percent, memory_total_bytes, memory_used_bytes) =
+        tokio::task::spawn_blocking(move || {
+            let system = resources.lock().expect("resources lock poisoned");
+            (
+                system.global_cpu_usage(),
+                system.total_memory(),
+                system.used_memory(),
+            )
+        })
+        .await
+        .unwrap_or((0.0, 0, 0));
 
     let data_dir = state.paths.data_dir.clone();
     let (disk_total_bytes, disk_available_bytes) =
@@ -111,16 +115,24 @@ pub async fn get_instance_resources(
 /// `run.sh` ends in `exec`, so no fork happens), but this also walks any
 /// descendants so resource usage stays correct if that ever changes.
 fn collect_descendants(system: &System, roots: &[u32]) -> Vec<u32> {
+    let mut children_by_parent: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for (candidate_pid, process) in system.processes() {
+        if let Some(parent) = process.parent() {
+            children_by_parent
+                .entry(parent.as_u32())
+                .or_default()
+                .push(candidate_pid.as_u32());
+        }
+    }
+
     let mut result: Vec<u32> = roots.to_vec();
     let mut frontier: Vec<u32> = roots.to_vec();
     while let Some(pid) = frontier.pop() {
-        for (candidate_pid, process) in system.processes() {
-            if process.parent().map(|p| p.as_u32()) == Some(pid) {
-                let candidate = candidate_pid.as_u32();
-                if !result.contains(&candidate) {
-                    result.push(candidate);
-                    frontier.push(candidate);
-                }
+        for &candidate in children_by_parent.get(&pid).into_iter().flatten() {
+            if !result.contains(&candidate) {
+                result.push(candidate);
+                frontier.push(candidate);
             }
         }
     }

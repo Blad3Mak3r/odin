@@ -3,10 +3,16 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 
+/// Presence of `<SYSTEM_CONFIG_DIR>/config.toml` (shipped as a conffile by
+/// the .deb/.rpm package) is what flips `Paths::resolve` into system mode.
+pub const SYSTEM_CONFIG_DIR: &str = "/etc/odin";
+pub const SYSTEM_DATA_DIR: &str = "/var/lib/odin";
+
 /// Resolved filesystem layout for Odin, rooted at a data directory.
 ///
-/// Precedence for the data dir: explicit override (config/env) > XDG default
-/// (`~/.local/share/odin`).
+/// Precedence for the data dir: explicit override (config/env) > default
+/// (system FHS paths if installed via package, otherwise XDG per-user
+/// paths).
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub data_dir: PathBuf,
@@ -15,14 +21,23 @@ pub struct Paths {
 
 impl Paths {
     pub fn resolve(data_dir_override: Option<PathBuf>) -> Result<Self> {
-        let project_dirs = ProjectDirs::from("", "", "odin")
-            .context("could not determine home directory for XDG paths")?;
+        let system_config_dir = PathBuf::from(SYSTEM_CONFIG_DIR);
+        let system_mode = system_config_dir.join("config.toml").is_file();
+
+        let (config_dir, default_data_dir) = if system_mode {
+            (system_config_dir, PathBuf::from(SYSTEM_DATA_DIR))
+        } else {
+            let project_dirs = ProjectDirs::from("", "", "odin")
+                .context("could not determine home directory for XDG paths")?;
+            (
+                project_dirs.config_dir().to_path_buf(),
+                project_dirs.data_dir().to_path_buf(),
+            )
+        };
 
         let data_dir = data_dir_override
             .or_else(|| std::env::var_os("ODIN_DATA_DIR").map(PathBuf::from))
-            .unwrap_or_else(|| project_dirs.data_dir().to_path_buf());
-
-        let config_dir = project_dirs.config_dir().to_path_buf();
+            .unwrap_or(default_data_dir);
 
         Ok(Self {
             data_dir,

@@ -34,7 +34,8 @@ directories = "6"
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.10"
 dialoguer = { version = "0.12", default-features = false }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "io-util", "process", "fs"] }
+libc = "0.2"
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.7", features = ["trace"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
@@ -51,8 +52,7 @@ tower = { version = "0.5", features = ["util"] }
 [package.metadata.deb]
 maintainer = "Blad3Mak3r <juanluiscarobenito@gmail.com>"
 copyright = "2026, Blad3Mak3r"
-depends = "tmux"
-extended-description = "Runs and maintains Valheim dedicated servers on Linux: installs/updates the server via SteamCMD, runs multiple independent named instances detached in tmux, manages per-instance config and access lists, takes backups, and installs BepInEx mods from Thunderstore."
+extended-description = "Runs and maintains Valheim dedicated servers on Linux: installs/updates the server via SteamCMD, runs multiple independent named instances as directly-supervised background processes, manages per-instance config and access lists, takes backups, and installs BepInEx mods from Thunderstore."
 section = "utils"
 priority = "optional"
 maintainer-scripts = "packaging/deb"
@@ -72,6 +72,3 @@ assets = [
 ]
 post_install_script = "packaging/scripts/postinst.sh"
 post_uninstall_script = "packaging/scripts/postrm.sh"
-
-[package.metadata.generate-rpm.requires]
-tmux = "*"

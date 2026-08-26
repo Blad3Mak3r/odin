@@ -57,7 +57,6 @@ fn run() -> Result<()> {
         Command::Create { server_name } => commands::create::run(&paths, &db, &server_name),
         Command::Start { server_name } => commands::start::run(&paths, &db, &server_name),
         Command::Stop { server_name } => commands::stop::run(&paths, &db, &server_name),
-        Command::Console { server_name } => commands::console::run(&paths, &db, &server_name),
         Command::Status => commands::status::run(&paths, &db),
         Command::Restart { server_name } => commands::restart::run(&paths, &db, &server_name),
         Command::Rename { old_name, new_name } => {
@@ -82,10 +81,6 @@ fn run() -> Result<()> {
             follow,
             lines,
         } => commands::logs::run(&paths, &db, &server_name, follow, lines),
-        Command::Exec {
-            server_name,
-            command,
-        } => commands::exec::run(&paths, &db, &server_name, &command),
         Command::Doctor => commands::doctor::run(&paths),
         Command::Mods { command } => match command {
             ModsCommand::Add {

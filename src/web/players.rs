@@ -1,31 +1,27 @@
 //! Tracks which players are currently connected to each running instance by
-//! tailing its `console.log` and recognizing Valheim's own connection
-//! messages — the dedicated server has no RCON or other admin protocol, so
-//! this is the only signal available.
+//! recognizing Valheim's own connection messages in `console.log` lines fed
+//! to it by the shared tailer in `web::log_tail` — the dedicated server has
+//! no RCON or other admin protocol, so this is the only signal available.
 //!
 //! The patterns below are a best-effort reconstruction from how Valheim's
 //! `ZNet`/`ZDOID` logging is known to behave (a numeric peer id shows up in
 //! both the join and the disconnect line), not verified against a real
 //! `console.log`. If they don't match a real server's output, `parse_line`
 //! is the one place to fix: it's a pure function, easy to test/adjust in
-//! isolation without touching the tailer or the registry around it. An
-//! unmatched line — including a disconnect whose peer id isn't currently
-//! tracked — is silently ignored rather than guessed at, so a bad pattern
-//! degrades to "missing a leave event" rather than corrupting the list.
+//! isolation without touching the registry around it. An unmatched line —
+//! including a disconnect whose peer id isn't currently tracked — is
+//! silently ignored rather than guessed at, so a bad pattern degrades to
+//! "missing a leave event" rather than corrupting the list.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 
-use crate::activity::{ActivityKind, ActivityLog};
-use crate::web::ws::read_new_bytes;
-
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
+use crate::activity::ActivityKind;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayerInfo {
@@ -97,6 +93,16 @@ impl PlayerRegistry {
             .remove(instance);
     }
 
+    /// Recognizes a join/leave in a single `console.log` line (see
+    /// `parse_line`) and applies it, returning the activity to record if
+    /// the line mattered. Called by `web::log_tail`'s shared tailer for
+    /// every new line it reads, so player tracking never needs its own
+    /// file-polling loop.
+    pub fn apply_line(&self, instance: &str, line: &str) -> Option<ActivityKind> {
+        let event = parse_line(line)?;
+        self.apply(instance, event)
+    }
+
     fn apply(&self, instance: &str, event: PlayerEvent) -> Option<ActivityKind> {
         let mut instances = self
             .instances
@@ -131,48 +137,6 @@ impl PlayerRegistry {
 impl Default for PlayerRegistry {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Polls `log_file` for newly-appended lines (same mechanism as the
-/// console WebSocket's tail-follow) and applies any join/leave recognized
-/// in them, until aborted by the telemetry supervisor. Starts tailing from
-/// the file's current end, not its beginning, since this only spawns once
-/// an instance is observed running — replaying its whole history isn't
-/// useful and could be a lot of lines for a long-running server.
-pub async fn tail_console_log(
-    instance_name: String,
-    log_file: PathBuf,
-    players: PlayerRegistry,
-    activity: ActivityLog,
-) {
-    let mut pos = tokio::task::spawn_blocking({
-        let log_file = log_file.clone();
-        move || std::fs::metadata(&log_file).map(|m| m.len()).unwrap_or(0)
-    })
-    .await
-    .unwrap_or(0);
-
-    loop {
-        tokio::time::sleep(POLL_INTERVAL).await;
-
-        let file = log_file.clone();
-        let (new_pos, chunk) = tokio::task::spawn_blocking(move || read_new_bytes(&file, pos))
-            .await
-            .unwrap_or((pos, String::new()));
-        pos = new_pos;
-        if chunk.is_empty() {
-            continue;
-        }
-
-        for line in chunk.lines() {
-            let Some(event) = parse_line(line) else {
-                continue;
-            };
-            if let Some(kind) = players.apply(&instance_name, event) {
-                activity.record(kind, Some(instance_name.clone()));
-            }
-        }
     }
 }
 

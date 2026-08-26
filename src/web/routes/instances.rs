@@ -85,7 +85,6 @@ pub async fn stop_instance(
     Path(name): Path<String>,
 ) -> ApiResult<StatusCode> {
     lifecycle::stop(&state.paths, &state.db, &name).await?;
-    state.supervisor.forget(&name);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -98,17 +97,8 @@ pub async fn restart_instance(
     Ok(Json(view(restarted)?))
 }
 
-/// Registers a freshly started child's console writer and hands it to the
-/// supervisor for reaping. Best-effort on the writer: if opening it fails,
-/// the next telemetry tick's reconciliation retries (see `web::mod`).
+/// Hands a freshly started child to the supervisor for reaping.
 async fn adopt(state: &AppState, name: &str, child: tokio::process::Child) {
-    let fifo = crate::paths::instance_console_fifo(&state.paths.instance_dir(name));
-    match instance::process::open_console_writer(&fifo).await {
-        Ok(file) => state.supervisor.register_writer(name, file),
-        Err(error) => {
-            tracing::warn!(instance = %name, %error, "could not open console fifo right after start")
-        }
-    }
     state.supervisor.spawn_reaper(
         name.to_string(),
         child,

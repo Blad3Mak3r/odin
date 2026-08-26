@@ -201,7 +201,6 @@ fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt as _;
 
     fn temp_env(label: &str) -> (Paths, Db) {
         let dir = std::env::temp_dir().join(format!(
@@ -220,14 +219,14 @@ mod tests {
 
     /// End-to-end smoke test against the *real* `valheim_server.x86_64` on
     /// this host (symlinked in, not copied) — exercises the actual spawn,
-    /// console-FIFO, liveness, and SIGINT/SIGKILL stop path this whole
-    /// module was rewritten around, not just the pure logic in
-    /// `instance::process`'s unit tests. Skipped by default (needs a real
-    /// Valheim dedicated server install, like the steamcmd-dependent tests
-    /// in `valheim_update.rs`): `cargo test -- --ignored lifecycle_e2e`.
+    /// liveness, and SIGINT/SIGKILL stop path this whole module was
+    /// rewritten around, not just the pure logic in `instance::process`'s
+    /// unit tests. Skipped by default (needs a real Valheim dedicated
+    /// server install, like the steamcmd-dependent tests in
+    /// `valheim_update.rs`): `cargo test -- --ignored lifecycle_e2e`.
     #[tokio::test]
     #[ignore]
-    async fn lifecycle_e2e_start_exec_stop_against_a_real_server_binary() {
+    async fn lifecycle_e2e_start_stop_against_a_real_server_binary() {
         // Deliberately bypasses `Paths::resolve`'s system-mode detection
         // (this dev box also has a package-installed `/etc/odin/config.toml`
         // pointing at `/var/lib/odin`, unreadable by this user) — this test
@@ -272,11 +271,6 @@ mod tests {
             }
         }
         assert!(saw_output, "expected the server to write to console.log");
-
-        // Console input actually reaches the real process's stdin.
-        let fifo = paths::instance_console_fifo(&instance.dir);
-        let mut writer = process::open_console_writer(&fifo).await.unwrap();
-        writer.write_all(b"help\n").await.unwrap();
 
         stop(&paths, &db, "e2e-smoke").await.unwrap();
         assert!(!process::is_alive(

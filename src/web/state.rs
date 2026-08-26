@@ -6,6 +6,7 @@ use crate::activity::ActivityLog;
 use crate::db::Db;
 use crate::paths::Paths;
 use crate::web::jobs::JobRegistry;
+use crate::web::log_tail::LogTailRegistry;
 use crate::web::players::PlayerRegistry;
 use crate::web::runtime::RuntimeRegistry;
 use crate::web::supervisor::Supervisor;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub activity: ActivityLog,
     pub players: PlayerRegistry,
     pub supervisor: Supervisor,
+    pub log_tail: LogTailRegistry,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
             activity,
             players: PlayerRegistry::new(),
             supervisor: Supervisor::new(),
+            log_tail: LogTailRegistry::new(),
         }
     }
 }

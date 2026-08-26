@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiWebSocketUrl } from '@/lib/api-client'
 
 const MAX_LINES = 1000
 
-export function useConsoleSocket(instanceName: string) {
+export function useLogSocket(instanceName: string) {
   const [lines, setLines] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
   const socketRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
     setLines([])
-    const socket = new WebSocket(apiWebSocketUrl(`/instances/${instanceName}/console/ws`))
+    const socket = new WebSocket(apiWebSocketUrl(`/instances/${instanceName}/logs/ws`))
     socketRef.current = socket
 
     socket.onopen = () => setConnected(true)
@@ -29,9 +29,5 @@ export function useConsoleSocket(instanceName: string) {
     }
   }, [instanceName])
 
-  const sendCommand = useCallback((command: string) => {
-    socketRef.current?.send(command)
-  }, [])
-
-  return { lines, connected, sendCommand }
+  return { lines, connected }
 }

@@ -3,6 +3,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::ActivityKind;
 use crate::instance::state::InstanceState;
 use crate::instance::{self, Instance, InstanceError, lifecycle};
 use crate::paths::Paths;
@@ -46,7 +47,14 @@ pub async fn create_instance(
     Json(req): Json<CreateInstanceRequest>,
 ) -> ApiResult<Json<InstanceView>> {
     let paths = state.paths.clone();
-    let created = run_blocking(move || Instance::create(&paths, &req.name)).await?;
+    let activity = state.activity.clone();
+    let name = req.name.clone();
+    let created = run_blocking(move || {
+        let instance = Instance::create(&paths, &req.name)?;
+        activity.record(ActivityKind::InstanceCreated, Some(name));
+        Ok(instance)
+    })
+    .await?;
     Ok(Json(view(created)?))
 }
 
@@ -113,8 +121,14 @@ pub async fn delete_instance(
     Query(query): Query<DeleteQuery>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
+    let activity = state.activity.clone();
     let delete_name = name.clone();
-    run_blocking(move || delete_instance_dir(&paths, &delete_name, query.keep_backups)).await?;
+    run_blocking(move || {
+        delete_instance_dir(&paths, &delete_name, query.keep_backups)?;
+        activity.record(ActivityKind::InstanceDeleted, Some(delete_name));
+        Ok(())
+    })
+    .await?;
     state.runtime.remove_instance(&name);
     Ok(StatusCode::NO_CONTENT)
 }

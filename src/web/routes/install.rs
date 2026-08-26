@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::State;
 
+use crate::activity::ActivityKind;
 use crate::instance;
 use crate::steamcmd::{SteamCmd, VALHEIM_DEDICATED_SERVER_APP_ID};
 use crate::web::jobs::JobKindDescr;
@@ -13,6 +14,7 @@ use crate::web::state::AppState;
 // not an oversight.
 pub async fn install_server(State(state): State<AppState>) -> Json<JobHandle> {
     let paths = state.paths.clone();
+    let activity = state.activity.clone();
     let id = state
         .jobs
         .spawn(JobKindDescr::SteamcmdInstall, move |logger| {
@@ -38,6 +40,7 @@ pub async fn install_server(State(state): State<AppState>) -> Json<JobHandle> {
             )?;
 
             logger.line("done");
+            activity.record(ActivityKind::ServerInstalled, None);
             Ok(())
         });
     Json(JobHandle { id })

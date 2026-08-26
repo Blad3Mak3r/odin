@@ -17,9 +17,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::activity::ActivityKind;
 use crate::instance;
 use crate::paths::Paths;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
+use runtime::{InstanceResourceEntry, ResourcesTick};
 use state::AppState;
 
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
@@ -75,16 +77,35 @@ fn run_telemetry_tick(state: &AppState) {
         .expect("resources lock poisoned")
         .refresh_all();
 
-    state.runtime.push_host_sample(compute_host_snapshot(state));
+    let host = compute_host_snapshot(state);
+    state.runtime.push_host_sample(host);
 
-    let Ok(instances) = instance::list_all(&state.paths) else {
-        return;
-    };
-    for inst in &instances {
-        if let Ok(snapshot) = compute_instance_snapshot(state, inst) {
-            state
-                .runtime
-                .push_instance_sample(&inst.state.name, snapshot);
+    let mut entries = Vec::new();
+    if let Ok(instances) = instance::list_all(&state.paths) {
+        for inst in &instances {
+            let Ok(snapshot) = compute_instance_snapshot(state, inst) else {
+                continue;
+            };
+            let name = &inst.state.name;
+            if state.runtime.push_instance_sample(name, snapshot) {
+                let kind = if snapshot.running {
+                    ActivityKind::InstanceStarted
+                } else {
+                    ActivityKind::InstanceStopped
+                };
+                state.activity.record(kind, Some(name.clone()));
+            }
+            entries.push(InstanceResourceEntry {
+                name: name.clone(),
+                running: snapshot.running,
+                cpu_percent: snapshot.cpu_percent,
+                memory_bytes: snapshot.memory_bytes,
+            });
         }
     }
+
+    state.runtime.broadcast_tick(ResourcesTick {
+        host,
+        instances: entries,
+    });
 }

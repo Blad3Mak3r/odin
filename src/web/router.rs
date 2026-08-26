@@ -3,7 +3,7 @@ use axum::routing::{delete, get, post};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    config_files, doctor, install, instances, jobs, lists, mods, resources, version,
+    config_files, doctor, events, install, instances, jobs, lists, mods, resources, version,
 };
 use crate::web::state::AppState;
 use crate::web::{static_files, ws};
@@ -72,6 +72,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))
         .route("/jobs/{id}/ws", get(jobs::job_ws))
+        .route("/events/ws", get(events::events_ws))
         .route("/system/resources", get(resources::get_host_resources))
         .route(
             "/system/resources/history",

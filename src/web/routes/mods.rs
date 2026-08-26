@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::activity::ActivityKind;
 use crate::mods::{self, GlobalMod, thunderstore};
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::jobs::JobKindDescr;
@@ -79,6 +80,7 @@ pub async fn add_mod(
     Json(req): Json<AddModRequest>,
 ) -> Json<JobHandle> {
     let paths = state.paths.clone();
+    let activity = state.activity.clone();
     let id = state.jobs.spawn(
         JobKindDescr::ModAdd {
             instance: name.clone(),
@@ -89,6 +91,12 @@ pub async fn add_mod(
             let result = mods::add(&paths, &name, &req.mod_id);
             if result.is_ok() {
                 logger.line("done");
+                activity.record(
+                    ActivityKind::ModInstalled {
+                        mod_id: req.mod_id.clone(),
+                    },
+                    Some(name.clone()),
+                );
             }
             result
         },
@@ -101,7 +109,20 @@ pub async fn remove_mod(
     Path((name, mod_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
-    run_blocking(move || mods::remove(&paths, &name, &mod_id)).await?;
+    let activity = state.activity.clone();
+    let event_name = name.clone();
+    let event_mod_id = mod_id.clone();
+    run_blocking(move || {
+        mods::remove(&paths, &name, &mod_id)?;
+        activity.record(
+            ActivityKind::ModRemoved {
+                mod_id: event_mod_id,
+            },
+            Some(event_name),
+        );
+        Ok(())
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -129,6 +150,7 @@ pub async fn update_mods(
     Path(name): Path<String>,
 ) -> Json<JobHandle> {
     let paths = state.paths.clone();
+    let activity = state.activity.clone();
     let id = state.jobs.spawn(
         JobKindDescr::ModUpdate {
             instance: name.clone(),
@@ -138,6 +160,7 @@ pub async fn update_mods(
             let result = mods::update(&paths, &name);
             if result.is_ok() {
                 logger.line("done");
+                activity.record(ActivityKind::ModsUpdated, Some(name.clone()));
             }
             result
         },

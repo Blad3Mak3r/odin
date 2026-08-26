@@ -1,3 +1,4 @@
+mod activity;
 mod backup;
 mod cli;
 mod commands;

@@ -15,6 +15,21 @@ pub enum TmuxError {
     CommandFailed(String),
 }
 
+/// Builds a `tmux` command with `SHELL` forced to a real shell.
+///
+/// tmux resolves its `default-shell` option (used to run pipe-pane's
+/// shell-command, among others) from `$SHELL`, falling back to the
+/// invoking user's passwd shell. When odin runs as a dedicated system
+/// service account with a `/usr/sbin/nologin` shell and no `$SHELL` in its
+/// environment (e.g. under systemd), tmux picks `nologin` as its shell,
+/// which refuses to run anything and exits 1 — breaking pipe-pane and any
+/// other tmux command that shells out.
+fn command() -> Command {
+    let mut cmd = Command::new("tmux");
+    cmd.env("SHELL", "/bin/sh");
+    cmd
+}
+
 pub fn has_binary() -> bool {
     Command::new("tmux")
         .arg("-V")
@@ -31,7 +46,7 @@ fn require_binary() -> Result<()> {
 
 pub fn has_session(session: &str) -> Result<bool> {
     require_binary()?;
-    let status = Command::new("tmux")
+    let status = command()
         .args(["has-session", "-t", session])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -42,7 +57,7 @@ pub fn has_session(session: &str) -> Result<bool> {
 
 pub fn new_detached_session(session: &str, cwd: &Path, shell_cmd: &str) -> Result<()> {
     require_binary()?;
-    let status = Command::new("tmux")
+    let status = command()
         .args(["new-session", "-d", "-s", session, "-c"])
         .arg(cwd)
         .arg(shell_cmd)
@@ -59,7 +74,7 @@ pub fn new_detached_session(session: &str, cwd: &Path, shell_cmd: &str) -> Resul
 pub fn pipe_pane_to_file(session: &str, log_file: &Path) -> Result<()> {
     require_binary()?;
     let log_file_str = log_file.to_string_lossy();
-    let status = Command::new("tmux")
+    let status = command()
         .args(["pipe-pane", "-o", "-t", session])
         .arg(format!("cat >> {log_file_str}"))
         .status()
@@ -74,7 +89,7 @@ pub fn pipe_pane_to_file(session: &str, log_file: &Path) -> Result<()> {
 
 pub fn send_ctrl_c(session: &str) -> Result<()> {
     require_binary()?;
-    let status = Command::new("tmux")
+    let status = command()
         .args(["send-keys", "-t", session, "C-c"])
         .status()
         .context("failed to invoke tmux send-keys")?;
@@ -89,7 +104,7 @@ pub fn send_ctrl_c(session: &str) -> Result<()> {
 /// Sends literal text followed by Enter, as if typed into the session's console.
 pub fn send_keys_line(session: &str, text: &str) -> Result<()> {
     require_binary()?;
-    let status = Command::new("tmux")
+    let status = command()
         .args(["send-keys", "-t", session, text, "Enter"])
         .status()
         .context("failed to invoke tmux send-keys")?;
@@ -103,7 +118,7 @@ pub fn send_keys_line(session: &str, text: &str) -> Result<()> {
 
 pub fn kill_session(session: &str) -> Result<()> {
     require_binary()?;
-    let status = Command::new("tmux")
+    let status = command()
         .args(["kill-session", "-t", session])
         .status()
         .context("failed to invoke tmux kill-session")?;
@@ -136,7 +151,7 @@ pub fn wait_for_session_end(session: &str, timeout: Duration) -> Result<bool> {
 /// same way.
 pub fn pane_pids(session: &str) -> Result<Vec<u32>> {
     require_binary()?;
-    let output = Command::new("tmux")
+    let output = command()
         .args(["list-panes", "-t", session, "-F", "#{pane_pid}"])
         .output()
         .context("failed to invoke tmux list-panes")?;

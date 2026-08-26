@@ -7,12 +7,13 @@ import { ConsoleTab } from '@/components/instance/ConsoleTab'
 import { InstanceHeader } from '@/components/instance/InstanceHeader'
 import { LogsTab } from '@/components/instance/LogsTab'
 import { ModsTab } from '@/components/instance/ModsTab'
+import { PlayersTab } from '@/components/instance/PlayersTab'
 import { ResourcesTab } from '@/components/instance/ResourcesTab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useDeleteInstance, useInstance } from '@/lib/queries'
 
-const TABS = ['console', 'logs', 'config', 'mods', 'lists', 'resources'] as const
+const TABS = ['console', 'logs', 'config', 'mods', 'lists', 'resources', 'players'] as const
 type Tab = (typeof TABS)[number]
 
 export function InstanceDetailPage() {
@@ -62,6 +63,7 @@ export function InstanceDetailPage() {
             <TabsTrigger value="mods">Mods</TabsTrigger>
             <TabsTrigger value="lists">Access lists</TabsTrigger>
             <TabsTrigger value="resources">Resources</TabsTrigger>
+            <TabsTrigger value="players">Players</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="console">
@@ -81,6 +83,9 @@ export function InstanceDetailPage() {
         </TabsContent>
         <TabsContent value="resources">
           <ResourcesTab name={name} running={instance.data?.running ?? false} />
+        </TabsContent>
+        <TabsContent value="players">
+          <PlayersTab name={name} running={instance.data?.running ?? false} />
         </TabsContent>
       </Tabs>
     </div>

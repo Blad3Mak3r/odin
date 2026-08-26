@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { PlayersBadge } from '@/components/PlayersBadge'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -70,9 +71,12 @@ export function InstancesPage() {
                 </Link>
               </TableCell>
               <TableCell>
-                <Badge variant={instance.running ? 'default' : 'secondary'}>
-                  {instance.running ? 'running' : 'stopped'}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={instance.running ? 'default' : 'secondary'}>
+                    {instance.running ? 'running' : 'stopped'}
+                  </Badge>
+                  <PlayersBadge name={instance.name} running={instance.running} />
+                </div>
               </TableCell>
               <TableCell className="hidden md:table-cell">{instance.world_name}</TableCell>
               <TableCell className="hidden md:table-cell">{instance.port}</TableCell>

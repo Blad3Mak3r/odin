@@ -1,7 +1,8 @@
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
-import { Blocks, LayoutDashboard, Menu, Server, X } from 'lucide-react'
+import { Bell, Blocks, LayoutDashboard, Menu, Server, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { ActivityFeedPanel } from '@/components/ActivityFeedPanel'
 import { Button } from '@/components/ui/button'
 import { useLiveSocket } from '@/hooks/useLiveSocket'
 import { useVersion } from '@/lib/queries'
@@ -14,7 +15,13 @@ const NAV_ITEMS = [
   { to: '/mods', label: 'Mods', icon: Blocks, end: false },
 ]
 
-function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+function SidebarNav({
+  onNavigate,
+  onOpenActivity,
+}: {
+  onNavigate?: () => void
+  onOpenActivity: () => void
+}) {
   const version = useVersion()
 
   return (
@@ -49,9 +56,19 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
       <div className="mt-auto flex items-center justify-between px-3 py-3">
         <ThemeToggle />
-        {version.data && (
-          <span className="text-xs text-muted-foreground">v{version.data.version}</span>
-        )}
+        <div className="flex items-center gap-1">
+          {version.data && (
+            <span className="text-xs text-muted-foreground">v{version.data.version}</span>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Open activity feed"
+            onClick={onOpenActivity}
+          >
+            <Bell className="size-4" />
+          </Button>
+        </div>
       </div>
     </>
   )
@@ -60,6 +77,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 export function AppShell({ children }: { children: ReactNode }) {
   useLiveSocket()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(false)
 
   return (
     <div className="flex h-svh flex-col overflow-hidden md:flex-row">
@@ -87,18 +105,23 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <X className="size-4" />
               </DialogPrimitive.Close>
             </div>
-            <SidebarNav onNavigate={() => setMobileNavOpen(false)} />
+            <SidebarNav
+              onNavigate={() => setMobileNavOpen(false)}
+              onOpenActivity={() => setActivityOpen(true)}
+            />
           </DialogPrimitive.Popup>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
 
       <aside className="hidden w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground md:flex">
-        <SidebarNav />
+        <SidebarNav onOpenActivity={() => setActivityOpen(true)} />
       </aside>
 
       <main className="min-w-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">{children}</div>
       </main>
+
+      <ActivityFeedPanel open={activityOpen} onOpenChange={setActivityOpen} />
     </div>
   )
 }

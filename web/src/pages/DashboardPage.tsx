@@ -5,7 +5,9 @@ import { ResourceChart } from '@/components/ResourceChart'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ACTIVITY_ICONS, describeActivity } from '@/lib/activity'
 import {
+  useActivityFeed,
   useDoctor,
   useHostResourceHistory,
   useHostResources,
@@ -13,7 +15,7 @@ import {
   useJobs,
 } from '@/lib/queries'
 import type { CheckResult } from '@/lib/types'
-import { formatBytes } from '@/lib/utils'
+import { formatBytes, formatRelativeTime } from '@/lib/utils'
 
 function CheckRow({ check }: { check: CheckResult }) {
   const Icon = check.ok ? CheckCircle2 : check.critical ? XCircle : AlertTriangle
@@ -35,6 +37,7 @@ export function DashboardPage() {
   const history = useHostResourceHistory()
   const installServer = useInstallServer()
   const jobs = useJobs()
+  const activity = useActivityFeed()
 
   const installNeeded = doctor.data?.some(
     (c) => c.label === 'Valheim dedicated server installed' && !c.ok,
@@ -128,27 +131,51 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      {jobs.data && jobs.data.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Recent jobs</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {jobs.data
-              .slice()
-              .reverse()
-              .slice(0, 5)
-              .map((job) => (
-                <div key={job.id} className="flex items-center justify-between text-sm">
-                  <span>{describeJobKind(job.kind)}</span>
-                  <Badge variant={job.status.status === 'failed' ? 'destructive' : 'secondary'}>
-                    {job.status.status}
-                  </Badge>
-                </div>
-              ))}
-          </CardContent>
-        </Card>
-      )}
+      <div className="grid gap-4 md:grid-cols-2">
+        {jobs.data && jobs.data.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Recent jobs</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              {jobs.data
+                .slice()
+                .reverse()
+                .slice(0, 5)
+                .map((job) => (
+                  <div key={job.id} className="flex items-center justify-between text-sm">
+                    <span>{describeJobKind(job.kind)}</span>
+                    <Badge variant={job.status.status === 'failed' ? 'destructive' : 'secondary'}>
+                      {job.status.status}
+                    </Badge>
+                  </div>
+                ))}
+            </CardContent>
+          </Card>
+        )}
+
+        {activity.data.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Live activity</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              {activity.data.slice(0, 6).map((event) => {
+                const Icon = ACTIVITY_ICONS[event.kind.kind]
+                return (
+                  <div key={event.id} className="flex items-center gap-2 text-sm">
+                    <Icon className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">{describeActivity(event.kind)}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatRelativeTime(event.at)}
+                    </span>
+                  </div>
+                )
+              })}
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   )
 }

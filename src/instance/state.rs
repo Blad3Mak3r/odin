@@ -45,7 +45,18 @@ pub struct InstanceState {
     pub created_at: DateTime<Utc>,
     pub last_started_at: Option<DateTime<Utc>>,
     pub last_stopped_at: Option<DateTime<Utc>>,
-    pub tmux_session: String,
+    /// OS process id of the running `valheim_server.x86_64`, if any. Always
+    /// set together with `pid_started_at` and cleared together with it —
+    /// never trust one without the other.
+    #[serde(default)]
+    pub pid: Option<u32>,
+    /// The process's own kernel start time (seconds since epoch, from
+    /// `sysinfo::Process::start_time()`) at the moment we recorded `pid`.
+    /// Compared against the live value on every liveness check so a reused
+    /// pid (after a host reboot, say) reads as "not running" rather than a
+    /// false positive.
+    #[serde(default)]
+    pub pid_started_at: Option<i64>,
     #[serde(default)]
     pub bepinex_installed: bool,
     #[serde(default)]
@@ -54,7 +65,6 @@ pub struct InstanceState {
 
 impl InstanceState {
     pub fn new(name: &str, port: u16) -> Self {
-        let tmux_session = crate::paths::tmux_session_name(name);
         Self {
             name: name.to_string(),
             port,
@@ -67,7 +77,8 @@ impl InstanceState {
             created_at: Utc::now(),
             last_started_at: None,
             last_stopped_at: None,
-            tmux_session,
+            pid: None,
+            pid_started_at: None,
             bepinex_installed: false,
             installed_mods: Vec::new(),
         }

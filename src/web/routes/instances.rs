@@ -75,9 +75,8 @@ pub async fn start_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let started = run_blocking(move || lifecycle::start(&paths, &db, &name)).await?;
+    let (started, child) = lifecycle::start(&state.paths, &state.db, &name).await?;
+    adopt(&state, &name, child).await;
     Ok(Json(view(started)?))
 }
 
@@ -85,9 +84,8 @@ pub async fn stop_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    run_blocking(move || lifecycle::stop(&paths, &db, &name)).await?;
+    lifecycle::stop(&state.paths, &state.db, &name).await?;
+    state.supervisor.forget(&name);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -95,10 +93,28 @@ pub async fn restart_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let restarted = run_blocking(move || lifecycle::restart(&paths, &db, &name)).await?;
+    let (restarted, child) = lifecycle::restart(&state.paths, &state.db, &name).await?;
+    adopt(&state, &name, child).await;
     Ok(Json(view(restarted)?))
+}
+
+/// Registers a freshly started child's console writer and hands it to the
+/// supervisor for reaping. Best-effort on the writer: if opening it fails,
+/// the next telemetry tick's reconciliation retries (see `web::mod`).
+async fn adopt(state: &AppState, name: &str, child: tokio::process::Child) {
+    let fifo = crate::paths::instance_console_fifo(&state.paths.instance_dir(name));
+    match instance::process::open_console_writer(&fifo).await {
+        Ok(file) => state.supervisor.register_writer(name, file),
+        Err(error) => {
+            tracing::warn!(instance = %name, %error, "could not open console fifo right after start")
+        }
+    }
+    state.supervisor.spawn_reaper(
+        name.to_string(),
+        child,
+        state.db.clone(),
+        state.activity.clone(),
+    );
 }
 
 #[derive(Deserialize)]

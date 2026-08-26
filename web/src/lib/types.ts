@@ -33,7 +33,8 @@ export interface InstanceView {
   created_at: string
   last_started_at: string | null
   last_stopped_at: string | null
-  tmux_session: string
+  pid: number | null
+  pid_started_at: number | null
   bepinex_installed: boolean
   installed_mods: InstalledMod[]
   running: boolean

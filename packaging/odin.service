@@ -11,6 +11,12 @@ WorkingDirectory=/var/lib/odin
 ExecStart=/usr/bin/odin serve --bind 127.0.0.1 --port 7331
 Restart=on-failure
 RestartSec=5
+# Only the tracked main pid (odin serve itself) is targeted on stop/restart —
+# not the whole cgroup. Valheim server processes are spawned directly by
+# odin serve (see src/instance/process.rs) and must keep running across a
+# service restart/deploy; the default KillMode=control-group would kill
+# them too, since they inherit this unit's cgroup.
+KillMode=process
 ProtectSystem=strict
 ReadWritePaths=/var/lib/odin
 ProtectHome=true

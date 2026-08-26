@@ -4,7 +4,6 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::paths::Paths;
-use crate::tmux;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckResult {
@@ -19,12 +18,6 @@ pub struct CheckResult {
 /// web dashboard's `/api/doctor` both format this shared list their own way.
 pub fn run_checks(paths: &Paths) -> Vec<CheckResult> {
     vec![
-        CheckResult {
-            label: "tmux installed",
-            ok: tmux::has_binary(),
-            critical: true,
-            detail: None,
-        },
         CheckResult {
             label: "SteamCMD installed",
             ok: paths.steamcmd_dir().join("steamcmd.sh").is_file(),

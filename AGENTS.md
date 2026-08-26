@@ -9,8 +9,9 @@ it.
 
 Odin is a single Rust binary that manages the full lifecycle of Valheim
 dedicated game servers on Linux: installing/updating the server via
-SteamCMD, running multiple independent named "instances" detached in
-`tmux`, managing per-instance config and access lists, taking backups, and
+SteamCMD, running multiple independent named "instances" as directly
+supervised background processes (see `src/instance/process.rs`), managing
+per-instance config and access lists, taking backups, and
 installing/toggling BepInEx mods from Thunderstore through a shared,
 deduplicated global mod store. It also ships an optional embedded web
 dashboard (`odin serve`) built as a separate frontend package and compiled

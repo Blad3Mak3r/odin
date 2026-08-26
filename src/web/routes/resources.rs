@@ -78,7 +78,7 @@ fn disk_usage_for(path: &std::path::Path) -> (u64, u64) {
 }
 
 /// Computed by `spawn_telemetry` for each currently-running instance on its
-/// background tick. Blocking (tmux + `sysinfo` process walk) — call from a
+/// background tick. Blocking (`sysinfo` process walk) — call from a
 /// blocking context.
 pub(crate) fn compute_instance_snapshot(
     state: &AppState,
@@ -87,7 +87,7 @@ pub(crate) fn compute_instance_snapshot(
     if !lifecycle::is_running(instance)? {
         return Ok(InstanceSnapshot::default());
     }
-    let root_pids = crate::tmux::pane_pids(&instance.state.tmux_session)?;
+    let root_pids: Vec<u32> = instance.state.pid.into_iter().collect();
 
     let system = state.resources.lock().expect("resources lock poisoned");
     let mut cpu_percent = 0.0;
@@ -106,9 +106,9 @@ pub(crate) fn compute_instance_snapshot(
     })
 }
 
-/// A tmux pane's process normally *is* the Valheim server (the generated
-/// `run.sh` ends in `exec`, so no fork happens), but this also walks any
-/// descendants so resource usage stays correct if that ever changes.
+/// `pid` normally *is* the Valheim server process directly (it's spawned
+/// straight from `process::build_command`, no intermediate shell), but this
+/// also walks any descendants so resource usage stays correct regardless.
 fn collect_descendants(system: &System, roots: &[u32]) -> Vec<u32> {
     let mut children_by_parent: std::collections::HashMap<u32, Vec<u32>> =
         std::collections::HashMap::new();

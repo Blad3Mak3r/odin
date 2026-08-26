@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -38,6 +39,7 @@ pub struct JobSnapshot {
     pub id: JobId,
     pub kind: JobKindDescr,
     pub status: JobStatus,
+    pub started_at: DateTime<Utc>,
     pub log: Vec<String>,
 }
 
@@ -49,6 +51,7 @@ pub struct JobSummary {
     pub id: JobId,
     pub kind: JobKindDescr,
     pub status: JobStatus,
+    pub started_at: DateTime<Utc>,
 }
 
 /// A message broadcast to live subscribers of a job as it runs.
@@ -61,6 +64,7 @@ pub enum JobEvent {
 struct JobRecord {
     kind: JobKindDescr,
     status: JobStatus,
+    started_at: DateTime<Utc>,
     log: Vec<String>,
     sender: broadcast::Sender<JobEvent>,
 }
@@ -112,6 +116,7 @@ impl JobRegistry {
                 JobRecord {
                     kind,
                     status: JobStatus::Queued,
+                    started_at: Utc::now(),
                     log: Vec::new(),
                     sender,
                 },
@@ -164,7 +169,9 @@ impl JobRegistry {
 
     pub fn list(&self) -> Vec<JobSummary> {
         let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
-        jobs.iter().map(|(id, r)| summary(id, r)).collect()
+        let mut summaries: Vec<JobSummary> = jobs.iter().map(|(id, r)| summary(id, r)).collect();
+        summaries.sort_by_key(|s| std::cmp::Reverse(s.started_at));
+        summaries
     }
 
     /// Returns the log buffered so far plus a receiver for events from this
@@ -184,6 +191,7 @@ fn snapshot(id: &str, record: &JobRecord) -> JobSnapshot {
         id: id.to_string(),
         kind: record.kind.clone(),
         status: record.status.clone(),
+        started_at: record.started_at,
         log: record.log.clone(),
     }
 }
@@ -193,6 +201,7 @@ fn summary(id: &str, record: &JobRecord) -> JobSummary {
         id: id.to_string(),
         kind: record.kind.clone(),
         status: record.status.clone(),
+        started_at: record.started_at,
     }
 }
 

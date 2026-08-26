@@ -15,6 +15,7 @@ const InstanceDetailPage = lazy(() =>
 const GlobalModsPage = lazy(() =>
   import('@/pages/GlobalModsPage').then((m) => ({ default: m.GlobalModsPage })),
 )
+const JobsPage = lazy(() => import('@/pages/JobsPage').then((m) => ({ default: m.JobsPage })))
 
 function RouteFallback() {
   return (
@@ -33,6 +34,7 @@ function App() {
           <Route path="/instances" element={<InstancesPage />} />
           <Route path="/instances/:name" element={<InstanceDetailPage />} />
           <Route path="/mods" element={<GlobalModsPage />} />
+          <Route path="/jobs" element={<JobsPage />} />
         </Routes>
       </Suspense>
     </AppShell>

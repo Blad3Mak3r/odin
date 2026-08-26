@@ -74,6 +74,7 @@ export interface JobSnapshot {
   id: string
   kind: JobKindDescr
   status: JobStatus
+  started_at: string
   log: string[]
 }
 
@@ -81,6 +82,7 @@ export interface JobSummary {
   id: string
   kind: JobKindDescr
   status: JobStatus
+  started_at: string
 }
 
 export type JobKindDescr =

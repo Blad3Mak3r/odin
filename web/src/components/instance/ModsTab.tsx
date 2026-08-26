@@ -1,9 +1,9 @@
 import { Loader2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { toast } from 'sonner'
+import { JobProgress } from '@/components/JobProgress'
 import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -138,44 +138,6 @@ function ModInstallSearch({ name }: { name: string }) {
       />
 
       {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
-    </div>
-  )
-}
-
-function JobProgress({
-  log,
-  status,
-  connected,
-}: {
-  log: string[]
-  status: { status: string; message?: string } | null
-  connected: boolean
-}) {
-  const isActive = status?.status === 'running' || status?.status === 'queued'
-  const connectionLost = !connected && isActive
-
-  return (
-    <div className="rounded-md border bg-muted/30 p-3">
-      <div className="mb-2 flex items-center gap-2">
-        {isActive && !connectionLost ? <Loader2 className="size-4 animate-spin" /> : null}
-        <Badge
-          variant={
-            connectionLost ? 'destructive' : status?.status === 'failed' ? 'destructive' : 'secondary'
-          }
-        >
-          {connectionLost ? 'connection lost' : (status?.status ?? 'starting')}
-        </Badge>
-        {status?.status === 'failed' && (
-          <span className="text-xs text-destructive">{status.message}</span>
-        )}
-      </div>
-      <div className="max-h-32 overflow-y-auto font-mono text-xs">
-        {log.map((line, i) => (
-          // Job log lines have no stable id and never reorder, only append.
-          // eslint-disable-next-line react/no-array-index-key
-          <div key={i}>{line}</div>
-        ))}
-      </div>
     </div>
   )
 }

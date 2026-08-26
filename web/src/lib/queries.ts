@@ -9,6 +9,7 @@ import type {
   ConfigView,
   GlobalMod,
   HostResources,
+  InstallStatusView,
   InstanceResources,
   InstanceView,
   JobHandle,
@@ -308,7 +309,18 @@ export function useInstallServer() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => api.post<JobHandle>('/install'),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['install-status'] })
+    },
+  })
+}
+
+export function useInstallStatus() {
+  return useQuery({
+    queryKey: ['install-status'],
+    queryFn: () => api.get<InstallStatusView>('/install/status'),
+    refetchInterval: LIVE_FALLBACK_INTERVAL,
   })
 }
 

@@ -4,9 +4,12 @@
 //! frontend keeps open for the lifetime of the app, instead of polling
 //! `/instances` and `/system/resources` on a timer.
 
+use std::convert::Infallible;
+
+use async_stream::stream;
 use axum::extract::State;
-use axum::extract::ws::{Message, WebSocketUpgrade};
-use axum::response::Response;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use futures_util::Stream;
 use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -22,61 +25,42 @@ enum WireEvent<'a> {
     Lagged { skipped: u64 },
 }
 
-pub async fn events_ws(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
-    let (history, mut activity_rx) = state.activity.subscribe();
-    let mut ticks_rx = state.runtime.subscribe_ticks();
+pub async fn events_sse(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let (history, activity_rx) = state.activity.subscribe();
+    let ticks_rx = state.runtime.subscribe_ticks();
 
-    ws.on_upgrade(move |mut socket| async move {
+    let activity_stream = stream! {
         for event in &history {
-            if send_json(&mut socket, &WireEvent::Activity { event })
-                .await
-                .is_err()
-            {
-                return;
-            }
+            yield Ok(json_event(&WireEvent::Activity { event }));
         }
 
+        let mut activity_rx = activity_rx;
         loop {
-            tokio::select! {
-                result = activity_rx.recv() => {
-                    match result {
-                        Ok(event) => {
-                            if send_json(&mut socket, &WireEvent::Activity { event: &event }).await.is_err() {
-                                return;
-                            }
-                        }
-                        Err(RecvError::Lagged(skipped)) => {
-                            if send_json(&mut socket, &WireEvent::Lagged { skipped }).await.is_err() {
-                                return;
-                            }
-                        }
-                        Err(RecvError::Closed) => return,
-                    }
-                }
-                result = ticks_rx.recv() => {
-                    match result {
-                        Ok(tick) => {
-                            if send_json(&mut socket, &WireEvent::Resources { tick: &tick }).await.is_err() {
-                                return;
-                            }
-                        }
-                        Err(RecvError::Lagged(skipped)) => {
-                            if send_json(&mut socket, &WireEvent::Lagged { skipped }).await.is_err() {
-                                return;
-                            }
-                        }
-                        Err(RecvError::Closed) => return,
-                    }
-                }
+            match activity_rx.recv().await {
+                Ok(event) => yield Ok(json_event(&WireEvent::Activity { event: &event })),
+                Err(RecvError::Lagged(skipped)) => yield Ok(json_event(&WireEvent::Lagged { skipped })),
+                Err(RecvError::Closed) => return,
             }
         }
-    })
+    };
+
+    let ticks_stream = stream! {
+        let mut ticks_rx = ticks_rx;
+        loop {
+            match ticks_rx.recv().await {
+                Ok(tick) => yield Ok(json_event(&WireEvent::Resources { tick: &tick })),
+                Err(RecvError::Lagged(skipped)) => yield Ok(json_event(&WireEvent::Lagged { skipped })),
+                Err(RecvError::Closed) => return,
+            }
+        }
+    };
+
+    Sse::new(futures_util::stream::select(activity_stream, ticks_stream))
+        .keep_alive(KeepAlive::default())
 }
 
-async fn send_json(
-    socket: &mut axum::extract::ws::WebSocket,
-    event: &WireEvent<'_>,
-) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(event).unwrap_or_default();
-    socket.send(Message::text(text)).await
+fn json_event(event: &WireEvent<'_>) -> Event {
+    Event::default().data(serde_json::to_string(event).unwrap_or_default())
 }

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
 use crate::activity::ActivityLog;
+use crate::db::Db;
 use crate::paths::Paths;
 use crate::web::jobs::JobRegistry;
 use crate::web::players::PlayerRegistry;
@@ -19,8 +20,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(paths: Paths) -> Self {
-        let activity = ActivityLog::load(&paths.data_dir);
+    pub fn new(paths: Paths, db: Arc<Db>) -> Self {
+        let activity = ActivityLog::load(db);
         Self {
             paths,
             jobs: JobRegistry::new(),

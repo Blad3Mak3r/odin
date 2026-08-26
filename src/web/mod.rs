@@ -15,12 +15,14 @@ mod ws;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::task::AbortHandle;
 
 use crate::activity::ActivityKind;
+use crate::db::Db;
 use crate::instance;
 use crate::paths::Paths;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
@@ -28,7 +30,8 @@ use runtime::{InstanceResourceEntry, ResourcesTick};
 use state::AppState;
 
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
-    let state = AppState::new(paths);
+    let db = Arc::new(Db::open(&paths).context("failed to open database")?);
+    let state = AppState::new(paths, db);
     spawn_telemetry(state.clone());
 
     let router = router::build_router(state);

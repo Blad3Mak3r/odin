@@ -3,6 +3,7 @@ mod backup;
 mod cli;
 mod commands;
 mod config;
+mod db;
 mod doctor;
 mod instance;
 mod mods;

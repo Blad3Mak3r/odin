@@ -1,15 +1,9 @@
 use anyhow::{Result, bail};
 
-use crate::db::Db;
-use crate::instance::{Instance, InstanceError, lifecycle};
-use crate::paths::Paths;
-use crate::tmux;
-
-pub fn run(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
-    let instance = Instance::load_existing(paths, db, server_name)?;
-    if !lifecycle::is_running(&instance)? {
-        bail!(InstanceError::NotRunning(server_name.to_string()));
-    }
-    // Replaces this process on success; only returns on failure.
-    tmux::attach(&instance.state.tmux_session)
+pub fn run(_paths: &crate::paths::Paths, _db: &crate::db::Db, server_name: &str) -> Result<()> {
+    bail!(
+        "'odin console' no longer attaches a terminal (tmux is gone) — use \
+         `odin logs --follow {server_name}` to watch the console and `odin exec {server_name} \
+         <command>` to send commands, or the web dashboard for both at once"
+    )
 }

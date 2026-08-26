@@ -21,7 +21,8 @@ pub enum Command {
         server_name: String,
     },
 
-    /// Create (if new) and start an instance, always detached in a tmux session.
+    /// Create (if new) and start an instance, always detached as a supervised
+    /// background process.
     Start {
         #[arg(value_parser = parse_instance_name)]
         server_name: String,
@@ -33,7 +34,8 @@ pub enum Command {
         server_name: String,
     },
 
-    /// Attach interactively to a running instance's console (tmux attach).
+    /// No longer attaches a terminal (tmux is gone) — points to `logs
+    /// --follow`/`exec`/the dashboard instead.
     Console {
         #[arg(value_parser = parse_instance_name)]
         server_name: String,
@@ -107,7 +109,7 @@ pub enum Command {
         command: String,
     },
 
-    /// Check the environment: tmux, SteamCMD, install, data dir, network.
+    /// Check the environment: SteamCMD, install, data dir, network.
     Doctor,
 
     /// Manage mods for an instance.

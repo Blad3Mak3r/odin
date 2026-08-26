@@ -15,7 +15,8 @@ use crate::instance::state::InstanceState;
 use crate::paths::{self, Paths};
 
 pub(super) fn bootstrap_if_empty(db: &Db, paths: &Paths) -> Result<()> {
-    import_instances(db, paths)
+    import_instances(db, paths)?;
+    import_backups(db, paths)
 }
 
 /// Imports every `servers/<name>/state.json` found on disk, if the
@@ -78,6 +79,35 @@ fn import_instances(db: &Db, paths: &Paths) -> Result<()> {
     tx.commit().context("failed to commit imported instances")?;
 
     tracing::info!(count, "imported existing instances into the database");
+    Ok(())
+}
+
+/// Imports every instance's `backups/*.zip` metadata found on disk, if the
+/// `backups` table is still empty. Only runs once instances exist in the
+/// database (backups reference them via a foreign key), so this always
+/// follows `import_instances`.
+fn import_backups(db: &Db, paths: &Paths) -> Result<()> {
+    let already_populated: bool =
+        db.conn()
+            .query_row("SELECT EXISTS(SELECT 1 FROM backups)", [], |row| row.get(0))?;
+    if already_populated {
+        return Ok(());
+    }
+
+    let instances = super::instances::list_all(db)?;
+    let mut count = 0;
+    for state in &instances {
+        let instance_dir = paths.instance_dir(&state.name);
+        let entries = crate::backup::list_from_disk(&instance_dir)?;
+        for entry in entries {
+            super::backups::insert(db, &state.name, &entry)?;
+            count += 1;
+        }
+    }
+
+    if count > 0 {
+        tracing::info!(count, "imported existing backup metadata into the database");
+    }
     Ok(())
 }
 
@@ -146,5 +176,21 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM instances", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn opening_a_fresh_db_imports_legacy_backup_zips() {
+        let paths = temp_paths("import-backups");
+        write_legacy_state_json(&paths, "my-server");
+        let backups_dir = paths.instance_dir("my-server").join("backups");
+        std::fs::create_dir_all(&backups_dir).unwrap();
+        std::fs::write(backups_dir.join("20260101T000000Z.zip"), b"fake zip").unwrap();
+
+        let db = Db::open(&paths).unwrap();
+
+        let entries = crate::db::backups::list(&db, "my-server").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "20260101T000000Z");
+        assert_eq!(entries[0].size_bytes, 8);
     }
 }

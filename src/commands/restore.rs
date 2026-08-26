@@ -9,7 +9,7 @@ pub fn run(paths: &Paths, db: &Db, server_name: &str, backup_id: Option<&str>) -
     let instance = Instance::load_existing(paths, db, server_name)?;
 
     let Some(backup_id) = backup_id else {
-        let backups = backup::list(&instance.dir)?;
+        let backups = backup::list(db, &instance.state.name)?;
         if backups.is_empty() {
             println!("no backups found for '{server_name}'; run `odin backup {server_name}` first");
         } else {
@@ -30,7 +30,7 @@ pub fn run(paths: &Paths, db: &Db, server_name: &str, backup_id: Option<&str>) -
         bail!("'{server_name}' is running; stop it first with `odin stop {server_name}`");
     }
 
-    backup::restore(&instance, backup_id)?;
+    backup::restore(&instance, db, backup_id)?;
     println!(
         "restored '{server_name}' from backup '{backup_id}' (previous saves were backed up first)"
     );

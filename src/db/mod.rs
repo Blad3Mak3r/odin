@@ -12,6 +12,7 @@
 //! exposes calls shaped like the file-I/O functions they replace.
 
 pub mod activity;
+pub mod backups;
 mod import;
 pub mod instances;
 mod migrations;

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
+use crate::db::Db;
 use crate::instance::Instance;
 use crate::mods;
 use crate::paths;
@@ -21,8 +22,9 @@ fn backup_id_now() -> String {
     Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
 }
 
-/// Zips the instance's `saves/` directory into `<instance_dir>/backups/<id>.zip`.
-pub fn create(instance: &Instance) -> Result<PathBuf> {
+/// Zips the instance's `saves/` directory into `<instance_dir>/backups/<id>.zip`
+/// and records its metadata in the database.
+pub fn create(instance: &Instance, db: &Db) -> Result<PathBuf> {
     let dir = backups_dir(&instance.dir);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create backups dir {}", dir.display()))?;
@@ -30,11 +32,30 @@ pub fn create(instance: &Instance) -> Result<PathBuf> {
     let id = backup_id_now();
     let backup_path = dir.join(format!("{id}.zip"));
     zip_directory(&paths::instance_saves_dir(&instance.dir), &backup_path)?;
+
+    let size_bytes = std::fs::metadata(&backup_path)?.len();
+    crate::db::backups::insert(
+        db,
+        &instance.state.name,
+        &BackupEntry {
+            id,
+            created_at: Utc::now(),
+            size_bytes,
+        },
+    )?;
+
     Ok(backup_path)
 }
 
-/// Lists available backups for an instance, newest first.
-pub fn list(instance_dir: &Path) -> Result<Vec<BackupEntry>> {
+/// Lists an instance's backups, newest first.
+pub fn list(db: &Db, instance_name: &str) -> Result<Vec<BackupEntry>> {
+    crate::db::backups::list(db, instance_name)
+}
+
+/// Scans `<instance_dir>/backups/*.zip` directly, deriving metadata from
+/// each file's mtime/size rather than the database — used only by the
+/// bootstrap importer to seed the database from an existing installation.
+pub(crate) fn list_from_disk(instance_dir: &Path) -> Result<Vec<BackupEntry>> {
     let dir = backups_dir(instance_dir);
     if !dir.is_dir() {
         return Ok(Vec::new());
@@ -70,7 +91,7 @@ pub fn list(instance_dir: &Path) -> Result<Vec<BackupEntry>> {
 /// first snapshotting the current `saves/` (so a restore is never a
 /// one-way, unrecoverable overwrite). Caller is responsible for checking
 /// the instance isn't running.
-pub fn restore(instance: &Instance, backup_id: &str) -> Result<()> {
+pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
     let backup_path = backups_dir(&instance.dir).join(format!("{backup_id}.zip"));
     if !backup_path.is_file() {
         bail!(
@@ -80,7 +101,7 @@ pub fn restore(instance: &Instance, backup_id: &str) -> Result<()> {
         );
     }
 
-    create(instance).context("failed to snapshot current saves before restoring")?;
+    create(instance, db).context("failed to snapshot current saves before restoring")?;
 
     let saves_dir = paths::instance_saves_dir(&instance.dir);
     std::fs::remove_dir_all(&saves_dir).ok();

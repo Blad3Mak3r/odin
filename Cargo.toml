@@ -35,13 +35,14 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.10"
 dialoguer = { version = "0.12", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "io-util", "process", "fs"] }
-axum = { version = "0.8", features = ["ws"] }
+axum = "0.8"
 tower-http = { version = "0.7", features = ["trace"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2"
 sysinfo = "0.39"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
+async-stream = "0.3"
 regex = "1"
 rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }
 

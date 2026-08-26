@@ -37,12 +37,3 @@ export const api = {
     request<T>(path, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 }
-
-/// Builds a `ws://`/`wss://` URL for `path` (under `/api`), matching the
-/// current page's origin — works both through Vite's proxy (which forwards
-/// WS upgrades, see `ws: true` in vite.config.ts) and when served directly
-/// by `odin serve`.
-export function apiWebSocketUrl(path: string): string {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}/api${path}`
-}

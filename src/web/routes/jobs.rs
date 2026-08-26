@@ -1,8 +1,11 @@
+use std::convert::Infallible;
+
+use async_stream::stream;
 use axum::Json;
-use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use futures_util::Stream;
 use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -34,59 +37,43 @@ enum WireEvent<'a> {
     },
 }
 
-pub async fn job_ws(
+pub async fn job_sse(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    ws: WebSocketUpgrade,
-) -> Result<Response, StatusCode> {
-    let Some((log, status, mut rx)) = state.jobs.subscribe(&id) else {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
+    let Some((log, status, rx)) = state.jobs.subscribe(&id) else {
         return Err(StatusCode::NOT_FOUND);
     };
 
-    Ok(ws.on_upgrade(move |mut socket| async move {
-        for line in &log {
-            if send_json(&mut socket, &WireEvent::Log { line })
-                .await
-                .is_err()
-            {
-                return;
-            }
-        }
-        if send_json(&mut socket, &WireEvent::Status { status: &status })
-            .await
-            .is_err()
-        {
-            return;
-        }
-
-        loop {
-            let result = match rx.recv().await {
-                Ok(JobEvent::Line(line)) => {
-                    send_json(&mut socket, &WireEvent::Log { line: &line }).await
-                }
-                Ok(JobEvent::Status(status)) => {
-                    send_json(&mut socket, &WireEvent::Status { status: &status }).await
-                }
-                Err(RecvError::Lagged(skipped)) => {
-                    let result = send_json(&mut socket, &WireEvent::Lagged { skipped }).await;
-                    if result.is_err() {
-                        return;
-                    }
-                    continue;
-                }
-                Err(RecvError::Closed) => return,
-            };
-            if result.is_err() {
-                return;
-            }
-        }
-    }))
+    Ok(Sse::new(job_stream(log, status, rx)).keep_alive(KeepAlive::default()))
 }
 
-async fn send_json(
-    socket: &mut axum::extract::ws::WebSocket,
-    event: &WireEvent<'_>,
-) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(event).unwrap_or_default();
-    socket.send(Message::text(text)).await
+fn job_stream(
+    log: Vec<String>,
+    status: crate::web::jobs::JobStatus,
+    mut rx: tokio::sync::broadcast::Receiver<JobEvent>,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    stream! {
+        for line in &log {
+            yield Ok(json_event(&WireEvent::Log { line }));
+        }
+        yield Ok(json_event(&WireEvent::Status { status: &status }));
+
+        loop {
+            match rx.recv().await {
+                Ok(JobEvent::Line(line)) => yield Ok(json_event(&WireEvent::Log { line: &line })),
+                Ok(JobEvent::Status(status)) => {
+                    yield Ok(json_event(&WireEvent::Status { status: &status }))
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    yield Ok(json_event(&WireEvent::Lagged { skipped }))
+                }
+                Err(RecvError::Closed) => return,
+            }
+        }
+    }
+}
+
+fn json_event(event: &WireEvent<'_>) -> Event {
+    Event::default().data(serde_json::to_string(event).unwrap_or_default())
 }

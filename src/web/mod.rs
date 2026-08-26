@@ -10,10 +10,10 @@ mod players;
 mod router;
 pub mod routes;
 mod runtime;
+mod sse;
 mod state;
 mod static_files;
 pub mod supervisor;
-mod ws;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, UdpSocket};

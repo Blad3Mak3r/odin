@@ -7,7 +7,7 @@ use crate::web::routes::{
     version,
 };
 use crate::web::state::AppState;
-use crate::web::{static_files, ws};
+use crate::web::{sse, static_files};
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -35,7 +35,7 @@ pub fn build_router(state: AppState) -> Router {
             get(instances::get_config).put(instances::set_config),
         )
         .route("/instances/{name}/logs", get(instances::get_logs))
-        .route("/instances/{name}/logs/ws", get(ws::logs_ws))
+        .route("/instances/{name}/logs/sse", get(sse::logs_sse))
         .route(
             "/instances/{name}/mods",
             get(mods::list_mods).post(mods::add_mod),
@@ -73,8 +73,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))
-        .route("/jobs/{id}/ws", get(jobs::job_ws))
-        .route("/events/ws", get(events::events_ws))
+        .route("/jobs/{id}/sse", get(jobs::job_sse))
+        .route("/events/sse", get(events::events_sse))
         .route("/system/resources", get(resources::get_host_resources))
         .route(
             "/system/resources/history",

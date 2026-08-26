@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { apiWebSocketUrl } from '@/lib/api-client'
 import type { JobStatus } from '@/lib/types'
 
 type WireEvent =
@@ -22,17 +21,16 @@ export function useJobSocket(jobId: string | null) {
 
     setLog([])
     setStatus(null)
-    const socket = new WebSocket(apiWebSocketUrl(`/jobs/${jobId}/ws`))
+    const source = new EventSource(`/api/jobs/${jobId}/sse`)
 
-    socket.onopen = () => setConnected(true)
-    socket.onclose = () => setConnected(false)
-    socket.onerror = () => setConnected(false)
-    socket.onmessage = (event: MessageEvent<string>) => {
+    source.onopen = () => setConnected(true)
+    source.onerror = () => setConnected(false)
+    source.onmessage = (event: MessageEvent<string>) => {
       let parsed: WireEvent
       try {
         parsed = JSON.parse(event.data) as WireEvent
       } catch (err) {
-        console.error('failed to parse job WS message', err)
+        console.error('failed to parse job SSE message', err)
         return
       }
 
@@ -49,7 +47,7 @@ export function useJobSocket(jobId: string | null) {
     }
 
     return () => {
-      socket.close()
+      source.close()
       setConnected(false)
     }
   }, [jobId])

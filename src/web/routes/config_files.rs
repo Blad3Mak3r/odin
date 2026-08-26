@@ -13,8 +13,9 @@ pub async fn list_config_files(
     Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<ConfigFileEntry>>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let files = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         config::list(&instance.dir)
     })
     .await?;
@@ -31,8 +32,9 @@ pub async fn get_config_file(
     Path((name, filename)): Path<(String, String)>,
 ) -> ApiResult<Json<ConfigFileView>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let content = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         config::read(&instance.dir, &filename)
     })
     .await?;
@@ -50,8 +52,9 @@ pub async fn set_config_file(
     Json(req): Json<SetConfigFileRequest>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         config::write(&instance.dir, &filename, &req.content)
     })
     .await?;

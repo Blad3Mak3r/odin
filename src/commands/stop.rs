@@ -1,10 +1,11 @@
 use anyhow::Result;
 
+use crate::db::Db;
 use crate::instance::lifecycle;
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
-    lifecycle::stop(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+    lifecycle::stop(paths, db, server_name)?;
     println!("stopped '{server_name}'");
     Ok(())
 }

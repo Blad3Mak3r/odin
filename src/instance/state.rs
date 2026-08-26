@@ -73,32 +73,15 @@ impl InstanceState {
         }
     }
 
-    pub fn load(state_file: &Path) -> Result<Self> {
+    /// Parses a `state.json` written by a pre-database version of Odin.
+    /// State is now stored in SQLite (see `crate::db::instances`) — this
+    /// only exists for the one-time bootstrap import of an existing
+    /// installation.
+    pub fn load_from_file(state_file: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(state_file)
             .with_context(|| format!("failed to read state file {}", state_file.display()))?;
         serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse state file {}", state_file.display()))
-    }
-
-    /// Writes the state file atomically (write to a temp file, then rename over
-    /// the target) so a process killed mid-write can't leave a corrupt state file.
-    pub fn save(&self, state_file: &Path) -> Result<()> {
-        if let Some(parent) = state_file.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create instance dir {}", parent.display()))?;
-        }
-        let raw =
-            serde_json::to_string_pretty(self).context("failed to serialize instance state")?;
-        let tmp_file = state_file.with_extension("json.tmp");
-        std::fs::write(&tmp_file, raw)
-            .with_context(|| format!("failed to write temp state file {}", tmp_file.display()))?;
-        std::fs::rename(&tmp_file, state_file).with_context(|| {
-            format!(
-                "failed to rename {} to {}",
-                tmp_file.display(),
-                state_file.display()
-            )
-        })
     }
 }
 
@@ -107,7 +90,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn save_then_load_round_trips() {
+    fn load_from_file_parses_a_legacy_state_json() {
         let dir = std::env::temp_dir().join(format!("vm-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let state_file = dir.join("state.json");
@@ -119,9 +102,10 @@ mod tests {
             installed_at: Utc::now(),
             enabled: true,
         });
+        let raw = serde_json::to_string_pretty(&original).unwrap();
+        std::fs::write(&state_file, raw).unwrap();
 
-        original.save(&state_file).unwrap();
-        let loaded = InstanceState::load(&state_file).unwrap();
+        let loaded = InstanceState::load_from_file(&state_file).unwrap();
 
         assert_eq!(loaded.name, original.name);
         assert_eq!(loaded.port, original.port);

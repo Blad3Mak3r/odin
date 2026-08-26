@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
+use crate::db::Db;
 use crate::instance::Instance;
 use crate::paths::{self, Paths};
 
@@ -11,8 +12,8 @@ use crate::paths::{self, Paths};
 /// looking for the last `max_lines` newlines.
 const TAIL_CHUNK_SIZE: u64 = 64 * 1024;
 
-pub fn run(paths: &Paths, server_name: &str, follow: bool, lines: usize) -> Result<()> {
-    let instance = Instance::load_existing(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str, follow: bool, lines: usize) -> Result<()> {
+    let instance = Instance::load_existing(paths, db, server_name)?;
     let log_file = paths::instance_logs_dir(&instance.dir).join("console.log");
     if !log_file.is_file() {
         bail!("no logs yet for '{server_name}'; start it first with `odin start {server_name}`");

@@ -99,7 +99,7 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
 
     let mut entries = Vec::new();
     let mut running_names = Vec::new();
-    if let Ok(instances) = instance::list_all(&state.paths) {
+    if let Ok(instances) = instance::list_all(&state.paths, &state.db) {
         for inst in &instances {
             let Ok(snapshot) = compute_instance_snapshot(state, inst) else {
                 continue;

@@ -14,11 +14,12 @@ use crate::web::state::AppState;
 // not an oversight.
 pub async fn install_server(State(state): State<AppState>) -> Json<JobHandle> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let activity = state.activity.clone();
     let id = state
         .jobs
         .spawn(JobKindDescr::SteamcmdInstall, move |logger| {
-            let running = instance::running_instance_names(&paths)?;
+            let running = instance::running_instance_names(&paths, &db)?;
             if !running.is_empty() {
                 anyhow::bail!(
                     "refusing to install/update while instance(s) are running: {}",

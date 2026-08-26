@@ -3,11 +3,12 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::db::Db;
 use crate::instance::{self, lifecycle};
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths) -> Result<()> {
-    let instances = instance::list_all(paths)?;
+pub fn run(paths: &Paths, db: &Db) -> Result<()> {
+    let instances = instance::list_all(paths, db)?;
 
     if instances.is_empty() {
         println!("no instances found; create one with `odin start <server-name>`");

@@ -22,8 +22,9 @@ pub async fn get_list(
 ) -> ApiResult<Json<ListView>> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let ids = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         lists::read(&instance.dir, kind)
     })
     .await?;
@@ -42,8 +43,9 @@ pub async fn set_list(
 ) -> ApiResult<StatusCode> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         lists::write(&instance.dir, kind, &req.ids)
     })
     .await?;
@@ -62,8 +64,9 @@ pub async fn add_list_entry(
 ) -> ApiResult<StatusCode> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         lists::add_id(&instance.dir, kind, &req.id)
     })
     .await?;
@@ -76,8 +79,9 @@ pub async fn remove_list_entry(
 ) -> ApiResult<StatusCode> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         lists::remove_id(&instance.dir, kind, &id)
     })
     .await?;

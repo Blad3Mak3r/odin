@@ -1,11 +1,12 @@
 use anyhow::{Result, bail};
 
 use crate::backup;
+use crate::db::Db;
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str, backup_id: Option<&str>) -> Result<()> {
-    let instance = Instance::load_existing(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str, backup_id: Option<&str>) -> Result<()> {
+    let instance = Instance::load_existing(paths, db, server_name)?;
 
     let Some(backup_id) = backup_id else {
         let backups = backup::list(&instance.dir)?;

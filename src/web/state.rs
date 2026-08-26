@@ -12,6 +12,7 @@ use crate::web::runtime::RuntimeRegistry;
 #[derive(Clone)]
 pub struct AppState {
     pub paths: Paths,
+    pub db: Arc<Db>,
     pub jobs: JobRegistry,
     pub resources: Arc<Mutex<System>>,
     pub runtime: RuntimeRegistry,
@@ -21,9 +22,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(paths: Paths, db: Arc<Db>) -> Self {
-        let activity = ActivityLog::load(db);
+        let activity = ActivityLog::load(db.clone());
         Self {
             paths,
+            db,
             jobs: JobRegistry::new(),
             resources: Arc::new(Mutex::new(System::new_all())),
             runtime: RuntimeRegistry::new(),

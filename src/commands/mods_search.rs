@@ -2,6 +2,7 @@ use std::io::{self, Write as _};
 
 use anyhow::{Result, bail};
 
+use crate::db::Db;
 use crate::instance::state::InstalledMod;
 use crate::mods::thunderstore::ThunderstorePackage;
 use crate::mods::{self, thunderstore};
@@ -9,7 +10,7 @@ use crate::paths::Paths;
 
 const MAX_RESULTS: usize = 30;
 
-pub fn run(paths: &Paths, server_name: &str, query: &str, list_only: bool) -> Result<()> {
+pub fn run(paths: &Paths, db: &Db, server_name: &str, query: &str, list_only: bool) -> Result<()> {
     let index = thunderstore::fetch_index(paths)?;
     let results = thunderstore::search(&index, query);
     if results.is_empty() {
@@ -18,12 +19,12 @@ pub fn run(paths: &Paths, server_name: &str, query: &str, list_only: bool) -> Re
     }
     let shown: Vec<&ThunderstorePackage> = results.into_iter().take(MAX_RESULTS).collect();
 
-    let installed = mods::list(paths, server_name)?;
+    let installed = mods::list(paths, db, server_name)?;
 
     print_results(&shown, &installed);
 
     if !list_only {
-        prompt_and_install(paths, server_name, &shown)?;
+        prompt_and_install(paths, db, server_name, &shown)?;
     }
 
     Ok(())
@@ -62,6 +63,7 @@ fn print_results(shown: &[&ThunderstorePackage], installed: &[InstalledMod]) {
 
 fn prompt_and_install(
     paths: &Paths,
+    db: &Db,
     server_name: &str,
     shown: &[&ThunderstorePackage],
 ) -> Result<()> {
@@ -82,7 +84,7 @@ fn prompt_and_install(
     };
 
     let mod_id = format!("{}-{}", package.owner, package.name);
-    mods::add(paths, server_name, &mod_id)?;
+    mods::add(paths, db, server_name, &mod_id)?;
     println!("installed mod '{mod_id}' for '{server_name}'");
     Ok(())
 }

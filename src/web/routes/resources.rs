@@ -24,8 +24,9 @@ pub async fn get_instance_resources(
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceSnapshot>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let load_name = name.clone();
-    run_blocking(move || Instance::load_existing(&paths, &load_name)).await?;
+    run_blocking(move || Instance::load_existing(&paths, &db, &load_name)).await?;
     Ok(Json(state.runtime.instance_snapshot(&name)))
 }
 
@@ -34,8 +35,9 @@ pub async fn get_instance_resources_history(
     Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<ResourceSample>>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let load_name = name.clone();
-    run_blocking(move || Instance::load_existing(&paths, &load_name)).await?;
+    run_blocking(move || Instance::load_existing(&paths, &db, &load_name)).await?;
     Ok(Json(state.runtime.instance_history(&name)))
 }
 

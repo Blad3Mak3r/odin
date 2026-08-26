@@ -13,6 +13,7 @@
 
 pub mod activity;
 mod import;
+pub mod instances;
 mod migrations;
 
 use std::path::Path;

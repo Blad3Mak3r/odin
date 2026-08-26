@@ -9,6 +9,7 @@ use chrono::Utc;
 
 use super::{Instance, InstanceError};
 use crate::cli::validate_instance_name;
+use crate::db::Db;
 use crate::paths::{self, Paths};
 use crate::tmux;
 
@@ -18,8 +19,8 @@ pub fn is_running(instance: &Instance) -> Result<bool> {
     tmux::has_session(&instance.state.tmux_session)
 }
 
-pub fn start(paths: &Paths, name: &str) -> Result<Instance> {
-    let mut instance = Instance::load_or_create(paths, name)?;
+pub fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+    let mut instance = Instance::load_or_create(paths, db, name)?;
 
     if is_running(&instance)? {
         bail!(InstanceError::AlreadyRunning(name.to_string()));
@@ -33,7 +34,7 @@ pub fn start(paths: &Paths, name: &str) -> Result<Instance> {
         );
     }
 
-    check_port_available(paths, &instance)?;
+    check_port_available(paths, db, &instance)?;
     prepare_instance_layout(paths, &instance)?;
     let run_script = write_run_script(&instance)?;
 
@@ -55,13 +56,13 @@ pub fn start(paths: &Paths, name: &str) -> Result<Instance> {
         .with_context(|| format!("failed to attach log capture for instance '{name}'"))?;
 
     instance.state.last_started_at = Some(Utc::now());
-    instance.save()?;
+    instance.save(db)?;
 
     Ok(instance)
 }
 
-pub fn stop(paths: &Paths, name: &str) -> Result<()> {
-    let mut instance = Instance::load_existing(paths, name)?;
+pub fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
+    let mut instance = Instance::load_existing(paths, db, name)?;
 
     if !is_running(&instance)? {
         bail!(InstanceError::NotRunning(name.to_string()));
@@ -81,32 +82,32 @@ pub fn stop(paths: &Paths, name: &str) -> Result<()> {
     }
 
     instance.state.last_stopped_at = Some(Utc::now());
-    instance.save()?;
+    instance.save(db)?;
 
     Ok(())
 }
 
 /// Stops the instance if it's running, then starts it again. Requires the
 /// instance to already exist (unlike `start`, which creates it on demand).
-pub fn restart(paths: &Paths, name: &str) -> Result<Instance> {
-    let instance = Instance::load_existing(paths, name)?;
+pub fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+    let instance = Instance::load_existing(paths, db, name)?;
     if is_running(&instance)? {
-        stop(paths, name)?;
+        stop(paths, db, name)?;
     }
-    start(paths, name)
+    start(paths, db, name)
 }
 
 /// Renames an instance on disk and in its state, provided it isn't running
 /// and no instance already exists under `new_name`. The world name (and thus
 /// its save files) is left untouched — only the instance's own identity moves.
-pub fn rename(paths: &Paths, old_name: &str, new_name: &str) -> Result<Instance> {
+pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<Instance> {
     validate_instance_name(new_name).map_err(InstanceError::InvalidName)?;
 
     if old_name == new_name {
         bail!("new name is the same as the current name");
     }
 
-    let mut instance = Instance::load_existing(paths, old_name)?;
+    let mut instance = Instance::load_existing(paths, db, old_name)?;
 
     if is_running(&instance)? {
         bail!(
@@ -114,7 +115,7 @@ pub fn rename(paths: &Paths, old_name: &str, new_name: &str) -> Result<Instance>
         );
     }
 
-    if Instance::load(paths, new_name)?.is_some() {
+    if Instance::load(paths, db, new_name)?.is_some() {
         bail!(InstanceError::AlreadyExists(new_name.to_string()));
     }
 
@@ -130,13 +131,17 @@ pub fn rename(paths: &Paths, old_name: &str, new_name: &str) -> Result<Instance>
     instance.dir = new_dir;
     instance.state.name = new_name.to_string();
     instance.state.tmux_session = paths::tmux_session_name(new_name);
-    instance.save()?;
+    // The instance row is keyed by name, so saving under the new name inserts
+    // a fresh row rather than updating the old one — the old row (and its
+    // installed_mods) must be deleted explicitly afterwards.
+    instance.save(db)?;
+    crate::db::instances::delete(db, old_name)?;
 
     Ok(instance)
 }
 
-fn check_port_available(paths: &Paths, instance: &Instance) -> Result<()> {
-    for other in super::list_all(paths)? {
+fn check_port_available(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
+    for other in super::list_all(paths, db)? {
         if other.state.name == instance.state.name {
             continue;
         }

@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
 use dialoguer::MultiSelect;
 
+use crate::db::Db;
 use crate::instance::state::InstalledMod;
 use crate::mods;
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
-    let installed = mods::list(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+    let installed = mods::list(paths, db, server_name)?;
     if installed.is_empty() {
         println!("no mods installed on '{server_name}'");
         return Ok(());
@@ -39,7 +40,7 @@ pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
     }
 
     for (mod_id, enabled) in changes {
-        mods::set_enabled(paths, server_name, &mod_id, enabled)?;
+        mods::set_enabled(paths, db, server_name, &mod_id, enabled)?;
         let verb = if enabled { "enabled" } else { "disabled" };
         println!("{verb} '{mod_id}'");
     }

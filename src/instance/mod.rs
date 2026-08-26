@@ -1,7 +1,8 @@
-//! Instance lookup, creation, and listing. Each instance is a directory under
-//! `<data_dir>/servers/<name>/` holding its `InstanceState` (see `state`) and
-//! save/log/mod files; `lifecycle` handles starting, stopping, and renaming
-//! the underlying tmux session and on-disk layout.
+//! Instance lookup, creation, and listing. Each instance's state lives in
+//! the database (see `crate::db::instances`); `dir` is the instance's
+//! directory under `<data_dir>/servers/<name>/`, still used on disk for
+//! save/log/mod files. `lifecycle` handles starting, stopping, and
+//! renaming the underlying tmux session and on-disk layout.
 
 pub mod lifecycle;
 pub mod lists;
@@ -9,11 +10,12 @@ pub mod state;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use thiserror::Error;
 
 use crate::cli::validate_instance_name;
-use crate::paths::{self, Paths};
+use crate::db::Db;
+use crate::paths::Paths;
 use state::InstanceState;
 
 const DEFAULT_BASE_PORT: u16 = 2456;
@@ -41,52 +43,43 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn state_file(&self) -> PathBuf {
-        paths::instance_state_file(&self.dir)
-    }
-
-    pub fn save(&self) -> Result<()> {
-        self.state.save(&self.state_file())
+    pub fn save(&self, db: &Db) -> Result<()> {
+        crate::db::instances::save(db, &self.state)
     }
 
     /// Loads an existing instance, or None if it hasn't been created yet.
-    pub fn load(paths: &Paths, name: &str) -> Result<Option<Self>> {
+    pub fn load(paths: &Paths, db: &Db, name: &str) -> Result<Option<Self>> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
         let dir = paths.instance_dir(name);
-        let state_file = paths::instance_state_file(&dir);
-        if !state_file.is_file() {
-            return Ok(None);
-        }
-        let state = InstanceState::load(&state_file)?;
-        Ok(Some(Self { dir, state }))
+        Ok(crate::db::instances::load(db, name)?.map(|state| Self { dir, state }))
     }
 
-    pub fn load_existing(paths: &Paths, name: &str) -> Result<Self> {
-        Self::load(paths, name)?.ok_or_else(|| InstanceError::NotFound(name.to_string()).into())
+    pub fn load_existing(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
+        Self::load(paths, db, name)?.ok_or_else(|| InstanceError::NotFound(name.to_string()).into())
     }
 
     /// Loads an existing instance, or creates a new one with an auto-assigned
     /// port that doesn't collide with any other known instance's recorded port.
-    pub fn load_or_create(paths: &Paths, name: &str) -> Result<Self> {
-        if let Some(instance) = Self::load(paths, name)? {
+    pub fn load_or_create(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
+        if let Some(instance) = Self::load(paths, db, name)? {
             return Ok(instance);
         }
-        Self::create_new(paths, name)
+        Self::create_new(paths, db, name)
     }
 
     /// Creates a new instance, failing if one with this name already exists.
     /// Unlike `load_or_create`, this never returns an already-existing instance.
-    pub fn create(paths: &Paths, name: &str) -> Result<Self> {
-        if Self::load(paths, name)?.is_some() {
+    pub fn create(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
+        if Self::load(paths, db, name)?.is_some() {
             anyhow::bail!(InstanceError::AlreadyExists(name.to_string()));
         }
-        Self::create_new(paths, name)
+        Self::create_new(paths, db, name)
     }
 
-    fn create_new(paths: &Paths, name: &str) -> Result<Self> {
+    fn create_new(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
 
-        let used_ports: Vec<u16> = list_all(paths)?.iter().map(|i| i.state.port).collect();
+        let used_ports: Vec<u16> = list_all(paths, db)?.iter().map(|i| i.state.port).collect();
         let mut port = DEFAULT_BASE_PORT;
         while used_ports.contains(&port) {
             port += PORT_STRIDE;
@@ -95,50 +88,26 @@ impl Instance {
         let dir = paths.instance_dir(name);
         let state = InstanceState::new(name, port);
         let instance = Self { dir, state };
-        instance.save()?;
+        instance.save(db)?;
         Ok(instance)
     }
 }
 
-/// Lists all instances found under `<data_dir>/servers/*/`. An entry with a
-/// missing/corrupt state file is logged and skipped, rather than aborting
-/// the whole listing.
-pub fn list_all(paths: &Paths) -> Result<Vec<Instance>> {
-    let servers_dir = paths.servers_dir();
-    if !servers_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut instances = Vec::new();
-    let entries = std::fs::read_dir(&servers_dir)
-        .with_context(|| format!("failed to read servers dir {}", servers_dir.display()))?;
-    for entry in entries {
-        let entry =
-            entry.with_context(|| format!("failed to read entry in {}", servers_dir.display()))?;
-        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        match Instance::load(paths, &name) {
-            Ok(Some(instance)) => instances.push(instance),
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(
-                    name = %name,
-                    %error,
-                    "skipping instance with unreadable/invalid state file"
-                );
-            }
-        }
-    }
-    instances.sort_by(|a, b| a.state.name.cmp(&b.state.name));
-    Ok(instances)
+/// Lists every known instance, ordered by name.
+pub fn list_all(paths: &Paths, db: &Db) -> Result<Vec<Instance>> {
+    Ok(crate::db::instances::list_all(db)?
+        .into_iter()
+        .map(|state| Instance {
+            dir: paths.instance_dir(&state.name),
+            state,
+        })
+        .collect())
 }
 
 /// Names (only, not full state) of every instance currently running.
-pub fn running_instance_names(paths: &Paths) -> Result<Vec<String>> {
+pub fn running_instance_names(paths: &Paths, db: &Db) -> Result<Vec<String>> {
     let mut running = Vec::new();
-    for instance in list_all(paths)? {
+    for instance in list_all(paths, db)? {
         if crate::tmux::has_session(&instance.state.tmux_session)? {
             running.push(instance.state.name);
         }

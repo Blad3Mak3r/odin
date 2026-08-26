@@ -25,7 +25,7 @@ pub async fn get_list(
     let db = state.db.clone();
     let ids = run_blocking(move || {
         let instance = Instance::load_existing(&paths, &db, &name)?;
-        lists::read(&instance.dir, kind)
+        lists::read(&db, &instance, kind)
     })
     .await?;
     Ok(Json(ListView { ids }))
@@ -46,7 +46,7 @@ pub async fn set_list(
     let db = state.db.clone();
     run_blocking(move || {
         let instance = Instance::load_existing(&paths, &db, &name)?;
-        lists::write(&instance.dir, kind, &req.ids)
+        lists::write(&db, &instance, kind, &req.ids)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -67,7 +67,7 @@ pub async fn add_list_entry(
     let db = state.db.clone();
     run_blocking(move || {
         let instance = Instance::load_existing(&paths, &db, &name)?;
-        lists::add_id(&instance.dir, kind, &req.id)
+        lists::add_id(&db, &instance, kind, &req.id)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -82,7 +82,7 @@ pub async fn remove_list_entry(
     let db = state.db.clone();
     run_blocking(move || {
         let instance = Instance::load_existing(&paths, &db, &name)?;
-        lists::remove_id(&instance.dir, kind, &id)
+        lists::remove_id(&db, &instance, kind, &id)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)

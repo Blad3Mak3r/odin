@@ -17,6 +17,7 @@ pub mod cache;
 pub mod global_mods;
 mod import;
 pub mod instances;
+pub mod lists;
 mod migrations;
 
 use std::path::Path;

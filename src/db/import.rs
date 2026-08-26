@@ -17,7 +17,8 @@ use crate::paths::{self, Paths};
 pub(super) fn bootstrap_if_empty(db: &Db, paths: &Paths) -> Result<()> {
     import_instances(db, paths)?;
     import_backups(db, paths)?;
-    import_global_mod_versions(db, paths)
+    import_global_mod_versions(db, paths)?;
+    import_access_lists(db, paths)
 }
 
 /// Imports every `servers/<name>/state.json` found on disk, if the
@@ -156,6 +157,54 @@ fn import_global_mod_versions(db: &Db, paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+/// Imports every instance's `adminlist.txt`/`bannedlist.txt`/
+/// `permittedlist.txt` found on disk, if the `access_list_entries` table is
+/// still empty. An id that fails Odin's own SteamID64 validation (possible
+/// for a hand-edited file — Odin itself never wrote an invalid one) is
+/// logged and skipped rather than aborting the import; the file gets
+/// regenerated to match on the next write made through Odin.
+fn import_access_lists(db: &Db, paths: &Paths) -> Result<()> {
+    use crate::instance::lists::ListKind;
+
+    let already_populated: bool = db.conn().query_row(
+        "SELECT EXISTS(SELECT 1 FROM access_list_entries)",
+        [],
+        |row| row.get(0),
+    )?;
+    if already_populated {
+        return Ok(());
+    }
+
+    let instances = super::instances::list_all(db)?;
+    let mut count = 0;
+    for state in &instances {
+        let instance_dir = paths.instance_dir(&state.name);
+        for kind in [ListKind::Admin, ListKind::Banned, ListKind::Permitted] {
+            let ids = crate::instance::lists::read_from_disk(&instance_dir, kind)?;
+            for id in ids {
+                if crate::instance::lists::validate_steam_id64(&id).is_err() {
+                    tracing::warn!(
+                        instance = %state.name,
+                        id,
+                        "skipping invalid SteamID64 while importing access list"
+                    );
+                    continue;
+                }
+                super::lists::insert(db, &state.name, kind.db_value(), &id)?;
+                count += 1;
+            }
+        }
+    }
+
+    if count > 0 {
+        tracing::info!(
+            count,
+            "imported existing access list entries into the database"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -252,5 +301,31 @@ mod tests {
             crate::db::global_mods::current_version(&db, "owner-mod").unwrap(),
             Some("1.2.3".to_string())
         );
+    }
+
+    #[test]
+    fn opening_a_fresh_db_imports_legacy_access_lists() {
+        use crate::instance::lists::ListKind;
+
+        let paths = temp_paths("import-lists");
+        write_legacy_state_json(&paths, "my-server");
+        let saves_dir = paths.instance_dir("my-server").join("saves");
+        std::fs::create_dir_all(&saves_dir).unwrap();
+        std::fs::write(
+            saves_dir.join("adminlist.txt"),
+            "76561197960287930\nnot-a-steamid\n",
+        )
+        .unwrap();
+
+        let db = Db::open(&paths).unwrap();
+
+        let instance = crate::instance::Instance {
+            dir: paths.instance_dir("my-server"),
+            state: crate::db::instances::load(&db, "my-server")
+                .unwrap()
+                .unwrap(),
+        };
+        let ids = crate::instance::lists::read(&db, &instance, ListKind::Admin).unwrap();
+        assert_eq!(ids, vec!["76561197960287930".to_string()]);
     }
 }

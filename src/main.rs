@@ -9,7 +9,6 @@ mod instance;
 mod mods;
 mod paths;
 mod steamcmd;
-mod systemd;
 mod tmux;
 mod web;
 
@@ -18,7 +17,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{Cli, Command, ModsCommand, ServeCommand};
+use cli::{Cli, Command, ModsCommand};
 use paths::Paths;
 
 fn main() -> ExitCode {
@@ -124,12 +123,6 @@ fn run() -> Result<()> {
             commands::completions::run(shell);
             Ok(())
         }
-        Command::Serve { bind, port, action } => match action {
-            None => commands::serve::run(&paths, &bind, port),
-            Some(ServeCommand::Install { bind, port, force }) => {
-                commands::serve_install::run(&bind, port, force)
-            }
-            Some(ServeCommand::Uninstall { yes }) => commands::serve_uninstall::run(yes),
-        },
+        Command::Serve { bind, port } => commands::serve::run(&paths, &bind, port),
     }
 }

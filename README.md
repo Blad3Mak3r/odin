@@ -21,9 +21,7 @@ them, side by side — is a single, predictable command away.
 ## Features
 
 - **One binary, no runtime dependencies** beyond `tmux` and (transparently
-  managed) SteamCMD — no Python, no Docker required. `systemd` is entirely
-  optional, only used if you choose to install the dashboard as a service
-  (`odin serve install`).
+  managed) SteamCMD — no Python, no Docker required.
 - **Multiple named instances.** Run several independent Valheim servers on
   one host, each with its own world, port, password, visibility, and mod
   set, sharing a single downloaded copy of the game binaries.
@@ -220,8 +218,6 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 | Command | Description |
 |---|---|
 | `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. No authentication — see [Web dashboard](#web-dashboard). |
-| `odin serve install [--bind ADDR] [--port PORT] [--force]` | Install `odin serve` as a per-user systemd service (`systemctl --user`, no root needed). See [Running as a systemd service](#running-as-a-systemd-service). |
-| `odin serve uninstall [-y]` | Stop, disable, and remove the systemd service installed by `odin serve install`. |
 
 ## Web dashboard
 
@@ -250,7 +246,7 @@ separate step from `cargo build` — see [Development](#development).
 
 ### Running as a systemd service
 
-**System-wide install** (via `make install`/the `.deb`/`.rpm` package)
+A system-wide install (via `make install`/the `.deb`/`.rpm` package)
 already ships a system `odin.service`, running `odin serve --bind
 127.0.0.1 --port 7331` as the dedicated `odin` user and enabled (but not
 auto-started) by the package's postinst:
@@ -262,32 +258,9 @@ sudo journalctl -u odin.service -f   # follow logs
 sudo systemctl edit odin.service     # override --bind/--port via a drop-in
 ```
 
-**Per-user install** (`make install-user`, or a plain `cargo build`) has no
-system service — install one for your own account instead, no root
-required:
-
-```sh
-odin serve install                            # binds 127.0.0.1:7331 by default
-odin serve install --bind 0.0.0.0 --port 8080  # or pick your own address/port
-```
-
-This writes a unit to `~/.config/systemd/user/odin-serve.service` (pass
-`--force` to overwrite an existing one) and tries to enable *lingering*
-for your user (`loginctl enable-linger`), so the service keeps running
-after you log out — on some systems this needs elevated privileges, in
-which case `odin serve install` tells you to run `sudo loginctl
-enable-linger $(whoami)` yourself. Once installed, manage it with the
-usual `systemctl --user`/`journalctl --user` commands, which `odin serve
-install` also prints for you:
-
-```sh
-systemctl --user enable --now odin-serve.service   # start now and on boot
-systemctl --user status odin-serve.service         # check it's running
-journalctl --user -u odin-serve.service -f         # follow logs
-systemctl --user disable --now odin-serve.service  # stop and disable
-```
-
-Remove the service entirely with `odin serve uninstall`.
+A per-user install (`make install-user`, or a plain `cargo build`) has no
+system service; run `odin serve` directly, or manage it yourself under
+your own `systemctl --user`/`tmux`/init setup.
 
 ## Configuration
 

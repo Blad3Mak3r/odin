@@ -1,12 +1,37 @@
 use axum::Json;
 use axum::extract::State;
+use serde::Serialize;
 
 use crate::activity::ActivityKind;
 use crate::instance;
 use crate::steamcmd::{SteamCmd, VALHEIM_DEDICATED_SERVER_APP_ID};
+use crate::valheim_update;
+use crate::web::error::{ApiResult, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
 use crate::web::state::AppState;
+
+#[derive(Serialize)]
+pub struct InstallStatusView {
+    pub installed: bool,
+    pub installed_build_id: Option<u64>,
+    pub latest_build_id: Option<u64>,
+    pub update_available: bool,
+}
+
+pub async fn get_install_status(
+    State(state): State<AppState>,
+) -> ApiResult<Json<InstallStatusView>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let status = run_blocking(move || valheim_update::check(&paths, &db)).await?;
+    Ok(Json(InstallStatusView {
+        installed: status.installed_build_id.is_some(),
+        installed_build_id: status.installed_build_id,
+        latest_build_id: status.latest_build_id,
+        update_available: status.update_available,
+    }))
+}
 
 // Returns a bare `Json<JobHandle>` rather than `ApiResult<...>` like other
 // mutating routes: spawning a job onto the registry can't fail synchronously

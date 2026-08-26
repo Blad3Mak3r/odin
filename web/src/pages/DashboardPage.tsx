@@ -1,4 +1,6 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { QueryError } from '@/components/QueryError'
@@ -14,6 +16,7 @@ import {
   useHostResourceHistory,
   useHostResources,
   useInstallServer,
+  useInstallStatus,
   useJobs,
 } from '@/lib/queries'
 import type { CheckResult } from '@/lib/types'
@@ -38,17 +41,29 @@ export function DashboardPage() {
   const resources = useHostResources()
   const history = useHostResourceHistory()
   const installServer = useInstallServer()
+  const installStatus = useInstallStatus()
   const jobs = useJobs()
   const activity = useActivityFeed()
+  const queryClient = useQueryClient()
 
-  const installNeeded = doctor.data?.some(
-    (c) => c.label === 'Valheim dedicated server installed' && !c.ok,
-  )
   const runningInstallJob = jobs.data?.find(
     (j) =>
       j.kind.kind === 'steamcmd_install' &&
       (j.status.status === 'queued' || j.status.status === 'running'),
   )
+
+  // Force one refetch as soon as an install/update job finishes, so the
+  // "update available" badge doesn't wait for its own poll interval.
+  const wasRunningInstallJob = useRef(false)
+  useEffect(() => {
+    if (wasRunningInstallJob.current && !runningInstallJob) {
+      queryClient.invalidateQueries({ queryKey: ['install-status'] })
+      queryClient.invalidateQueries({ queryKey: ['doctor'] })
+    }
+    wasRunningInstallJob.current = Boolean(runningInstallJob)
+  }, [runningInstallJob, queryClient])
+
+  const showInstallButton = !installStatus.data || !installStatus.data.installed || installStatus.data.update_available
 
   return (
     <div className="flex flex-col gap-6">
@@ -61,7 +76,7 @@ export function DashboardPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">Dependency status</CardTitle>
-            {installNeeded && (
+            {showInstallButton && (
               <Button
                 size="sm"
                 disabled={installServer.isPending || Boolean(runningInstallJob)}
@@ -82,6 +97,22 @@ export function DashboardPage() {
             {doctor.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
             {doctor.isError && <QueryError error={doctor.error} />}
             {doctor.data?.map((check) => <CheckRow key={check.label} check={check} />)}
+            {installStatus.isError && <QueryError error={installStatus.error} />}
+            {installStatus.data && (
+              <div className="flex items-center justify-between py-2">
+                <span className="text-sm">Valheim server version</span>
+                {!installStatus.data.installed ? (
+                  <Badge variant="outline">Not installed</Badge>
+                ) : installStatus.data.update_available ? (
+                  <Badge variant="secondary">
+                    Update available: {installStatus.data.installed_build_id} →{' '}
+                    {installStatus.data.latest_build_id}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">Up to date (build {installStatus.data.installed_build_id})</Badge>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 

@@ -16,6 +16,20 @@ deduplicated global mod store. It also ships an optional embedded web
 dashboard (`odin serve`) built as a separate frontend package and compiled
 into the binary at build time.
 
+## Project direction
+
+The web dashboard (`odin serve`) is where this project is headed: it's the
+primary, and increasingly the *only*, supported way to operate Odin. New
+user-facing capabilities should be built as web API routes
+(`src/web/routes/`) plus dashboard UI (`web/src/`) — not as new CLI
+subcommands.
+
+The CLI (`src/cli.rs`, `src/commands/`) is being deprecated. Existing
+commands keep working for now, but treat the CLI as legacy: don't add new
+CLI-only functionality, and don't hold new web-only features back for lack
+of CLI parity. When in doubt about where a capability belongs, it belongs
+in the web API and dashboard.
+
 ## Repository layout
 
 - `src/` — the Rust CLI (edition 2024, no workspace, single binary crate).
@@ -63,9 +77,11 @@ reviewed by a human — run all of it.
   (`noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`); the
   `@/*` path alias maps to `web/src/*`; UI components follow shadcn/ui's
   `base-nova` style (see `web/components.json`).
-- Keep the CLI (`src/commands/`) and the web API (`src/web/routes/`) in
-  sync when adding a capability that should be reachable from both — most
-  instance/mod mutations are meant to be usable from either surface.
+- New capabilities target the web API (`src/web/routes/`) and dashboard
+  (`web/src/`) only — see [Project direction](#project-direction). The CLI
+  (`src/commands/`) is legacy: it doesn't need to grow alongside the web
+  API anymore, and existing CLI/web duplication is being carried, not
+  extended.
 
 ## Git workflow
 

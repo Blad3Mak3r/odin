@@ -9,6 +9,13 @@ export interface CheckResult {
   detail: string | null
 }
 
+export interface InstallStatusView {
+  installed: boolean
+  installed_build_id: number | null
+  latest_build_id: number | null
+  update_available: boolean
+}
+
 export interface InstalledMod {
   mod_id: string
   version: string

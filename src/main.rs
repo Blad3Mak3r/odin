@@ -10,6 +10,7 @@ mod mods;
 mod paths;
 mod steamcmd;
 mod tmux;
+mod valheim_update;
 mod web;
 
 use std::process::ExitCode;

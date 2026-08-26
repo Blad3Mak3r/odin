@@ -14,6 +14,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/version", get(version::get_version))
         .route("/doctor", get(doctor::get_doctor))
         .route("/install", post(install::install_server))
+        .route("/install/status", get(install::get_install_status))
         .route(
             "/instances",
             get(instances::list_instances).post(instances::create_instance),

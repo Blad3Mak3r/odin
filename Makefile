@@ -38,6 +38,7 @@ rpm: release
 
 ## Build and install a system-wide .deb/.rpm package (needs sudo; Debian/Fedora-family only)
 install:
+	@sudo -v
 	@if [ -f /etc/debian_version ]; then \
 		$(MAKE) deb; \
 		sudo apt install -y ./target/debian/odin_*.deb; \
@@ -59,6 +60,7 @@ install-user: release
 
 ## Remove the system-wide .deb/.rpm package (needs sudo)
 uninstall:
+	@sudo -v
 	@if [ -f /etc/debian_version ]; then \
 		sudo apt remove -y odin; \
 	elif command -v dnf >/dev/null 2>&1; then \

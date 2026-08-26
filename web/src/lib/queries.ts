@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api-client'
 import type {
+  ActivityEvent,
   CheckResult,
   ConfigFileEntry,
   ConfigFileView,
@@ -16,8 +17,15 @@ import type {
   ListView,
   LogsView,
   ModSearchResult,
+  PlayerInfo,
+  ResourceSample,
   VersionView,
 } from './types'
+
+// These have a live push counterpart (see `useLiveSocket`) that keeps their
+// cache fresh in near-real-time; the interval here is only a fallback in
+// case the WebSocket is down.
+const LIVE_FALLBACK_INTERVAL = 30_000
 
 export function useVersion() {
   return useQuery({
@@ -39,7 +47,15 @@ export function useHostResources() {
   return useQuery({
     queryKey: ['resources', 'host'],
     queryFn: () => api.get<HostResources>('/system/resources'),
-    refetchInterval: 3_000,
+    refetchInterval: LIVE_FALLBACK_INTERVAL,
+  })
+}
+
+export function useHostResourceHistory() {
+  return useQuery({
+    queryKey: ['resource-history', 'host'],
+    queryFn: () => api.get<ResourceSample[]>('/system/resources/history'),
+    staleTime: Infinity,
   })
 }
 
@@ -47,8 +63,35 @@ export function useInstanceResources(name: string, enabled = true) {
   return useQuery({
     queryKey: ['resources', 'instance', name],
     queryFn: () => api.get<InstanceResources>(`/instances/${name}/resources`),
-    refetchInterval: 3_000,
+    refetchInterval: LIVE_FALLBACK_INTERVAL,
     enabled,
+  })
+}
+
+export function useInstanceResourceHistory(name: string, enabled = true) {
+  return useQuery({
+    queryKey: ['resource-history', 'instance', name],
+    queryFn: () => api.get<ResourceSample[]>(`/instances/${name}/resources/history`),
+    staleTime: Infinity,
+    enabled,
+  })
+}
+
+export function usePlayers(name: string, enabled = true) {
+  return useQuery({
+    queryKey: ['players', name],
+    queryFn: () => api.get<PlayerInfo[]>(`/instances/${name}/players`),
+    staleTime: Infinity,
+    enabled,
+  })
+}
+
+export function useActivityFeed() {
+  return useQuery({
+    queryKey: ['activity-feed'],
+    queryFn: () => Promise.resolve<ActivityEvent[]>([]),
+    initialData: [] as ActivityEvent[],
+    staleTime: Infinity,
   })
 }
 
@@ -56,7 +99,7 @@ export function useInstances() {
   return useQuery({
     queryKey: ['instances'],
     queryFn: () => api.get<InstanceView[]>('/instances'),
-    refetchInterval: 5_000,
+    refetchInterval: LIVE_FALLBACK_INTERVAL,
   })
 }
 

@@ -2,6 +2,7 @@ import { ArrowLeft, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { PlayersBadge } from '@/components/PlayersBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useRestartInstance, useStartInstance, useStopInstance } from '@/lib/queries'
@@ -35,9 +36,12 @@ export function InstanceHeader({
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">{instance?.name ?? '…'}</h1>
           {!loading && instance && (
-            <Badge variant={instance.running ? 'default' : 'secondary'}>
-              {instance.running ? 'running' : 'stopped'}
-            </Badge>
+            <>
+              <Badge variant={instance.running ? 'default' : 'secondary'}>
+                {instance.running ? 'running' : 'stopped'}
+              </Badge>
+              <PlayersBadge name={instance.name} running={instance.running} />
+            </>
           )}
         </div>
 

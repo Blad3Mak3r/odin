@@ -130,3 +130,46 @@ export interface InstanceResources {
   cpu_percent: number
   memory_bytes: number
 }
+
+export interface ResourceSample {
+  at: string
+  cpu_percent: number
+  memory_bytes: number
+}
+
+export interface PlayerInfo {
+  name: string
+  connected_at: string
+}
+
+export interface InstanceResourceEntry {
+  name: string
+  running: boolean
+  cpu_percent: number
+  memory_bytes: number
+  players: PlayerInfo[]
+}
+
+export interface ResourcesTick {
+  host: HostResources
+  instances: InstanceResourceEntry[]
+}
+
+export type ActivityKind =
+  | { kind: 'instance_created' }
+  | { kind: 'instance_deleted' }
+  | { kind: 'instance_started' }
+  | { kind: 'instance_stopped' }
+  | { kind: 'server_installed' }
+  | { kind: 'mod_installed'; mod_id: string }
+  | { kind: 'mod_removed'; mod_id: string }
+  | { kind: 'mods_updated' }
+  | { kind: 'player_joined'; name: string }
+  | { kind: 'player_left'; name: string }
+
+export interface ActivityEvent {
+  id: string
+  at: string
+  instance: string | null
+  kind: ActivityKind
+}

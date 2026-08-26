@@ -1,48 +1,64 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use serde::Serialize;
 use sysinfo::{Disks, Pid, System};
 
 use crate::instance::{Instance, lifecycle};
 use crate::web::error::{ApiResult, run_blocking};
+use crate::web::runtime::{HostSnapshot, InstanceSnapshot, ResourceSample};
 use crate::web::state::AppState;
 
-#[derive(Serialize)]
-pub struct HostResources {
-    pub cpu_percent: f32,
-    pub memory_total_bytes: u64,
-    pub memory_used_bytes: u64,
-    pub disk_total_bytes: u64,
-    pub disk_available_bytes: u64,
+/// Reads whatever `spawn_telemetry`'s background tick last cached — cheap,
+/// no `sysinfo`/`tmux` work on the request path.
+pub async fn get_host_resources(State(state): State<AppState>) -> Json<HostSnapshot> {
+    Json(state.runtime.host_snapshot())
 }
 
-pub async fn get_host_resources(State(state): State<AppState>) -> Json<HostResources> {
-    let resources = state.resources.clone();
-    let (cpu_percent, memory_total_bytes, memory_used_bytes) =
-        tokio::task::spawn_blocking(move || {
-            let system = resources.lock().expect("resources lock poisoned");
-            (
-                system.global_cpu_usage(),
-                system.total_memory(),
-                system.used_memory(),
-            )
-        })
-        .await
-        .unwrap_or((0.0, 0, 0));
+pub async fn get_host_resources_history(
+    State(state): State<AppState>,
+) -> Json<Vec<ResourceSample>> {
+    Json(state.runtime.host_history())
+}
 
-    let data_dir = state.paths.data_dir.clone();
-    let (disk_total_bytes, disk_available_bytes) =
-        tokio::task::spawn_blocking(move || disk_usage_for(&data_dir))
-            .await
-            .unwrap_or((0, 0));
+pub async fn get_instance_resources(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<InstanceSnapshot>> {
+    let paths = state.paths.clone();
+    let load_name = name.clone();
+    run_blocking(move || Instance::load_existing(&paths, &load_name)).await?;
+    Ok(Json(state.runtime.instance_snapshot(&name)))
+}
 
-    Json(HostResources {
+pub async fn get_instance_resources_history(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    let paths = state.paths.clone();
+    let load_name = name.clone();
+    run_blocking(move || Instance::load_existing(&paths, &load_name)).await?;
+    Ok(Json(state.runtime.instance_history(&name)))
+}
+
+/// Computed by `spawn_telemetry` on its background tick — refreshes
+/// `state.resources` and the host disk usage, without touching any
+/// per-instance/tmux state.
+pub(crate) fn compute_host_snapshot(state: &AppState) -> HostSnapshot {
+    let (cpu_percent, memory_total_bytes, memory_used_bytes) = {
+        let system = state.resources.lock().expect("resources lock poisoned");
+        (
+            system.global_cpu_usage(),
+            system.total_memory(),
+            system.used_memory(),
+        )
+    };
+    let (disk_total_bytes, disk_available_bytes) = disk_usage_for(&state.paths.data_dir);
+    HostSnapshot {
         cpu_percent,
         memory_total_bytes,
         memory_used_bytes,
         disk_total_bytes,
         disk_available_bytes,
-    })
+    }
 }
 
 /// Usage for the most specific mounted filesystem containing `path` (i.e.
@@ -59,56 +75,33 @@ fn disk_usage_for(path: &std::path::Path) -> (u64, u64) {
         .unwrap_or((0, 0))
 }
 
-#[derive(Serialize)]
-pub struct InstanceResources {
-    pub running: bool,
-    pub cpu_percent: f32,
-    pub memory_bytes: u64,
-}
+/// Computed by `spawn_telemetry` for each currently-running instance on its
+/// background tick. Blocking (tmux + `sysinfo` process walk) — call from a
+/// blocking context.
+pub(crate) fn compute_instance_snapshot(
+    state: &AppState,
+    instance: &Instance,
+) -> anyhow::Result<InstanceSnapshot> {
+    if !lifecycle::is_running(instance)? {
+        return Ok(InstanceSnapshot::default());
+    }
+    let root_pids = crate::tmux::pane_pids(&instance.state.tmux_session)?;
 
-pub async fn get_instance_resources(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<InstanceResources>> {
-    let paths = state.paths.clone();
-    let (running, root_pids) = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
-        if !lifecycle::is_running(&instance)? {
-            return Ok((false, Vec::new()));
+    let system = state.resources.lock().expect("resources lock poisoned");
+    let mut cpu_percent = 0.0;
+    let mut memory_bytes = 0;
+    for pid in collect_descendants(&system, &root_pids) {
+        if let Some(process) = system.process(Pid::from_u32(pid)) {
+            cpu_percent += process.cpu_usage();
+            memory_bytes += process.memory();
         }
-        Ok((true, crate::tmux::pane_pids(&instance.state.tmux_session)?))
-    })
-    .await?;
-
-    if !running {
-        return Ok(Json(InstanceResources {
-            running: false,
-            cpu_percent: 0.0,
-            memory_bytes: 0,
-        }));
     }
 
-    let resources = state.resources.clone();
-    let (cpu_percent, memory_bytes) = tokio::task::spawn_blocking(move || {
-        let system = resources.lock().expect("resources lock poisoned");
-        let mut cpu_percent = 0.0;
-        let mut memory_bytes = 0;
-        for pid in collect_descendants(&system, &root_pids) {
-            if let Some(process) = system.process(Pid::from_u32(pid)) {
-                cpu_percent += process.cpu_usage();
-                memory_bytes += process.memory();
-            }
-        }
-        (cpu_percent, memory_bytes)
-    })
-    .await
-    .unwrap_or((0.0, 0));
-
-    Ok(Json(InstanceResources {
+    Ok(InstanceSnapshot {
         running: true,
         cpu_percent,
         memory_bytes,
-    }))
+    })
 }
 
 /// A tmux pane's process normally *is* the Valheim server (the generated

@@ -1,11 +1,12 @@
 use anyhow::{Context, Result, bail};
 
 use crate::commands::confirm;
+use crate::db::Db;
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str, yes: bool, keep_backups: bool) -> Result<()> {
-    let instance = Instance::load_existing(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str, yes: bool, keep_backups: bool) -> Result<()> {
+    let instance = Instance::load_existing(paths, db, server_name)?;
 
     if lifecycle::is_running(&instance)? {
         bail!("'{server_name}' is running; stop it first with `odin stop {server_name}`");
@@ -44,6 +45,8 @@ pub fn run(paths: &Paths, server_name: &str, yes: bool, keep_backups: bool) -> R
         std::fs::remove_dir_all(&instance.dir)
             .with_context(|| format!("failed to remove instance dir {}", instance.dir.display()))?;
     }
+
+    crate::db::instances::delete(db, server_name)?;
 
     println!("deleted '{server_name}'");
     Ok(())

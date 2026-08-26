@@ -1,10 +1,11 @@
 use anyhow::Result;
 
+use crate::db::Db;
 use crate::instance::lifecycle;
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
-    let instance = lifecycle::start(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+    let instance = lifecycle::start(paths, db, server_name)?;
     println!(
         "started '{server_name}' on port {} (password: {}); use `odin console {server_name}` to attach",
         instance.state.port,

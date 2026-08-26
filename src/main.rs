@@ -3,6 +3,7 @@ mod backup;
 mod cli;
 mod commands;
 mod config;
+mod db;
 mod doctor;
 mod instance;
 mod mods;
@@ -45,66 +46,79 @@ fn run() -> Result<()> {
         None => paths,
     };
 
+    // `serve` opens its own connection (it needs an `Arc<Db>` shared across
+    // request handlers, not this single-threaded one), and `install`/
+    // `doctor`/`completions`/`serve-install`/`serve-uninstall` don't touch
+    // instance state at all — opening the database eagerly for every
+    // subcommand keeps this dispatch simple rather than special-casing each.
+    let db = db::Db::open(&paths)?;
+
     match cli.command {
-        Command::Install => commands::install::run(&paths),
-        Command::Create { server_name } => commands::create::run(&paths, &server_name),
-        Command::Start { server_name } => commands::start::run(&paths, &server_name),
-        Command::Stop { server_name } => commands::stop::run(&paths, &server_name),
-        Command::Console { server_name } => commands::console::run(&paths, &server_name),
-        Command::Status => commands::status::run(&paths),
-        Command::Restart { server_name } => commands::restart::run(&paths, &server_name),
+        Command::Install => commands::install::run(&paths, &db),
+        Command::Create { server_name } => commands::create::run(&paths, &db, &server_name),
+        Command::Start { server_name } => commands::start::run(&paths, &db, &server_name),
+        Command::Stop { server_name } => commands::stop::run(&paths, &db, &server_name),
+        Command::Console { server_name } => commands::console::run(&paths, &db, &server_name),
+        Command::Status => commands::status::run(&paths, &db),
+        Command::Restart { server_name } => commands::restart::run(&paths, &db, &server_name),
         Command::Rename { old_name, new_name } => {
-            commands::rename::run(&paths, &old_name, &new_name)
+            commands::rename::run(&paths, &db, &old_name, &new_name)
         }
         Command::Delete {
             server_name,
             yes,
             keep_backups,
-        } => commands::delete::run(&paths, &server_name, yes, keep_backups),
+        } => commands::delete::run(&paths, &db, &server_name, yes, keep_backups),
         Command::Config {
             server_name,
             action,
-        } => commands::config_cmd::run(&paths, &server_name, action),
-        Command::Backup { server_name } => commands::backup::run(&paths, &server_name),
+        } => commands::config_cmd::run(&paths, &db, &server_name, action),
+        Command::Backup { server_name } => commands::backup::run(&paths, &db, &server_name),
         Command::Restore {
             server_name,
             backup_id,
-        } => commands::restore::run(&paths, &server_name, backup_id.as_deref()),
+        } => commands::restore::run(&paths, &db, &server_name, backup_id.as_deref()),
         Command::Logs {
             server_name,
             follow,
             lines,
-        } => commands::logs::run(&paths, &server_name, follow, lines),
+        } => commands::logs::run(&paths, &db, &server_name, follow, lines),
         Command::Exec {
             server_name,
             command,
-        } => commands::exec::run(&paths, &server_name, &command),
+        } => commands::exec::run(&paths, &db, &server_name, &command),
         Command::Doctor => commands::doctor::run(&paths),
         Command::Mods { command } => match command {
             ModsCommand::Add {
                 server_name,
                 mod_id,
-            } => commands::mods_add::run(&paths, &server_name, &mod_id),
-            ModsCommand::Update { server_name } => commands::mods_update::run(&paths, &server_name),
-            ModsCommand::List { server_name } => commands::mods_list::run(&paths, &server_name),
+            } => commands::mods_add::run(&paths, &db, &server_name, &mod_id),
+            ModsCommand::Update { server_name } => {
+                commands::mods_update::run(&paths, &db, &server_name)
+            }
+            ModsCommand::List { server_name } => {
+                commands::mods_list::run(&paths, &db, &server_name)
+            }
             ModsCommand::Remove {
                 server_name,
                 mod_id,
-            } => commands::mods_remove::run(&paths, &server_name, &mod_id),
+            } => commands::mods_remove::run(&paths, &db, &server_name, &mod_id),
             ModsCommand::Search {
                 server_name,
                 query,
                 list,
-            } => commands::mods_search::run(&paths, &server_name, &query, list),
+            } => commands::mods_search::run(&paths, &db, &server_name, &query, list),
             ModsCommand::Enable {
                 server_name,
                 mod_id,
-            } => commands::mods_enable::run(&paths, &server_name, &mod_id),
+            } => commands::mods_enable::run(&paths, &db, &server_name, &mod_id),
             ModsCommand::Disable {
                 server_name,
                 mod_id,
-            } => commands::mods_disable::run(&paths, &server_name, &mod_id),
-            ModsCommand::Manage { server_name } => commands::mods_manage::run(&paths, &server_name),
+            } => commands::mods_disable::run(&paths, &db, &server_name, &mod_id),
+            ModsCommand::Manage { server_name } => {
+                commands::mods_manage::run(&paths, &db, &server_name)
+            }
         },
         Command::Completions { shell } => {
             commands::completions::run(shell);

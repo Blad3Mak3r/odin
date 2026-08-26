@@ -1,14 +1,15 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::paths::Paths;
+use crate::db::Db;
 
 const PACKAGE_INDEX_URL: &str = "https://thunderstore.io/c/valheim/api/v1/package/";
+const INDEX_CACHE_KEY: &str = "thunderstore_index";
 const INDEX_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 pub const BEPINEX_MOD_ID: &str = "denikson-BepInExPack_Valheim";
 
@@ -85,20 +86,11 @@ impl ModRef {
 
 /// Fetches the Valheim Thunderstore package index, using a locally cached copy
 /// if it's younger than `INDEX_CACHE_TTL`.
-pub fn fetch_index(paths: &Paths) -> Result<Vec<ThunderstorePackage>> {
-    let cache_file = paths.thunderstore_index_cache();
-
-    let is_fresh = std::fs::metadata(&cache_file)
-        .and_then(|m| m.modified())
-        .is_ok_and(|modified| {
-            SystemTime::now()
-                .duration_since(modified)
-                .unwrap_or(Duration::MAX)
-                < INDEX_CACHE_TTL
-        });
-    if is_fresh
-        && let Ok(raw) = std::fs::read_to_string(&cache_file)
-        && let Ok(packages) = serde_json::from_str(&raw)
+pub fn fetch_index(db: &Db) -> Result<Vec<ThunderstorePackage>> {
+    if let Some(entry) = crate::db::cache::get(db, INDEX_CACHE_KEY)?
+        && let Ok(age) = (chrono::Utc::now() - entry.fetched_at).to_std()
+        && age < INDEX_CACHE_TTL
+        && let Ok(packages) = serde_json::from_str(&entry.value)
     {
         return Ok(packages);
     }
@@ -117,10 +109,7 @@ pub fn fetch_index(paths: &Paths) -> Result<Vec<ThunderstorePackage>> {
     let packages: Vec<ThunderstorePackage> =
         serde_json::from_str(&raw).context("failed to parse Thunderstore package index")?;
 
-    if let Some(parent) = cache_file.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(&cache_file, &raw).ok();
+    crate::db::cache::set(db, INDEX_CACHE_KEY, &raw).ok();
 
     Ok(packages)
 }

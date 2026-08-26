@@ -1,11 +1,12 @@
 use anyhow::{Result, bail};
 
 use crate::cli::ConfigAction;
+use crate::db::Db;
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str, action: ConfigAction) -> Result<()> {
-    let mut instance = Instance::load_existing(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str, action: ConfigAction) -> Result<()> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
 
     match action {
         ConfigAction::Get => {
@@ -45,7 +46,7 @@ pub fn run(paths: &Paths, server_name: &str, action: ConfigAction) -> Result<()>
             if let Some(public) = public {
                 instance.state.public = public;
             }
-            instance.save()?;
+            instance.save(db)?;
 
             if lifecycle::is_running(&instance)? {
                 tracing::warn!(

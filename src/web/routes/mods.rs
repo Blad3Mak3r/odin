@@ -12,7 +12,8 @@ use crate::web::state::AppState;
 
 pub async fn list_global_mods(State(state): State<AppState>) -> ApiResult<Json<Vec<GlobalMod>>> {
     let paths = state.paths.clone();
-    let mods = run_blocking(move || mods::list_global(&paths)).await?;
+    let db = state.db.clone();
+    let mods = run_blocking(move || mods::list_global(&paths, &db)).await?;
     Ok(Json(mods))
 }
 
@@ -21,7 +22,8 @@ pub async fn prune_mod(
     Path(mod_id): Path<String>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
-    run_blocking(move || mods::prune_global(&paths, &mod_id)).await?;
+    let db = state.db.clone();
+    run_blocking(move || mods::prune_global(&paths, &db, &mod_id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -39,9 +41,10 @@ pub async fn list_mods(
     Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<InstalledModView>>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let views = run_blocking(move || {
-        let installed = mods::list(&paths, &name)?;
-        let index = thunderstore::fetch_index(&paths).unwrap_or_else(|e| {
+        let installed = mods::list(&paths, &db, &name)?;
+        let index = thunderstore::fetch_index(&db).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "failed to fetch Thunderstore index; mods will show without icons");
             Vec::new()
         });
@@ -80,6 +83,7 @@ pub async fn add_mod(
     Json(req): Json<AddModRequest>,
 ) -> Json<JobHandle> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let activity = state.activity.clone();
     let id = state.jobs.spawn(
         JobKindDescr::ModAdd {
@@ -88,7 +92,7 @@ pub async fn add_mod(
         },
         move |logger| {
             logger.line(format!("installing '{}' on '{}'", req.mod_id, name));
-            let result = mods::add(&paths, &name, &req.mod_id);
+            let result = mods::add(&paths, &db, &name, &req.mod_id);
             if result.is_ok() {
                 logger.line("done");
                 activity.record(
@@ -109,11 +113,12 @@ pub async fn remove_mod(
     Path((name, mod_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let activity = state.activity.clone();
     let event_name = name.clone();
     let event_mod_id = mod_id.clone();
     run_blocking(move || {
-        mods::remove(&paths, &name, &mod_id)?;
+        mods::remove(&paths, &db, &name, &mod_id)?;
         activity.record(
             ActivityKind::ModRemoved {
                 mod_id: event_mod_id,
@@ -131,7 +136,8 @@ pub async fn enable_mod(
     Path((name, mod_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
-    run_blocking(move || mods::set_enabled(&paths, &name, &mod_id, true)).await?;
+    let db = state.db.clone();
+    run_blocking(move || mods::set_enabled(&paths, &db, &name, &mod_id, true)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -140,7 +146,8 @@ pub async fn disable_mod(
     Path((name, mod_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
-    run_blocking(move || mods::set_enabled(&paths, &name, &mod_id, false)).await?;
+    let db = state.db.clone();
+    run_blocking(move || mods::set_enabled(&paths, &db, &name, &mod_id, false)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -150,6 +157,7 @@ pub async fn update_mods(
     Path(name): Path<String>,
 ) -> Json<JobHandle> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let activity = state.activity.clone();
     let id = state.jobs.spawn(
         JobKindDescr::ModUpdate {
@@ -157,7 +165,7 @@ pub async fn update_mods(
         },
         move |logger| {
             logger.line(format!("updating mods for '{name}'"));
-            let result = mods::update(&paths, &name);
+            let result = mods::update(&paths, &db, &name);
             if result.is_ok() {
                 logger.line("done");
                 activity.record(ActivityKind::ModsUpdated, Some(name.clone()));
@@ -188,9 +196,9 @@ pub async fn search_mods(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<Json<Vec<ModSearchResult>>> {
-    let paths = state.paths.clone();
+    let db = state.db.clone();
     let results = run_blocking(move || {
-        let index = thunderstore::fetch_index(&paths)?;
+        let index = thunderstore::fetch_index(&db)?;
         Ok(thunderstore::search(&index, &query.q)
             .into_iter()
             .filter_map(|pkg| {

@@ -1,10 +1,11 @@
 use anyhow::Result;
 
+use crate::db::Db;
 use crate::mods;
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
-    let installed = mods::list(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+    let installed = mods::list(paths, db, server_name)?;
 
     if installed.is_empty() {
         println!("no mods installed on '{server_name}'");

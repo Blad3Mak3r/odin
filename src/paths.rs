@@ -50,14 +50,6 @@ impl Paths {
         self.servers_dir().join(name)
     }
 
-    pub fn cache_dir(&self) -> PathBuf {
-        self.data_dir.join("cache")
-    }
-
-    pub fn thunderstore_index_cache(&self) -> PathBuf {
-        self.cache_dir().join("thunderstore-index.json")
-    }
-
     /// Root of the global mod store, shared across every instance.
     pub fn mods_dir(&self) -> PathBuf {
         self.data_dir.join("mods")

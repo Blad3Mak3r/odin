@@ -1,10 +1,11 @@
 use anyhow::Result;
 
+use crate::db::Db;
 use crate::instance::lifecycle;
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, server_name: &str) -> Result<()> {
-    let instance = lifecycle::restart(paths, server_name)?;
+pub fn run(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+    let instance = lifecycle::restart(paths, db, server_name)?;
     println!(
         "restarted '{server_name}' on port {} (password: {})",
         instance.state.port,

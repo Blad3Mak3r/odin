@@ -15,12 +15,14 @@ mod ws;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::task::AbortHandle;
 
 use crate::activity::ActivityKind;
+use crate::db::Db;
 use crate::instance;
 use crate::paths::Paths;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
@@ -28,7 +30,8 @@ use runtime::{InstanceResourceEntry, ResourcesTick};
 use state::AppState;
 
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
-    let state = AppState::new(paths);
+    let db = Arc::new(Db::open(&paths).context("failed to open database")?);
+    let state = AppState::new(paths, db);
     spawn_telemetry(state.clone());
 
     let router = router::build_router(state);
@@ -96,7 +99,7 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
 
     let mut entries = Vec::new();
     let mut running_names = Vec::new();
-    if let Ok(instances) = instance::list_all(&state.paths) {
+    if let Ok(instances) = instance::list_all(&state.paths, &state.db) {
         for inst in &instances {
             let Ok(snapshot) = compute_instance_snapshot(state, inst) else {
                 continue;

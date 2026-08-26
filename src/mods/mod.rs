@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Serialize;
 
+use crate::db::Db;
 use crate::instance::Instance;
 use crate::instance::state::InstalledMod;
 use crate::paths::{self, Paths};
@@ -28,25 +29,26 @@ use thunderstore::ModRef;
 /// alongside the actual mod payload; these aren't part of the mod itself.
 const METADATA_ENTRIES: &[&str] = &["icon.png", "manifest.json", "README.md", "CHANGELOG.md"];
 
-pub fn add(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
-    let mut instance = Instance::load_existing(paths, server_name)?;
+pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
 
     if !instance.state.bepinex_installed {
         tracing::info!(
             instance = server_name,
             "BepInEx not installed yet; bootstrapping"
         );
-        bepinex::bootstrap(paths, &instance.dir)?;
+        bepinex::bootstrap(db, &instance.dir)?;
         instance.state.bepinex_installed = true;
-        instance.save()?;
+        instance.save(db)?;
     }
 
     let mod_ref = ModRef::parse(mod_id)?;
-    let index = thunderstore::fetch_index(paths)?;
+    let index = thunderstore::fetch_index(db)?;
     let (_package, version) = thunderstore::resolve(&mod_ref, &index)?;
 
     let global_dir = ensure_global_mod(
         paths,
+        db,
         &mod_ref,
         &version.version_number,
         &version.download_url,
@@ -64,7 +66,7 @@ pub fn add(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
         .installed_mods
         .retain(|m| m.mod_id != entry.mod_id);
     instance.state.installed_mods.push(entry);
-    instance.save()?;
+    instance.save(db)?;
 
     if crate::instance::lifecycle::is_running(&instance)? {
         tracing::warn!(
@@ -76,9 +78,9 @@ pub fn add(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
-    let mut instance = Instance::load_existing(paths, server_name)?;
-    let index = thunderstore::fetch_index(paths)?;
+pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
+    let index = thunderstore::fetch_index(db)?;
 
     // Mod ids are collected up front (rather than cloning the whole
     // `Vec<InstalledMod>`) so the loop can still mutate `installed_mods` by
@@ -119,6 +121,7 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
 
         let global_dir = ensure_global_mod(
             paths,
+            db,
             &mod_ref,
             &latest.version_number,
             &latest.download_url,
@@ -134,7 +137,7 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
     }
 
     if any_updated {
-        instance.save()?;
+        instance.save(db)?;
     } else {
         println!("all mods for '{server_name}' are already up to date");
     }
@@ -150,13 +153,13 @@ pub fn update(paths: &Paths, server_name: &str) -> Result<()> {
 }
 
 /// Reads an instance's installed mods from its state — no network call.
-pub fn list(paths: &Paths, server_name: &str) -> Result<Vec<InstalledMod>> {
-    let instance = Instance::load_existing(paths, server_name)?;
+pub fn list(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<InstalledMod>> {
+    let instance = Instance::load_existing(paths, db, server_name)?;
     Ok(instance.state.installed_mods)
 }
 
-pub fn remove(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
-    let mut instance = Instance::load_existing(paths, server_name)?;
+pub fn remove(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
 
     if !instance
         .state
@@ -172,7 +175,7 @@ pub fn remove(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
     remove_link_if_present(&active_plugin_dir(&instance.dir, mod_id))?;
 
     instance.state.installed_mods.retain(|m| m.mod_id != mod_id);
-    instance.save()?;
+    instance.save(db)?;
 
     if crate::instance::lifecycle::is_running(&instance)? {
         tracing::warn!(
@@ -187,8 +190,14 @@ pub fn remove(paths: &Paths, server_name: &str, mod_id: &str) -> Result<()> {
 /// Symlinks or unlinks a mod's entry under `plugins/` and flips its stored
 /// `enabled` flag. Returns whether anything actually changed (false if the
 /// mod was already in the requested state).
-pub fn set_enabled(paths: &Paths, server_name: &str, mod_id: &str, enabled: bool) -> Result<bool> {
-    let mut instance = Instance::load_existing(paths, server_name)?;
+pub fn set_enabled(
+    paths: &Paths,
+    db: &Db,
+    server_name: &str,
+    mod_id: &str,
+    enabled: bool,
+) -> Result<bool> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
 
     let current = instance
         .state
@@ -224,7 +233,7 @@ pub fn set_enabled(paths: &Paths, server_name: &str, mod_id: &str, enabled: bool
     {
         entry.enabled = enabled;
     }
-    instance.save()?;
+    instance.save(db)?;
 
     if crate::instance::lifecycle::is_running(&instance)? {
         tracing::warn!(
@@ -264,7 +273,7 @@ pub struct GlobalMod {
 /// mod via a best-effort Thunderstore index lookup: a fetch failure (offline,
 /// Thunderstore down) doesn't fail the whole listing, mods just show without
 /// icons.
-pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
+pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
     let mut mods: BTreeMap<String, GlobalMod> = BTreeMap::new();
 
     let mods_dir = paths.mods_dir();
@@ -285,11 +294,12 @@ pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
                     icon: None,
                     instances: Vec::new(),
                 })
-                .global_version = current_marker_version(&entry.path());
+                .global_version =
+                crate::db::global_mods::current_version(db, &mod_id).unwrap_or_default();
         }
     }
 
-    for instance in crate::instance::list_all(paths)? {
+    for instance in crate::instance::list_all(paths, db)? {
         let running = crate::instance::lifecycle::is_running(&instance)?;
         for installed in &instance.state.installed_mods {
             mods.entry(installed.mod_id.clone())
@@ -309,7 +319,7 @@ pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
         }
     }
 
-    let index = thunderstore::fetch_index(paths).unwrap_or_else(|e| {
+    let index = thunderstore::fetch_index(db).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to fetch Thunderstore index; mods will show without icons");
         Vec::new()
     });
@@ -329,8 +339,8 @@ pub fn list_global(paths: &Paths) -> Result<Vec<GlobalMod>> {
 
 /// Removes a mod's payload from the global store. Refuses if any instance
 /// still references it — it must be removed per-instance first via `remove`.
-pub fn prune_global(paths: &Paths, mod_id: &str) -> Result<()> {
-    let in_use = crate::instance::list_all(paths)?
+pub fn prune_global(paths: &Paths, db: &Db, mod_id: &str) -> Result<()> {
+    let in_use = crate::instance::list_all(paths, db)?
         .into_iter()
         .any(|instance| {
             instance
@@ -350,6 +360,7 @@ pub fn prune_global(paths: &Paths, mod_id: &str) -> Result<()> {
         std::fs::remove_dir_all(&dir)
             .with_context(|| format!("failed to remove {}", dir.display()))?;
     }
+    crate::db::global_mods::remove(db, mod_id)?;
     Ok(())
 }
 
@@ -358,11 +369,6 @@ fn active_plugin_dir(instance_dir: &Path, mod_id: &str) -> PathBuf {
         .join("plugins")
         .join(mod_id)
 }
-
-/// Marker file dropped alongside a mod's payload in the global store,
-/// recording which version is currently there so `ensure_global_mod` can
-/// skip re-downloading when it's already the one asked for.
-const VERSION_MARKER: &str = ".odin-version";
 
 /// Removes the wrapped directory when dropped, regardless of whether the
 /// scope exited normally or via an early `?` return — used to guarantee
@@ -381,13 +387,14 @@ impl Drop for CleanupDir<'_> {
 /// updating it affects every instance currently symlinking it.
 fn ensure_global_mod(
     paths: &Paths,
+    db: &Db,
     mod_ref: &ModRef,
     version_number: &str,
     download_url: &str,
 ) -> Result<PathBuf> {
     let mod_id = mod_ref.mod_id();
     let final_dir = paths.mod_dir(&mod_id);
-    if current_marker_version(&final_dir).as_deref() == Some(version_number) {
+    if crate::db::global_mods::current_version(db, &mod_id)?.as_deref() == Some(version_number) {
         return Ok(final_dir);
     }
 
@@ -416,16 +423,9 @@ fn ensure_global_mod(
     }
     copy_dir_contents_excluding_metadata(&source_root, &final_dir)
         .with_context(|| format!("failed to install mod '{mod_id}'"))?;
-    std::fs::write(final_dir.join(VERSION_MARKER), version_number)
-        .with_context(|| format!("failed to record version for '{mod_id}'"))?;
+    crate::db::global_mods::set_version(db, &mod_id, version_number)?;
 
     Ok(final_dir)
-}
-
-fn current_marker_version(mod_dir: &Path) -> Option<String> {
-    std::fs::read_to_string(mod_dir.join(VERSION_MARKER))
-        .ok()
-        .map(|s| s.trim().to_string())
 }
 
 /// Removes whatever is at `path` (symlink or real directory) without

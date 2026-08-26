@@ -1,11 +1,12 @@
 use anyhow::{Result, bail};
 
+use crate::db::Db;
 use crate::instance;
 use crate::paths::Paths;
 use crate::steamcmd::{SteamCmd, VALHEIM_DEDICATED_SERVER_APP_ID};
 
-pub fn run(paths: &Paths) -> Result<()> {
-    let running = instance::running_instance_names(paths)?;
+pub fn run(paths: &Paths, db: &Db) -> Result<()> {
+    let running = instance::running_instance_names(paths, db)?;
     if !running.is_empty() {
         bail!(
             "refusing to install/update while instance(s) are running: {}; stop them first with `odin stop <name>`",

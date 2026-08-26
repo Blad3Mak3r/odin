@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
+use crate::db::Db;
 use crate::instance::state::InstanceState;
 use crate::instance::{self, Instance, InstanceError, lifecycle};
 use crate::paths::Paths;
@@ -27,8 +28,9 @@ fn view(instance: Instance) -> anyhow::Result<InstanceView> {
 
 pub async fn list_instances(State(state): State<AppState>) -> ApiResult<Json<Vec<InstanceView>>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let views = run_blocking(move || {
-        instance::list_all(&paths)?
+        instance::list_all(&paths, &db)?
             .into_iter()
             .map(view)
             .collect::<anyhow::Result<Vec<_>>>()
@@ -47,10 +49,11 @@ pub async fn create_instance(
     Json(req): Json<CreateInstanceRequest>,
 ) -> ApiResult<Json<InstanceView>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let activity = state.activity.clone();
     let name = req.name.clone();
     let created = run_blocking(move || {
-        let instance = Instance::create(&paths, &req.name)?;
+        let instance = Instance::create(&paths, &db, &req.name)?;
         activity.record(ActivityKind::InstanceCreated, Some(name));
         Ok(instance)
     })
@@ -63,7 +66,8 @@ pub async fn get_instance(
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
     let paths = state.paths.clone();
-    let instance = run_blocking(move || Instance::load_existing(&paths, &name)).await?;
+    let db = state.db.clone();
+    let instance = run_blocking(move || Instance::load_existing(&paths, &db, &name)).await?;
     Ok(Json(view(instance)?))
 }
 
@@ -72,7 +76,8 @@ pub async fn start_instance(
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
     let paths = state.paths.clone();
-    let started = run_blocking(move || lifecycle::start(&paths, &name)).await?;
+    let db = state.db.clone();
+    let started = run_blocking(move || lifecycle::start(&paths, &db, &name)).await?;
     Ok(Json(view(started)?))
 }
 
@@ -81,7 +86,8 @@ pub async fn stop_instance(
     Path(name): Path<String>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
-    run_blocking(move || lifecycle::stop(&paths, &name)).await?;
+    let db = state.db.clone();
+    run_blocking(move || lifecycle::stop(&paths, &db, &name)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -90,7 +96,8 @@ pub async fn restart_instance(
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
     let paths = state.paths.clone();
-    let restarted = run_blocking(move || lifecycle::restart(&paths, &name)).await?;
+    let db = state.db.clone();
+    let restarted = run_blocking(move || lifecycle::restart(&paths, &db, &name)).await?;
     Ok(Json(view(restarted)?))
 }
 
@@ -105,7 +112,9 @@ pub async fn rename_instance(
     Json(req): Json<RenameRequest>,
 ) -> ApiResult<Json<InstanceView>> {
     let paths = state.paths.clone();
-    let renamed = run_blocking(move || lifecycle::rename(&paths, &old_name, &req.new_name)).await?;
+    let db = state.db.clone();
+    let renamed =
+        run_blocking(move || lifecycle::rename(&paths, &db, &old_name, &req.new_name)).await?;
     Ok(Json(view(renamed)?))
 }
 
@@ -121,10 +130,11 @@ pub async fn delete_instance(
     Query(query): Query<DeleteQuery>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let activity = state.activity.clone();
     let delete_name = name.clone();
     run_blocking(move || {
-        delete_instance_dir(&paths, &delete_name, query.keep_backups)?;
+        delete_instance_dir(&paths, &db, &delete_name, query.keep_backups)?;
         activity.record(ActivityKind::InstanceDeleted, Some(delete_name));
         Ok(())
     })
@@ -135,8 +145,13 @@ pub async fn delete_instance(
 
 /// Same behavior as `commands::delete::run`, minus the interactive
 /// confirmation prompt — the frontend asks for confirmation itself.
-fn delete_instance_dir(paths: &Paths, name: &str, keep_backups: bool) -> anyhow::Result<()> {
-    let instance = Instance::load_existing(paths, name)?;
+fn delete_instance_dir(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+    keep_backups: bool,
+) -> anyhow::Result<()> {
+    let instance = Instance::load_existing(paths, db, name)?;
     if lifecycle::is_running(&instance)? {
         return Err(InstanceError::AlreadyRunning(name.to_string()).into());
     }
@@ -158,6 +173,8 @@ fn delete_instance_dir(paths: &Paths, name: &str, keep_backups: bool) -> anyhow:
         std::fs::remove_dir_all(&instance.dir)?;
     }
 
+    crate::db::instances::delete(db, name)?;
+
     Ok(())
 }
 
@@ -174,7 +191,8 @@ pub async fn get_config(
     Path(name): Path<String>,
 ) -> ApiResult<Json<ConfigView>> {
     let paths = state.paths.clone();
-    let instance = run_blocking(move || Instance::load_existing(&paths, &name)).await?;
+    let db = state.db.clone();
+    let instance = run_blocking(move || Instance::load_existing(&paths, &db, &name)).await?;
     Ok(Json(ConfigView {
         world_name: instance.state.world_name,
         port: instance.state.port,
@@ -197,7 +215,8 @@ pub async fn set_config(
     Json(req): Json<ConfigUpdateRequest>,
 ) -> ApiResult<Json<ConfigView>> {
     let paths = state.paths.clone();
-    let instance = run_blocking(move || update_config(&paths, &name, req)).await?;
+    let db = state.db.clone();
+    let instance = run_blocking(move || update_config(&paths, &db, &name, req)).await?;
     Ok(Json(ConfigView {
         world_name: instance.state.world_name,
         port: instance.state.port,
@@ -206,8 +225,13 @@ pub async fn set_config(
     }))
 }
 
-fn update_config(paths: &Paths, name: &str, req: ConfigUpdateRequest) -> anyhow::Result<Instance> {
-    let mut instance = Instance::load_existing(paths, name)?;
+fn update_config(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+    req: ConfigUpdateRequest,
+) -> anyhow::Result<Instance> {
+    let mut instance = Instance::load_existing(paths, db, name)?;
 
     if let Some(password) = &req.password
         && password.len() < 5
@@ -230,7 +254,7 @@ fn update_config(paths: &Paths, name: &str, req: ConfigUpdateRequest) -> anyhow:
     if let Some(public) = req.public {
         instance.state.public = public;
     }
-    instance.save()?;
+    instance.save(db)?;
     Ok(instance)
 }
 
@@ -255,8 +279,9 @@ pub async fn get_logs(
     Query(query): Query<LogsQuery>,
 ) -> ApiResult<Json<LogsView>> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let tail = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
+        let instance = Instance::load_existing(&paths, &db, &name)?;
         let log_file = crate::paths::instance_logs_dir(&instance.dir).join("console.log");
         if !log_file.is_file() {
             return Ok(String::new());

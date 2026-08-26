@@ -22,9 +22,10 @@ pub async fn get_list(
 ) -> ApiResult<Json<ListView>> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let ids = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
-        lists::read(&instance.dir, kind)
+        let instance = Instance::load_existing(&paths, &db, &name)?;
+        lists::read(&db, &instance, kind)
     })
     .await?;
     Ok(Json(ListView { ids }))
@@ -42,9 +43,10 @@ pub async fn set_list(
 ) -> ApiResult<StatusCode> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
-        lists::write(&instance.dir, kind, &req.ids)
+        let instance = Instance::load_existing(&paths, &db, &name)?;
+        lists::write(&db, &instance, kind, &req.ids)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -62,9 +64,10 @@ pub async fn add_list_entry(
 ) -> ApiResult<StatusCode> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
-        lists::add_id(&instance.dir, kind, &req.id)
+        let instance = Instance::load_existing(&paths, &db, &name)?;
+        lists::add_id(&db, &instance, kind, &req.id)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -76,9 +79,10 @@ pub async fn remove_list_entry(
 ) -> ApiResult<StatusCode> {
     let kind = parse_kind(&kind)?;
     let paths = state.paths.clone();
+    let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &name)?;
-        lists::remove_id(&instance.dir, kind, &id)
+        let instance = Instance::load_existing(&paths, &db, &name)?;
+        lists::remove_id(&db, &instance, kind, &id)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)

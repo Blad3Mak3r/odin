@@ -26,8 +26,10 @@ pub async fn console_ws(
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let paths = state.paths.clone();
+    let db = state.db.clone();
     let instance =
-        crate::web::error::run_blocking(move || Instance::load_existing(&paths, &name)).await?;
+        crate::web::error::run_blocking(move || Instance::load_existing(&paths, &db, &name))
+            .await?;
 
     let session = instance.state.tmux_session.clone();
     let log_file = paths::instance_logs_dir(&instance.dir).join("console.log");

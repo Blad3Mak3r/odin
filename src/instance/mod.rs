@@ -2,10 +2,11 @@
 //! the database (see `crate::db::instances`); `dir` is the instance's
 //! directory under `<data_dir>/servers/<name>/`, still used on disk for
 //! save/log/mod files. `lifecycle` handles starting, stopping, and
-//! renaming the underlying tmux session and on-disk layout.
+//! renaming the underlying process and on-disk layout.
 
 pub mod lifecycle;
 pub mod lists;
+pub mod process;
 pub mod state;
 
 use std::path::PathBuf;
@@ -115,7 +116,7 @@ pub fn list_all(paths: &Paths, db: &Db) -> Result<Vec<Instance>> {
 pub fn running_instance_names(paths: &Paths, db: &Db) -> Result<Vec<String>> {
     let mut running = Vec::new();
     for instance in list_all(paths, db)? {
-        if crate::tmux::has_session(&instance.state.tmux_session)? {
+        if lifecycle::is_running(&instance)? {
             running.push(instance.state.name);
         }
     }

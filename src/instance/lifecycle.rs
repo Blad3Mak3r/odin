@@ -1,25 +1,38 @@
-use std::fmt::Write as _;
-use std::io::Write as _;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use sysinfo::Signal;
 
-use super::{Instance, InstanceError};
+use super::{Instance, InstanceError, process};
 use crate::cli::validate_instance_name;
 use crate::db::Db;
 use crate::paths::{self, Paths};
-use crate::tmux;
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The single canonical liveness check: a live `(pid, pid_started_at)`
+/// comparison against the OS process table, never a cached/in-memory
+/// value. Correct standalone (no `odin serve` needed) and from the web
+/// layer alike.
 pub fn is_running(instance: &Instance) -> Result<bool> {
-    tmux::has_session(&instance.state.tmux_session)
+    Ok(match (instance.state.pid, instance.state.pid_started_at) {
+        (Some(pid), Some(pid_started_at)) => process::is_alive(pid, pid_started_at),
+        _ => false,
+    })
 }
 
-pub fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+/// Starts (creating first, if new) an instance's server process. Returns
+/// the `Child` handle so the caller can decide what to do with it: `odin
+/// serve` hands it to `web::supervisor` for reaping and console-writer
+/// registration; a standalone CLI invocation just drops it (safe — see
+/// `process::spawn`'s doc comment), letting it become adoptable by
+/// whichever `odin serve` next reconciles.
+pub async fn start(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+) -> Result<(Instance, tokio::process::Child)> {
     let mut instance = Instance::load_or_create(paths, db, name)?;
 
     if is_running(&instance)? {
@@ -36,65 +49,75 @@ pub fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 
     check_port_available(paths, db, &instance)?;
     prepare_instance_layout(paths, &instance)?;
-    let run_script = write_run_script(&instance)?;
 
-    let logs_dir = paths::instance_logs_dir(&instance.dir);
-    let console_log = logs_dir.join("console.log");
+    let cmd = process::build_command(&instance, paths)?;
+    let child = process::spawn(cmd)
+        .await
+        .with_context(|| format!("failed to start instance '{name}'"))?;
+    let pid = child.id().context("spawned child has no pid")?;
+    let pid_started_at = process::start_time_of(pid)?;
+    let started_at = Utc::now();
 
-    // The server binary resolves `linux64/` libs and `steam_appid.txt` relative
-    // to the working directory, so the tmux session's cwd must be the shared
-    // install dir itself (matching Valheim's own `start_server.sh`), not the
-    // per-instance directory.
-    let run_cmd = format!("bash {}", run_script.display());
-    tmux::new_detached_session(
-        &instance.state.tmux_session,
-        &paths.shared_install_dir(),
-        &run_cmd,
-    )
-    .with_context(|| format!("failed to start instance '{name}'"))?;
-    tmux::pipe_pane_to_file(&instance.state.tmux_session, &console_log)
-        .with_context(|| format!("failed to attach log capture for instance '{name}'"))?;
+    instance.state.last_started_at = Some(started_at);
+    instance.state.pid = Some(pid);
+    instance.state.pid_started_at = Some(pid_started_at);
+    // Narrower than a full `instance.save`: just the three columns that
+    // actually changed, rather than an upsert of every column plus a
+    // delete-and-reinsert of every installed mod row.
+    crate::db::instances::set_pid(db, name, pid, pid_started_at, started_at)?;
 
-    instance.state.last_started_at = Some(Utc::now());
-    instance.save(db)?;
-
-    Ok(instance)
+    Ok((instance, child))
 }
 
-pub fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
+/// Stops a running instance: SIGINT, wait up to `STOP_TIMEOUT` for a clean
+/// exit, SIGKILL as a fallback. Works purely by pid — doesn't require the
+/// caller to own the `Child` that was originally spawned, so this is
+/// exactly as functional from a standalone CLI invocation as from the web
+/// dashboard, and works equally well on an instance "adopted" from a
+/// previous `odin serve` boot.
+pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, name)?;
 
-    if !is_running(&instance)? {
+    let (Some(pid), Some(pid_started_at)) = (instance.state.pid, instance.state.pid_started_at)
+    else {
+        bail!(InstanceError::NotRunning(name.to_string()));
+    };
+    if !process::is_alive(pid, pid_started_at) {
         bail!(InstanceError::NotRunning(name.to_string()));
     }
 
-    let session = &instance.state.tmux_session;
-    tmux::send_ctrl_c(session)?;
-
-    let ended = tmux::wait_for_session_end(session, STOP_TIMEOUT)?;
-    if !ended {
+    process::send_signal(pid, pid_started_at, Signal::Interrupt)?;
+    if !process::wait_until_gone(pid, pid_started_at, STOP_TIMEOUT).await {
         tracing::warn!(
             instance = name,
-            "graceful shutdown did not complete within {:?}; killing tmux session (possible data loss)",
+            "graceful shutdown did not complete within {:?}; sending SIGKILL (possible data loss)",
             STOP_TIMEOUT
         );
-        tmux::kill_session(session)?;
+        process::send_signal(pid, pid_started_at, Signal::Kill)?;
+        process::wait_until_gone(pid, pid_started_at, Duration::from_secs(5)).await;
     }
 
-    instance.state.last_stopped_at = Some(Utc::now());
-    instance.save(db)?;
+    let stopped_at = Utc::now();
+    instance.state.last_stopped_at = Some(stopped_at);
+    instance.state.pid = None;
+    instance.state.pid_started_at = None;
+    crate::db::instances::clear_pid(db, name, stopped_at)?;
 
     Ok(())
 }
 
 /// Stops the instance if it's running, then starts it again. Requires the
 /// instance to already exist (unlike `start`, which creates it on demand).
-pub fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+pub async fn restart(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+) -> Result<(Instance, tokio::process::Child)> {
     let instance = Instance::load_existing(paths, db, name)?;
     if is_running(&instance)? {
-        stop(paths, db, name)?;
+        stop(paths, db, name).await?;
     }
-    start(paths, db, name)
+    start(paths, db, name).await
 }
 
 /// Renames an instance on disk and in its state, provided it isn't running
@@ -130,7 +153,6 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
 
     instance.dir = new_dir;
     instance.state.name = new_name.to_string();
-    instance.state.tmux_session = paths::tmux_session_name(new_name);
     // The instance row is keyed by name, so saving under the new name inserts
     // a fresh row rather than updating the old one — the old row (and its
     // installed_mods) must be deleted explicitly afterwards.
@@ -176,67 +198,95 @@ fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
     Ok(())
 }
 
-fn write_run_script(instance: &Instance) -> Result<PathBuf> {
-    let saves_dir = paths::instance_saves_dir(&instance.dir);
-    let bepinex_dir = paths::instance_bepinex_dir(&instance.dir);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt as _;
 
-    let mut script = String::from(
-        "#!/usr/bin/env bash\nset -euo pipefail\n\n\
-         export LD_LIBRARY_PATH=\"./linux64:${LD_LIBRARY_PATH:-}\"\n\
-         export SteamAppId=892970\n\n",
-    );
-
-    if instance.state.bepinex_installed {
-        // Matches the BepInExPack Valheim's own `start_server_bepinex.sh`
-        // (Doorstop 4.x env var names), but with absolute paths since our
-        // tmux session's cwd is the shared install dir, not this instance
-        // dir where BepInEx/doorstop_libs actually live.
-        let doorstop_libs_dir = instance.dir.join("doorstop_libs");
-        write!(
-            script,
-            "export DOORSTOP_ENABLED=1\n\
-             export DOORSTOP_TARGET_ASSEMBLY=\"{bepinex_dir}/core/BepInEx.Preloader.dll\"\n\
-             export LD_LIBRARY_PATH=\"{doorstop_libs_dir}:${{LD_LIBRARY_PATH:-}}\"\n\
-             export LD_PRELOAD=\"libdoorstop_x64.so:${{LD_PRELOAD:-}}\"\n\n",
-            bepinex_dir = bepinex_dir.display(),
-            doorstop_libs_dir = doorstop_libs_dir.display()
-        )
-        .expect("writing to a String never fails");
+    fn temp_env(label: &str) -> (Paths, Db) {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-lifecycle-e2e-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Db::open(&paths).unwrap();
+        (paths, db)
     }
 
-    let mut args = vec![
-        "-nographics".to_string(),
-        "-batchmode".to_string(),
-        "-name".to_string(),
-        shell_quote(&instance.state.name),
-        "-port".to_string(),
-        instance.state.port.to_string(),
-        "-world".to_string(),
-        shell_quote(&instance.state.world_name),
-        "-savedir".to_string(),
-        shell_quote(&saves_dir.to_string_lossy()),
-        "-public".to_string(),
-        if instance.state.public { "1" } else { "0" }.to_string(),
-    ];
-    if let Some(password) = &instance.state.password {
-        args.push("-password".to_string());
-        args.push(shell_quote(password));
+    /// End-to-end smoke test against the *real* `valheim_server.x86_64` on
+    /// this host (symlinked in, not copied) — exercises the actual spawn,
+    /// console-FIFO, liveness, and SIGINT/SIGKILL stop path this whole
+    /// module was rewritten around, not just the pure logic in
+    /// `instance::process`'s unit tests. Skipped by default (needs a real
+    /// Valheim dedicated server install, like the steamcmd-dependent tests
+    /// in `valheim_update.rs`): `cargo test -- --ignored lifecycle_e2e`.
+    #[tokio::test]
+    #[ignore]
+    async fn lifecycle_e2e_start_exec_stop_against_a_real_server_binary() {
+        // Deliberately bypasses `Paths::resolve`'s system-mode detection
+        // (this dev box also has a package-installed `/etc/odin/config.toml`
+        // pointing at `/var/lib/odin`, unreadable by this user) — this test
+        // only cares about finding *a* real install to symlink in, always
+        // under the per-user XDG data dir regardless of system-mode.
+        let real_install = directories::ProjectDirs::from("", "", "odin")
+            .unwrap()
+            .data_dir()
+            .join("install")
+            .join("valheim");
+        assert!(
+            real_install.join("valheim_server.x86_64").is_file(),
+            "expected a real Valheim install at {}; run `odin install` first",
+            real_install.display()
+        );
+
+        let (paths, db) = temp_env("smoke");
+        std::fs::create_dir_all(paths.shared_install_dir().parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_install, paths.shared_install_dir()).unwrap();
+
+        let (instance, child) = start(&paths, &db, "e2e-smoke").await.unwrap();
+        let pid = instance.state.pid.unwrap();
+        assert!(process::is_alive(
+            pid,
+            instance.state.pid_started_at.unwrap()
+        ));
+        assert!(is_running(&instance).unwrap());
+        drop(child); // detach, exactly like the CLI does — must not affect the running process
+
+        // Real console output should show up in the log within a few seconds.
+        let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
+        let mut saw_output = false;
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if std::fs::metadata(&console_log)
+                .map(|m| m.len())
+                .unwrap_or(0)
+                > 0
+            {
+                saw_output = true;
+                break;
+            }
+        }
+        assert!(saw_output, "expected the server to write to console.log");
+
+        // Console input actually reaches the real process's stdin.
+        let fifo = paths::instance_console_fifo(&instance.dir);
+        let mut writer = process::open_console_writer(&fifo).await.unwrap();
+        writer.write_all(b"help\n").await.unwrap();
+
+        stop(&paths, &db, "e2e-smoke").await.unwrap();
+        assert!(!process::is_alive(
+            pid,
+            instance.state.pid_started_at.unwrap()
+        ));
+        let reloaded = Instance::load_existing(&paths, &db, "e2e-smoke").unwrap();
+        assert!(!is_running(&reloaded).unwrap());
+        assert_eq!(reloaded.state.pid, None);
+
+        std::fs::remove_dir_all(&paths.data_dir).ok();
     }
-
-    writeln!(script, "exec ./valheim_server.x86_64 {}", args.join(" "))
-        .expect("writing to a String never fails");
-
-    let run_script = instance.dir.join("run.sh");
-    let mut file = std::fs::File::create(&run_script)
-        .with_context(|| format!("failed to create {}", run_script.display()))?;
-    file.write_all(script.as_bytes())?;
-    let mut perms = file.metadata()?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&run_script, perms)?;
-
-    Ok(run_script)
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }

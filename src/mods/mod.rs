@@ -37,17 +37,18 @@ pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()
             instance = server_name,
             "BepInEx not installed yet; bootstrapping"
         );
-        bepinex::bootstrap(paths, &instance.dir)?;
+        bepinex::bootstrap(db, &instance.dir)?;
         instance.state.bepinex_installed = true;
         instance.save(db)?;
     }
 
     let mod_ref = ModRef::parse(mod_id)?;
-    let index = thunderstore::fetch_index(paths)?;
+    let index = thunderstore::fetch_index(db)?;
     let (_package, version) = thunderstore::resolve(&mod_ref, &index)?;
 
     let global_dir = ensure_global_mod(
         paths,
+        db,
         &mod_ref,
         &version.version_number,
         &version.download_url,
@@ -79,7 +80,7 @@ pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()
 
 pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
-    let index = thunderstore::fetch_index(paths)?;
+    let index = thunderstore::fetch_index(db)?;
 
     // Mod ids are collected up front (rather than cloning the whole
     // `Vec<InstalledMod>`) so the loop can still mutate `installed_mods` by
@@ -120,6 +121,7 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
 
         let global_dir = ensure_global_mod(
             paths,
+            db,
             &mod_ref,
             &latest.version_number,
             &latest.download_url,
@@ -292,7 +294,8 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
                     icon: None,
                     instances: Vec::new(),
                 })
-                .global_version = current_marker_version(&entry.path());
+                .global_version =
+                crate::db::global_mods::current_version(db, &mod_id).unwrap_or_default();
         }
     }
 
@@ -316,7 +319,7 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
         }
     }
 
-    let index = thunderstore::fetch_index(paths).unwrap_or_else(|e| {
+    let index = thunderstore::fetch_index(db).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to fetch Thunderstore index; mods will show without icons");
         Vec::new()
     });
@@ -357,6 +360,7 @@ pub fn prune_global(paths: &Paths, db: &Db, mod_id: &str) -> Result<()> {
         std::fs::remove_dir_all(&dir)
             .with_context(|| format!("failed to remove {}", dir.display()))?;
     }
+    crate::db::global_mods::remove(db, mod_id)?;
     Ok(())
 }
 
@@ -365,11 +369,6 @@ fn active_plugin_dir(instance_dir: &Path, mod_id: &str) -> PathBuf {
         .join("plugins")
         .join(mod_id)
 }
-
-/// Marker file dropped alongside a mod's payload in the global store,
-/// recording which version is currently there so `ensure_global_mod` can
-/// skip re-downloading when it's already the one asked for.
-const VERSION_MARKER: &str = ".odin-version";
 
 /// Removes the wrapped directory when dropped, regardless of whether the
 /// scope exited normally or via an early `?` return — used to guarantee
@@ -388,13 +387,14 @@ impl Drop for CleanupDir<'_> {
 /// updating it affects every instance currently symlinking it.
 fn ensure_global_mod(
     paths: &Paths,
+    db: &Db,
     mod_ref: &ModRef,
     version_number: &str,
     download_url: &str,
 ) -> Result<PathBuf> {
     let mod_id = mod_ref.mod_id();
     let final_dir = paths.mod_dir(&mod_id);
-    if current_marker_version(&final_dir).as_deref() == Some(version_number) {
+    if crate::db::global_mods::current_version(db, &mod_id)?.as_deref() == Some(version_number) {
         return Ok(final_dir);
     }
 
@@ -423,16 +423,9 @@ fn ensure_global_mod(
     }
     copy_dir_contents_excluding_metadata(&source_root, &final_dir)
         .with_context(|| format!("failed to install mod '{mod_id}'"))?;
-    std::fs::write(final_dir.join(VERSION_MARKER), version_number)
-        .with_context(|| format!("failed to record version for '{mod_id}'"))?;
+    crate::db::global_mods::set_version(db, &mod_id, version_number)?;
 
     Ok(final_dir)
-}
-
-fn current_marker_version(mod_dir: &Path) -> Option<String> {
-    std::fs::read_to_string(mod_dir.join(VERSION_MARKER))
-        .ok()
-        .map(|s| s.trim().to_string())
 }
 
 /// Removes whatever is at `path` (symlink or real directory) without

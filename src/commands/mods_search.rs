@@ -11,7 +11,7 @@ use crate::paths::Paths;
 const MAX_RESULTS: usize = 30;
 
 pub fn run(paths: &Paths, db: &Db, server_name: &str, query: &str, list_only: bool) -> Result<()> {
-    let index = thunderstore::fetch_index(paths)?;
+    let index = thunderstore::fetch_index(db)?;
     let results = thunderstore::search(&index, query);
     if results.is_empty() {
         println!("no mods found matching '{query}'");

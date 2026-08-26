@@ -44,7 +44,7 @@ pub async fn list_mods(
     let db = state.db.clone();
     let views = run_blocking(move || {
         let installed = mods::list(&paths, &db, &name)?;
-        let index = thunderstore::fetch_index(&paths).unwrap_or_else(|e| {
+        let index = thunderstore::fetch_index(&db).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "failed to fetch Thunderstore index; mods will show without icons");
             Vec::new()
         });
@@ -196,9 +196,9 @@ pub async fn search_mods(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<Json<Vec<ModSearchResult>>> {
-    let paths = state.paths.clone();
+    let db = state.db.clone();
     let results = run_blocking(move || {
-        let index = thunderstore::fetch_index(&paths)?;
+        let index = thunderstore::fetch_index(&db)?;
         Ok(thunderstore::search(&index, &query.q)
             .into_iter()
             .filter_map(|pkg| {

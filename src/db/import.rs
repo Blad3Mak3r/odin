@@ -16,7 +16,8 @@ use crate::paths::{self, Paths};
 
 pub(super) fn bootstrap_if_empty(db: &Db, paths: &Paths) -> Result<()> {
     import_instances(db, paths)?;
-    import_backups(db, paths)
+    import_backups(db, paths)?;
+    import_global_mod_versions(db, paths)
 }
 
 /// Imports every `servers/<name>/state.json` found on disk, if the
@@ -111,6 +112,50 @@ fn import_backups(db: &Db, paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+/// Imports every `.odin-version` marker file found under the global mod
+/// store, if the `global_mods` table is still empty — otherwise a fresh
+/// upgrade would forget which version of each already-installed mod is on
+/// disk and re-download all of them on the next `mods update`.
+fn import_global_mod_versions(db: &Db, paths: &Paths) -> Result<()> {
+    let already_populated: bool =
+        db.conn()
+            .query_row("SELECT EXISTS(SELECT 1 FROM global_mods)", [], |row| {
+                row.get(0)
+            })?;
+    if already_populated {
+        return Ok(());
+    }
+
+    let mods_dir = paths.mods_dir();
+    if !mods_dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut count = 0;
+    for entry in std::fs::read_dir(&mods_dir)
+        .with_context(|| format!("failed to read {}", mods_dir.display()))?
+    {
+        let entry = entry?;
+        let mod_id = entry.file_name().to_string_lossy().into_owned();
+        if mod_id.starts_with('.') || !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let Ok(marker) = std::fs::read_to_string(entry.path().join(".odin-version")) else {
+            continue;
+        };
+        super::global_mods::set_version(db, &mod_id, marker.trim())?;
+        count += 1;
+    }
+
+    if count > 0 {
+        tracing::info!(
+            count,
+            "imported existing global mod version markers into the database"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -192,5 +237,20 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "20260101T000000Z");
         assert_eq!(entries[0].size_bytes, 8);
+    }
+
+    #[test]
+    fn opening_a_fresh_db_imports_legacy_version_markers() {
+        let paths = temp_paths("import-global-mods");
+        let mod_dir = paths.mod_dir("owner-mod");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(mod_dir.join(".odin-version"), "1.2.3").unwrap();
+
+        let db = Db::open(&paths).unwrap();
+
+        assert_eq!(
+            crate::db::global_mods::current_version(&db, "owner-mod").unwrap(),
+            Some("1.2.3".to_string())
+        );
     }
 }

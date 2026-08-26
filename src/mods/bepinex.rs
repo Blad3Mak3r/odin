@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 
 use super::thunderstore::{self, BEPINEX_MOD_ID, ModRef};
 use super::{CleanupDir, effective_source_root, extract_zip_to_dir};
-use crate::paths::Paths;
+use crate::db::Db;
 
 /// Downloads and unpacks the BepInEx pack for Valheim directly into the
 /// instance directory (the pack's own layout mirrors the game's install root).
-pub fn bootstrap(paths: &Paths, instance_dir: &Path) -> Result<String> {
-    let index = thunderstore::fetch_index(paths)?;
+pub fn bootstrap(db: &Db, instance_dir: &Path) -> Result<String> {
+    let index = thunderstore::fetch_index(db)?;
     let mod_ref = ModRef::parse(BEPINEX_MOD_ID)?;
     let (_package, version) = thunderstore::resolve(&mod_ref, &index)?;
 

@@ -13,6 +13,8 @@
 
 pub mod activity;
 pub mod backups;
+pub mod cache;
+pub mod global_mods;
 mod import;
 pub mod instances;
 mod migrations;

@@ -34,13 +34,6 @@ pub enum Command {
         server_name: String,
     },
 
-    /// No longer attaches a terminal (tmux is gone) — points to `logs
-    /// --follow`/`exec`/the dashboard instead.
-    Console {
-        #[arg(value_parser = parse_instance_name)]
-        server_name: String,
-    },
-
     /// List all known instances and their derived state.
     Status,
 
@@ -100,13 +93,6 @@ pub enum Command {
         follow: bool,
         #[arg(short = 'n', long, default_value_t = 50)]
         lines: usize,
-    },
-
-    /// Send a command to a running instance's console without attaching.
-    Exec {
-        #[arg(value_parser = parse_instance_name)]
-        server_name: String,
-        command: String,
     },
 
     /// Check the environment: SteamCMD, install, data dir, network.

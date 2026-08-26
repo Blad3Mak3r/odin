@@ -1392,7 +1392,6 @@ dependencies = [
  "directories",
  "flate2",
  "futures-util",
- "libc",
  "mime_guess",
  "rand 0.10.2",
  "regex",

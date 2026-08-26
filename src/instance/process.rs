@@ -1,14 +1,10 @@
 //! Spawns and supervises the `valheim_server.x86_64` OS process directly —
 //! no tmux, no shell script. Replaces `crate::tmux`.
 //!
-//! Console input goes through a per-instance named pipe
-//! (`paths::instance_console_fifo`) rather than an in-memory pipe: the
-//! server process holds its read end open for its whole life, and any
-//! process — including a fresh `odin serve` after a restart, or a
-//! standalone CLI invocation — can reopen the write end by path, so
-//! sending console commands doesn't depend on which process originally
-//! spawned the server. See `crate::web::supervisor` for how `odin serve`
-//! keeps that write end open across ticks.
+//! The dedicated server has no admin/RCON protocol, so there's no console
+//! input to wire up: stdin is `/dev/null` and stdout/stderr are appended to
+//! `console.log`, which is the only channel odin has into the running
+//! server.
 //!
 //! Liveness and signalling both go through `sysinfo`, keyed by
 //! `(pid, pid_started_at)`: `pid_started_at` is the process's own kernel
@@ -16,11 +12,7 @@
 //! lookup so a reused pid (e.g. after a host reboot) reads as "not
 //! running" instead of a false positive.
 
-use std::ffi::CString;
-use std::fs::{File, OpenOptions};
-use std::io;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::fs::OpenOptions;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -30,52 +22,6 @@ use tokio::process::{Child, Command};
 
 use super::Instance;
 use crate::paths::{self, Paths};
-
-/// Creates `path` as a FIFO if it doesn't already exist. Idempotent across
-/// stop/start cycles of the same instance — the same pipe is reused, not
-/// recreated, each time the instance starts.
-///
-/// SAFETY: `path` is converted to a valid, nul-terminated `CString` before
-/// the call; only the integer return value is inspected afterwards.
-pub fn ensure_console_fifo(path: &Path) -> Result<()> {
-    let c_path = CString::new(path.as_os_str().as_bytes())
-        .with_context(|| format!("instance path {} contains a nul byte", path.display()))?;
-    let ret = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-    if ret != 0 {
-        let err = io::Error::last_os_error();
-        if err.kind() != io::ErrorKind::AlreadyExists {
-            return Err(err).with_context(|| format!("failed to create fifo {}", path.display()));
-        }
-    }
-    Ok(())
-}
-
-/// Opens the FIFO's read end to hand to the child as its stdin. Opened
-/// read+write (not read-only) specifically so this `open` never blocks: a
-/// read-only open on a FIFO blocks until some writer opens it, and nobody
-/// has opened the write end yet at this point — `odin serve` opens its own
-/// writer immediately after spawning (see `web::supervisor`).
-fn open_fifo_for_child_stdin(path: &Path) -> Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .with_context(|| format!("failed to open {} for the child's stdin", path.display()))
-}
-
-/// Opens (or reopens, after an `odin serve` restart) the persistent
-/// write end used to send console commands. `O_NONBLOCK` makes this fail
-/// fast with `ENXIO` if the reader is somehow already gone (a narrow race
-/// between a liveness check and this call) rather than blocking a
-/// reconciliation tick indefinitely.
-pub async fn open_console_writer(path: &Path) -> Result<tokio::fs::File> {
-    tokio::fs::OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-        .await
-        .with_context(|| format!("failed to open console fifo {} for writing", path.display()))
-}
 
 /// Prepends `prefix` to whatever `var` odin's own process inherited,
 /// mirroring how the old `run.sh` extended `LD_LIBRARY_PATH`/`LD_PRELOAD`
@@ -90,18 +36,14 @@ fn colon_prepend(var: &str, prefix: &str) -> String {
 
 /// Builds the ready-to-spawn command for an instance's server process:
 /// working directory, env vars (including BepInEx/Doorstop when
-/// installed), stdio (stdin from the console FIFO, stdout/stderr appended
-/// to `console.log`), and args — all set directly on the `Command`
-/// builder, no intermediate shell script. Passing args as native argv
-/// (instead of interpolating them into a shell command string, as the old
-/// `run.sh` did) also removes the shell-injection risk class that existed
-/// there, not just the shell process itself.
+/// installed), stdio (stdin discarded, stdout/stderr appended to
+/// `console.log`), and args — all set directly on the `Command` builder, no
+/// intermediate shell script. Passing args as native argv (instead of
+/// interpolating them into a shell command string, as the old `run.sh` did)
+/// also removes the shell-injection risk class that existed there, not just
+/// the shell process itself.
 pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
     let install_dir = paths.shared_install_dir();
-
-    let fifo = paths::instance_console_fifo(&instance.dir);
-    ensure_console_fifo(&fifo)?;
-    let stdin = open_fifo_for_child_stdin(&fifo)?;
 
     let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
     let stdout = OpenOptions::new()
@@ -123,7 +65,7 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
             ),
         )
         .env("SteamAppId", "892970")
-        .stdin(Stdio::from(stdin))
+        .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         // Own process group: a Ctrl-C delivered to odin's own controlling
@@ -259,26 +201,6 @@ pub async fn wait_until_gone(pid: u32, pid_started_at: i64, timeout: Duration) -
 mod tests {
     use super::*;
 
-    fn temp_path(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "odin-process-test-{label}-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ))
-    }
-
-    #[test]
-    fn ensure_console_fifo_is_idempotent_and_creates_a_real_fifo() {
-        let path = temp_path("fifo");
-        ensure_console_fifo(&path).unwrap();
-        ensure_console_fifo(&path).unwrap(); // second call: EEXIST, swallowed
-
-        let file_type = std::fs::symlink_metadata(&path).unwrap().file_type();
-        assert!(std::os::unix::fs::FileTypeExt::is_fifo(&file_type));
-
-        std::fs::remove_file(&path).ok();
-    }
-
     #[test]
     fn is_alive_reflects_a_real_child_process_across_its_lifetime() {
         let mut child = std::process::Command::new("sleep")
@@ -315,18 +237,5 @@ mod tests {
 
         assert!(wait_until_gone(pid, started_at, Duration::from_secs(5)).await);
         reaper.await.unwrap().ok();
-    }
-
-    #[tokio::test]
-    async fn console_writer_can_be_opened_after_child_stdin_is_attached() {
-        let path = temp_path("writer");
-        ensure_console_fifo(&path).unwrap();
-        let _child_stdin = open_fifo_for_child_stdin(&path).unwrap(); // simulates the spawned child holding the read end
-
-        let mut writer = open_console_writer(&path).await.unwrap();
-        use tokio::io::AsyncWriteExt as _;
-        writer.write_all(b"save\n").await.unwrap();
-
-        std::fs::remove_file(&path).ok();
     }
 }

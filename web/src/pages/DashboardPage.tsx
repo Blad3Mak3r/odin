@@ -1,4 +1,5 @@
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { QueryError } from '@/components/QueryError'
 import { ResourceChart } from '@/components/ResourceChart'
@@ -6,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ACTIVITY_ICONS, describeActivity } from '@/lib/activity'
+import { describeJobKind, jobStatusVariant } from '@/lib/jobs'
 import {
   useActivityFeed,
   useDoctor,
@@ -134,22 +136,19 @@ export function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2">
         {jobs.data && jobs.data.length > 0 && (
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-base">Recent jobs</CardTitle>
+              <Link to="/jobs" className="text-xs text-muted-foreground hover:underline">
+                View all
+              </Link>
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
-              {jobs.data
-                .slice()
-                .reverse()
-                .slice(0, 5)
-                .map((job) => (
-                  <div key={job.id} className="flex items-center justify-between text-sm">
-                    <span>{describeJobKind(job.kind)}</span>
-                    <Badge variant={job.status.status === 'failed' ? 'destructive' : 'secondary'}>
-                      {job.status.status}
-                    </Badge>
-                  </div>
-                ))}
+              {jobs.data.slice(0, 5).map((job) => (
+                <div key={job.id} className="flex items-center justify-between text-sm">
+                  <span>{describeJobKind(job.kind)}</span>
+                  <Badge variant={jobStatusVariant(job.status)}>{job.status.status}</Badge>
+                </div>
+              ))}
             </CardContent>
           </Card>
         )}
@@ -178,17 +177,4 @@ export function DashboardPage() {
       </div>
     </div>
   )
-}
-
-function describeJobKind(kind: { kind: string; instance?: string; mod_id?: string }): string {
-  switch (kind.kind) {
-    case 'steamcmd_install':
-      return 'Install/update server files'
-    case 'mod_add':
-      return `Install mod ${kind.mod_id} on ${kind.instance}`
-    case 'mod_update':
-      return `Update mods on ${kind.instance}`
-    default:
-      return kind.kind
-  }
 }

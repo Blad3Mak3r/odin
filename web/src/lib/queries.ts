@@ -175,7 +175,6 @@ export function useLogs(name: string, lines = 200) {
   return useQuery({
     queryKey: ['instances', name, 'logs', lines],
     queryFn: () => api.get<LogsView>(`/instances/${name}/logs?lines=${lines}`),
-    refetchInterval: 4_000,
   })
 }
 

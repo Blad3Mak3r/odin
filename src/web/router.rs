@@ -35,7 +35,7 @@ pub fn build_router(state: AppState) -> Router {
             get(instances::get_config).put(instances::set_config),
         )
         .route("/instances/{name}/logs", get(instances::get_logs))
-        .route("/instances/{name}/console/ws", get(ws::console_ws))
+        .route("/instances/{name}/logs/ws", get(ws::logs_ws))
         .route(
             "/instances/{name}/mods",
             get(mods::list_mods).post(mods::add_mod),

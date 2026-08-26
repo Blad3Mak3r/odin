@@ -10,7 +10,7 @@ pub mod state;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use thiserror::Error;
 
 use crate::cli::validate_instance_name;
@@ -86,6 +86,13 @@ impl Instance {
         }
 
         let dir = paths.instance_dir(name);
+        // The DB save below has no filesystem side effect (unlike the old
+        // file-based one, which implicitly created this directory as the
+        // parent of state.json) — create it explicitly so code that assumes
+        // a freshly created instance already has a directory (e.g. `rename`)
+        // keeps working.
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create instance dir {}", dir.display()))?;
         let state = InstanceState::new(name, port);
         let instance = Self { dir, state };
         instance.save(db)?;

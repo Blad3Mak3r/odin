@@ -5,6 +5,7 @@
 
 mod error;
 pub mod jobs;
+mod players;
 mod router;
 pub mod routes;
 mod runtime;
@@ -12,10 +13,12 @@ mod state;
 mod static_files;
 mod ws;
 
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use tokio::task::AbortHandle;
 
 use crate::activity::ActivityKind;
 use crate::instance;
@@ -59,18 +62,29 @@ const TELEMETRY_INTERVAL: Duration = Duration::from_secs(3);
 /// previous refresh, so a `System` refreshed only on-demand would always
 /// read 0%), then samples host and per-instance resource usage into
 /// `state.runtime` so HTTP handlers and the live WebSocket feed just read a
-/// cached snapshot instead of recomputing it per request.
+/// cached snapshot instead of recomputing it per request. Also supervises
+/// one player-tracking log tailer per currently-running instance, starting
+/// and stopping them as instances start and stop.
 fn spawn_telemetry(state: AppState) {
     tokio::spawn(async move {
+        let mut tailers: HashMap<String, AbortHandle> = HashMap::new();
         loop {
             let tick_state = state.clone();
-            let _ = tokio::task::spawn_blocking(move || run_telemetry_tick(&tick_state)).await;
+            let running = tokio::task::spawn_blocking(move || run_telemetry_tick(&tick_state))
+                .await
+                .unwrap_or_default();
+
+            reconcile_player_tailers(&state, &mut tailers, &running);
+
             tokio::time::sleep(TELEMETRY_INTERVAL).await;
         }
     });
 }
 
-fn run_telemetry_tick(state: &AppState) {
+/// One tick of resource sampling; returns the names of instances found
+/// running this tick, so the caller can reconcile player tailers against
+/// them without a second pass over `instance::list_all`.
+fn run_telemetry_tick(state: &AppState) -> Vec<String> {
     state
         .resources
         .lock()
@@ -81,6 +95,7 @@ fn run_telemetry_tick(state: &AppState) {
     state.runtime.push_host_sample(host);
 
     let mut entries = Vec::new();
+    let mut running_names = Vec::new();
     if let Ok(instances) = instance::list_all(&state.paths) {
         for inst in &instances {
             let Ok(snapshot) = compute_instance_snapshot(state, inst) else {
@@ -95,11 +110,15 @@ fn run_telemetry_tick(state: &AppState) {
                 };
                 state.activity.record(kind, Some(name.clone()));
             }
+            if snapshot.running {
+                running_names.push(name.clone());
+            }
             entries.push(InstanceResourceEntry {
                 name: name.clone(),
                 running: snapshot.running,
                 cpu_percent: snapshot.cpu_percent,
                 memory_bytes: snapshot.memory_bytes,
+                players: state.players.snapshot(name),
             });
         }
     }
@@ -108,4 +127,42 @@ fn run_telemetry_tick(state: &AppState) {
         host,
         instances: entries,
     });
+
+    running_names
+}
+
+/// Starts a player-tracking tailer for any newly-running instance, and
+/// aborts + clears tracked players for any that stopped running since the
+/// last tick.
+fn reconcile_player_tailers(
+    state: &AppState,
+    tailers: &mut HashMap<String, AbortHandle>,
+    running: &[String],
+) {
+    let running_set: HashSet<&str> = running.iter().map(String::as_str).collect();
+
+    tailers.retain(|name, handle| {
+        if running_set.contains(name.as_str()) {
+            true
+        } else {
+            handle.abort();
+            state.players.clear_instance(name);
+            false
+        }
+    });
+
+    for name in running {
+        if tailers.contains_key(name) {
+            continue;
+        }
+        let log_file = players::console_log_path(&state.paths.instance_dir(name));
+        let handle = tokio::spawn(players::tail_console_log(
+            name.clone(),
+            log_file,
+            state.players.clone(),
+            state.activity.clone(),
+        ))
+        .abort_handle();
+        tailers.insert(name.clone(), handle);
+    }
 }

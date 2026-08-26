@@ -5,6 +5,7 @@ use sysinfo::System;
 use crate::activity::ActivityLog;
 use crate::paths::Paths;
 use crate::web::jobs::JobRegistry;
+use crate::web::players::PlayerRegistry;
 use crate::web::runtime::RuntimeRegistry;
 
 #[derive(Clone)]
@@ -14,6 +15,7 @@ pub struct AppState {
     pub resources: Arc<Mutex<System>>,
     pub runtime: RuntimeRegistry,
     pub activity: ActivityLog,
+    pub players: PlayerRegistry,
 }
 
 impl AppState {
@@ -25,6 +27,7 @@ impl AppState {
             resources: Arc::new(Mutex::new(System::new_all())),
             runtime: RuntimeRegistry::new(),
             activity,
+            players: PlayerRegistry::new(),
         }
     }
 }

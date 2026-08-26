@@ -6,5 +6,6 @@ pub mod instances;
 pub mod jobs;
 pub mod lists;
 pub mod mods;
+pub mod players;
 pub mod resources;
 pub mod version;

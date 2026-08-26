@@ -11,6 +11,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::web::players::PlayerInfo;
+
 /// Samples kept per series (host, and each instance). At the telemetry
 /// task's tick interval (3s), 120 samples covers the last 6 minutes.
 const HISTORY_CAPACITY: usize = 120;
@@ -49,6 +51,7 @@ pub struct InstanceResourceEntry {
     pub running: bool,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
+    pub players: Vec<PlayerInfo>,
 }
 
 /// One telemetry tick's worth of host + per-instance samples, broadcast to

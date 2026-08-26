@@ -96,7 +96,11 @@ async fn handle_console_socket(socket: WebSocket, session: String, log_file: Pat
 /// Restarts from the beginning if the file is now shorter than `from`
 /// (rotated/truncated). Never errors — a transient read failure just yields
 /// no new bytes this tick, and the next poll tries again.
-fn read_new_bytes(path: &StdPath, from: u64) -> (u64, String) {
+///
+/// Also used by `web::players`' console-log tailer — same poll-for-new-bytes
+/// mechanism, just applied to player-connection parsing instead of a client
+/// socket.
+pub(crate) fn read_new_bytes(path: &StdPath, from: u64) -> (u64, String) {
     use std::io::{Read, Seek, SeekFrom};
 
     let Ok(mut file) = std::fs::File::open(path) else {

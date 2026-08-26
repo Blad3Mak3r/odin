@@ -1,10 +1,17 @@
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { QueryError } from '@/components/QueryError'
+import { ResourceChart } from '@/components/ResourceChart'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useDoctor, useHostResources, useInstallServer, useJobs } from '@/lib/queries'
+import {
+  useDoctor,
+  useHostResourceHistory,
+  useHostResources,
+  useInstallServer,
+  useJobs,
+} from '@/lib/queries'
 import type { CheckResult } from '@/lib/types'
 import { formatBytes } from '@/lib/utils'
 
@@ -25,6 +32,7 @@ function CheckRow({ check }: { check: CheckResult }) {
 export function DashboardPage() {
   const doctor = useDoctor()
   const resources = useHostResources()
+  const history = useHostResourceHistory()
   const installServer = useInstallServer()
   const jobs = useJobs()
 
@@ -76,20 +84,34 @@ export function DashboardPage() {
           <CardHeader>
             <CardTitle className="text-base">Host resources</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-3 text-sm">
+          <CardContent className="flex flex-col gap-4 text-sm">
             {resources.isError && <QueryError error={resources.error} />}
             {resources.data ? (
               <>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">CPU</span>
-                  <span>{resources.data.cpu_percent.toFixed(1)}%</span>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">CPU</span>
+                    <span>{resources.data.cpu_percent.toFixed(1)}%</span>
+                  </div>
+                  <ResourceChart
+                    data={history.data ?? []}
+                    dataKey="cpu_percent"
+                    formatValue={(v) => `${v.toFixed(1)}%`}
+                  />
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Memory</span>
-                  <span>
-                    {formatBytes(resources.data.memory_used_bytes)} /{' '}
-                    {formatBytes(resources.data.memory_total_bytes)}
-                  </span>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Memory</span>
+                    <span>
+                      {formatBytes(resources.data.memory_used_bytes)} /{' '}
+                      {formatBytes(resources.data.memory_total_bytes)}
+                    </span>
+                  </div>
+                  <ResourceChart
+                    data={history.data ?? []}
+                    dataKey="memory_bytes"
+                    formatValue={formatBytes}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Disk free</span>

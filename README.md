@@ -88,11 +88,23 @@ Build from source with [Rust](https://www.rust-lang.org/tools/install)
 git clone git@github.com:Blad3Mak3r/odin.git
 cd odin
 make release          # optimized build at target/release/odin
-make install           # installs to ~/.local/bin/odin (override with PREFIX=/usr/local)
+make install           # installs to ~/.local/bin/odin by default
 ```
 
 Make sure the install directory (`~/.local/bin` by default) is on your
 `PATH`. See [`make help`](#development) for every available target.
+
+To install system-wide for all users instead of just the current one,
+override `PREFIX` (this needs `sudo`, since `/usr/local` isn't
+user-writable):
+
+```sh
+sudo make install PREFIX=/usr/local   # installs to /usr/local/bin/odin
+```
+
+Use `/usr/local`, not `/usr` — `/usr/bin` is reserved for binaries managed
+by the distro's package manager, while `/usr/local/bin` is the standard
+location for software installed manually outside of it.
 
 ## Quick start
 

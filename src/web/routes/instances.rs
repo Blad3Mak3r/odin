@@ -113,7 +113,9 @@ pub async fn delete_instance(
     Query(query): Query<DeleteQuery>,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
-    run_blocking(move || delete_instance_dir(&paths, &name, query.keep_backups)).await?;
+    let delete_name = name.clone();
+    run_blocking(move || delete_instance_dir(&paths, &delete_name, query.keep_backups)).await?;
+    state.runtime.remove_instance(&name);
     Ok(StatusCode::NO_CONTENT)
 }
 

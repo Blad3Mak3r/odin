@@ -74,8 +74,16 @@ pub fn build_router(state: AppState) -> Router {
         .route("/jobs/{id}/ws", get(jobs::job_ws))
         .route("/system/resources", get(resources::get_host_resources))
         .route(
+            "/system/resources/history",
+            get(resources::get_host_resources_history),
+        )
+        .route(
             "/instances/{name}/resources",
             get(resources::get_instance_resources),
+        )
+        .route(
+            "/instances/{name}/resources/history",
+            get(resources::get_instance_resources_history),
         )
         .with_state(state);
 

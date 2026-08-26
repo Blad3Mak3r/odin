@@ -7,6 +7,7 @@ mod error;
 pub mod jobs;
 mod router;
 pub mod routes;
+mod runtime;
 mod state;
 mod static_files;
 mod ws;
@@ -16,12 +17,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::instance;
 use crate::paths::Paths;
+use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
 use state::AppState;
 
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let state = AppState::new(paths);
-    spawn_resource_refresh(state.clone());
+    spawn_telemetry(state.clone());
 
     let router = router::build_router(state);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -47,21 +50,41 @@ fn local_network_ip() -> Option<IpAddr> {
     socket.local_addr().ok().map(|addr| addr.ip())
 }
 
-/// `sysinfo`'s per-process CPU usage is a delta since the previous refresh,
-/// so a `System` refreshed only on-demand would always read 0% — this keeps
-/// `AppState.resources` warm in the background instead.
-fn spawn_resource_refresh(state: AppState) {
+const TELEMETRY_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Background task keeping the dashboard's live view of the world warm:
+/// refreshes `sysinfo` (its per-process CPU usage is a delta since the
+/// previous refresh, so a `System` refreshed only on-demand would always
+/// read 0%), then samples host and per-instance resource usage into
+/// `state.runtime` so HTTP handlers and the live WebSocket feed just read a
+/// cached snapshot instead of recomputing it per request.
+fn spawn_telemetry(state: AppState) {
     tokio::spawn(async move {
         loop {
-            let system = state.resources.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                system
-                    .lock()
-                    .expect("resources lock poisoned")
-                    .refresh_all();
-            })
-            .await;
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            let tick_state = state.clone();
+            let _ = tokio::task::spawn_blocking(move || run_telemetry_tick(&tick_state)).await;
+            tokio::time::sleep(TELEMETRY_INTERVAL).await;
         }
     });
+}
+
+fn run_telemetry_tick(state: &AppState) {
+    state
+        .resources
+        .lock()
+        .expect("resources lock poisoned")
+        .refresh_all();
+
+    state.runtime.push_host_sample(compute_host_snapshot(state));
+
+    let Ok(instances) = instance::list_all(&state.paths) else {
+        return;
+    };
+    for inst in &instances {
+        if let Ok(snapshot) = compute_instance_snapshot(state, inst) {
+            state
+                .runtime
+                .push_instance_sample(&inst.state.name, snapshot);
+        }
+    }
 }

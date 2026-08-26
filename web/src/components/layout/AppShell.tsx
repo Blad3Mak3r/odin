@@ -3,6 +3,7 @@ import { Blocks, LayoutDashboard, Menu, Server, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
+import { useLiveSocket } from '@/hooks/useLiveSocket'
 import { useVersion } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from './ThemeToggle'
@@ -57,6 +58,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
+  useLiveSocket()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   return (

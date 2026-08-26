@@ -5,7 +5,7 @@ dedicated servers on Linux. In Norse mythology, Odin is the All-Father who
 watches over the nine realms; this Odin watches over your Valheim realms —
 installing and updating the game server, starting and stopping instances,
 keeping them alive in the background, and managing their mods — so you don't
-have to babysit `screen`/`tmux` sessions and SteamCMD invocations by hand.
+have to babysit background processes and SteamCMD invocations by hand.
 
 ## Why Odin exists
 
@@ -20,14 +20,16 @@ them, side by side — is a single, predictable command away.
 
 ## Features
 
-- **One binary, no runtime dependencies** beyond `tmux` and (transparently
-  managed) SteamCMD — no Python, no Docker required.
+- **One binary, no runtime dependencies** beyond (transparently managed)
+  SteamCMD — no Python, no Docker, no terminal multiplexer required.
 - **Multiple named instances.** Run several independent Valheim servers on
   one host, each with its own world, port, password, visibility, and mod
   set, sharing a single downloaded copy of the game binaries.
-- **Detached by default.** Every instance runs inside its own `tmux`
-  session, so it keeps running after you disconnect. Reattach any time with
-  `odin console`, or just tail its logs with `odin logs`.
+- **Detached by default, and restart-proof.** Every instance runs as its
+  own directly-supervised background process, so it keeps running after you
+  disconnect — and after `odin serve` itself is restarted or upgraded.
+  Watch it live with `odin logs --follow` or the web dashboard, and send it
+  console commands with `odin exec`.
 - **Mod support out of the box.** `odin mods add` bootstraps
   [BepInEx](https://github.com/BepInEx/BepInEx) automatically and installs
   mods straight from the [Thunderstore](https://thunderstore.io/c/valheim)
@@ -45,12 +47,12 @@ them, side by side — is a single, predictable command away.
   snapshot of the current state first, so a restore is never a one-way,
   unrecoverable action.
 - **State you can trust.** An instance's "running" status is always derived
-  live from the actual `tmux` session, never from a flag that can silently
-  go stale after a crash or a reboot.
-- **A `doctor` command** that checks your environment (tmux, SteamCMD, the
-  game install, disk permissions, network reachability) so a broken setup
-  fails with a clear diagnosis instead of a cryptic error three commands
-  later.
+  live from the OS process itself (its pid, cross-checked against its own
+  start time so a reused pid never lies to you), never from a flag that can
+  silently go stale after a crash or a reboot.
+- **A `doctor` command** that checks your environment (SteamCMD, the game
+  install, disk permissions, network reachability) so a broken setup fails
+  with a clear diagnosis instead of a cryptic error three commands later.
 - **An optional web dashboard.** `odin serve` starts a single self-contained
   HTTP server — the built frontend is embedded in the binary, no separate
   process or database — for managing everything above from a browser: create
@@ -66,12 +68,9 @@ them, side by side — is a single, predictable command away.
 
 ## Requirements
 
-- **Linux only** (x86_64). Odin shells out to `tmux` and to SteamCMD's
-  Linux distribution; there is no Windows or macOS support.
-- **[`tmux`](https://github.com/tmux/tmux)** must be installed and on
-  `PATH`. Odin never tries to install it for you — it's a lightweight,
-  universally-packaged system tool (`apt install tmux`, `dnf install tmux`,
-  `pacman -S tmux`, ...).
+- **Linux only** (x86_64). Odin spawns the Valheim dedicated server
+  directly and shells out to SteamCMD's Linux distribution; there is no
+  Windows or macOS support.
 - **SteamCMD is handled for you.** Odin downloads and installs it
   automatically on first `odin install`; you don't need to have it set up
   beforehand.
@@ -82,9 +81,6 @@ them, side by side — is a single, predictable command away.
   build`/`release`). The compiled `odin` binary itself has no Node.js or
   npm runtime dependency — the dashboard is embedded static assets, not a
   separate process.
-- The `.deb`/`.rpm` packages declare `tmux` as a real dependency, resolved
-  automatically by `apt`/`dnf`; building from source still requires
-  installing it yourself as noted above.
 
 ## Installation
 
@@ -124,15 +120,15 @@ help`](#development) for every available target.
 # Install SteamCMD and the Valheim dedicated server (safe to re-run to update later)
 odin install
 
-# Create and start a server named "my-server" (always runs detached in tmux)
+# Create and start a server named "my-server" (always runs detached in the background)
 odin start my-server
 
 # Check on it
 odin status
 odin logs my-server --follow
 
-# Attach to its live console (Ctrl-b d to detach without stopping the server)
-odin console my-server
+# Send it a console command without attaching to anything
+odin exec my-server "save"
 
 # Add a mod and restart to load it
 odin mods search my-server valheim-plus
@@ -164,14 +160,14 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 | Command | Description |
 |---|---|
 | `odin create <server-name>` | Create a new instance (auto-assigning a free port and a random password) without starting it. Fails if the name is already taken — use this when you want to `config set` a world/port/password before the first start. |
-| `odin start <server-name>` | Create the instance if it doesn't exist yet (auto-assigning a free port and a random password) and start it, always detached in its own `tmux` session. |
-| `odin stop <server-name>` | Gracefully stop a running instance (sends `Ctrl-C` for a clean world save, then force-kills the session if it doesn't exit in time). |
+| `odin start <server-name>` | Create the instance if it doesn't exist yet (auto-assigning a free port and a random password) and start it, always detached as its own supervised background process. |
+| `odin stop <server-name>` | Gracefully stop a running instance (sends `SIGINT` for a clean world save, then `SIGKILL`s it if it doesn't exit in time). |
 | `odin restart <server-name>` | Stop the instance if it's running, then start it again. Useful after installing mods or changing config. |
 | `odin rename <old-name> <new-name>` | Rename an instance. Must be stopped first. Only its identity changes — the world name and save files are left untouched. |
 | `odin delete <server-name> [-y\|--yes] [--keep-backups]` | Permanently delete an instance. Must be stopped first, and asks for confirmation unless `-y` is given. `--keep-backups` deletes everything except the `backups/` directory. |
 | `odin status` | List every known instance with its live status, address (public IP:port), world, uptime, mod count, and password — everything needed to hand a friend a join string. |
-| `odin console <server-name>` | Attach interactively to a running instance's console via `tmux attach`. |
-| `odin logs <server-name> [-f\|--follow] [-n\|--lines N]` | Print (and optionally follow) the instance's captured console output, without attaching to `tmux`. Default 50 lines. |
+| `odin console <server-name>` | No longer attaches an interactive terminal — prints a pointer to `odin logs --follow`, `odin exec`, or the web dashboard instead. |
+| `odin logs <server-name> [-f\|--follow] [-n\|--lines N]` | Print (and optionally follow) the instance's captured console output. Default 50 lines. |
 | `odin exec <server-name> <command>` | Send a line of input to a running instance's console without attaching — handy for scripting. |
 
 ### Configuration
@@ -205,7 +201,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
 | Command | Description |
 |---|---|
-| `odin doctor` | Check that `tmux` and SteamCMD are available, the game is installed, the data directory is writable, and Thunderstore/Steam are reachable. Exits non-zero only on a critical failure (e.g. missing `tmux`). |
+| `odin doctor` | Check that SteamCMD is available, the game is installed, the data directory is writable, and Thunderstore/Steam are reachable. Exits non-zero only on a critical failure. |
 
 ### Shell completions
 
@@ -260,7 +256,7 @@ sudo systemctl edit odin.service     # override --bind/--port via a drop-in
 
 A per-user install (`make install-user`, or a plain `cargo build`) has no
 system service; run `odin serve` directly, or manage it yourself under
-your own `systemctl --user`/`tmux`/init setup.
+your own `systemctl --user`/init setup.
 
 ## Configuration
 
@@ -295,6 +291,7 @@ In both modes, the data dir is resolved in this order:
     saves/                       # the world's save files
     backups/<id>.zip              # snapshots created by `odin backup`
     logs/console.log              # captured console output, tailed by `odin logs`
+    console.in                    # named pipe carrying console input (`odin exec`/dashboard)
     BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>  # present only while enabled
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
@@ -310,10 +307,11 @@ copying or moving files around. Because the store isn't versioned per mod,
 need two servers pinned to two different versions of the same mod at the
 same time, that isn't currently supported.
 
-An instance's **running/stopped status is never stored** — it's always
-derived on demand by checking whether its `tmux` session exists. That way
-`odin status` can never lie to you after a crash, a manual `tmux
-kill-session`, or a host reboot.
+An instance's **running/stopped status is never trusted from a stored
+flag** — it's always derived on demand by checking whether its recorded
+process id is still alive, cross-checked against that process's own start
+time so a reused pid can never lie to you. That way `odin status` can never
+be wrong after a crash, a manual `kill -9`, or a host reboot.
 
 ## Development
 

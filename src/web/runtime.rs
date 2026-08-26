@@ -1,6 +1,6 @@
 //! In-memory cache of periodic host/instance resource samples, kept warm by
 //! the background telemetry task (`web::spawn_telemetry`) so HTTP handlers
-//! read a cheap snapshot instead of recomputing `sysinfo`/`tmux` queries on
+//! read a cheap snapshot instead of recomputing `sysinfo` queries on
 //! every request, and so the dashboard can chart recent history instead of
 //! only ever seeing the current instant.
 

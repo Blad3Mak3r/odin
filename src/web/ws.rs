@@ -1,8 +1,8 @@
 //! Live console for a single instance over a WebSocket: on connect, replays
 //! a tail of `console.log`, then streams new lines as they're appended
 //! (polling, same approach as `odin logs --follow`), while any text message
-//! from the client is sent into the instance's tmux pane as a console
-//! command (`odin exec`'s mechanism).
+//! from the client is sent into the instance's console FIFO as a console
+//! command (`odin exec`'s mechanism, `web::supervisor::Supervisor`).
 
 use std::path::{Path as StdPath, PathBuf};
 use std::time::Duration;
@@ -16,6 +16,7 @@ use crate::instance::Instance;
 use crate::paths;
 use crate::web::error::ApiError;
 use crate::web::state::AppState;
+use crate::web::supervisor::Supervisor;
 
 const TAIL_LINES: usize = 200;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -27,17 +28,23 @@ pub async fn console_ws(
 ) -> Result<Response, ApiError> {
     let paths = state.paths.clone();
     let db = state.db.clone();
+    let load_name = name.clone();
     let instance =
-        crate::web::error::run_blocking(move || Instance::load_existing(&paths, &db, &name))
+        crate::web::error::run_blocking(move || Instance::load_existing(&paths, &db, &load_name))
             .await?;
 
-    let session = instance.state.tmux_session.clone();
     let log_file = paths::instance_logs_dir(&instance.dir).join("console.log");
+    let supervisor = state.supervisor.clone();
 
-    Ok(ws.on_upgrade(move |socket| handle_console_socket(socket, session, log_file)))
+    Ok(ws.on_upgrade(move |socket| handle_console_socket(socket, name, log_file, supervisor)))
 }
 
-async fn handle_console_socket(socket: WebSocket, session: String, log_file: PathBuf) {
+async fn handle_console_socket(
+    socket: WebSocket,
+    name: String,
+    log_file: PathBuf,
+    supervisor: Supervisor,
+) {
     let (mut sink, mut stream) = socket.split();
 
     let tail_log_file = log_file.clone();
@@ -60,12 +67,14 @@ async fn handle_console_socket(socket: WebSocket, session: String, log_file: Pat
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = stream.next().await {
             let Message::Text(text) = msg else { continue };
-            let session = session.clone();
             let command = text.to_string();
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::tmux::send_keys_line(&session, &command)
-            })
-            .await;
+            if let Err(error) = supervisor.send_command(&name, &command).await {
+                // Transient right after an `odin serve` restart (the
+                // reconciliation tick reopens a writer within a few
+                // seconds) — log rather than drop silently, but don't tear
+                // down the socket over it.
+                tracing::warn!(instance = %name, %error, "console command not delivered");
+            }
         }
     });
 

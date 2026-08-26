@@ -8,6 +8,7 @@ use crate::paths::Paths;
 use crate::web::jobs::JobRegistry;
 use crate::web::players::PlayerRegistry;
 use crate::web::runtime::RuntimeRegistry;
+use crate::web::supervisor::Supervisor;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -18,6 +19,7 @@ pub struct AppState {
     pub runtime: RuntimeRegistry,
     pub activity: ActivityLog,
     pub players: PlayerRegistry,
+    pub supervisor: Supervisor,
 }
 
 impl AppState {
@@ -31,6 +33,7 @@ impl AppState {
             runtime: RuntimeRegistry::new(),
             activity,
             players: PlayerRegistry::new(),
+            supervisor: Supervisor::new(),
         }
     }
 }

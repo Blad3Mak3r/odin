@@ -11,6 +11,7 @@ pub mod routes;
 mod runtime;
 mod state;
 mod static_files;
+pub mod supervisor;
 mod ws;
 
 use std::collections::{HashMap, HashSet};
@@ -24,7 +25,7 @@ use tokio::task::AbortHandle;
 use crate::activity::ActivityKind;
 use crate::db::Db;
 use crate::instance;
-use crate::paths::Paths;
+use crate::paths::{self, Paths};
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
 use runtime::{InstanceResourceEntry, ResourcesTick};
 use state::AppState;
@@ -78,10 +79,33 @@ fn spawn_telemetry(state: AppState) {
                 .unwrap_or_default();
 
             reconcile_player_tailers(&state, &mut tailers, &running);
+            reconcile_console_writers(&state, &running).await;
 
             tokio::time::sleep(TELEMETRY_INTERVAL).await;
         }
     });
+}
+
+/// Reopens the console-command write end for any currently-running instance
+/// this boot doesn't have one for yet — typically every instance, right
+/// after `odin serve` starts (whether that's the very first boot, or a
+/// restart with instances left running from before it). Self-healing: a
+/// failed attempt (e.g. a narrow race where the process died a moment
+/// after the liveness check) just gets retried on the next tick, so this
+/// doesn't need a dedicated one-shot boot step to be correct.
+async fn reconcile_console_writers(state: &AppState, running: &[String]) {
+    for name in running {
+        if state.supervisor.has_writer(name) {
+            continue;
+        }
+        let fifo = paths::instance_console_fifo(&state.paths.instance_dir(name));
+        match instance::process::open_console_writer(&fifo).await {
+            Ok(file) => state.supervisor.register_writer(name, file),
+            Err(error) => {
+                tracing::warn!(instance = %name, %error, "could not (re)open console fifo yet, will retry next tick");
+            }
+        }
+    }
 }
 
 /// One tick of resource sampling; returns the names of instances found
@@ -115,6 +139,15 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
             }
             if snapshot.running {
                 running_names.push(name.clone());
+            } else if inst.state.pid.is_some() {
+                // Persisted pid but not actually alive: the process died
+                // without anyone observing it directly (crash, OOM, an
+                // external `kill -9`). Clear the stale fingerprint so the
+                // DB matches reality; `start`/`stop` already do this on
+                // their own success path, so this is purely the safety net
+                // for unwitnessed deaths.
+                let _ = crate::db::instances::clear_pid(&state.db, name, chrono::Utc::now());
+                state.supervisor.forget(name);
             }
             entries.push(InstanceResourceEntry {
                 name: name.clone(),

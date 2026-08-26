@@ -59,6 +59,12 @@ them, side by side — is a single, predictable command away.
   and control instances, edit config and access lists, search and install
   mods, watch a live console and logs, and see host/instance resource usage.
   See [Web dashboard](#web-dashboard) below.
+- **Optional system-wide install.** The `.deb`/`.rpm` packages (`make
+  install`) set up a dedicated `odin` system account, `/etc/odin` +
+  `/var/lib/odin`, and a system `odin.service` running the dashboard — run
+  ad-hoc instance commands as that account with `sudo -u odin odin
+  <command>` (`nologin` only blocks interactive login, not `sudo -u`
+  exec), or manage everything from the dashboard day to day.
 
 ## Requirements
 
@@ -78,33 +84,41 @@ them, side by side — is a single, predictable command away.
   build`/`release`). The compiled `odin` binary itself has no Node.js or
   npm runtime dependency — the dashboard is embedded static assets, not a
   separate process.
+- The `.deb`/`.rpm` packages declare `tmux` as a real dependency, resolved
+  automatically by `apt`/`dnf`; building from source still requires
+  installing it yourself as noted above.
 
 ## Installation
 
 Build from source with [Rust](https://www.rust-lang.org/tools/install)
-(2024 edition) and the included `Makefile`:
+(2024 edition) and the included `Makefile`. Two install modes are
+available:
+
+**System-wide (recommended)** — builds a `.deb` or `.rpm` (whichever fits
+the host distro) and installs it via the system package manager. This
+creates a dedicated `odin` system user, `/etc/odin` and `/var/lib/odin`,
+and a system `odin.service` systemd unit running the dashboard as that
+user (see [Running as a systemd service](#running-as-a-systemd-service)).
+Needs `sudo`, and requires `cargo install cargo-deb` or `cargo install
+cargo-generate-rpm` beforehand, matching the host distro:
 
 ```sh
 git clone git@github.com:Blad3Mak3r/odin.git
 cd odin
-make release          # optimized build at target/release/odin
-make install           # installs to ~/.local/bin/odin by default
+make install    # builds + installs a system package (Debian/Fedora-family only)
 ```
 
-Make sure the install directory (`~/.local/bin` by default) is on your
-`PATH`. See [`make help`](#development) for every available target.
-
-To install system-wide for all users instead of just the current one,
-override `PREFIX` (this needs `sudo`, since `/usr/local` isn't
-user-writable):
+**Per-user** — installs just the binary to `~/.local/bin` (or `PREFIX`),
+with no system user, no service, and the original per-user XDG data/config
+paths (see [Configuration](#configuration)):
 
 ```sh
-sudo make install PREFIX=/usr/local   # installs to /usr/local/bin/odin
+make install-user                       # installs to ~/.local/bin/odin by default
+make install-user PREFIX=/usr/local     # or override the prefix
 ```
 
-Use `/usr/local`, not `/usr` — `/usr/bin` is reserved for binaries managed
-by the distro's package manager, while `/usr/local/bin` is the standard
-location for software installed manually outside of it.
+Make sure the install directory is on your `PATH`. See [`make
+help`](#development) for every available target.
 
 ## Quick start
 
@@ -236,9 +250,21 @@ separate step from `cargo build` — see [Development](#development).
 
 ### Running as a systemd service
 
-To keep the dashboard running across crashes (and, with lingering, across
-logouts and reboots too) without a terminal open, install it as a per-user
-systemd service — no root required:
+**System-wide install** (via `make install`/the `.deb`/`.rpm` package)
+already ships a system `odin.service`, running `odin serve --bind
+127.0.0.1 --port 7331` as the dedicated `odin` user and enabled (but not
+auto-started) by the package's postinst:
+
+```sh
+sudo systemctl start odin.service    # start now
+sudo systemctl status odin.service   # check it's running
+sudo journalctl -u odin.service -f   # follow logs
+sudo systemctl edit odin.service     # override --bind/--port via a drop-in
+```
+
+**Per-user install** (`make install-user`, or a plain `cargo build`) has no
+system service — install one for your own account instead, no root
+required:
 
 ```sh
 odin serve install                            # binds 127.0.0.1:7331 by default
@@ -265,12 +291,21 @@ Remove the service entirely with `odin serve uninstall`.
 
 ## Configuration
 
-Odin stores everything under a single **data directory**, resolved in this
-order:
+Odin stores everything under a single **data directory**. Which mode it
+runs in is detected automatically from whether `/etc/odin/config.toml`
+exists (it does after a system-wide `.deb`/`.rpm` install, and does not
+after `make install-user`/a plain source build):
 
-1. `data_dir` in `~/.config/odin/config.toml`
+- **System mode** (`/etc/odin/config.toml` present): config at
+  `/etc/odin/config.toml`, data at `/var/lib/odin` by default.
+- **Per-user mode** (no system config file): config at
+  `~/.config/odin/config.toml`, data at `~/.local/share/odin` by default.
+
+In both modes, the data dir is resolved in this order:
+
+1. `data_dir` in the mode's config file
 2. the `ODIN_DATA_DIR` environment variable
-3. the XDG default, `~/.local/share/odin`
+3. the mode's default above
 
 ### Data layout
 
@@ -317,7 +352,12 @@ make lint          # clippy, denying warnings
 make fmt           # format the codebase
 make fmt-check     # check formatting without modifying files
 make check         # fmt-check + lint + test — run before committing
-make install        # install the release binary (PREFIX=... to override, default ~/.local)
+make deb            # build a .deb package (needs `cargo install cargo-deb`)
+make rpm             # build an .rpm package (needs `cargo install cargo-generate-rpm`)
+make install          # build + install a system .deb/.rpm package (needs sudo)
+make install-user      # install the release binary to ~/.local/bin instead (PREFIX=... to override)
+make uninstall          # remove the system package (needs sudo)
+make uninstall-user      # remove the binary installed by make install-user
 make clean          # remove build artifacts
 make web-install     # install the dashboard frontend's npm dependencies
 make web-build       # build the dashboard frontend (output embedded into the binary)

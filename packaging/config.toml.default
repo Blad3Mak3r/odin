@@ -1,0 +1,3 @@
+# Odin system-wide configuration (installed by the .deb/.rpm package).
+# Uncomment to override the data directory (default: /var/lib/odin).
+# data_dir = "/var/lib/odin"

@@ -1,0 +1,21 @@
+[Unit]
+Description=Odin Valheim server manager dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=odin
+Group=odin
+WorkingDirectory=/var/lib/odin
+ExecStart=/usr/bin/odin serve --bind 127.0.0.1 --port 7331
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ReadWritePaths=/var/lib/odin
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

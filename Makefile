@@ -4,7 +4,7 @@ BINDIR     := $(PREFIX)/bin
 DEBUG_BIN  := target/debug/$(BIN)
 RELEASE_BIN := target/release/$(BIN)
 
-.PHONY: all build release install uninstall run test lint fmt fmt-check check clean help web-install web-build web-dev
+.PHONY: all build release install install-user uninstall uninstall-user deb rpm run test lint fmt fmt-check check clean help web-install web-build web-dev
 
 all: build
 
@@ -28,14 +28,48 @@ build: web-build
 release: web-build
 	cargo build --release
 
-## Install the release binary to $(BINDIR) (override with `make install PREFIX=/usr/local`)
-install: release
+## Build a .deb package (needs `cargo install cargo-deb`)
+deb: web-build
+	cargo deb
+
+## Build an .rpm package (needs `cargo install cargo-generate-rpm`)
+rpm: release
+	cargo generate-rpm
+
+## Build and install a system-wide .deb/.rpm package (needs sudo; Debian/Fedora-family only)
+install:
+	@if [ -f /etc/debian_version ]; then \
+		$(MAKE) deb; \
+		sudo apt install -y ./target/debian/odin_*.deb; \
+	elif [ -f /etc/redhat-release ] || [ -f /etc/fedora-release ]; then \
+		$(MAKE) rpm; \
+		sudo dnf install -y ./target/generate-rpm/odin-*.rpm; \
+	else \
+		echo "Unsupported distro (no /etc/debian_version or /etc/redhat-release)." >&2; \
+		echo "Use 'make install-user' for a per-user install, or 'make deb'/'make rpm'" >&2; \
+		echo "to build a package manually." >&2; \
+		exit 1; \
+	fi
+
+## Install the release binary to $(BINDIR) instead of a system package (override with `make install-user PREFIX=/usr/local`)
+install-user: release
 	install -Dm755 $(RELEASE_BIN) $(BINDIR)/$(BIN)
 	@echo "Installed to $(BINDIR)/$(BIN)"
 	@echo "Make sure $(BINDIR) is on your PATH."
 
-## Remove the installed binary from $(BINDIR)
+## Remove the system-wide .deb/.rpm package (needs sudo)
 uninstall:
+	@if [ -f /etc/debian_version ]; then \
+		sudo apt remove -y odin; \
+	elif command -v dnf >/dev/null 2>&1; then \
+		sudo dnf remove -y odin; \
+	else \
+		echo "Not a package-managed install; use 'make uninstall-user' instead." >&2; \
+		exit 1; \
+	fi
+
+## Remove the binary installed by `make install-user`
+uninstall-user:
 	rm -f $(BINDIR)/$(BIN)
 
 ## Run the debug binary, forwarding extra args: make run ARGS="status"

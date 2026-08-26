@@ -47,3 +47,31 @@ rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+
+[package.metadata.deb]
+maintainer = "Blad3Mak3r <juanluiscarobenito@gmail.com>"
+copyright = "2026, Blad3Mak3r"
+depends = "tmux"
+extended-description = "Runs and maintains Valheim dedicated servers on Linux: installs/updates the server via SteamCMD, runs multiple independent named instances detached in tmux, manages per-instance config and access lists, takes backups, and installs BepInEx mods from Thunderstore."
+section = "utils"
+priority = "optional"
+maintainer-scripts = "packaging/deb"
+assets = [
+    ["target/release/odin", "usr/bin/odin", "755"],
+    ["packaging/odin.service", "usr/lib/systemd/system/odin.service", "644"],
+    ["packaging/config.toml.default", "etc/odin/config.toml", "640"],
+    ["README.md", "usr/share/doc/odin/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/odin", dest = "/usr/bin/odin", mode = "755" },
+    { source = "packaging/odin.service", dest = "/usr/lib/systemd/system/odin.service", mode = "644" },
+    { source = "packaging/config.toml.default", dest = "/etc/odin/config.toml", mode = "640", config = "noreplace" },
+    { source = "README.md", dest = "/usr/share/doc/odin/README.md", mode = "644", doc = true },
+]
+post_install_script = "packaging/scripts/postinst.sh"
+post_uninstall_script = "packaging/scripts/postrm.sh"
+
+[package.metadata.generate-rpm.requires]
+tmux = "*"

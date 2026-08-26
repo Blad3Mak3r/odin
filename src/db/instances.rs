@@ -1,6 +1,7 @@
 //! Durable storage for instance state, backing `crate::instance::Instance`.
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, Transaction, params};
 
 use super::Db;
@@ -22,8 +23,8 @@ pub fn save(db: &Db, state: &InstanceState) -> Result<()> {
 pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> {
     tx.execute(
         "INSERT INTO instances \
-            (name, port, world_name, password, public, created_at, last_started_at, last_stopped_at, tmux_session, bepinex_installed) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+            (name, port, world_name, password, public, created_at, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
          ON CONFLICT(name) DO UPDATE SET \
             port = excluded.port, \
             world_name = excluded.world_name, \
@@ -32,7 +33,8 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
             created_at = excluded.created_at, \
             last_started_at = excluded.last_started_at, \
             last_stopped_at = excluded.last_stopped_at, \
-            tmux_session = excluded.tmux_session, \
+            pid = excluded.pid, \
+            pid_started_at = excluded.pid_started_at, \
             bepinex_installed = excluded.bepinex_installed",
         params![
             state.name,
@@ -43,7 +45,8 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
             state.created_at,
             state.last_started_at,
             state.last_stopped_at,
-            state.tmux_session,
+            state.pid,
+            state.pid_started_at,
             state.bepinex_installed,
         ],
     )
@@ -110,9 +113,9 @@ pub fn delete(db: &Db, name: &str) -> Result<()> {
 }
 
 const SELECT_INSTANCE: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, tmux_session, bepinex_installed FROM instances WHERE name = ?1";
+     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed FROM instances WHERE name = ?1";
 const SELECT_ALL_INSTANCES: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, tmux_session, bepinex_installed FROM instances ORDER BY name";
+     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed FROM instances ORDER BY name";
 
 fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
     Ok(InstanceState {
@@ -124,10 +127,43 @@ fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
         created_at: row.get(5)?,
         last_started_at: row.get(6)?,
         last_stopped_at: row.get(7)?,
-        tmux_session: row.get(8)?,
-        bepinex_installed: row.get(9)?,
+        pid: row.get(8)?,
+        pid_started_at: row.get(9)?,
+        bepinex_installed: row.get(10)?,
         installed_mods: Vec::new(),
     })
+}
+
+/// Persists a freshly spawned process's identity fingerprint after a
+/// successful `start()`. Narrower than [`save`] so it can't clobber a
+/// concurrent edit to an unrelated column.
+pub fn set_pid(
+    db: &Db,
+    name: &str,
+    pid: u32,
+    pid_started_at: i64,
+    started_at: DateTime<Utc>,
+) -> Result<()> {
+    db.conn()
+        .execute(
+            "UPDATE instances SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE name = ?1",
+            params![name, pid, pid_started_at, started_at],
+        )
+        .with_context(|| format!("failed to record pid for instance '{name}'"))?;
+    Ok(())
+}
+
+/// Clears a stopped instance's pid fingerprint and stamps `last_stopped_at`.
+/// Used both by an explicit `stop()` and by reconciliation when a persisted
+/// pid is found to be dead.
+pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
+    db.conn()
+        .execute(
+            "UPDATE instances SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE name = ?1",
+            params![name, stopped_at],
+        )
+        .with_context(|| format!("failed to clear pid for instance '{name}'"))?;
+    Ok(())
 }
 
 fn load_installed_mods(conn: &Connection, instance_name: &str) -> Result<Vec<InstalledMod>> {
@@ -190,6 +226,24 @@ mod tests {
         assert_eq!(loaded.port, original.port);
         assert_eq!(loaded.installed_mods.len(), 1);
         assert_eq!(loaded.installed_mods[0].mod_id, "owner-mod");
+    }
+
+    #[test]
+    fn set_pid_then_clear_pid_round_trips() {
+        let db = temp_db("set-clear-pid");
+        save(&db, &sample("my-server")).unwrap();
+
+        set_pid(&db, "my-server", 4242, 1_700_000_000, Utc::now()).unwrap();
+        let running = load(&db, "my-server").unwrap().unwrap();
+        assert_eq!(running.pid, Some(4242));
+        assert_eq!(running.pid_started_at, Some(1_700_000_000));
+        assert!(running.last_started_at.is_some());
+
+        clear_pid(&db, "my-server", Utc::now()).unwrap();
+        let stopped = load(&db, "my-server").unwrap().unwrap();
+        assert_eq!(stopped.pid, None);
+        assert_eq!(stopped.pid_started_at, None);
+        assert!(stopped.last_stopped_at.is_some());
     }
 
     #[test]

@@ -74,6 +74,46 @@ mod tests {
     }
 
     #[test]
+    fn v1_tmux_session_column_is_dropped_and_pid_columns_are_nullable() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // Apply only 0001 by hand, seed a v1-shaped row, then run the full
+        // migration set and check 0002 both drops `tmux_session` and adds
+        // nullable `pid`/`pid_started_at` without losing the row.
+        conn.execute_batch(
+            std::str::from_utf8(&Migrations::get("0001_init.sql").unwrap().data).unwrap(),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO instances (name, port, world_name, public, created_at, tmux_session) \
+             VALUES ('legacy', 2456, 'legacy', 1, '2024-01-01T00:00:00Z', 'odin-legacy')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+
+        run(&mut conn).unwrap();
+
+        let has_tmux_session: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('instances') WHERE name = 'tmux_session')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!has_tmux_session);
+
+        let (pid, name): (Option<i64>, String) = conn
+            .query_row(
+                "SELECT pid, name FROM instances WHERE name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(pid, None);
+        assert_eq!(name, "legacy");
+    }
+
+    #[test]
     fn running_twice_is_a_noop() {
         let mut conn = Connection::open_in_memory().unwrap();
         run(&mut conn).unwrap();

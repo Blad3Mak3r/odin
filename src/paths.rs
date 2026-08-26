@@ -102,6 +102,10 @@ pub fn instance_server_symlink(instance_dir: &std::path::Path) -> PathBuf {
     instance_dir.join("server")
 }
 
-pub fn tmux_session_name(instance_name: &str) -> String {
-    format!("odin-{instance_name}")
+/// Named pipe carrying console input to the running server's stdin. Created
+/// once at first `start()` and reused across stop/start cycles; any process
+/// with filesystem access can open it for writing, independent of which
+/// `odin serve` (if any) is currently running — see `instance::process`.
+pub fn instance_console_fifo(instance_dir: &std::path::Path) -> PathBuf {
+    instance_dir.join("console.in")
 }

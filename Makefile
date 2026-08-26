@@ -41,10 +41,11 @@ install:
 	@sudo -v
 	@if [ -f /etc/debian_version ]; then \
 		$(MAKE) deb; \
-		sudo apt install -y ./target/debian/odin_*.deb; \
+		sudo apt install --reinstall -y ./target/debian/odin_*.deb; \
 	elif [ -f /etc/redhat-release ] || [ -f /etc/fedora-release ]; then \
 		$(MAKE) rpm; \
-		sudo dnf install -y ./target/generate-rpm/odin-*.rpm; \
+		sudo dnf reinstall -y ./target/generate-rpm/odin-*.rpm || \
+			sudo dnf install -y ./target/generate-rpm/odin-*.rpm; \
 	else \
 		echo "Unsupported distro (no /etc/debian_version or /etc/redhat-release)." >&2; \
 		echo "Use 'make install-user' for a per-user install, or 'make deb'/'make rpm'" >&2; \

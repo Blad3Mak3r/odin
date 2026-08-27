@@ -95,7 +95,7 @@ export function BackupsTab({ name, running }: { name: string; running: boolean }
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Created</TableHead>
+              <TableHead className="w-full">Created</TableHead>
               <TableHead className="hidden sm:table-cell">Size</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>

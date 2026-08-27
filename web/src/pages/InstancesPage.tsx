@@ -40,7 +40,7 @@ export function InstancesPage() {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Name</TableHead>
+            <TableHead className="w-full">Name</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="hidden md:table-cell">World</TableHead>
             <TableHead className="hidden md:table-cell">Port</TableHead>

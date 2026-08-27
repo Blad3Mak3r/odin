@@ -41,7 +41,7 @@ export function JobsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Job</TableHead>
+              <TableHead className="w-full">Job</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="hidden sm:table-cell">Started</TableHead>
             </TableRow>

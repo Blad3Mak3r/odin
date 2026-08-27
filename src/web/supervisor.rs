@@ -1,24 +1,22 @@
-//! Reaps a `Child` spawned by this exact `odin serve` boot, so it never
-//! zombies while the daemon stays alive.
-//!
-//! This is deliberately *not* the source of truth for "is this instance
-//! running" — that's always a live `(pid, pid_started_at)` check against
-//! the OS process table (`instance::lifecycle::is_running`), persisted in
-//! SQLite and therefore correct even before this process has reconciled
-//! anything. `Supervisor` only ever adds the reaping behavior on top of
-//! that, and only for instances spawned by this exact boot.
-//!
-//! Crucially, `Supervisor` never calls `Child::kill()` and never sets
-//! `kill_on_drop(true)`. On a daemon restart, the reaper task and its
-//! `Child` are simply abandoned along with the rest of the process's
-//! state — the OS process reparents to PID 1 (which reaps it whenever it
-//! eventually exits) and keeps running. That's the detail that makes an
-//! instance survive `systemctl restart odin`.
+//! `odin serve`'s handle onto `crate::supervisor` (the `odin run` RPC
+//! layer). `instance::lifecycle` already talks to it directly for
+//! start/stop, and `web::routes::resources::compute_instance_snapshot`
+//! pings it for liveness; this module bridges a running instance's pushed
+//! log/exit events into `LogTailRegistry`, so `web::sse`'s live console
+//! stream is fed by `odin run` pushing lines over its events socket rather
+//! than `web::log_tail` polling `console.log` from here. `web::mod`'s
+//! `reconcile_log_tailers` falls back to that file-poller only for an
+//! instance with no reachable supervisor (see `try_bridge_events`).
 
-use std::sync::Arc;
+use futures_util::StreamExt as _;
+use tokio::task::AbortHandle;
 
 use crate::activity::ActivityLog;
-use crate::db::Db;
+use crate::paths::Paths;
+use crate::supervisor::client;
+use crate::supervisor::protocol::Event;
+use crate::web::log_tail::LogTailRegistry;
+use crate::web::players::PlayerRegistry;
 
 #[derive(Clone, Default)]
 pub struct Supervisor;
@@ -28,24 +26,40 @@ impl Supervisor {
         Self
     }
 
-    /// Takes ownership of a freshly spawned child: reaps it (`child.wait()`
-    /// — the actual `waitpid(2)`, preventing a zombie for as long as this
-    /// boot is alive) in a background task, then clears its pid on exit.
-    /// Must be called only for a `Child` this exact boot spawned — never
-    /// for one adopted during reconciliation, since there's no `Child`
-    /// handle to reap in that case.
-    pub fn spawn_reaper(
+    /// Subscribes to `name`'s events socket and bridges pushed `LogLine`s
+    /// into `log_tail`'s broadcast channel (applying player-tracking
+    /// exactly like the legacy poller does), until the supervisor closes
+    /// the connection — normally right after an `Exited` event. Returns
+    /// `None` if no supervisor is reachable for this instance, so the
+    /// caller can fall back to `web::log_tail`'s file-poller.
+    pub async fn try_bridge_events(
         &self,
-        name: String,
-        mut child: tokio::process::Child,
-        db: Arc<Db>,
-        activity: ActivityLog,
-    ) {
-        tokio::spawn(async move {
-            let status = child.wait().await;
-            tracing::info!(instance = %name, ?status, "instance process exited");
-            let _ = crate::db::instances::clear_pid(&db, &name, chrono::Utc::now());
-            activity.record(crate::activity::ActivityKind::InstanceStopped, Some(name));
+        paths: &Paths,
+        name: &str,
+        log_tail: &LogTailRegistry,
+        players: &PlayerRegistry,
+        activity: &ActivityLog,
+    ) -> Option<AbortHandle> {
+        let stream = client::subscribe_events(paths, name).await.ok()?;
+        let sender = log_tail.sender_for(name);
+        let name = name.to_string();
+        let players = players.clone();
+        let activity = activity.clone();
+
+        let handle = tokio::spawn(async move {
+            futures_util::pin_mut!(stream);
+            while let Some(event) = stream.next().await {
+                match event {
+                    Event::LogLine { line } => {
+                        if let Some(kind) = players.apply_line(&name, &line) {
+                            activity.record(kind, Some(name.clone()));
+                        }
+                        let _ = sender.send(line);
+                    }
+                    Event::Exited { .. } => break,
+                }
+            }
         });
+        Some(handle.abort_handle())
     }
 }

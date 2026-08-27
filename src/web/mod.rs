@@ -79,7 +79,7 @@ fn spawn_telemetry(state: AppState) {
                 .await
                 .unwrap_or_default();
 
-            reconcile_log_tailers(&state, &mut tailers, &running);
+            reconcile_log_tailers(&state, &mut tailers, &running).await;
 
             tokio::time::sleep(TELEMETRY_INTERVAL).await;
         }
@@ -125,6 +125,16 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
                 // their own success path, so this is purely the safety net
                 // for unwitnessed deaths.
                 let _ = crate::db::instances::clear_pid(&state.db, name, chrono::Utc::now());
+                // If a supervisor was involved, it's gone too (the ping
+                // above already failed) without cleaning up after itself —
+                // an `odin run` crash rather than a normal exit. Remove
+                // whatever it left behind so a future start doesn't trip
+                // over a stale socket/pidfile.
+                let _ =
+                    std::fs::remove_file(crate::supervisor::control_sock_path(&state.paths, name));
+                let _ =
+                    std::fs::remove_file(crate::supervisor::events_sock_path(&state.paths, name));
+                let _ = std::fs::remove_file(crate::supervisor::pidfile_path(&state.paths, name));
             }
             entries.push(InstanceResourceEntry {
                 name: name.clone(),
@@ -144,10 +154,14 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
     running_names
 }
 
-/// Starts the shared log tailer (`web::log_tail`) for any newly-running
+/// Starts a live console feed (`web::log_tail`) for any newly-running
 /// instance, and aborts + clears tracked players for any that stopped
-/// running since the last tick.
-fn reconcile_log_tailers(
+/// running since the last tick. Prefers subscribing to the instance's
+/// supervisor for pushed events (`web::supervisor::Supervisor::
+/// try_bridge_events`); falls back to `web::log_tail`'s file-poller only
+/// for an instance with no reachable supervisor (started by a pre-upgrade
+/// binary, or whose supervisor has crashed).
+async fn reconcile_log_tailers(
     state: &AppState,
     tailers: &mut HashMap<String, AbortHandle>,
     running: &[String],
@@ -168,16 +182,31 @@ fn reconcile_log_tailers(
         if tailers.contains_key(name) {
             continue;
         }
-        let log_file = players::console_log_path(&state.paths.instance_dir(name));
-        let sender = state.log_tail.sender_for(name);
-        let handle = tokio::spawn(log_tail::tail_and_broadcast(
-            name.clone(),
-            log_file,
-            sender,
-            state.players.clone(),
-            state.activity.clone(),
-        ))
-        .abort_handle();
+        let handle = match state
+            .supervisor
+            .try_bridge_events(
+                &state.paths,
+                name,
+                &state.log_tail,
+                &state.players,
+                &state.activity,
+            )
+            .await
+        {
+            Some(handle) => handle,
+            None => {
+                let log_file = players::console_log_path(&state.paths.instance_dir(name));
+                let sender = state.log_tail.sender_for(name);
+                tokio::spawn(log_tail::tail_and_broadcast(
+                    name.clone(),
+                    log_file,
+                    sender,
+                    state.players.clone(),
+                    state.activity.clone(),
+                ))
+                .abort_handle()
+            }
+        };
         tailers.insert(name.clone(), handle);
     }
 }

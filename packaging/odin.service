@@ -12,16 +12,27 @@ ExecStart=/usr/bin/odin serve --bind 127.0.0.1 --port 7331
 Restart=on-failure
 RestartSec=5
 # Only the tracked main pid (odin serve itself) is targeted on stop/restart —
-# not the whole cgroup. Valheim server processes are spawned directly by
-# odin serve (see src/instance/process.rs) and must keep running across a
-# service restart/deploy; the default KillMode=control-group would kill
-# them too, since they inherit this unit's cgroup.
+# not the whole cgroup. Each running instance is owned by its own detached
+# `odin run` supervisor process (see src/supervisor/), spawned by odin serve
+# but independent of it, and must keep running across a service
+# restart/deploy; the default KillMode=control-group would kill it and its
+# Valheim child too, since they inherit this unit's cgroup.
 KillMode=process
 ProtectSystem=strict
 ReadWritePaths=/var/lib/odin
 ProtectHome=true
 NoNewPrivileges=true
 PrivateTmp=true
+# /run/odin holds the supervisor.rs Unix control/events sockets for every
+# running instance (Paths::runtime_dir). RuntimeDirectory=, unlike a plain
+# directory (even one provisioned by tmpfiles.d), is specifically exempted
+# by systemd from ProtectSystem=strict's read-only remount, so odin run —
+# a detached child of this unit, inheriting its mount namespace — can
+# actually write to it. Preserve=yes keeps it (and thus every already-
+# running instance's sockets) intact across a service restart/deploy, for
+# the same reason KillMode=process exists above.
+RuntimeDirectory=odin
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

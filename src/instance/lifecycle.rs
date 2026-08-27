@@ -8,8 +8,10 @@ use super::{Instance, InstanceError, process};
 use crate::cli::validate_instance_name;
 use crate::db::Db;
 use crate::paths::{self, Paths};
+use crate::supervisor;
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The single canonical liveness check: a live `(pid, pid_started_at)`
 /// comparison against the OS process table, never a cached/in-memory
@@ -22,18 +24,14 @@ pub fn is_running(instance: &Instance) -> Result<bool> {
     })
 }
 
-/// Starts (creating first, if new) an instance's server process. Returns
-/// the `Child` handle so the caller can decide what to do with it: `odin
-/// serve` hands it to `web::supervisor` for reaping and console-writer
-/// registration; a standalone CLI invocation just drops it (safe — see
-/// `process::spawn`'s doc comment), letting it become adoptable by
-/// whichever `odin serve` next reconciles.
-pub async fn start(
-    paths: &Paths,
-    db: &Db,
-    name: &str,
-) -> Result<(Instance, tokio::process::Child)> {
-    let mut instance = Instance::load_or_create(paths, db, name)?;
+/// Everything `start` needs to do before actually spawning a process:
+/// load-or-create the instance, guard against a double-start, verify the
+/// server binary is installed, and prepare the on-disk layout. Split out so
+/// `supervisor::server` (the `odin run` supervisor process itself) can call
+/// it directly — it no longer goes through `start`'s spawn step, since it
+/// *is* what does the spawning now.
+pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+    let instance = Instance::load_or_create(paths, db, name)?;
 
     if is_running(&instance)? {
         bail!(InstanceError::AlreadyRunning(name.to_string()));
@@ -50,33 +48,38 @@ pub async fn start(
     check_port_available(paths, db, &instance)?;
     prepare_instance_layout(paths, &instance)?;
 
-    let cmd = process::build_command(&instance, paths)?;
-    let child = process::spawn(cmd)
-        .await
-        .with_context(|| format!("failed to start instance '{name}'"))?;
-    let pid = child.id().context("spawned child has no pid")?;
-    let pid_started_at = process::start_time_of(pid)?;
-    let started_at = Utc::now();
-
-    instance.state.last_started_at = Some(started_at);
-    instance.state.pid = Some(pid);
-    instance.state.pid_started_at = Some(pid_started_at);
-    // Narrower than a full `instance.save`: just the three columns that
-    // actually changed, rather than an upsert of every column plus a
-    // delete-and-reinsert of every installed mod row.
-    crate::db::instances::set_pid(db, name, pid, pid_started_at, started_at)?;
-
-    Ok((instance, child))
+    Ok(instance)
 }
 
-/// Stops a running instance: SIGINT, wait up to `STOP_TIMEOUT` for a clean
-/// exit, SIGKILL as a fallback. Works purely by pid — doesn't require the
-/// caller to own the `Child` that was originally spawned, so this is
-/// exactly as functional from a standalone CLI invocation as from the web
-/// dashboard, and works equally well on an instance "adopted" from a
-/// previous `odin serve` boot.
+/// Starts (creating first, if new) an instance's server process: spawns
+/// `odin run --instance <name>` detached (the supervisor process that
+/// actually launches and owns Valheim — see `supervisor::server`) and waits
+/// for it to become responsive. The supervisor records `(pid,
+/// pid_started_at)` in the database itself once it spawns the process, so
+/// this just reloads the instance afterwards to pick that up.
+pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+    prepare_start(paths, db, name)?;
+
+    supervisor::client::spawn_detached(paths, name)
+        .await
+        .with_context(|| format!("failed to start instance '{name}'"))?;
+    supervisor::client::ping_with_retry(paths, name, SUPERVISOR_START_TIMEOUT)
+        .await
+        .with_context(|| format!("failed to start instance '{name}'"))?;
+
+    Instance::load_existing(paths, db, name)
+}
+
+/// Stops a running instance. Prefers asking the live supervisor to do it
+/// (`supervisor::client::stop`) — it owns the `Child` directly, so there's
+/// no pid-fingerprint race to worry about on its side. Falls back to
+/// signalling by pid directly only when no supervisor is reachable: an
+/// instance started by a pre-upgrade binary, or one whose supervisor has
+/// already crashed. Either way, this function only returns once the
+/// process is actually gone (or `STOP_TIMEOUT` has been given a full
+/// chance, supervisor-side escalation included).
 pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let mut instance = Instance::load_existing(paths, db, name)?;
+    let instance = Instance::load_existing(paths, db, name)?;
 
     let (Some(pid), Some(pid_started_at)) = (instance.state.pid, instance.state.pid_started_at)
     else {
@@ -86,6 +89,33 @@ pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
         bail!(InstanceError::NotRunning(name.to_string()));
     }
 
+    match supervisor::client::stop(paths, name, STOP_TIMEOUT.as_secs()).await {
+        Ok(()) => {
+            // The supervisor owns the shutdown sequence (SIGINT, then its
+            // own SIGKILL escalation after STOP_TIMEOUT) and clears the DB
+            // pid itself once the process is gone. Give it a bit more than
+            // its own timeout budget so that escalation has time to land.
+            if !process::wait_until_gone(
+                pid,
+                pid_started_at,
+                STOP_TIMEOUT + Duration::from_secs(10),
+            )
+            .await
+            {
+                bail!(
+                    "instance '{name}' did not stop even after the supervisor's own shutdown timeout"
+                );
+            }
+            Ok(())
+        }
+        Err(_) => stop_via_pid_signal(db, name, pid, pid_started_at).await,
+    }
+}
+
+/// Direct pid-based stop: SIGINT, wait up to `STOP_TIMEOUT`, SIGKILL as a
+/// fallback. The only path taken when no supervisor is reachable for this
+/// instance — see `stop`'s doc comment.
+async fn stop_via_pid_signal(db: &Db, name: &str, pid: u32, pid_started_at: i64) -> Result<()> {
     process::send_signal(pid, pid_started_at, Signal::Interrupt)?;
     if !process::wait_until_gone(pid, pid_started_at, STOP_TIMEOUT).await {
         tracing::warn!(
@@ -97,22 +127,14 @@ pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
         process::wait_until_gone(pid, pid_started_at, Duration::from_secs(5)).await;
     }
 
-    let stopped_at = Utc::now();
-    instance.state.last_stopped_at = Some(stopped_at);
-    instance.state.pid = None;
-    instance.state.pid_started_at = None;
-    crate::db::instances::clear_pid(db, name, stopped_at)?;
+    crate::db::instances::clear_pid(db, name, Utc::now())?;
 
     Ok(())
 }
 
 /// Stops the instance if it's running, then starts it again. Requires the
 /// instance to already exist (unlike `start`, which creates it on demand).
-pub async fn restart(
-    paths: &Paths,
-    db: &Db,
-    name: &str,
-) -> Result<(Instance, tokio::process::Child)> {
+pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     let instance = Instance::load_existing(paths, db, name)?;
     if is_running(&instance)? {
         stop(paths, db, name).await?;
@@ -198,89 +220,9 @@ fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_env(label: &str) -> (Paths, Db) {
-        let dir = std::env::temp_dir().join(format!(
-            "odin-lifecycle-e2e-{label}-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir,
-        };
-        let db = Db::open(&paths).unwrap();
-        (paths, db)
-    }
-
-    /// End-to-end smoke test against the *real* `valheim_server.x86_64` on
-    /// this host (symlinked in, not copied) — exercises the actual spawn,
-    /// liveness, and SIGINT/SIGKILL stop path this whole module was
-    /// rewritten around, not just the pure logic in `instance::process`'s
-    /// unit tests. Skipped by default (needs a real Valheim dedicated
-    /// server install, like the steamcmd-dependent tests in
-    /// `valheim_update.rs`): `cargo test -- --ignored lifecycle_e2e`.
-    #[tokio::test]
-    #[ignore]
-    async fn lifecycle_e2e_start_stop_against_a_real_server_binary() {
-        // Deliberately bypasses `Paths::resolve`'s system-mode detection
-        // (this dev box also has a package-installed `/etc/odin/config.toml`
-        // pointing at `/var/lib/odin`, unreadable by this user) — this test
-        // only cares about finding *a* real install to symlink in, always
-        // under the per-user XDG data dir regardless of system-mode.
-        let real_install = directories::ProjectDirs::from("", "", "odin")
-            .unwrap()
-            .data_dir()
-            .join("install")
-            .join("valheim");
-        assert!(
-            real_install.join("valheim_server.x86_64").is_file(),
-            "expected a real Valheim install at {}; run `odin install` first",
-            real_install.display()
-        );
-
-        let (paths, db) = temp_env("smoke");
-        std::fs::create_dir_all(paths.shared_install_dir().parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&real_install, paths.shared_install_dir()).unwrap();
-
-        let (instance, child) = start(&paths, &db, "e2e-smoke").await.unwrap();
-        let pid = instance.state.pid.unwrap();
-        assert!(process::is_alive(
-            pid,
-            instance.state.pid_started_at.unwrap()
-        ));
-        assert!(is_running(&instance).unwrap());
-        drop(child); // detach, exactly like the CLI does — must not affect the running process
-
-        // Real console output should show up in the log within a few seconds.
-        let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
-        let mut saw_output = false;
-        for _ in 0..20 {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if std::fs::metadata(&console_log)
-                .map(|m| m.len())
-                .unwrap_or(0)
-                > 0
-            {
-                saw_output = true;
-                break;
-            }
-        }
-        assert!(saw_output, "expected the server to write to console.log");
-
-        stop(&paths, &db, "e2e-smoke").await.unwrap();
-        assert!(!process::is_alive(
-            pid,
-            instance.state.pid_started_at.unwrap()
-        ));
-        let reloaded = Instance::load_existing(&paths, &db, "e2e-smoke").unwrap();
-        assert!(!is_running(&reloaded).unwrap());
-        assert_eq!(reloaded.state.pid, None);
-
-        std::fs::remove_dir_all(&paths.data_dir).ok();
-    }
-}
+// The real-Valheim-binary end-to-end test that used to live here moved to
+// `supervisor::server`'s test module: `start`'s spawn step now re-execs
+// odin's own binary (`std::env::current_exe()`) as `odin run`, which only
+// resolves to the real `odin` binary outside a `cargo test` harness — the
+// equivalent coverage now drives `supervisor::server::run_instance`
+// directly (as `odin run` itself would) instead of going through `start`.

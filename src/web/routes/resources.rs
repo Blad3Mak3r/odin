@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::Json;
 use axum::extract::{Path, State};
 use sysinfo::{Disks, Pid, System};
@@ -6,6 +8,12 @@ use crate::instance::{Instance, lifecycle};
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::runtime::{HostSnapshot, InstanceSnapshot, ResourceSample};
 use crate::web::state::AppState;
+
+/// Kept short deliberately: this runs inside the telemetry tick's
+/// `spawn_blocking` context, once per instance per tick — a wedged
+/// supervisor should read as "unreachable" quickly, not tie up a blocking
+/// thread.
+const SUPERVISOR_PING_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// Reads whatever `spawn_telemetry`'s background tick last cached — cheap,
 /// no `sysinfo`/`tmux` work on the request path.
@@ -84,7 +92,22 @@ pub(crate) fn compute_instance_snapshot(
     state: &AppState,
     instance: &Instance,
 ) -> anyhow::Result<InstanceSnapshot> {
-    if !lifecycle::is_running(instance)? {
+    // Ping the live supervisor first — it's a more direct signal than the
+    // sysinfo/pid-fingerprint check (no reliance on a periodic full-process
+    // refresh), and correctly reports "running" even in the moment right
+    // after a start/restart before this tick's own sysinfo refresh has
+    // necessarily seen the new pid. Fall back to the pid check for an
+    // instance with no reachable supervisor (started by a pre-upgrade
+    // binary, or whose supervisor has crashed but Valheim itself survived).
+    let running = match crate::supervisor::client::ping_blocking(
+        &state.paths,
+        &instance.state.name,
+        SUPERVISOR_PING_TIMEOUT,
+    ) {
+        Ok(_) => true,
+        Err(_) => lifecycle::is_running(instance)?,
+    };
+    if !running {
         return Ok(InstanceSnapshot::default());
     }
     let root_pids: Vec<u32> = instance.state.pid.into_iter().collect();

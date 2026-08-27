@@ -19,13 +19,24 @@ pub struct Paths {
     pub config_dir: PathBuf,
 }
 
+/// Presence of `<SYSTEM_CONFIG_DIR>/config.toml` is what flips Odin into
+/// system mode — see `Paths::resolve`'s doc comment. Only used there: once
+/// a `Paths` is resolved, its own `config_dir` field already reflects the
+/// decision (see `Paths::runtime_dir`'s doc comment for why methods should
+/// check `self`, not re-probe the filesystem).
+fn system_mode() -> bool {
+    PathBuf::from(SYSTEM_CONFIG_DIR)
+        .join("config.toml")
+        .is_file()
+}
+
 impl Paths {
     pub fn resolve(data_dir_override: Option<PathBuf>) -> Result<Self> {
-        let system_config_dir = PathBuf::from(SYSTEM_CONFIG_DIR);
-        let system_mode = system_config_dir.join("config.toml").is_file();
-
-        let (config_dir, default_data_dir) = if system_mode {
-            (system_config_dir, PathBuf::from(SYSTEM_DATA_DIR))
+        let (config_dir, default_data_dir) = if system_mode() {
+            (
+                PathBuf::from(SYSTEM_CONFIG_DIR),
+                PathBuf::from(SYSTEM_DATA_DIR),
+            )
         } else {
             let project_dirs = ProjectDirs::from("", "", "odin")
                 .context("could not determine home directory for XDG paths")?;
@@ -75,6 +86,33 @@ impl Paths {
     /// this rather than each keeping their own copy.
     pub fn mod_dir(&self, mod_id: &str) -> PathBuf {
         self.mods_dir().join(mod_id)
+    }
+
+    /// A short, OS-managed directory for ephemeral runtime files — the
+    /// `supervisor` module's per-instance Unix sockets. Deliberately *not*
+    /// under `data_dir`: a Unix domain socket path is capped at ~108 bytes
+    /// (`sockaddr_un::sun_path` on Linux), and `<data_dir>/servers/<name>/...`
+    /// combined with a per-user XDG data dir and a long instance name can
+    /// exceed that easily. System mode uses `/run/odin`; per-user mode
+    /// follows the XDG Base Directory spec's `XDG_RUNTIME_DIR`, falling back
+    /// to a `/tmp`-based path if it isn't set (e.g. no active login session).
+    ///
+    /// System-mode here means *this* `Paths` value was resolved as one
+    /// (`self.config_dir == SYSTEM_CONFIG_DIR`) — not a fresh re-check of
+    /// `/etc/odin/config.toml` on disk. Re-checking the filesystem directly
+    /// (as an earlier version of this method did) meant a `Paths` built
+    /// entirely by hand for a test, pointed at its own temp `data_dir`,
+    /// would still get shunted into `/run/odin` the moment the real package
+    /// happened to be installed on the machine running the tests — every
+    /// other `Paths` method already derives purely from `self`, and this
+    /// one should too.
+    pub fn runtime_dir(&self) -> PathBuf {
+        if self.config_dir == std::path::Path::new(SYSTEM_CONFIG_DIR) {
+            return PathBuf::from("/run/odin");
+        }
+        ProjectDirs::from("", "", "odin")
+            .and_then(|d| d.runtime_dir().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| std::env::temp_dir().join("odin-run"))
     }
 }
 

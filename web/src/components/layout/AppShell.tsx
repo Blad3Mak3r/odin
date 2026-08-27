@@ -118,7 +118,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
         <UpdateBanner />
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">{children}</div>
+        <div className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 sm:py-8">{children}</div>
       </main>
 
       <ActivityFeedPanel open={activityOpen} onOpenChange={setActivityOpen} />

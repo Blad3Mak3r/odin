@@ -69,7 +69,7 @@ function InstalledMods({ instanceNames }: { instanceNames: string[] }) {
       </h2>
 
       {globalMods.isLoading && (
-        <div className="flex flex-col gap-3">
+        <div className="grid gap-3 xl:grid-cols-2">
           <Skeleton className="h-20 w-full" />
           <Skeleton className="h-20 w-full" />
         </div>
@@ -79,7 +79,7 @@ function InstalledMods({ instanceNames }: { instanceNames: string[] }) {
         <p className="text-sm text-muted-foreground">No mods installed anywhere yet.</p>
       )}
 
-      <div className="flex flex-col gap-3">
+      <div className="grid gap-3 xl:grid-cols-2">
         {globalMods.data?.map((mod) => (
           <GlobalModCard key={mod.mod_id} mod={mod} instanceNames={instanceNames} />
         ))}

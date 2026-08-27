@@ -45,7 +45,7 @@ export function ModConfigFiles({ name }: { name: string }) {
       </h2>
 
       {files.isLoading && (
-        <div className="flex flex-col gap-2">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <Skeleton className="h-14 w-full" />
           <Skeleton className="h-14 w-full" />
         </div>
@@ -58,7 +58,7 @@ export function ModConfigFiles({ name }: { name: string }) {
         </p>
       )}
 
-      <div className="flex flex-col gap-2">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {files.data?.map((file) => (
           <div
             key={file.filename}

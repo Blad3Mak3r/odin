@@ -1,5 +1,4 @@
 export interface VersionView {
-  version: string
   latest_version: string | null
   latest_release_url: string | null
   update_available: boolean

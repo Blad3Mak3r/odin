@@ -6,7 +6,6 @@ import { ActivityFeedPanel } from '@/components/ActivityFeedPanel'
 import { Button } from '@/components/ui/button'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { useLiveSocket } from '@/hooks/useLiveSocket'
-import { useVersion } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from './ThemeToggle'
 
@@ -24,8 +23,6 @@ function SidebarNav({
   onNavigate?: () => void
   onOpenActivity: () => void
 }) {
-  const version = useVersion()
-
   return (
     <>
       <div className="flex items-center gap-2 px-4 py-5">
@@ -59,8 +56,8 @@ function SidebarNav({
       <div className="mt-auto flex items-center justify-between px-3 py-3">
         <ThemeToggle />
         <div className="flex items-center gap-1">
-          {version.data && (
-            <span className="text-xs text-muted-foreground">v{version.data.version}</span>
+          {import.meta.env.VITE_ODIN_VERSION && (
+            <span className="text-xs text-muted-foreground">v{import.meta.env.VITE_ODIN_VERSION}</span>
           )}
           <Button
             variant="ghost"

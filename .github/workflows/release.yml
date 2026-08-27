@@ -84,7 +84,7 @@ jobs:
       - name: Build frontend
         run: |
           npm --prefix web ci
-          npm --prefix web run build
+          VITE_ODIN_VERSION="$VERSION" npm --prefix web run build
 
       - name: Build release binary
         run: cargo build --release

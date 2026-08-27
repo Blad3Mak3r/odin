@@ -3,6 +3,7 @@ PREFIX     ?= $(HOME)/.local
 BINDIR     := $(PREFIX)/bin
 DEBUG_BIN  := target/debug/$(BIN)
 RELEASE_BIN := target/release/$(BIN)
+ODIN_VERSION := $(shell grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"$$/\1/')
 
 .PHONY: all build release install install-user uninstall uninstall-user deb rpm run test lint fmt fmt-check check clean help web-install web-build web-dev
 
@@ -14,7 +15,7 @@ web-install:
 
 ## Build the dashboard frontend (output embedded into the binary from web/dist)
 web-build: web-install
-	npm --prefix web run build
+	VITE_ODIN_VERSION=$(ODIN_VERSION) npm --prefix web run build
 
 ## Run the dashboard frontend's Vite dev server (proxies /api to `odin serve`)
 web-dev:

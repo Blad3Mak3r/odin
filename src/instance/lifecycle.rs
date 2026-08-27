@@ -60,7 +60,7 @@ pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     prepare_start(paths, db, name)?;
 
-    supervisor::client::spawn_detached(name)
+    supervisor::client::spawn_detached(paths, name)
         .await
         .with_context(|| format!("failed to start instance '{name}'"))?;
     supervisor::client::ping_with_retry(paths, name, SUPERVISOR_START_TIMEOUT)

@@ -20,9 +20,10 @@ pub struct Paths {
 }
 
 /// Presence of `<SYSTEM_CONFIG_DIR>/config.toml` is what flips Odin into
-/// system mode — see `Paths::resolve`'s doc comment. Also consulted by
-/// `Paths::runtime_dir`, which needs the same distinction independently of
-/// any already-resolved `Paths` value.
+/// system mode — see `Paths::resolve`'s doc comment. Only used there: once
+/// a `Paths` is resolved, its own `config_dir` field already reflects the
+/// decision (see `Paths::runtime_dir`'s doc comment for why methods should
+/// check `self`, not re-probe the filesystem).
 fn system_mode() -> bool {
     PathBuf::from(SYSTEM_CONFIG_DIR)
         .join("config.toml")
@@ -95,8 +96,18 @@ impl Paths {
     /// exceed that easily. System mode uses `/run/odin`; per-user mode
     /// follows the XDG Base Directory spec's `XDG_RUNTIME_DIR`, falling back
     /// to a `/tmp`-based path if it isn't set (e.g. no active login session).
+    ///
+    /// System-mode here means *this* `Paths` value was resolved as one
+    /// (`self.config_dir == SYSTEM_CONFIG_DIR`) — not a fresh re-check of
+    /// `/etc/odin/config.toml` on disk. Re-checking the filesystem directly
+    /// (as an earlier version of this method did) meant a `Paths` built
+    /// entirely by hand for a test, pointed at its own temp `data_dir`,
+    /// would still get shunted into `/run/odin` the moment the real package
+    /// happened to be installed on the machine running the tests — every
+    /// other `Paths` method already derives purely from `self`, and this
+    /// one should too.
     pub fn runtime_dir(&self) -> PathBuf {
-        if system_mode() {
+        if self.config_dir == std::path::Path::new(SYSTEM_CONFIG_DIR) {
             return PathBuf::from("/run/odin");
         }
         ProjectDirs::from("", "", "odin")

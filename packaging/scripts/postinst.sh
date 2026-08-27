@@ -18,6 +18,13 @@ if [ -f /etc/odin/config.toml ]; then
 fi
 
 if [ -d /run/systemd/system ]; then
+    # /run/odin (the supervisor.rs Unix control/events sockets live there —
+    # see Paths::runtime_dir) is provisioned by the tmpfiles.d config below
+    # rather than created on demand: /run itself is root:root 0755, so the
+    # unprivileged odin user can't create a subdirectory there itself.
+    # --create applies it now, in addition to the usual on-boot pass, so a
+    # fresh install/upgrade doesn't need a reboot before instances can start.
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/odin.conf || true
     systemctl daemon-reload || true
     systemctl enable odin.service || true
     # By this point dpkg/rpm has already replaced the binary, but a

@@ -20,20 +20,36 @@ const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Spawns `odin run --instance <name>` detached: its own process group
 /// (same mechanism `instance::process::build_command` already uses for the
-/// Valheim child itself) and stdio discarded — the supervisor logs via
-/// `tracing` to its own file, not this process's stdout/stderr. The `Child`
-/// handle is dropped immediately; like the Valheim child today, `kill_on_drop`
+/// Valheim child itself), stdin discarded. stdout/stderr are appended to
+/// `<instance_dir>/logs/supervisor.log` rather than discarded — anything the
+/// supervisor prints before it manages to bind its own sockets (a startup
+/// failure: e.g. `runtime_dir()` not writable) would otherwise vanish
+/// silently, since this process isn't attached to a terminal and isn't
+/// itself a systemd unit journald would capture. The `Child` handle is
+/// dropped immediately; like the Valheim child today, `kill_on_drop`
 /// defaults to `false`, so this does not kill the supervisor.
-pub async fn spawn_detached(instance_name: &str) -> Result<()> {
+pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
     let exe = std::env::current_exe().context("failed to resolve odin's own executable path")?;
+
+    let log_path =
+        crate::paths::instance_logs_dir(&paths.instance_dir(instance_name)).join("supervisor.log");
+    let stdout_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open {}", log_path.display()))?;
+    let stderr_file = stdout_file
+        .try_clone()
+        .context("failed to duplicate supervisor.log handle for stderr")?;
+
     let mut cmd = Command::new(exe);
     cmd.arg("run")
         .arg("--instance")
         .arg(instance_name)
         .process_group(0)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(std::process::Stdio::from(stdout_file))
+        .stderr(std::process::Stdio::from(stderr_file));
     let child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn 'odin run --instance {instance_name}'"))?;

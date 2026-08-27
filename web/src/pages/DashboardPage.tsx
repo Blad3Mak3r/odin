@@ -3,11 +3,13 @@ import { AlertTriangle, CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { PageHeader } from '@/components/PageHeader'
 import { QueryError } from '@/components/QueryError'
-import { ResourceChart } from '@/components/ResourceChart'
+import { ResourceMetric, ResourceMetricSkeleton } from '@/components/ResourceMetric'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ACTIVITY_ICONS, describeActivity } from '@/lib/activity'
 import { describeJobKind, jobStatusVariant } from '@/lib/jobs'
 import {
@@ -67,10 +69,7 @@ export function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Environment status and host resources.</p>
-      </div>
+      <PageHeader title="Dashboard" description="Environment status and host resources." />
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
@@ -94,7 +93,13 @@ export function DashboardPage() {
             )}
           </CardHeader>
           <CardContent>
-            {doctor.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+            {doctor.isLoading && (
+              <div className="flex flex-col gap-2 py-2">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-2/3" />
+              </div>
+            )}
             {doctor.isError && <QueryError error={doctor.error} />}
             {doctor.data?.map((check) => <CheckRow key={check.label} check={check} />)}
             {installStatus.isError && <QueryError error={installStatus.error} />}
@@ -124,31 +129,20 @@ export function DashboardPage() {
             {resources.isError && <QueryError error={resources.error} />}
             {resources.data ? (
               <>
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">CPU</span>
-                    <span>{resources.data.cpu_percent.toFixed(1)}%</span>
-                  </div>
-                  <ResourceChart
-                    data={history.data ?? []}
-                    dataKey="cpu_percent"
-                    formatValue={(v) => `${v.toFixed(1)}%`}
-                  />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Memory</span>
-                    <span>
-                      {formatBytes(resources.data.memory_used_bytes)} /{' '}
-                      {formatBytes(resources.data.memory_total_bytes)}
-                    </span>
-                  </div>
-                  <ResourceChart
-                    data={history.data ?? []}
-                    dataKey="memory_bytes"
-                    formatValue={formatBytes}
-                  />
-                </div>
+                <ResourceMetric
+                  label="CPU"
+                  value={`${resources.data.cpu_percent.toFixed(1)}%`}
+                  history={history.data ?? []}
+                  dataKey="cpu_percent"
+                  formatValue={(v) => `${v.toFixed(1)}%`}
+                />
+                <ResourceMetric
+                  label="Memory"
+                  value={`${formatBytes(resources.data.memory_used_bytes)} / ${formatBytes(resources.data.memory_total_bytes)}`}
+                  history={history.data ?? []}
+                  dataKey="memory_bytes"
+                  formatValue={formatBytes}
+                />
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Disk free</span>
                   <span>
@@ -158,7 +152,10 @@ export function DashboardPage() {
                 </div>
               </>
             ) : (
-              <p className="text-muted-foreground">Loading…</p>
+              <>
+                <ResourceMetricSkeleton />
+                <ResourceMetricSkeleton />
+              </>
             )}
           </CardContent>
         </Card>

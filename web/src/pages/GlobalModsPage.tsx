@@ -3,10 +3,12 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
+import { PageHeader } from '@/components/PageHeader'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -14,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
@@ -33,12 +36,10 @@ export function GlobalModsPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Mods</h1>
-        <p className="text-sm text-muted-foreground">
-          Every mod across all instances, backed by the shared download store.
-        </p>
-      </div>
+      <PageHeader
+        title="Mods"
+        description="Every mod across all instances, backed by the shared download store."
+      />
 
       {instances.isError && <QueryError error={instances.error} />}
 
@@ -63,8 +64,16 @@ function InstalledMods({ instanceNames }: { instanceNames: string[] }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Installed mods</h2>
+      <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Installed mods
+      </h2>
 
+      {globalMods.isLoading && (
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-20 w-full" />
+          <Skeleton className="h-20 w-full" />
+        </div>
+      )}
       {globalMods.isError && <QueryError error={globalMods.error} />}
       {globalMods.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">No mods installed anywhere yet.</p>
@@ -145,7 +154,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
             {mod.instances.map((entry) => (
               <div
                 key={entry.instance}
-                className="flex flex-col gap-2 rounded-md bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-2 rounded-xl bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex items-center gap-2 text-sm">
                   <span className="font-medium">{entry.instance}</span>
@@ -251,12 +260,7 @@ function InstallOnInstancesDialog({
           )}
           {candidateInstances.map((name) => (
             <label key={name} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={selected.includes(name)}
-                onChange={() => toggle(name)}
-                className="size-4 rounded border-input accent-primary"
-              />
+              <Checkbox checked={selected.includes(name)} onCheckedChange={() => toggle(name)} />
               {name}
             </label>
           ))}

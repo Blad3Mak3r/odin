@@ -83,7 +83,7 @@ export function LogsTab({ name }: { name: string }) {
 
       <div
         ref={scrollRef}
-        className="h-96 overflow-y-auto rounded-md border bg-muted/30 p-3 font-mono text-xs"
+        className="h-96 overflow-y-auto rounded-xl border bg-muted/30 p-3 font-mono text-xs"
       >
         {logs.isLoading && !live && <p className="text-muted-foreground">Loading…</p>}
         {logs.isError && !live && <QueryError error={logs.error} />}

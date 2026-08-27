@@ -16,6 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useConfigFileContent, useConfigFiles, useSetConfigFileContent } from '@/lib/queries'
 
 // Module-scope so these extension instances are referentially stable across
@@ -39,7 +40,16 @@ export function ModConfigFiles({ name }: { name: string }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Configuration files</h2>
+      <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Configuration files
+      </h2>
+
+      {files.isLoading && (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </div>
+      )}
 
       {files.data?.length === 0 && (
         <p className="text-sm text-muted-foreground">
@@ -52,7 +62,7 @@ export function ModConfigFiles({ name }: { name: string }) {
         {files.data?.map((file) => (
           <div
             key={file.filename}
-            className="flex items-center justify-between rounded-md border p-3"
+            className="flex items-center justify-between rounded-xl border p-3"
           >
             <div>
               <p className="text-sm font-medium">{file.filename}</p>
@@ -132,7 +142,7 @@ function ConfigFileEditDialog({
         )}
 
         {original !== null && (
-          <div className="min-w-0 overflow-hidden rounded-md border">
+          <div className="min-w-0 overflow-hidden rounded-xl border">
             <CodeMirror
               value={value}
               height="60vh"

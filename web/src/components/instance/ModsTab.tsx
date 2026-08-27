@@ -19,7 +19,7 @@ const ModConfigFiles = lazy(() =>
 export function ModsTab({ name }: { name: string }) {
   return (
     <Tabs defaultValue="installed">
-      <TabsList>
+      <TabsList variant="line">
         <TabsTrigger value="installed">Installed</TabsTrigger>
         <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
       </TabsList>
@@ -61,7 +61,9 @@ function InstalledMods({ name }: { name: string }) {
     <div className="flex flex-col gap-3">
       {dialog}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-sm font-medium">Installed mods</h2>
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Installed mods
+        </h2>
         <Button
           size="sm"
           variant="outline"

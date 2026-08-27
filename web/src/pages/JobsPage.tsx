@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { JobProgress } from '@/components/JobProgress'
+import { PageHeader } from '@/components/PageHeader'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useJobSocket } from '@/hooks/useJobSocket'
 import { describeJobKind, jobStatusVariant } from '@/lib/jobs'
@@ -16,12 +18,18 @@ export function JobsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>
-        <p className="text-sm text-muted-foreground">
-          Server installs, updates, and mod operations, with their live logs.
-        </p>
-      </div>
+      <PageHeader
+        title="Jobs"
+        description="Server installs, updates, and mod operations, with their live logs."
+      />
+
+      {jobs.isLoading && (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      )}
 
       {jobs.isError && <QueryError error={jobs.error} />}
 

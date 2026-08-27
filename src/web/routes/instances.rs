@@ -75,8 +75,7 @@ pub async fn start_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
-    let (started, child) = lifecycle::start(&state.paths, &state.db, &name).await?;
-    adopt(&state, &name, child).await;
+    let started = lifecycle::start(&state.paths, &state.db, &name).await?;
     Ok(Json(view(started)?))
 }
 
@@ -92,19 +91,8 @@ pub async fn restart_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
-    let (restarted, child) = lifecycle::restart(&state.paths, &state.db, &name).await?;
-    adopt(&state, &name, child).await;
+    let restarted = lifecycle::restart(&state.paths, &state.db, &name).await?;
     Ok(Json(view(restarted)?))
-}
-
-/// Hands a freshly started child to the supervisor for reaping.
-async fn adopt(state: &AppState, name: &str, child: tokio::process::Child) {
-    state.supervisor.spawn_reaper(
-        name.to_string(),
-        child,
-        state.db.clone(),
-        state.activity.clone(),
-    );
 }
 
 #[derive(Deserialize)]

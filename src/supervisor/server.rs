@@ -219,3 +219,88 @@ async fn poll_console_log(log_file: PathBuf, events_tx: broadcast::Sender<Event>
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::supervisor::client;
+
+    fn temp_paths(label: &str) -> Paths {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-supervisor-server-test-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        }
+    }
+
+    /// End-to-end against the *real* `valheim_server.x86_64` on this host
+    /// (symlinked in, not copied): runs the supervisor loop directly (as
+    /// `odin run` itself would, minus the process re-exec — a `cargo test`
+    /// binary can't usefully exec itself as `odin`; that leg is covered by
+    /// manual verification instead), pings it for the real pid, waits for a
+    /// real console log line pushed over the events socket, then stops it
+    /// and confirms both processes exit and every socket/pidfile is
+    /// cleaned up. Skipped by default (needs a real Valheim dedicated
+    /// server install, like the steamcmd-dependent tests elsewhere in the
+    /// crate): `cargo test -- --ignored run_instance_e2e`.
+    #[tokio::test]
+    #[ignore]
+    async fn run_instance_e2e_against_a_real_server_binary() {
+        // Deliberately bypasses `Paths::resolve`'s system-mode detection
+        // (this dev box may also have a package-installed
+        // `/etc/odin/config.toml` pointing at `/var/lib/odin`, unreadable by
+        // this user) — this test only cares about finding *a* real install
+        // to symlink in, always under the per-user XDG data dir regardless
+        // of system-mode.
+        let real_install = directories::ProjectDirs::from("", "", "odin")
+            .unwrap()
+            .data_dir()
+            .join("install")
+            .join("valheim");
+        assert!(
+            real_install.join("valheim_server.x86_64").is_file(),
+            "expected a real Valheim install at {}; run `odin install` first",
+            real_install.display()
+        );
+
+        let paths = temp_paths("run-e2e");
+        std::fs::create_dir_all(paths.shared_install_dir().parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_install, paths.shared_install_dir()).unwrap();
+
+        let supervisor_task = tokio::spawn(run_instance(paths.clone(), "e2e-run"));
+
+        let response = client::ping_with_retry(&paths, "e2e-run", Duration::from_secs(10))
+            .await
+            .unwrap();
+        let (pid, pid_started_at) = match response {
+            Response::Pong {
+                pid,
+                pid_started_at,
+                ..
+            } => (pid, pid_started_at),
+            other => panic!("expected Pong, got {other:?}"),
+        };
+        assert!(process::is_alive(pid, pid_started_at));
+
+        client::stop(&paths, "e2e-run", 30).await.unwrap();
+        supervisor_task.await.unwrap().unwrap();
+
+        assert!(!process::is_alive(pid, pid_started_at));
+        assert!(!super::super::control_sock_path(&paths, "e2e-run").exists());
+        assert!(!super::super::events_sock_path(&paths, "e2e-run").exists());
+        assert!(!super::super::pidfile_path(&paths, "e2e-run").exists());
+
+        let reloaded =
+            crate::instance::Instance::load_existing(&paths, &Db::open(&paths).unwrap(), "e2e-run")
+                .unwrap();
+        assert!(!lifecycle::is_running(&reloaded).unwrap());
+        assert_eq!(reloaded.state.pid, None);
+
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+}

@@ -125,6 +125,16 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
                 // their own success path, so this is purely the safety net
                 // for unwitnessed deaths.
                 let _ = crate::db::instances::clear_pid(&state.db, name, chrono::Utc::now());
+                // If a supervisor was involved, it's gone too (the ping
+                // above already failed) without cleaning up after itself —
+                // an `odin run` crash rather than a normal exit. Remove
+                // whatever it left behind so a future start doesn't trip
+                // over a stale socket/pidfile.
+                let _ =
+                    std::fs::remove_file(crate::supervisor::control_sock_path(&state.paths, name));
+                let _ =
+                    std::fs::remove_file(crate::supervisor::events_sock_path(&state.paths, name));
+                let _ = std::fs::remove_file(crate::supervisor::pidfile_path(&state.paths, name));
             }
             entries.push(InstanceResourceEntry {
                 name: name.clone(),

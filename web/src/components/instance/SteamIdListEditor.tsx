@@ -21,7 +21,7 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
 
   if (list.isLoading || !list.data) {
     return (
-      <div className="flex flex-col gap-1">
+      <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
         <Skeleton className="h-10 w-full" />
         <Skeleton className="h-10 w-full" />
       </div>
@@ -56,7 +56,7 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
     <div className="flex flex-col gap-3">
       {dialog}
       {ids.length === 0 && <p className="text-sm text-muted-foreground">No entries.</p>}
-      <div className="flex flex-col gap-1">
+      <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
         {ids.map((id) => (
           <div key={id} className="flex items-center justify-between rounded-xl border px-3 py-2">
             <span className="font-mono text-sm">{id}</span>
@@ -71,7 +71,7 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
           </div>
         ))}
       </div>
-      <div className="flex gap-2">
+      <div className="flex max-w-sm gap-2">
         <Input
           placeholder="17-digit SteamID64…"
           value={newId}

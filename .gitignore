@@ -6,3 +6,7 @@
 /web/node_modules
 /web/dist/*
 !/web/dist/index.html
+
+# Impeccable design-skill machine-local overrides (e.g. hook consent);
+# .impeccable/design.json (the design-system sidecar) is tracked.
+/.impeccable/config.local.json

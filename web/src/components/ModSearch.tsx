@@ -36,7 +36,9 @@ export function ModSearch({
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium">Search Thunderstore</h2>
+      <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Search Thunderstore
+      </h2>
       <Input
         placeholder="Search mods by name or author…"
         value={query}

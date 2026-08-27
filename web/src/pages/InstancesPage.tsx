@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { PageHeader } from '@/components/PageHeader'
 import { PlayersBadge } from '@/components/PlayersBadge'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +16,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   useCreateInstance,
@@ -29,13 +31,11 @@ export function InstancesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Instances</h1>
-          <p className="text-sm text-muted-foreground">Every Valheim server Odin manages.</p>
-        </div>
-        <CreateInstanceDialog />
-      </div>
+      <PageHeader
+        title="Instances"
+        description="Every Valheim server Odin manages."
+        action={<CreateInstanceDialog />}
+      />
 
       <Table>
         <TableHeader>
@@ -49,6 +49,16 @@ export function InstancesPage() {
           </TableRow>
         </TableHeader>
         <TableBody>
+          {instances.isLoading &&
+            Array.from({ length: 3 }, (_, i) => (
+              // Loading placeholder rows have no stable id and never reorder.
+              // eslint-disable-next-line react/no-array-index-key
+              <TableRow key={i}>
+                <TableCell colSpan={6}>
+                  <Skeleton className="h-5 w-full" />
+                </TableCell>
+              </TableRow>
+            ))}
           {instances.isError && (
             <TableRow>
               <TableCell colSpan={6}>

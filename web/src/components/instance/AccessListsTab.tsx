@@ -8,7 +8,7 @@ export function AccessListsTab({ name }: { name: string }) {
         Valheim reads these directly from the world save directory — no restart required.
       </p>
       <Tabs defaultValue="admin">
-        <TabsList>
+        <TabsList variant="line">
           <TabsTrigger value="admin">Admins</TabsTrigger>
           <TabsTrigger value="banned">Banned</TabsTrigger>
           <TabsTrigger value="permitted">Permitted builders</TabsTrigger>

@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useList, useSetList } from '@/lib/queries'
 import type { ListKind } from '@/lib/types'
@@ -19,7 +20,12 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
   }
 
   if (list.isLoading || !list.data) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>
+    return (
+      <div className="flex flex-col gap-1">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </div>
+    )
   }
 
   const ids = list.data.ids
@@ -52,7 +58,7 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
       {ids.length === 0 && <p className="text-sm text-muted-foreground">No entries.</p>}
       <div className="flex flex-col gap-1">
         {ids.map((id) => (
-          <div key={id} className="flex items-center justify-between rounded-md border px-3 py-2">
+          <div key={id} className="flex items-center justify-between rounded-xl border px-3 py-2">
             <span className="font-mono text-sm">{id}</span>
             <Button
               size="icon"

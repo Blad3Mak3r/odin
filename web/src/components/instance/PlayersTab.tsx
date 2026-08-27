@@ -1,5 +1,6 @@
 import { Users } from 'lucide-react'
 import { QueryError } from '@/components/QueryError'
+import { Skeleton } from '@/components/ui/skeleton'
 import { usePlayers } from '@/lib/queries'
 import { formatRelativeTime } from '@/lib/utils'
 
@@ -15,7 +16,12 @@ export function PlayersTab({ name, running }: { name: string; running: boolean }
   }
 
   if (players.isLoading || !players.data) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>
+    return (
+      <div className="flex max-w-sm flex-col gap-2">
+        <Skeleton className="h-11 w-full" />
+        <Skeleton className="h-11 w-full" />
+      </div>
+    )
   }
 
   if (players.data.length === 0) {
@@ -27,7 +33,7 @@ export function PlayersTab({ name, running }: { name: string; running: boolean }
       {players.data.map((player) => (
         <div
           key={player.name}
-          className="flex items-center justify-between rounded-md border p-3 text-sm"
+          className="flex items-center justify-between rounded-xl border p-3 text-sm"
         >
           <span className="flex items-center gap-2">
             <Users className="size-4 text-muted-foreground" />

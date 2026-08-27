@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-27T01:00:00Z",
+  "title": "Design System: Odin",
+  "extensions": {
+    "colorMeta": {
+      "paper": { "role": "neutral", "displayName": "Paper", "canonical": "oklch(1 0 0)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.28 0 0)", "oklch(0.41 0 0)", "oklch(0.54 0 0)", "oklch(0.67 0 0)", "oklch(0.80 0 0)", "oklch(0.93 0 0)", "oklch(1 0 0)"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "oklch(0.145 0 0)", "tonalRamp": ["oklch(0.145 0 0)", "oklch(0.27 0 0)", "oklch(0.40 0 0)", "oklch(0.53 0 0)", "oklch(0.66 0 0)", "oklch(0.79 0 0)", "oklch(0.92 0 0)", "oklch(0.985 0 0)"] },
+      "charcoal": { "role": "primary", "displayName": "Charcoal", "canonical": "oklch(0.205 0 0)", "tonalRamp": ["oklch(0.145 0 0)", "oklch(0.27 0 0)", "oklch(0.40 0 0)", "oklch(0.53 0 0)", "oklch(0.66 0 0)", "oklch(0.79 0 0)", "oklch(0.92 0 0)", "oklch(0.985 0 0)"] },
+      "charcoal-foreground": { "role": "neutral", "displayName": "Charcoal Foreground", "canonical": "oklch(0.985 0 0)" },
+      "mist": { "role": "neutral", "displayName": "Mist", "canonical": "oklch(0.97 0 0)" },
+      "slate": { "role": "neutral", "displayName": "Slate", "canonical": "oklch(0.556 0 0)" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "oklch(0.922 0 0)" },
+      "focus-ring": { "role": "neutral", "displayName": "Focus Ring", "canonical": "oklch(0.708 0 0)" },
+      "alarm": { "role": "critical", "displayName": "Alarm", "canonical": "oklch(0.577 0.245 27.325)", "tonalRamp": ["oklch(0.20 0.13 27.3)", "oklch(0.30 0.17 27.3)", "oklch(0.40 0.20 27.3)", "oklch(0.50 0.23 27.3)", "oklch(0.577 0.245 27.325)", "oklch(0.66 0.20 27.3)", "oklch(0.80 0.13 27.3)", "oklch(0.92 0.06 27.3)"] },
+      "signal-ok": { "role": "positive", "displayName": "Signal OK", "canonical": "#10b981" },
+      "signal-warn": { "role": "warning", "displayName": "Signal Warn", "canonical": "#f59e0b" }
+    },
+    "typographyMeta": {
+      "heading": { "displayName": "Heading", "purpose": "Page titles only (e.g. 'Instances', 'Dependency status')." },
+      "title": { "displayName": "Title", "purpose": "Card and dialog titles." },
+      "body": { "displayName": "Body", "purpose": "Default UI text: table cells, labels, descriptions." },
+      "label": { "displayName": "Label", "purpose": "Secondary metadata: sidebar subtitle, version tag, hidden-column labels." },
+      "mono": { "displayName": "Mono", "purpose": "Raw technical content only: console/log output and Steam IDs." }
+    },
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single dominant action per view (Start, Create, New instance).",
+      "html": "<button class=\"ds-btn-primary\">Start</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 2rem; padding: 0 0.625rem; border-radius: var(--radius-lg); border: 1px solid transparent; background: var(--color-primary); color: var(--color-primary-foreground); font-size: 0.875rem; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 0.15s ease, transform 0.1s ease; } .ds-btn-primary:hover { background: color-mix(in oklch, var(--color-primary), transparent 20%); } .ds-btn-primary:focus-visible { border-color: var(--color-ring); box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-ring), transparent 50%); outline: none; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Reversible per-row actions (Restart, Stop).",
+      "html": "<button class=\"ds-btn-outline\">Restart</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 1.75rem; padding: 0 0.625rem; border-radius: var(--radius-lg); border: 1px solid var(--color-border); background: var(--color-background); color: var(--color-foreground); font-size: 0.8rem; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 0.15s ease; } .ds-btn-outline:hover { background: var(--color-muted); } .ds-btn-outline:focus-visible { border-color: var(--color-ring); box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-ring), transparent 50%); outline: none; }"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "refersTo": "button-destructive",
+      "description": "Quiet, low-opacity destructive treatment — never a solid red button.",
+      "html": "<button class=\"ds-btn-destructive\">Delete</button>",
+      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 2rem; padding: 0 0.625rem; border-radius: var(--radius-lg); border: 1px solid transparent; background: color-mix(in oklch, var(--color-destructive), transparent 90%); color: var(--color-destructive); font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: background-color 0.15s ease; } .ds-btn-destructive:hover { background: color-mix(in oklch, var(--color-destructive), transparent 80%); }"
+    },
+    {
+      "name": "Default Badge",
+      "kind": "chip",
+      "refersTo": "badge-default",
+      "description": "The 'true'/positive state, e.g. an instance that is running.",
+      "html": "<span class=\"ds-badge-default\">running</span>",
+      "css": ".ds-badge-default { display: inline-flex; align-items: center; justify-content: center; height: 1.25rem; padding: 0 0.5rem; border-radius: var(--radius-4xl); background: var(--color-primary); color: var(--color-primary-foreground); font-size: 0.75rem; font-weight: 500; white-space: nowrap; }"
+    },
+    {
+      "name": "Secondary Badge",
+      "kind": "chip",
+      "refersTo": "badge-secondary",
+      "description": "The neutral/informational state, e.g. a stopped instance or a plain count.",
+      "html": "<span class=\"ds-badge-secondary\">stopped</span>",
+      "css": ".ds-badge-secondary { display: inline-flex; align-items: center; justify-content: center; height: 1.25rem; padding: 0 0.5rem; border-radius: var(--radius-4xl); background: var(--color-secondary); color: var(--color-secondary-foreground); font-size: 0.75rem; font-weight: 500; white-space: nowrap; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Flat surface, ring border instead of shadow, used for dashboard summaries and detail-page groupings.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Dependency status</div><div class=\"ds-card-body\">SteamCMD, game install, disk, network.</div></div>",
+      "css": ".ds-card { display: flex; flex-direction: column; gap: 1rem; border-radius: var(--radius-xl); background: var(--color-card); box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-foreground), transparent 90%); padding: 1rem; font-size: 0.875rem; color: var(--color-card-foreground); } .ds-card-title { font-size: 1rem; font-weight: 500; line-height: 1.375; } .ds-card-body { color: var(--color-muted-foreground); }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text field used in forms (e.g. Create instance dialog).",
+      "html": "<input class=\"ds-input\" placeholder=\"my-server\" />",
+      "css": ".ds-input { height: 2rem; width: 100%; box-sizing: border-box; border-radius: var(--radius-lg); border: 1px solid var(--color-input); background: transparent; padding: 0.25rem 0.625rem; font-size: 0.875rem; color: var(--color-foreground); } .ds-input::placeholder { color: var(--color-muted-foreground); } .ds-input:focus-visible { border-color: var(--color-ring); box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-ring), transparent 50%); outline: none; }"
+    },
+    {
+      "name": "Checkbox",
+      "kind": "input",
+      "refersTo": "checkbox",
+      "description": "Independent multi-selection (e.g. picking instances to install a mod on); Switch stays the control for a single on/off setting.",
+      "html": "<span class=\"ds-checkbox\" aria-checked=\"true\" role=\"checkbox\"><svg class=\"ds-checkbox-icon\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\"><polyline points=\"20 6 9 17 4 12\"/></svg></span>",
+      "css": ".ds-checkbox { display: inline-flex; align-items: center; justify-content: center; width: 1rem; height: 1rem; border-radius: var(--radius-sm); border: 1px solid var(--color-input); background: var(--color-primary); color: var(--color-primary-foreground); } .ds-checkbox-icon { width: 0.75rem; height: 0.75rem; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Signature navigation pattern: hover and active share one visual treatment.",
+      "html": "<a class=\"ds-nav-item ds-nav-item--active\">Instances</a>",
+      "css": ".ds-nav-item { display: flex; align-items: center; gap: 0.5rem; border-radius: var(--radius-md); padding: 0.5rem 0.75rem; font-size: 0.875rem; font-weight: 500; color: color-mix(in oklch, var(--color-sidebar-foreground), transparent 30%); text-decoration: none; transition: background-color 0.15s ease, color 0.15s ease; } .ds-nav-item:hover, .ds-nav-item--active { background: var(--color-sidebar-accent); color: var(--color-sidebar-accent-foreground); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The All-Father's Ledger",
+    "overview": "Odin's dashboard is a record-keeping tool, not a showcase. It exists so an admin running several Valheim servers for other people can see, at a glance, exactly what's true right now — which instances are up, who's connected, what a job is doing — and act on it without ceremony. The visual system reflects that: a near-monochrome charcoal-on-paper (and paper-on-charcoal in dark mode) surface, Geist Variable as the one typeface doing all the work, flat ring-bordered cards, and color spent nowhere except where it reports a fact the admin needs to notice. This is a deliberate, confirmed identity — not a placeholder waiting for a brand pass.\n\nThe mark (web/public/logo.png) — a painterly, dark-stone Odin figure with glowing cyan runes and molten amber accents — lives outside this system on purpose. It signs the product; it does not style it. The dashboard's restraint and the mark's illustrated intensity are two different registers by design, not an inconsistency to reconcile.",
+    "keyCharacteristics": [
+      "Near-zero-chroma neutral surface (charcoal/paper), one typeface, one radius scale.",
+      "Color is reserved for status signals (ok / warning / critical) and never used decoratively.",
+      "Depth comes from a hairline ring border, never a shadow.",
+      "The illustrated brand mark is deliberately kept out of the UI's visual language."
+    ],
+    "rules": [
+      { "name": "The Signal-Only Rule", "body": "Alarm, Signal OK, and Signal Warn exist to report a fact about system state — never to decorate a button, a nav item, or routine content. An instance's own running/stopped state deliberately stays inside the neutral scale: \"running\" is the expected steady state, not an alert.", "section": "colors" },
+      { "name": "The One Register Rule", "body": "The logo's cyan/amber/painterly language never enters component color, icon style, or illustration. If a screen needs to feel more \"alive,\" reach for typography, density, or motion — not the mark's palette.", "section": "colors" },
+      { "name": "The One Typeface Rule", "body": "Never introduce a second font family for emphasis or \"personality\" — weight and size carry that job, keeping the ledger feel consistent everywhere it's read.", "section": "typography" },
+      { "name": "The No-Shadow Rule", "body": "Depth is a border and a background-color relationship, never box-shadow. A component that \"needs to pop\" gets a ring and a fill change, not elevation.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep color confined to the three signal roles (Alarm, Signal OK, Signal Warn) and use them only to report an actual state, never to decorate.",
+      "Do build hierarchy with size, weight, and tracking on the single Geist Variable family — never introduce a second typeface.",
+      "Do use a 1px Hairline ring plus a background-color step for anything that needs to read as \"raised.\"",
+      "Do treat a routine instance's running state as the neutral default badge, not a colored one — reserve color for things that need attention.",
+      "Do keep the destructive button/badge treatment quiet (low-opacity fill on Alarm text), matching the system's overall restraint."
+    ],
+    "donts": [
+      "Don't pull the logo's cyan/amber/painterly illustration style into any UI component, icon, or chrome element — the mark and the interface are deliberately different registers.",
+      "Don't drift toward a neon/gradient/\"gaming rig\" aesthetic anywhere in the dashboard, even though the product manages a game server.",
+      "Don't add box-shadow to any surface — depth is a border and fill relationship in this system, not elevation.",
+      "Don't color-code an instance's own running/stopped state (or any other expected, non-alerting state) — that dilutes the signal colors' meaning everywhere else."
+    ]
+  }
+}

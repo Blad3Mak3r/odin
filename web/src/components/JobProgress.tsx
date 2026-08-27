@@ -17,7 +17,7 @@ export function JobProgress({
   const connectionLost = !connected && isActive
 
   return (
-    <div className="rounded-md border bg-muted/30 p-3">
+    <div className="rounded-xl border bg-muted/30 p-3">
       <div className="mb-2 flex items-center gap-2">
         {isActive && !connectionLost ? <Loader2 className="size-4 animate-spin" /> : null}
         <Badge

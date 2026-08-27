@@ -4,6 +4,7 @@ import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { ActivityFeedPanel } from '@/components/ActivityFeedPanel'
 import { Button } from '@/components/ui/button'
+import { UpdateBanner } from '@/components/UpdateBanner'
 import { useLiveSocket } from '@/hooks/useLiveSocket'
 import { useVersion } from '@/lib/queries'
 import { cn } from '@/lib/utils'
@@ -118,7 +119,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SidebarNav onOpenActivity={() => setActivityOpen(true)} />
       </aside>
 
-      <main className="min-w-0 flex-1 overflow-y-auto">
+      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+        <UpdateBanner />
         <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">{children}</div>
       </main>
 

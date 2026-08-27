@@ -7,6 +7,7 @@ mod db;
 mod doctor;
 mod instance;
 mod mods;
+mod odin_update;
 mod paths;
 mod steamcmd;
 mod valheim_update;

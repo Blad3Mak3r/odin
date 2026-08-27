@@ -28,11 +28,17 @@ import type {
 // case the WebSocket is down.
 const LIVE_FALLBACK_INTERVAL = 30_000
 
+// The backend caches its own GitHub release lookup for hours, so polling
+// here is cheap; this just makes sure a long-open dashboard tab notices a
+// newly published release without needing a manual reload.
+const VERSION_CHECK_INTERVAL = 30 * 60_000
+
 export function useVersion() {
   return useQuery({
     queryKey: ['version'],
     queryFn: () => api.get<VersionView>('/version'),
     staleTime: Infinity,
+    refetchInterval: VERSION_CHECK_INTERVAL,
   })
 }
 

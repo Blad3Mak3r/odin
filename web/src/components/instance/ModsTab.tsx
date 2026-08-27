@@ -84,7 +84,7 @@ function InstalledMods({ name }: { name: string }) {
         <p className="text-sm text-muted-foreground">No mods installed yet.</p>
       )}
 
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-2 xl:grid-cols-2 2xl:grid-cols-3">
         {mods.data?.map((m) => (
           <Card key={m.mod_id} size="sm">
             <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

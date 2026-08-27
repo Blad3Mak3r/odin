@@ -20,10 +20,6 @@ pub struct AppState {
     pub runtime: RuntimeRegistry,
     pub activity: ActivityLog,
     pub players: PlayerRegistry,
-    #[expect(
-        dead_code,
-        reason = "wiring point for the LogTailRegistry event bridge landing in a follow-up phase; see web::supervisor's doc comment"
-    )]
     pub supervisor: Supervisor,
     pub log_tail: LogTailRegistry,
 }

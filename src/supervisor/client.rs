@@ -139,16 +139,8 @@ async fn request(stream: &mut UnixStream, req: &Request) -> Result<Response> {
 /// Subscribes to `instance_name`'s events socket, yielding pushed
 /// `LogLine`/`Exited` events as they arrive. The stream ends when the
 /// supervisor closes the connection (normally right after `Exited`).
-///
-/// Not yet called from anywhere — becomes the `LogTailRegistry` event
-/// bridge in a follow-up phase (replacing `web::log_tail`'s file-polling
-/// for instances with a live control socket). The `expect` below is a
-/// forcing function: it starts failing the moment something calls this,
-/// which is the cue to remove it.
-#[expect(
-    dead_code,
-    reason = "wired into the LogTailRegistry event bridge in a follow-up phase"
-)]
+/// Used by `web::supervisor::Supervisor::try_bridge_events` to feed
+/// `LogTailRegistry` directly instead of polling `console.log`.
 pub async fn subscribe_events(
     paths: &Paths,
     instance_name: &str,

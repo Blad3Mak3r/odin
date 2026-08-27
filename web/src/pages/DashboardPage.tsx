@@ -71,7 +71,7 @@ export function DashboardPage() {
     <div className="flex flex-col gap-6">
       <PageHeader title="Dashboard" description="Environment status and host resources." />
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">Dependency status</CardTitle>
@@ -159,9 +159,7 @@ export function DashboardPage() {
             )}
           </CardContent>
         </Card>
-      </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
         {jobs.data && jobs.data.length > 0 && (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">

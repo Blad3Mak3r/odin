@@ -118,6 +118,15 @@ pub enum Command {
         #[arg(long, default_value_t = 7331)]
         port: u16,
     },
+
+    /// Hidden: the per-instance supervisor process (odin's conmon
+    /// equivalent). Spawned internally by `odin serve`/`start`/`restart` —
+    /// not for direct/manual use.
+    #[command(hide = true)]
+    Run {
+        #[arg(long, value_parser = parse_instance_name)]
+        instance: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -19,13 +19,23 @@ pub struct Paths {
     pub config_dir: PathBuf,
 }
 
+/// Presence of `<SYSTEM_CONFIG_DIR>/config.toml` is what flips Odin into
+/// system mode — see `Paths::resolve`'s doc comment. Also consulted by
+/// `Paths::runtime_dir`, which needs the same distinction independently of
+/// any already-resolved `Paths` value.
+fn system_mode() -> bool {
+    PathBuf::from(SYSTEM_CONFIG_DIR)
+        .join("config.toml")
+        .is_file()
+}
+
 impl Paths {
     pub fn resolve(data_dir_override: Option<PathBuf>) -> Result<Self> {
-        let system_config_dir = PathBuf::from(SYSTEM_CONFIG_DIR);
-        let system_mode = system_config_dir.join("config.toml").is_file();
-
-        let (config_dir, default_data_dir) = if system_mode {
-            (system_config_dir, PathBuf::from(SYSTEM_DATA_DIR))
+        let (config_dir, default_data_dir) = if system_mode() {
+            (
+                PathBuf::from(SYSTEM_CONFIG_DIR),
+                PathBuf::from(SYSTEM_DATA_DIR),
+            )
         } else {
             let project_dirs = ProjectDirs::from("", "", "odin")
                 .context("could not determine home directory for XDG paths")?;
@@ -75,6 +85,23 @@ impl Paths {
     /// this rather than each keeping their own copy.
     pub fn mod_dir(&self, mod_id: &str) -> PathBuf {
         self.mods_dir().join(mod_id)
+    }
+
+    /// A short, OS-managed directory for ephemeral runtime files — the
+    /// `supervisor` module's per-instance Unix sockets. Deliberately *not*
+    /// under `data_dir`: a Unix domain socket path is capped at ~108 bytes
+    /// (`sockaddr_un::sun_path` on Linux), and `<data_dir>/servers/<name>/...`
+    /// combined with a per-user XDG data dir and a long instance name can
+    /// exceed that easily. System mode uses `/run/odin`; per-user mode
+    /// follows the XDG Base Directory spec's `XDG_RUNTIME_DIR`, falling back
+    /// to a `/tmp`-based path if it isn't set (e.g. no active login session).
+    pub fn runtime_dir(&self) -> PathBuf {
+        if system_mode() {
+            return PathBuf::from("/run/odin");
+        }
+        ProjectDirs::from("", "", "odin")
+            .and_then(|d| d.runtime_dir().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| std::env::temp_dir().join("odin-run"))
     }
 }
 

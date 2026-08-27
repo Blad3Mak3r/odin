@@ -11,8 +11,7 @@
 //! carries lines appended from the moment of subscription onward.
 
 use std::collections::HashMap;
-use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::{Path as StdPath, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -75,9 +74,10 @@ pub async fn tail_and_broadcast(
         tokio::time::sleep(POLL_INTERVAL).await;
 
         let file = log_file.clone();
-        let (new_pos, chunk) = tokio::task::spawn_blocking(move || read_new_bytes(&file, pos))
-            .await
-            .unwrap_or((pos, String::new()));
+        let (new_pos, chunk) =
+            tokio::task::spawn_blocking(move || crate::log_poll::read_new_bytes(&file, pos))
+                .await
+                .unwrap_or((pos, String::new()));
         pos = new_pos;
         if chunk.is_empty() {
             continue;
@@ -90,24 +90,4 @@ pub async fn tail_and_broadcast(
             let _ = sender.send(line.to_string());
         }
     }
-}
-
-/// Reads whatever has been appended to `path` since byte offset `from`.
-/// Restarts from the beginning if the file is now shorter than `from`
-/// (rotated/truncated). Never errors — a transient read failure just yields
-/// no new bytes this tick, and the next poll tries again.
-fn read_new_bytes(path: &StdPath, from: u64) -> (u64, String) {
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return (from, String::new());
-    };
-    let len = file.metadata().map(|m| m.len()).unwrap_or(from);
-    let start = if len < from { 0 } else { from };
-    if file.seek(SeekFrom::Start(start)).is_err() {
-        return (len, String::new());
-    }
-    let mut buf = Vec::new();
-    if file.read_to_end(&mut buf).is_err() {
-        return (len, String::new());
-    }
-    (len, String::from_utf8_lossy(&buf).to_string())
 }

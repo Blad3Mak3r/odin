@@ -22,18 +22,14 @@ pub fn is_running(instance: &Instance) -> Result<bool> {
     })
 }
 
-/// Starts (creating first, if new) an instance's server process. Returns
-/// the `Child` handle so the caller can decide what to do with it: `odin
-/// serve` hands it to `web::supervisor` for reaping and console-writer
-/// registration; a standalone CLI invocation just drops it (safe — see
-/// `process::spawn`'s doc comment), letting it become adoptable by
-/// whichever `odin serve` next reconciles.
-pub async fn start(
-    paths: &Paths,
-    db: &Db,
-    name: &str,
-) -> Result<(Instance, tokio::process::Child)> {
-    let mut instance = Instance::load_or_create(paths, db, name)?;
+/// Everything `start` needs to do before actually spawning a process:
+/// load-or-create the instance, guard against a double-start, verify the
+/// server binary is installed, and prepare the on-disk layout. Split out so
+/// `supervisor::server` (the `odin run` supervisor process itself) can call
+/// it directly — it no longer goes through `start`'s spawn step, since it
+/// *is* what does the spawning now.
+pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+    let instance = Instance::load_or_create(paths, db, name)?;
 
     if is_running(&instance)? {
         bail!(InstanceError::AlreadyRunning(name.to_string()));
@@ -49,6 +45,22 @@ pub async fn start(
 
     check_port_available(paths, db, &instance)?;
     prepare_instance_layout(paths, &instance)?;
+
+    Ok(instance)
+}
+
+/// Starts (creating first, if new) an instance's server process. Returns
+/// the `Child` handle so the caller can decide what to do with it: `odin
+/// serve` hands it to `web::supervisor` for reaping and console-writer
+/// registration; a standalone CLI invocation just drops it (safe — see
+/// `process::spawn`'s doc comment), letting it become adoptable by
+/// whichever `odin serve` next reconciles.
+pub async fn start(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+) -> Result<(Instance, tokio::process::Child)> {
+    let mut instance = prepare_start(paths, db, name)?;
 
     let cmd = process::build_command(&instance, paths)?;
     let child = process::spawn(cmd)

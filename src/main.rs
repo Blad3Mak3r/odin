@@ -6,10 +6,12 @@ mod config;
 mod db;
 mod doctor;
 mod instance;
+mod log_poll;
 mod mods;
 mod odin_update;
 mod paths;
 mod steamcmd;
+mod supervisor;
 mod valheim_update;
 mod web;
 
@@ -46,9 +48,9 @@ fn run() -> Result<()> {
         None => paths,
     };
 
-    // `serve` opens its own connection (it needs an `Arc<Db>` shared across
-    // request handlers, not this single-threaded one), and `install`/
-    // `doctor`/`completions`/`serve-install`/`serve-uninstall` don't touch
+    // `serve` and `run` each open their own connection (they need an
+    // `Arc<Db>`/a fresh handle from within their own async runtime, not this
+    // single-threaded one), and `install`/`doctor`/`completions` don't touch
     // instance state at all — opening the database eagerly for every
     // subcommand keeps this dispatch simple rather than special-casing each.
     let db = db::Db::open(&paths)?;
@@ -120,5 +122,6 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::Serve { bind, port } => commands::serve::run(&paths, &bind, port),
+        Command::Run { instance } => commands::run::run(&paths, &instance),
     }
 }

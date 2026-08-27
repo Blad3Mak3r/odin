@@ -24,6 +24,7 @@ pub mod mods_update;
 pub mod rename;
 pub mod restart;
 pub mod restore;
+pub mod run;
 pub mod serve;
 pub mod start;
 pub mod status;

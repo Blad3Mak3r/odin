@@ -8,6 +8,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::backup::BackupError;
 use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
@@ -55,6 +56,9 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         Some(ConfigFileError::InvalidFilename(_)) => return StatusCode::BAD_REQUEST,
         Some(ConfigFileError::NotFound(_)) => return StatusCode::NOT_FOUND,
         None => {}
+    }
+    if let Some(BackupError::NotFound(_)) = err.downcast_ref::<BackupError>() {
+        return StatusCode::NOT_FOUND;
     }
     match err.downcast_ref::<InstanceError>() {
         Some(InstanceError::NotFound(_)) => StatusCode::NOT_FOUND,

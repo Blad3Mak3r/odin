@@ -99,6 +99,8 @@ export type JobKindDescr =
   | { kind: 'steamcmd_install' }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
+  | { kind: 'backup_create'; instance: string }
+  | { kind: 'backup_restore'; instance: string; backup_id: string }
 
 export interface GlobalModInstanceEntry {
   instance: string
@@ -120,6 +122,12 @@ export interface ListView {
 
 export interface ConfigFileEntry {
   filename: string
+  size_bytes: number
+}
+
+export interface BackupEntry {
+  id: string
+  created_at: string
   size_bytes: number
 }
 
@@ -176,6 +184,8 @@ export type ActivityKind =
   | { kind: 'mod_installed'; mod_id: string }
   | { kind: 'mod_removed'; mod_id: string }
   | { kind: 'mods_updated' }
+  | { kind: 'backup_created'; backup_id: string }
+  | { kind: 'backup_restored'; backup_id: string }
   | { kind: 'player_joined'; name: string }
   | { kind: 'player_left'; name: string }
 

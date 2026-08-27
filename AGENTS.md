@@ -68,6 +68,45 @@ There is no CI configured in this repo, so `make check` plus a frontend
 build/typecheck/lint is the only signal an agent gets before a PR is
 reviewed by a human — run all of it.
 
+## Manually running `odin serve` locally
+
+If the `.deb`/`.rpm` package is also installed on the machine you're
+developing on, there is a real, live `odin.service` already bound to
+`127.0.0.1:7331` — a real systemd service managing real instances with
+real world saves and mods. A locally-built `target/debug/odin serve` will
+happily bind to the same port if it's free, but if it isn't, `curl`/a
+browser hitting `127.0.0.1:7331` silently talks to the *production*
+service instead of your build, with no error indicating the mismatch. Any
+instance you create, delete, or mutate while "testing" lands in the real
+data directory. Always check `systemctl status odin.service` (or `ss
+-ltnp | grep 7331`) before assuming a request landed on your build, and
+never point manual/agent testing at port 7331.
+
+Separately, if `/etc/odin/config.toml` exists on the machine (i.e. the
+package is installed at all, whether or not the service is running), a
+locally-built binary always resolves to system mode (`Paths::resolve` in
+`src/paths.rs` detects this purely from that path existing) and tries to
+read that file — which is owned `root:odin`, mode `640`, so a normal user
+account gets `Permission denied` and the process exits immediately.
+`ODIN_DATA_DIR` does not help here: it only overrides the *data* dir, not
+this config-file read. There is no per-invocation flag to force per-user
+(XDG) mode.
+
+The safe recipe for running a local build on such a machine:
+
+```sh
+sudo env ODIN_DATA_DIR=/path/to/a/scratch/dir \
+  ./target/debug/odin serve --bind 127.0.0.1 --port 7332
+```
+
+- `sudo` (root, not `sudo -u odin`) so the group-restricted config file
+  can be read *and* so the process can write to an arbitrary
+  `ODIN_DATA_DIR` regardless of its ownership.
+- A `--port` other than `7331`, so it can never be mistaken for — or
+  silently fall back to — the real service.
+- `ODIN_DATA_DIR` pointed at a throwaway directory, so nothing touches
+  `/var/lib/odin` or any real instance's saves/config/mods.
+
 ## Code conventions
 
 - Rust: formatted with `cargo fmt`, and `cargo clippy --all-targets -- -D

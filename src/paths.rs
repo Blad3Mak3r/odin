@@ -86,6 +86,10 @@ pub fn instance_saves_dir(instance_dir: &std::path::Path) -> PathBuf {
     instance_dir.join("saves")
 }
 
+pub fn instance_backups_dir(instance_dir: &std::path::Path) -> PathBuf {
+    instance_dir.join("backups")
+}
+
 pub fn instance_logs_dir(instance_dir: &std::path::Path) -> PathBuf {
     instance_dir.join("logs")
 }

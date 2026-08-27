@@ -8,6 +8,10 @@ export function describeJobKind(kind: JobKindDescr): string {
       return `Install mod ${kind.mod_id} on ${kind.instance}`
     case 'mod_update':
       return `Update mods on ${kind.instance}`
+    case 'backup_create':
+      return `Back up ${kind.instance}`
+    case 'backup_restore':
+      return `Restore ${kind.instance} from backup ${kind.backup_id}`
     default:
       return (kind as { kind: string }).kind
   }

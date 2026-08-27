@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api-client'
 import type {
   ActivityEvent,
+  BackupEntry,
   CheckResult,
   ConfigFileEntry,
   ConfigFileView,
@@ -247,6 +248,47 @@ export function useUpdateMods() {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useBackups(name: string) {
+  return useQuery({
+    queryKey: ['instances', name, 'backups'],
+    queryFn: () => api.get<BackupEntry[]>(`/instances/${name}/backups`),
+  })
+}
+
+export function useCreateBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.post<JobHandle>(`/instances/${name}/backups`),
+    onSuccess: (_data, name) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useRestoreBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
+      api.post<JobHandle>(`/instances/${name}/backups/${backupId}/restore`),
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useDeleteBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
+      api.delete<void>(`/instances/${name}/backups/${backupId}`),
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
     },
   })
 }

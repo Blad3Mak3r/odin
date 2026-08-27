@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AccessListsTab } from '@/components/instance/AccessListsTab'
+import { BackupsTab } from '@/components/instance/BackupsTab'
 import { ConfigTab } from '@/components/instance/ConfigTab'
 import { InstanceHeader } from '@/components/instance/InstanceHeader'
 import { LogsTab } from '@/components/instance/LogsTab'
@@ -12,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useDeleteInstance, useInstance } from '@/lib/queries'
 
-const TABS = ['logs', 'config', 'mods', 'lists', 'resources', 'players'] as const
+const TABS = ['logs', 'config', 'mods', 'lists', 'backups', 'resources', 'players'] as const
 type Tab = (typeof TABS)[number]
 
 export function InstanceDetailPage() {
@@ -60,6 +61,7 @@ export function InstanceDetailPage() {
             <TabsTrigger value="config">Config</TabsTrigger>
             <TabsTrigger value="mods">Mods</TabsTrigger>
             <TabsTrigger value="lists">Access lists</TabsTrigger>
+            <TabsTrigger value="backups">Backups</TabsTrigger>
             <TabsTrigger value="resources">Resources</TabsTrigger>
             <TabsTrigger value="players">Players</TabsTrigger>
           </TabsList>
@@ -75,6 +77,9 @@ export function InstanceDetailPage() {
         </TabsContent>
         <TabsContent value="lists">
           <AccessListsTab name={name} />
+        </TabsContent>
+        <TabsContent value="backups">
+          <BackupsTab name={name} running={instance.data?.running ?? false} />
         </TabsContent>
         <TabsContent value="resources">
           <ResourcesTab name={name} running={instance.data?.running ?? false} />

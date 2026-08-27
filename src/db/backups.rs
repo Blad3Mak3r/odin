@@ -42,6 +42,18 @@ pub fn list(db: &Db, instance_name: &str) -> Result<Vec<BackupEntry>> {
     Ok(entries)
 }
 
+/// Removes a backup's row. The caller is responsible for removing the zip
+/// file itself.
+pub fn delete(db: &Db, instance_name: &str, id: &str) -> Result<()> {
+    db.conn()
+        .execute(
+            "DELETE FROM backups WHERE instance_name = ?1 AND id = ?2",
+            params![instance_name, id],
+        )
+        .with_context(|| format!("failed to delete backup '{id}' for '{instance_name}'"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;

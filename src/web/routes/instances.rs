@@ -7,7 +7,7 @@ use crate::activity::ActivityKind;
 use crate::db::Db;
 use crate::instance::state::InstanceState;
 use crate::instance::{self, Instance, InstanceError, lifecycle};
-use crate::paths::Paths;
+use crate::paths::{self, Paths};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -163,9 +163,10 @@ fn delete_instance_dir(
     }
 
     if keep_backups {
+        let backups_dir = paths::instance_backups_dir(&instance.dir);
         for entry in std::fs::read_dir(&instance.dir)? {
             let entry = entry?;
-            if entry.file_name() == "backups" {
+            if entry.path() == backups_dir {
                 continue;
             }
             let path = entry.path();

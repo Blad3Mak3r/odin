@@ -3,8 +3,8 @@ use axum::routing::{delete, get, post};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    config_files, doctor, events, install, instances, jobs, lists, mods, players, resources,
-    version,
+    backups, config_files, doctor, events, install, instances, jobs, lists, mods, players,
+    resources, version,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -49,6 +49,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{name}/mods/{mod_id}/disable",
             post(mods::disable_mod),
+        )
+        .route(
+            "/instances/{name}/backups",
+            get(backups::list_backups).post(backups::create_backup),
+        )
+        .route(
+            "/instances/{name}/backups/{id}/restore",
+            post(backups::restore_backup),
+        )
+        .route(
+            "/instances/{name}/backups/{id}",
+            delete(backups::delete_backup),
         )
         .route(
             "/instances/{name}/bepinex/config",

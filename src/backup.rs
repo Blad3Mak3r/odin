@@ -1,21 +1,28 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use serde::Serialize;
+use thiserror::Error;
 
 use crate::db::Db;
-use crate::instance::Instance;
+use crate::instance::{Instance, InstanceError, lifecycle};
 use crate::mods;
 use crate::paths;
 
+/// Failures a caller (e.g. the web API) may want to distinguish from other,
+/// unexpected errors.
+#[derive(Debug, Error)]
+pub enum BackupError {
+    #[error("backup '{0}' not found")]
+    NotFound(String),
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct BackupEntry {
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub size_bytes: u64,
-}
-
-fn backups_dir(instance_dir: &Path) -> PathBuf {
-    instance_dir.join("backups")
 }
 
 fn backup_id_now() -> String {
@@ -25,7 +32,7 @@ fn backup_id_now() -> String {
 /// Zips the instance's `saves/` directory into `<instance_dir>/backups/<id>.zip`
 /// and records its metadata in the database.
 pub fn create(instance: &Instance, db: &Db) -> Result<PathBuf> {
-    let dir = backups_dir(&instance.dir);
+    let dir = paths::instance_backups_dir(&instance.dir);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create backups dir {}", dir.display()))?;
 
@@ -56,7 +63,7 @@ pub fn list(db: &Db, instance_name: &str) -> Result<Vec<BackupEntry>> {
 /// each file's mtime/size rather than the database — used only by the
 /// bootstrap importer to seed the database from an existing installation.
 pub(crate) fn list_from_disk(instance_dir: &Path) -> Result<Vec<BackupEntry>> {
-    let dir = backups_dir(instance_dir);
+    let dir = paths::instance_backups_dir(instance_dir);
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -89,16 +96,17 @@ pub(crate) fn list_from_disk(instance_dir: &Path) -> Result<Vec<BackupEntry>> {
 
 /// Restores `<instance_dir>/backups/<backup_id>.zip` over `saves/`, after
 /// first snapshotting the current `saves/` (so a restore is never a
-/// one-way, unrecoverable overwrite). Caller is responsible for checking
-/// the instance isn't running.
+/// one-way, unrecoverable overwrite). Refuses to run while the instance is
+/// running (checked here, not just by callers, so every entry point —
+/// CLI and web — gets the guard for free).
 pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
-    let backup_path = backups_dir(&instance.dir).join(format!("{backup_id}.zip"));
+    if lifecycle::is_running(instance)? {
+        return Err(InstanceError::AlreadyRunning(instance.state.name.clone()).into());
+    }
+
+    let backup_path = paths::instance_backups_dir(&instance.dir).join(format!("{backup_id}.zip"));
     if !backup_path.is_file() {
-        bail!(
-            "backup '{backup_id}' not found for instance '{}'; run `odin restore {}` with no id to list available backups",
-            instance.state.name,
-            instance.state.name
-        );
+        return Err(BackupError::NotFound(backup_id.to_string()).into());
     }
 
     create(instance, db).context("failed to snapshot current saves before restoring")?;
@@ -108,6 +116,17 @@ pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
     std::fs::create_dir_all(&saves_dir)?;
     mods::extract_zip_to_dir(&backup_path, &saves_dir)
         .with_context(|| format!("failed to restore backup '{backup_id}'"))
+}
+
+/// Deletes a backup's zip file and its database row.
+pub fn delete(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
+    let backup_path = paths::instance_backups_dir(&instance.dir).join(format!("{backup_id}.zip"));
+    if !backup_path.is_file() {
+        return Err(BackupError::NotFound(backup_id.to_string()).into());
+    }
+    std::fs::remove_file(&backup_path)
+        .with_context(|| format!("failed to remove {}", backup_path.display()))?;
+    crate::db::backups::delete(db, &instance.state.name, backup_id)
 }
 
 fn zip_directory(source_dir: &Path, dest_zip: &Path) -> Result<()> {

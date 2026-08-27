@@ -17,7 +17,7 @@ export function PlayersTab({ name, running }: { name: string; running: boolean }
 
   if (players.isLoading || !players.data) {
     return (
-      <div className="flex max-w-sm flex-col gap-2">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         <Skeleton className="h-11 w-full" />
         <Skeleton className="h-11 w-full" />
       </div>
@@ -29,7 +29,7 @@ export function PlayersTab({ name, running }: { name: string; running: boolean }
   }
 
   return (
-    <div className="flex max-w-sm flex-col gap-2">
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {players.data.map((player) => (
         <div
           key={player.name}

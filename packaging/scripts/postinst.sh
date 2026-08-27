@@ -20,6 +20,14 @@ fi
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
     systemctl enable odin.service || true
+    # By this point dpkg/rpm has already replaced the binary, but a
+    # previously-running odin.service is still executing the old
+    # (now-unlinked) one, so is-active still reflects its pre-upgrade
+    # state. Restart only if it was already running, so a fresh install
+    # still doesn't auto-start (see README's manual `systemctl start`).
+    if systemctl is-active --quiet odin.service; then
+        systemctl restart odin.service || true
+    fi
 fi
 
 echo "Odin installed. The 'odin' system account owns /etc/odin and /var/lib/odin."

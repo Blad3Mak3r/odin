@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
@@ -32,7 +32,7 @@ import type { GlobalMod } from '@/lib/types'
 
 export function GlobalModsPage() {
   const instances = useInstances()
-  const instanceNames = instances.data?.map((i) => i.name) ?? []
+  const instanceNames = useMemo(() => instances.data?.map((i) => i.name) ?? [], [instances.data])
 
   return (
     <div className="flex flex-col gap-8">
@@ -226,6 +226,13 @@ function InstallOnInstancesDialog({
   const [selected, setSelected] = useState<string[]>([])
   const [installing, setInstalling] = useState(false)
   const addMod = useAddMod()
+
+  // Reset checkboxes whenever the dialog opens for a (possibly different)
+  // mod, rather than carrying over a stale selection from the last time it
+  // was open — this component instance is reused across mods.
+  useEffect(() => {
+    if (open) setSelected([])
+  }, [open])
 
   const toggle = (name: string) =>
     setSelected((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]))

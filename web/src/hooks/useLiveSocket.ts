@@ -53,6 +53,11 @@ function appendCapped<T>(prev: T[] | undefined, next: T, cap: number): T[] {
   return list.length > cap ? list.slice(list.length - cap) : list
 }
 
+function samePlayers(prev: PlayerInfo[] | undefined, next: PlayerInfo[]): boolean {
+  if (!prev || prev.length !== next.length) return false
+  return prev.every((p, i) => p.name === next[i].name && p.connected_at === next[i].connected_at)
+}
+
 function applyWireEvent(queryClient: QueryClient, event: WireEvent) {
   if (event.type === 'lagged') {
     return
@@ -82,13 +87,21 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
   )
 
   const runningByName = new Map(tick.instances.map((entry) => [entry.name, entry.running]))
-  queryClient.setQueryData<InstanceView[]>(['instances'], (prev) =>
-    prev?.map((instance) =>
-      runningByName.has(instance.name)
-        ? { ...instance, running: runningByName.get(instance.name)! }
-        : instance,
-    ),
-  )
+  // Only allocate a new array/objects for instances whose `running` flag
+  // actually flipped, and bail out entirely if none did — otherwise every
+  // row subscribed to `['instances']` (the whole instances table) re-renders
+  // on every tick even when nothing visible changed.
+  queryClient.setQueryData<InstanceView[]>(['instances'], (prev) => {
+    if (!prev) return prev
+    let changed = false
+    const next = prev.map((instance) => {
+      const running = runningByName.get(instance.name)
+      if (running === undefined || running === instance.running) return instance
+      changed = true
+      return { ...instance, running }
+    })
+    return changed ? next : prev
+  })
 
   for (const entry of tick.instances) {
     const resources: InstanceResources = {
@@ -97,7 +110,12 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
       memory_bytes: entry.memory_bytes,
     }
     queryClient.setQueryData(['resources', 'instance', entry.name], resources)
-    queryClient.setQueryData<PlayerInfo[]>(['players', entry.name], entry.players)
+    // Same idea for the player list: keep the previous reference when the
+    // set of connected players hasn't changed, so `PlayersBadge` (rendered
+    // once per instance row) doesn't re-render every tick while idle.
+    queryClient.setQueryData<PlayerInfo[]>(['players', entry.name], (prev) =>
+      samePlayers(prev, entry.players) ? prev : entry.players,
+    )
 
     if (entry.running) {
       queryClient.setQueryData<ResourceSample[]>(

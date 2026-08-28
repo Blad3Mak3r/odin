@@ -3,8 +3,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
+import { NexusModSearch } from '@/components/NexusModSearch'
 import { PageHeader } from '@/components/PageHeader'
 import { QueryError } from '@/components/QueryError'
+import { UploadModForm } from '@/components/UploadModForm'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -16,10 +18,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
+import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
 import {
   useAddMod,
   useGlobalMods,
@@ -125,7 +129,10 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
         <div className="flex items-center gap-3">
           <ModIcon src={mod.icon} />
           <div>
-            <p className="text-sm font-medium">{mod.mod_id}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium">{mod.mod_id}</p>
+              <Badge variant="outline">{MOD_SOURCE_LABEL[getModSource(mod.mod_id)]}</Badge>
+            </div>
             <p className="text-xs text-muted-foreground">
               {mod.global_version ? `v${mod.global_version} in the shared store` : 'missing from the shared store'}
             </p>
@@ -200,7 +207,22 @@ function ModSearchSection({ instanceNames }: { instanceNames: string[] }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <ModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
+      <Tabs defaultValue="thunderstore">
+        <TabsList variant="line">
+          <TabsTrigger value="thunderstore">Thunderstore</TabsTrigger>
+          <TabsTrigger value="nexus">Nexus Mods</TabsTrigger>
+          <TabsTrigger value="upload">Upload</TabsTrigger>
+        </TabsList>
+        <TabsContent value="thunderstore">
+          <ModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
+        </TabsContent>
+        <TabsContent value="nexus">
+          <NexusModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
+        </TabsContent>
+        <TabsContent value="upload">
+          <UploadSection instanceNames={instanceNames} />
+        </TabsContent>
+      </Tabs>
 
       <InstallOnInstancesDialog
         open={dialogModId !== null}
@@ -208,6 +230,40 @@ function ModSearchSection({ instanceNames }: { instanceNames: string[] }) {
         modId={dialogModId ?? ''}
         candidateInstances={instanceNames}
       />
+    </div>
+  )
+}
+
+// Unlike the per-instance Mods tab, this page has no single target instance
+// in scope — pick one before showing the upload form.
+function UploadSection({ instanceNames }: { instanceNames: string[] }) {
+  const [target, setTarget] = useState('')
+
+  if (instanceNames.length === 0) {
+    return <p className="text-sm text-muted-foreground">Create an instance first.</p>
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex max-w-md flex-col gap-2">
+        <Label htmlFor="upload-target-instance">Install on</Label>
+        <select
+          id="upload-target-instance"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+        >
+          <option value="" disabled>
+            Choose an instance…
+          </option>
+          {instanceNames.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </div>
+      {target && <UploadModForm name={target} />}
     </div>
   )
 }

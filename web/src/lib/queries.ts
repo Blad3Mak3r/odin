@@ -21,6 +21,7 @@ import type {
   ModSearchResult,
   PlayerInfo,
   ResourceSample,
+  SettingsView,
   VersionView,
 } from './types'
 
@@ -220,7 +221,7 @@ export function useRemoveMod() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, modId }: { name: string; modId: string }) =>
-      api.delete<void>(`/instances/${name}/mods/${modId}`),
+      api.delete<void>(`/instances/${name}/mods/${encodeURIComponent(modId)}`),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
@@ -232,7 +233,9 @@ export function useSetModEnabled() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, modId, enabled }: { name: string; modId: string; enabled: boolean }) =>
-      api.post<void>(`/instances/${name}/mods/${modId}/${enabled ? 'enable' : 'disable'}`),
+      api.post<void>(
+        `/instances/${name}/mods/${encodeURIComponent(modId)}/${enabled ? 'enable' : 'disable'}`,
+      ),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
@@ -304,8 +307,77 @@ export function useGlobalMods() {
 export function usePruneMod() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (modId: string) => api.delete<void>(`/mods/${modId}`),
+    mutationFn: (modId: string) => api.delete<void>(`/mods/${encodeURIComponent(modId)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mods', 'global'] }),
+  })
+}
+
+// Nexus Mods has no keyword-search endpoint, so discovery is a one-shot
+// "resolve this pasted URL/ID" action (a mutation, unlike `useModSearch`'s
+// live-as-you-type query) plus a "trending" list.
+export function useNexusLookup() {
+  return useMutation({
+    mutationFn: (query: string) =>
+      api.get<ModSearchResult>(`/mods/nexus/lookup?query=${encodeURIComponent(query)}`),
+  })
+}
+
+export function useNexusTrending() {
+  return useQuery({
+    queryKey: ['mods', 'nexus', 'trending'],
+    queryFn: () => api.get<ModSearchResult[]>('/mods/nexus/trending'),
+    staleTime: 10 * 60_000,
+  })
+}
+
+export function useUploadMod() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      name,
+      modName,
+      version,
+      file,
+    }: {
+      name: string
+      modName: string
+      version: string
+      file: File
+    }) => {
+      const formData = new FormData()
+      formData.set('name', modName)
+      if (version.trim()) formData.set('version', version)
+      formData.set('file', file)
+      return api.upload<JobHandle>(`/instances/${name}/mods/upload`, formData)
+    },
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+      queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useSettings() {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<SettingsView>('/settings'),
+  })
+}
+
+export function useSetNexusApiKey() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (apiKey: string) => api.put<void>('/settings/nexus-api-key', { api_key: apiKey }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  })
+}
+
+export function useClearNexusApiKey() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.delete<void>('/settings/nexus-api-key'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   })
 }
 

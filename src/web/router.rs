@@ -63,6 +63,10 @@ pub fn build_router(state: AppState) -> Router {
             delete(backups::delete_backup),
         )
         .route(
+            "/instances/{name}/backup-schedule",
+            get(backups::get_backup_schedule).put(backups::set_backup_schedule),
+        )
+        .route(
             "/instances/{name}/bepinex/config",
             get(config_files::list_config_files),
         )

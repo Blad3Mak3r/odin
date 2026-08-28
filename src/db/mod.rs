@@ -12,6 +12,7 @@
 //! exposes calls shaped like the file-I/O functions they replace.
 
 pub mod activity;
+pub mod backup_schedules;
 pub mod backups;
 pub mod cache;
 pub mod global_mods;

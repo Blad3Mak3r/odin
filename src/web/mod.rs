@@ -3,6 +3,7 @@
 //! is synchronous — this module (and `commands::serve`) is the only place
 //! async/tokio is used.
 
+mod backup_scheduler;
 mod error;
 pub mod jobs;
 mod log_tail;
@@ -35,6 +36,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let db = Arc::new(Db::open(&paths).context("failed to open database")?);
     let state = AppState::new(paths, db);
     spawn_telemetry(state.clone());
+    backup_scheduler::spawn(state.clone());
 
     let router = router::build_router(state);
     let listener = tokio::net::TcpListener::bind(addr)

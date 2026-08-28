@@ -32,6 +32,7 @@ pub enum ActivityKind {
     ModsUpdated,
     BackupCreated { backup_id: String },
     BackupRestored { backup_id: String },
+    BackupPruned { backup_id: String },
     PlayerJoined { name: String },
     PlayerLeft { name: String },
 }

@@ -54,6 +54,7 @@ name = "odin-server"
 maintainer = "Blad3Mak3r <juanluiscarobenito@gmail.com>"
 copyright = "2026, Blad3Mak3r"
 extended-description = "Runs and maintains Valheim dedicated servers on Linux: installs/updates the server via SteamCMD, runs multiple independent named instances as directly-supervised background processes, manages per-instance config and access lists, takes backups, and installs BepInEx mods from Thunderstore."
+conflicts = "odin"
 section = "utils"
 priority = "optional"
 maintainer-scripts = "packaging/deb"
@@ -76,3 +77,6 @@ assets = [
 ]
 post_install_script = "packaging/scripts/postinst.sh"
 post_uninstall_script = "packaging/scripts/postrm.sh"
+
+[package.metadata.generate-rpm.conflicts]
+odin = "*"

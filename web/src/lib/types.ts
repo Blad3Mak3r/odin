@@ -207,6 +207,12 @@ export interface ActivityEvent {
   kind: ActivityKind
 }
 
+export interface BulkResult {
+  name: string
+  ok: boolean
+  error: string | null
+}
+
 export interface WebhookView {
   id: string
   url: string

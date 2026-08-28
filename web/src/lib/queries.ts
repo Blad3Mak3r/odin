@@ -4,6 +4,7 @@ import type {
   ActivityEvent,
   BackupEntry,
   BackupScheduleView,
+  BulkResult,
   CheckResult,
   ConfigFileEntry,
   ConfigFileView,
@@ -143,6 +144,28 @@ function useInstanceAction(action: 'start' | 'stop' | 'restart') {
 export const useStartInstance = () => useInstanceAction('start')
 export const useStopInstance = () => useInstanceAction('stop')
 export const useRestartInstance = () => useInstanceAction('restart')
+
+function useBulkInstanceAction(action: 'start' | 'stop' | 'restart') {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (names: string[]) =>
+      api.post<BulkResult[]>(`/instances/bulk/${action}`, { names }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances'] }),
+  })
+}
+
+export const useBulkStartInstances = () => useBulkInstanceAction('start')
+export const useBulkStopInstances = () => useBulkInstanceAction('stop')
+export const useBulkRestartInstances = () => useBulkInstanceAction('restart')
+
+export function useBulkUpdateMods() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (names: string[]) =>
+      api.post<JobHandle[]>('/instances/bulk/mods/update', { names }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+  })
+}
 
 export function useRenameInstance() {
   const queryClient = useQueryClient()

@@ -1,51 +1,69 @@
 # Odin
 
-**Odin** is a command-line tool for running and maintaining [Valheim](https://www.valheimgame.com/)
+**Odin** is a self-hosted web service for orchestrating [Valheim](https://www.valheimgame.com/)
 dedicated servers on Linux. In Norse mythology, Odin is the All-Father who
 watches over the nine realms; this Odin watches over your Valheim realms —
-installing and updating the game server, starting and stopping instances,
-keeping them alive in the background, and managing their mods — so you don't
-have to babysit background processes and SteamCMD invocations by hand.
+installing and updating the game server, running and supervising multiple
+server instances, managing their mods, config, backups, and access lists —
+all from one binary and one web dashboard, so you don't have to babysit
+background processes and SteamCMD invocations by hand.
+
+Odin ships as a single binary with an embedded web dashboard
+(`odin serve`) — that dashboard is the primary, actively developed way to
+operate it. A legacy CLI is still bundled for scripting and one-off use,
+but new capabilities land in the web API and dashboard, not the CLI. See
+[Project direction](#project-direction).
 
 ## Why Odin exists
 
 Running a Valheim dedicated server on Linux usually means stitching together
 several separate tools yourself: SteamCMD to install and update the server,
-some terminal multiplexer to keep it running after you log out, manual
-`BepInEx`/Thunderstore downloads if you want mods, and a pile of shell
-scripts to remember port numbers, world names, and passwords across
-restarts. Odin folds all of that into one small, dependency-light binary
-with a consistent command surface, so managing a server — or a dozen of
-them, side by side — is a single, predictable command away.
+some way to keep it running after you log out, manual `BepInEx`/Thunderstore
+downloads if you want mods, and a pile of shell scripts or ad-hoc notes to
+remember port numbers, world names, and passwords across restarts — and it
+only gets messier once you're running more than one server. Odin folds all
+of that into one small binary that runs as a background service and exposes
+a single web dashboard for orchestrating a whole fleet of servers side by
+side: creating and controlling instances, installing mods, editing config
+and access lists, watching live consoles and logs, and taking backups —
+all from a browser, on one host or several.
 
 ## Features
 
+- **A web dashboard as the primary interface.** `odin serve` starts a
+  single self-contained HTTP server — the built frontend is embedded in
+  the binary, no separate process or database — for orchestrating every
+  instance from a browser: create and control instances, edit config and
+  access lists, search and install mods, watch a live console and logs, and
+  see host/instance resource usage. See [Web dashboard](#web-dashboard)
+  below.
 - **One binary, no runtime dependencies** beyond (transparently managed)
   SteamCMD — no Python, no Docker, no terminal multiplexer required.
-- **Multiple named instances.** Run several independent Valheim servers on
-  one host, each with its own world, port, password, visibility, and mod
-  set, sharing a single downloaded copy of the game binaries.
+- **Multiple named instances.** Orchestrate several independent Valheim
+  servers on one host, each with its own world, port, password,
+  visibility, and mod set, sharing a single downloaded copy of the game
+  binaries.
 - **Detached by default, and restart-proof.** Every instance runs as its
   own directly-supervised background process, so it keeps running after you
   disconnect — and after `odin serve` itself is restarted or upgraded.
-  Watch it live with `odin logs --follow` or the web dashboard, and send it
-  console commands with `odin exec`.
-- **Mod support out of the box.** `odin mods add` bootstraps
+  Watch it live from the dashboard's console view, or with `odin logs
+  --follow` via the legacy CLI.
+- **Mod support out of the box.** Bootstraps
   [BepInEx](https://github.com/BepInEx/BepInEx) automatically and installs
   mods straight from the [Thunderstore](https://thunderstore.io/c/valheim)
   API by name — no manual unzipping into the right folder. Mods download
   once into a shared global store and get symlinked into every instance
   that wants them, so running the same mod on several servers doesn't mean
-  downloading it several times; `odin mods enable`/`disable` toggles a mod
-  per instance without reinstalling it.
-- **Ready-to-share connect info.** `odin status` prints each instance's
-  public address and password alongside its live state, so getting a
-  friend into your world doesn't mean a round-trip through `config get`
-  and "what's my IP".
-- **Backups with a safety net.** `odin backup`/`odin restore` snapshot a
-  world's save files to a zip archive; restoring always takes a fresh
-  snapshot of the current state first, so a restore is never a one-way,
-  unrecoverable action.
+  downloading it several times; enabling/disabling a mod per instance never
+  requires reinstalling it.
+- **Ready-to-share connect info.** The dashboard (and `odin status`) shows
+  each instance's public address and password alongside its live state, so
+  getting a friend into your world doesn't mean a round-trip through raw
+  config and "what's my IP".
+- **Backups with a safety net.** Snapshot a world's save files to a zip
+  archive at any time; restoring always takes a fresh snapshot of the
+  current state first, so a restore is never a one-way, unrecoverable
+  action.
 - **State you can trust.** An instance's "running" status is always derived
   live from the OS process itself (its pid, cross-checked against its own
   start time so a reused pid never lies to you), never from a flag that can
@@ -53,18 +71,22 @@ them, side by side — is a single, predictable command away.
 - **A `doctor` command** that checks your environment (SteamCMD, the game
   install, disk permissions, network reachability) so a broken setup fails
   with a clear diagnosis instead of a cryptic error three commands later.
-- **An optional web dashboard.** `odin serve` starts a single self-contained
-  HTTP server — the built frontend is embedded in the binary, no separate
-  process or database — for managing everything above from a browser: create
-  and control instances, edit config and access lists, search and install
-  mods, watch a live console and logs, and see host/instance resource usage.
-  See [Web dashboard](#web-dashboard) below.
 - **Optional system-wide install.** The `.deb`/`.rpm` packages (`make
   install`) set up a dedicated `odin` system account, `/etc/odin` +
-  `/var/lib/odin`, and a system `odin.service` running the dashboard — run
-  ad-hoc instance commands as that account with `sudo -u odin odin
-  <command>` (`nologin` only blocks interactive login, not `sudo -u`
-  exec), or manage everything from the dashboard day to day.
+  `/var/lib/odin`, and a system `odin.service` running the dashboard as a
+  long-lived orchestration service — run ad-hoc instance commands as that
+  account with `sudo -u odin odin <command>` (`nologin` only blocks
+  interactive login, not `sudo -u` exec), or manage everything from the
+  dashboard day to day.
+
+## Project direction
+
+The web dashboard (`odin serve`) is where this project is headed: it's the
+primary, and increasingly the *only*, supported way to operate Odin. New
+user-facing capabilities are built as web API routes plus dashboard UI, not
+as new CLI subcommands. The CLI documented below still works and is kept
+around for scripting and quick one-off commands, but it's being treated as
+legacy — don't expect new features to show up there first.
 
 ## Requirements
 
@@ -117,6 +139,19 @@ help`](#development) for every available target.
 ## Quick start
 
 ```sh
+# Start the orchestration service (binds 127.0.0.1:7331 by default)
+odin serve
+```
+
+Then open `http://127.0.0.1:7331` in a browser: install/update the game
+server, create and start named instances, search and install mods, edit
+config and access lists, watch a live console, and take backups — all from
+the dashboard. See [Web dashboard](#web-dashboard) for details.
+
+For scripting or quick one-off changes, the legacy CLI covers the same
+ground:
+
+```sh
 # Install SteamCMD and the Valheim dedicated server (safe to re-run to update later)
 odin install
 
@@ -144,6 +179,11 @@ odin delete my-old-server
 ```
 
 ## Command reference
+
+> **Note:** the CLI is legacy. It remains fully functional for scripting
+> and one-off use, but new capabilities are added to the [web
+> dashboard](#web-dashboard) only — see [Project
+> direction](#project-direction).
 
 Server names are positional arguments (never a `-n`/`--name` flag) and must
 be **DNS-friendly**: lowercase letters, digits, and hyphens only, and they
@@ -217,14 +257,15 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
 ## Web dashboard
 
-`odin serve` starts a JSON API plus the built frontend from one binary:
+`odin serve` starts a JSON API plus the built frontend from one binary —
+this is the primary way to operate Odin:
 
 ```sh
 odin serve                            # binds 127.0.0.1:7331 by default
 odin serve --bind 0.0.0.0 --port 8080  # or pick your own address/port
 ```
 
-It covers the same ground as the CLI — dependency status, instance
+It covers dependency status, instance
 create/start/stop/restart/rename/delete, per-instance config, mod
 search/install/enable via Thunderstore, a live console and log tail, and
 editing `adminlist.txt`/`bannedlist.txt`/`permittedlist.txt` — plus live

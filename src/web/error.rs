@@ -12,6 +12,7 @@ use crate::backup::BackupError;
 use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
+use crate::mods::nexus::NexusError;
 
 /// A catch-all for ad-hoc input validation in route handlers that doesn't
 /// warrant its own domain error type (e.g. "password too short"). Always
@@ -59,6 +60,15 @@ fn classify(err: &anyhow::Error) -> StatusCode {
     }
     if let Some(BackupError::NotFound(_)) = err.downcast_ref::<BackupError>() {
         return StatusCode::NOT_FOUND;
+    }
+    match err.downcast_ref::<NexusError>() {
+        Some(NexusError::ApiKeyMissing | NexusError::InvalidReference(_)) => {
+            return StatusCode::BAD_REQUEST;
+        }
+        Some(NexusError::Unauthorized) => return StatusCode::UNAUTHORIZED,
+        Some(NexusError::ModNotFound(_)) => return StatusCode::NOT_FOUND,
+        Some(NexusError::DownloadUnavailable(_)) => return StatusCode::UNPROCESSABLE_ENTITY,
+        None => {}
     }
     match err.downcast_ref::<InstanceError>() {
         Some(InstanceError::NotFound(_)) => StatusCode::NOT_FOUND,

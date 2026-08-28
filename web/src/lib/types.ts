@@ -99,6 +99,7 @@ export type JobKindDescr =
   | { kind: 'steamcmd_install' }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
+  | { kind: 'mod_upload'; instance: string; name: string }
   | { kind: 'backup_create'; instance: string }
   | { kind: 'backup_restore'; instance: string; backup_id: string }
 
@@ -194,4 +195,8 @@ export interface ActivityEvent {
   at: string
   instance: string | null
   kind: ActivityKind
+}
+
+export interface SettingsView {
+  nexus_api_key_configured: boolean
 }

@@ -3,7 +3,7 @@ use axum::routing::{delete, get, post};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, config_files, doctor, events, install, instances, jobs, lists, mods, players,
+    backups, bulk, config_files, doctor, events, install, instances, jobs, lists, mods, players,
     resources, version, webhooks,
 };
 use crate::web::state::AppState;
@@ -19,6 +19,10 @@ pub fn build_router(state: AppState) -> Router {
             "/instances",
             get(instances::list_instances).post(instances::create_instance),
         )
+        .route("/instances/bulk/start", post(bulk::bulk_start))
+        .route("/instances/bulk/stop", post(bulk::bulk_stop))
+        .route("/instances/bulk/restart", post(bulk::bulk_restart))
+        .route("/instances/bulk/mods/update", post(bulk::bulk_update_mods))
         .route(
             "/instances/{name}",
             get(instances::get_instance).delete(instances::delete_instance),
@@ -123,4 +127,34 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(static_files::serve_index))
         .route("/{*path}", get(static_files::serve_asset))
         .layer(TraceLayer::new_for_http())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+    use crate::paths::Paths;
+    use std::sync::Arc;
+
+    // `Router::route` panics at registration time if two routes' path
+    // shapes are ambiguous — e.g. a literal segment landing where another
+    // route already has a `{param}` at the same depth (`/instances/bulk/...`
+    // vs. `/instances/{name}/...`). This is the only place that would
+    // surface, since nothing else calls `build_router` outside `odin serve`.
+    #[test]
+    fn router_builds_without_panicking_on_overlapping_route_shapes() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let state = AppState::new(paths, db);
+        let _ = build_router(state);
+    }
 }

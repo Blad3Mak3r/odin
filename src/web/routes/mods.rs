@@ -151,15 +151,14 @@ pub async fn disable_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// See the comment on `add_mod` above: intentionally not `ApiResult`-wrapped.
-pub async fn update_mods(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> Json<JobHandle> {
+/// Spawns the "update mods for one instance" job. Its own function (rather
+/// than inlined in `update_mods`) so `routes::bulk::bulk_update_mods` can
+/// fan out over it per instance without duplicating the job body.
+pub(crate) fn spawn_mod_update_job(state: &AppState, name: String) -> String {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let activity = state.activity.clone();
-    let id = state.jobs.spawn(
+    state.jobs.spawn(
         JobKindDescr::ModUpdate {
             instance: name.clone(),
         },
@@ -172,8 +171,17 @@ pub async fn update_mods(
             }
             result
         },
-    );
-    Json(JobHandle { id })
+    )
+}
+
+// See the comment on `add_mod` above: intentionally not `ApiResult`-wrapped.
+pub async fn update_mods(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Json<JobHandle> {
+    Json(JobHandle {
+        id: spawn_mod_update_job(&state, name),
+    })
 }
 
 #[derive(Deserialize)]

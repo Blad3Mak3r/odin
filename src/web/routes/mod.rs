@@ -1,4 +1,5 @@
 pub mod backups;
+pub mod bulk;
 pub mod config_files;
 pub mod doctor;
 pub mod events;

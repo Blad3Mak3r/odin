@@ -1,6 +1,7 @@
 import {
   Archive,
   ArchiveRestore,
+  ArchiveX,
   CircleCheck,
   type LucideIcon,
   Package,
@@ -37,6 +38,8 @@ export function describeActivity(kind: ActivityKind): string {
       return `Backup created: ${kind.backup_id}`
     case 'backup_restored':
       return `Restored from backup: ${kind.backup_id}`
+    case 'backup_pruned':
+      return `Old backup pruned: ${kind.backup_id}`
     case 'player_joined':
       return `${kind.name} joined`
     case 'player_left':
@@ -55,6 +58,7 @@ export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   mods_updated: Package,
   backup_created: Archive,
   backup_restored: ArchiveRestore,
+  backup_pruned: ArchiveX,
   player_joined: UserPlus,
   player_left: UserMinus,
 }

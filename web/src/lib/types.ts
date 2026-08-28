@@ -131,6 +131,13 @@ export interface BackupEntry {
   size_bytes: number
 }
 
+export interface BackupScheduleView {
+  interval_hours: number
+  retain_count: number
+  enabled: boolean
+  last_run_at: string | null
+}
+
 export interface ConfigFileView {
   content: string
 }
@@ -186,6 +193,7 @@ export type ActivityKind =
   | { kind: 'mods_updated' }
   | { kind: 'backup_created'; backup_id: string }
   | { kind: 'backup_restored'; backup_id: string }
+  | { kind: 'backup_pruned'; backup_id: string }
   | { kind: 'player_joined'; name: string }
   | { kind: 'player_left'; name: string }
 

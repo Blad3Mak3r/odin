@@ -3,6 +3,7 @@ import { api } from './api-client'
 import type {
   ActivityEvent,
   BackupEntry,
+  BackupScheduleView,
   CheckResult,
   ConfigFileEntry,
   ConfigFileView,
@@ -289,6 +290,24 @@ export function useDeleteBackup() {
       api.delete<void>(`/instances/${name}/backups/${backupId}`),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
+    },
+  })
+}
+
+export function useBackupSchedule(name: string) {
+  return useQuery({
+    queryKey: ['instances', name, 'backup-schedule'],
+    queryFn: () => api.get<BackupScheduleView>(`/instances/${name}/backup-schedule`),
+  })
+}
+
+export function useSetBackupSchedule(name: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: Omit<BackupScheduleView, 'last_run_at'>) =>
+      api.put<BackupScheduleView>(`/instances/${name}/backup-schedule`, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-schedule'] })
     },
   })
 }

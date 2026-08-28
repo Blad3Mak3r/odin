@@ -119,7 +119,7 @@ export function BackupsTab({ name, running }: { name: string; running: boolean }
                     </Button>
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="destructive"
                       disabled={deleteBackup.isPending}
                       onClick={() => handleDelete(backup.id)}
                     >

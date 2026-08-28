@@ -61,6 +61,12 @@ pub struct InstanceState {
     pub bepinex_installed: bool,
     #[serde(default)]
     pub installed_mods: Vec<InstalledMod>,
+    /// Whether the telemetry tick should restart this instance on its own
+    /// if it finds the process dead without anyone having stopped it
+    /// deliberately (crash, OOM, an external `kill -9`). Off by default —
+    /// an admin opts an instance in from its Config tab.
+    #[serde(default)]
+    pub auto_restart: bool,
 }
 
 impl InstanceState {
@@ -81,6 +87,7 @@ impl InstanceState {
             pid_started_at: None,
             bepinex_installed: false,
             installed_mods: Vec::new(),
+            auto_restart: false,
         }
     }
 

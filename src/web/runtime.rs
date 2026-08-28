@@ -79,6 +79,7 @@ pub struct RuntimeRegistry {
     host: Arc<Mutex<HostState>>,
     instances: Arc<Mutex<HashMap<String, InstanceState>>>,
     ticks: broadcast::Sender<ResourcesTick>,
+    auto_restart_attempts: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
 }
 
 impl RuntimeRegistry {
@@ -88,6 +89,7 @@ impl RuntimeRegistry {
             host: Arc::new(Mutex::new(HostState::default())),
             instances: Arc::new(Mutex::new(HashMap::new())),
             ticks,
+            auto_restart_attempts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -182,6 +184,26 @@ impl RuntimeRegistry {
             .expect("runtime instances lock poisoned")
             .remove(name);
     }
+
+    /// Gates automatic crash-restart attempts: returns `true` (and records
+    /// this as the latest attempt) only if the instance hasn't had one
+    /// within `cooldown`. Without this, an instance that crashes
+    /// immediately on every start (a broken mod, say) would get a fresh
+    /// restart attempt on every ~3s telemetry tick forever.
+    pub fn should_attempt_auto_restart(&self, name: &str, cooldown: chrono::Duration) -> bool {
+        let now = Utc::now();
+        let mut attempts = self
+            .auto_restart_attempts
+            .lock()
+            .expect("runtime auto-restart lock poisoned");
+        match attempts.get(name) {
+            Some(last) if now - *last < cooldown => false,
+            _ => {
+                attempts.insert(name.to_string(), now);
+                true
+            }
+        }
+    }
 }
 
 impl Default for RuntimeRegistry {
@@ -194,5 +216,36 @@ fn push_capped(buf: &mut VecDeque<ResourceSample>, sample: ResourceSample) {
     buf.push_back(sample);
     if buf.len() > HISTORY_CAPACITY {
         buf.pop_front();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_restart_is_gated_by_cooldown_per_instance() {
+        let registry = RuntimeRegistry::new();
+        let cooldown = chrono::Duration::hours(1);
+
+        assert!(registry.should_attempt_auto_restart("my-server", cooldown));
+        assert!(
+            !registry.should_attempt_auto_restart("my-server", cooldown),
+            "a second attempt within the cooldown should be refused"
+        );
+        assert!(
+            registry.should_attempt_auto_restart("other-server", cooldown),
+            "cooldown is tracked per instance, not globally"
+        );
+    }
+
+    #[test]
+    fn auto_restart_is_allowed_again_once_the_cooldown_elapses() {
+        let registry = RuntimeRegistry::new();
+        assert!(registry.should_attempt_auto_restart("my-server", chrono::Duration::zero()));
+        assert!(
+            registry.should_attempt_auto_restart("my-server", chrono::Duration::zero()),
+            "a zero-length cooldown should never block a retry"
+        );
     }
 }

@@ -9,6 +9,7 @@ import {
   PackagePlus,
   Play,
   Plus,
+  RefreshCcw,
   Square,
   Trash2,
   UserMinus,
@@ -26,6 +27,8 @@ export function describeActivity(kind: ActivityKind): string {
       return 'Instance started'
     case 'instance_stopped':
       return 'Instance stopped'
+    case 'instance_auto_restarted':
+      return 'Instance restarted automatically after crashing'
     case 'server_installed':
       return 'Server files installed/updated'
     case 'mod_installed':
@@ -52,6 +55,7 @@ export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   instance_deleted: Trash2,
   instance_started: Play,
   instance_stopped: Square,
+  instance_auto_restarted: RefreshCcw,
   server_installed: CircleCheck,
   mod_installed: PackagePlus,
   mod_removed: PackageMinus,

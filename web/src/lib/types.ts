@@ -47,6 +47,7 @@ export interface ConfigView {
   port: number
   password: string | null
   public: boolean
+  auto_restart: boolean
 }
 
 export interface ConfigUpdateRequest {
@@ -54,6 +55,7 @@ export interface ConfigUpdateRequest {
   port?: number
   password?: string
   public?: boolean
+  auto_restart?: boolean
 }
 
 export interface LogsView {
@@ -187,6 +189,7 @@ export type ActivityKind =
   | { kind: 'instance_deleted' }
   | { kind: 'instance_started' }
   | { kind: 'instance_stopped' }
+  | { kind: 'instance_auto_restarted' }
   | { kind: 'server_installed' }
   | { kind: 'mod_installed'; mod_id: string }
   | { kind: 'mod_removed'; mod_id: string }

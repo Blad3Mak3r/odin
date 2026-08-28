@@ -23,8 +23,8 @@ pub fn save(db: &Db, state: &InstanceState) -> Result<()> {
 pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> {
     tx.execute(
         "INSERT INTO instances \
-            (name, port, world_name, password, public, created_at, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+            (name, port, world_name, password, public, created_at, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
          ON CONFLICT(name) DO UPDATE SET \
             port = excluded.port, \
             world_name = excluded.world_name, \
@@ -35,7 +35,8 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
             last_stopped_at = excluded.last_stopped_at, \
             pid = excluded.pid, \
             pid_started_at = excluded.pid_started_at, \
-            bepinex_installed = excluded.bepinex_installed",
+            bepinex_installed = excluded.bepinex_installed, \
+            auto_restart = excluded.auto_restart",
         params![
             state.name,
             state.port,
@@ -48,6 +49,7 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
             state.pid,
             state.pid_started_at,
             state.bepinex_installed,
+            state.auto_restart,
         ],
     )
     .with_context(|| format!("failed to upsert instance '{}'", state.name))?;
@@ -113,9 +115,11 @@ pub fn delete(db: &Db, name: &str) -> Result<()> {
 }
 
 const SELECT_INSTANCE: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed FROM instances WHERE name = ?1";
+     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart \
+     FROM instances WHERE name = ?1";
 const SELECT_ALL_INSTANCES: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed FROM instances ORDER BY name";
+     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart \
+     FROM instances ORDER BY name";
 
 fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
     Ok(InstanceState {
@@ -130,6 +134,7 @@ fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
         pid: row.get(8)?,
         pid_started_at: row.get(9)?,
         bepinex_installed: row.get(10)?,
+        auto_restart: row.get(11)?,
         installed_mods: Vec::new(),
     })
 }

@@ -26,6 +26,7 @@ pub enum ActivityKind {
     InstanceDeleted,
     InstanceStarted,
     InstanceStopped,
+    InstanceAutoRestarted,
     ServerInstalled,
     ModInstalled { mod_id: String },
     ModRemoved { mod_id: String },

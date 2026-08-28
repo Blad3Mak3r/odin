@@ -1,12 +1,14 @@
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
+use uuid::Uuid;
 
 use crate::activity::ActivityKind;
 use crate::mods::{self, GlobalMod, thunderstore};
-use crate::web::error::{ApiResult, run_blocking};
+use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::state::AppState;
 
@@ -217,4 +219,95 @@ pub async fn search_mods(
     })
     .await?;
     Ok(Json(results))
+}
+
+/// Accepts a user-uploaded mod `.zip` (multipart fields `name`, optional
+/// `version`, `file`) and installs it exactly like a registry-installed
+/// mod. The upload's bytes are streamed straight to a staging file rather
+/// than buffered in memory — a modpack zip can be sizeable — then handed
+/// off to a background job the same way `add_mod` does, since extraction
+/// is comparable in cost to a registry download.
+pub async fn upload_mod(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    mut multipart: Multipart,
+) -> ApiResult<Json<JobHandle>> {
+    let mut mod_name: Option<String> = None;
+    let mut mod_version: Option<String> = None;
+    let mut zip_path: Option<std::path::PathBuf> = None;
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| BadRequest(format!("invalid upload: {e}")))?
+    {
+        match field.name().unwrap_or_default() {
+            "name" => {
+                mod_name = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| BadRequest(format!("invalid 'name' field: {e}")))?,
+                );
+            }
+            "version" => {
+                mod_version = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| BadRequest(format!("invalid 'version' field: {e}")))?,
+                );
+            }
+            "file" => {
+                let dest = state
+                    .paths
+                    .mods_dir()
+                    .join(format!(".upload-tmp-{}.zip", Uuid::new_v4()));
+                if let Some(parent) = dest.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                let mut out = tokio::fs::File::create(&dest).await?;
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|e| BadRequest(format!("invalid upload: {e}")))?
+                {
+                    out.write_all(&chunk).await?;
+                }
+                out.flush().await?;
+                zip_path = Some(dest);
+            }
+            _ => {}
+        }
+    }
+
+    let mod_name = mod_name
+        .filter(|n| !n.trim().is_empty())
+        .ok_or_else(|| BadRequest("a mod name is required".to_string()))?;
+    let mod_version = mod_version
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
+    let zip_path = zip_path.ok_or_else(|| BadRequest("no file was uploaded".to_string()))?;
+
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let activity = state.activity.clone();
+    let id = state.jobs.spawn(
+        JobKindDescr::ModUpload {
+            instance: name.clone(),
+            name: mod_name.clone(),
+        },
+        move |logger| {
+            logger.line(format!("installing uploaded mod '{mod_name}' on '{name}'"));
+            match mods::add_local(&paths, &db, &name, &mod_name, &mod_version, &zip_path) {
+                Ok(mod_id) => {
+                    logger.line("done");
+                    activity.record(ActivityKind::ModInstalled { mod_id }, Some(name.clone()));
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        },
+    );
+    Ok(Json(JobHandle { id }))
 }

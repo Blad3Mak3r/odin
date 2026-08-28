@@ -7,6 +7,8 @@ pub mod instances;
 pub mod jobs;
 pub mod lists;
 pub mod mods;
+pub mod nexus;
 pub mod players;
 pub mod resources;
+pub mod settings;
 pub mod version;

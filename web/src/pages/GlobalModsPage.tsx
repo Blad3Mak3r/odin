@@ -132,7 +132,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
           </div>
         </div>
         {mod.instances.length === 0 ? (
-          <Button size="sm" variant="ghost" disabled={pruneMod.isPending} onClick={handlePrune}>
+          <Button size="sm" variant="destructive" disabled={pruneMod.isPending} onClick={handlePrune}>
             Remove from store
           </Button>
         ) : (
@@ -159,7 +159,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
                 <div className="flex items-center gap-2 text-sm">
                   <span className="font-medium">{entry.instance}</span>
                   <span className="text-xs text-muted-foreground">v{entry.version}</span>
-                  {entry.running && <Badge variant="outline">running</Badge>}
+                  {entry.running && <Badge variant="default">running</Badge>}
                 </div>
                 <div className="flex items-center gap-3">
                   <Switch
@@ -173,7 +173,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
                   />
                   <Button
                     size="sm"
-                    variant="ghost"
+                    variant="destructive"
                     onClick={() => handleRemove(entry.instance)}
                   >
                     Remove

@@ -105,7 +105,7 @@ function InstalledMods({ name }: { name: string }) {
                     )
                   }
                 />
-                <Button size="sm" variant="ghost" onClick={() => handleRemove(m.mod_id)}>
+                <Button size="sm" variant="destructive" onClick={() => handleRemove(m.mod_id)}>
                   Remove
                 </Button>
               </div>

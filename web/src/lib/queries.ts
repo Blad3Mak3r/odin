@@ -79,11 +79,21 @@ export function useInstanceResources(name: string, enabled = true) {
   })
 }
 
-export function useInstanceResourceHistory(name: string, enabled = true) {
+// `hours` omitted keeps the existing live-socket-fed, in-memory (~6 minute)
+// history — its query key deliberately matches `useLiveSocket`'s writes.
+// A specific `hours` reads a downsampled long-range history straight from
+// the database instead, under its own query key so it doesn't collide with
+// the live one.
+export function useInstanceResourceHistory(name: string, hours?: number, enabled = true) {
   return useQuery({
-    queryKey: ['resource-history', 'instance', name],
-    queryFn: () => api.get<ResourceSample[]>(`/instances/${name}/resources/history`),
-    staleTime: Infinity,
+    queryKey: hours
+      ? ['resource-history', 'instance', name, hours]
+      : ['resource-history', 'instance', name],
+    queryFn: () =>
+      api.get<ResourceSample[]>(
+        `/instances/${name}/resources/history${hours ? `?hours=${hours}` : ''}`,
+      ),
+    staleTime: hours ? 60_000 : Infinity,
     enabled,
   })
 }

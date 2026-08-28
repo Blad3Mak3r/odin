@@ -316,10 +316,19 @@ export function useList(name: string, kind: ListKind) {
   })
 }
 
-export function useSetList(name: string, kind: ListKind) {
+export function useAddListEntry(name: string, kind: ListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (ids: string[]) => api.put<void>(`/instances/${name}/lists/${kind}`, { ids }),
+    mutationFn: (id: string) => api.post<void>(`/instances/${name}/lists/${kind}`, { id }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
+  })
+}
+
+export function useRemoveListEntry(name: string, kind: ListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.delete<void>(`/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
   })
 }

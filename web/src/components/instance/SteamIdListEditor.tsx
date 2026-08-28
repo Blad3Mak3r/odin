@@ -6,12 +6,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
-import { useList, useSetList } from '@/lib/queries'
+import { useAddListEntry, useList, useRemoveListEntry } from '@/lib/queries'
 import type { ListKind } from '@/lib/types'
 
 export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind }) {
   const list = useList(name, kind)
-  const setList = useSetList(name, kind)
+  const addEntry = useAddListEntry(name, kind)
+  const removeEntry = useRemoveListEntry(name, kind)
   const [newId, setNewId] = useState('')
   const { confirm, dialog } = useConfirmDialog()
 
@@ -33,7 +34,7 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
   const addId = () => {
     const id = newId.trim()
     if (!id || ids.includes(id)) return
-    setList.mutate([...ids, id], {
+    addEntry.mutate(id, {
       onSuccess: () => setNewId(''),
       onError: (e) => toast.error(e.message),
     })
@@ -46,10 +47,7 @@ export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind
       confirmLabel: 'Remove',
     })
     if (!confirmed) return
-    setList.mutate(
-      ids.filter((existing) => existing !== id),
-      { onError: (e) => toast.error(e.message) },
-    )
+    removeEntry.mutate(id, { onError: (e) => toast.error(e.message) })
   }
 
   return (

@@ -10,3 +10,10 @@
 # Impeccable design-skill machine-local overrides (e.g. hook consent);
 # .impeccable/design.json (the design-system sidecar) is tracked.
 /.impeccable/config.local.json
+
+# Claude Code agent tooling: local settings, git worktrees created by the
+# agent, downloaded skill caches, and their lock file. Machine-local, not
+# project state.
+/.claude/
+/.agents/
+/skills-lock.json

@@ -206,3 +206,11 @@ export interface ActivityEvent {
   instance: string | null
   kind: ActivityKind
 }
+
+export interface WebhookView {
+  id: string
+  url: string
+  enabled: boolean
+  event_kinds: ActivityKind['kind'][]
+  created_at: string
+}

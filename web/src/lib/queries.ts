@@ -23,6 +23,7 @@ import type {
   PlayerInfo,
   ResourceSample,
   VersionView,
+  WebhookView,
 } from './types'
 
 // These have a live push counterpart (see `useLiveSocket`) that keeps their
@@ -404,5 +405,44 @@ export function useJobs() {
     queryKey: ['jobs'],
     queryFn: () => api.get<JobSummary[]>('/jobs'),
     refetchInterval: 3_000,
+  })
+}
+
+export function useWebhooks() {
+  return useQuery({
+    queryKey: ['webhooks'],
+    queryFn: () => api.get<WebhookView[]>('/webhooks'),
+  })
+}
+
+export function useCreateWebhook() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { url: string; event_kinds: string[] }) =>
+      api.post<WebhookView>('/webhooks', req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
+  })
+}
+
+export function useDeleteWebhook() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/webhooks/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
+  })
+}
+
+export function useSetWebhookEnabled() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api.post<void>(`/webhooks/${id}/${enabled ? 'enable' : 'disable'}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
+  })
+}
+
+export function useTestWebhook() {
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/webhooks/${id}/test`),
   })
 }

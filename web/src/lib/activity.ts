@@ -50,6 +50,26 @@ export function describeActivity(kind: ActivityKind): string {
   }
 }
 
+// Short, payload-independent labels for picking which activity kinds a
+// webhook should forward — unlike `describeActivity`, these don't need a
+// specific event's fields (a mod id, a backup id, ...) to read sensibly.
+export const ACTIVITY_KIND_LABELS: Record<ActivityKind['kind'], string> = {
+  instance_created: 'Instance created',
+  instance_deleted: 'Instance deleted',
+  instance_started: 'Instance started',
+  instance_stopped: 'Instance stopped',
+  instance_auto_restarted: 'Auto-restarted after a crash',
+  server_installed: 'Server files installed/updated',
+  mod_installed: 'Mod installed',
+  mod_removed: 'Mod removed',
+  mods_updated: 'Mods updated',
+  backup_created: 'Backup created',
+  backup_restored: 'Backup restored',
+  backup_pruned: 'Old backup pruned',
+  player_joined: 'Player joined',
+  player_left: 'Player left',
+}
+
 export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   instance_created: Plus,
   instance_deleted: Trash2,

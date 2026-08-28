@@ -106,17 +106,39 @@ legacy — don't expect new features to show up there first.
 
 ## Installation
 
-Build from source with [Rust](https://www.rust-lang.org/tools/install)
-(2024 edition) and the included `Makefile`. Two install modes are
-available:
+**Recommended** — download and install the latest release with one
+command. This detects your distro (Debian/Ubuntu or Fedora/RHEL-family,
+x86_64 only), pulls the matching `.deb`/`.rpm` from the [latest GitHub
+release](https://github.com/Blad3Mak3r/odin/releases/latest), and installs
+it via `apt`/`dnf`. No Rust toolchain needed. Like any `curl | sh` install,
+review [`install.sh`](install.sh) first if you want to see exactly what it
+does before running it:
 
-**System-wide (recommended)** — builds a `.deb` or `.rpm` (whichever fits
-the host distro) and installs it via the system package manager. This
-creates a dedicated `odin` system user, `/etc/odin` and `/var/lib/odin`,
-and a system `odin.service` systemd unit running the dashboard as that
-user (see [Running as a systemd service](#running-as-a-systemd-service)).
-Needs `sudo`, and requires `cargo install cargo-deb` or `cargo install
-cargo-generate-rpm` beforehand, matching the host distro:
+```sh
+curl -sSL https://raw.githubusercontent.com/Blad3Mak3r/odin/main/install.sh | sh
+```
+
+This installs the same system package described below: a dedicated `odin`
+system user, `/etc/odin` and `/var/lib/odin`, and a system `odin.service`
+systemd unit running the dashboard as that user (see [Running as a
+systemd service](#running-as-a-systemd-service)).
+
+Alternatively, grab the `.deb`/`.rpm` yourself from the [Releases
+page](https://github.com/Blad3Mak3r/odin/releases) and install it with
+`apt install ./odin-server_*.deb` or `dnf install ./odin-server-*.rpm`.
+
+### Build from source
+
+Only needed if you want a version other than the latest release, or your
+distro isn't Debian/Fedora-family. Requires
+[Rust](https://www.rust-lang.org/tools/install) (2024 edition) and the
+included `Makefile`.
+
+**System-wide** — builds a `.deb` or `.rpm` (whichever fits the host
+distro) and installs it via the system package manager, same result as
+the one-line install above. Needs `sudo`, and requires `cargo install
+cargo-deb` or `cargo install cargo-generate-rpm` beforehand, matching the
+host distro:
 
 ```sh
 git clone git@github.com:Blad3Mak3r/odin.git

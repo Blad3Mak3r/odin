@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod db;
 mod doctor;
+mod http;
 mod instance;
 mod log_poll;
 mod mods;

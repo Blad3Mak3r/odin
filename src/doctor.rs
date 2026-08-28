@@ -94,9 +94,9 @@ fn is_writable(dir: &std::path::Path) -> bool {
 }
 
 fn url_reachable(url: &str) -> bool {
-    reqwest::blocking::Client::builder()
+    crate::http::CLIENT
+        .get(url)
         .timeout(Duration::from_secs(3))
-        .build()
-        .and_then(|client| client.get(url).send())
+        .send()
         .is_ok_and(|resp| resp.status().is_success())
 }

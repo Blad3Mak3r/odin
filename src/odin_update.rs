@@ -62,16 +62,15 @@ fn latest_release(db: &Db) -> Result<Option<GithubRelease>> {
         return Ok(cached);
     }
 
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!("odin/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(10))
-        .build()
-        .context("failed to build GitHub release check client")?;
-
-    let response = client
+    let response = crate::http::CLIENT
         .get(format!(
             "https://api.github.com/repos/{REPO}/releases/latest"
         ))
+        .header(
+            reqwest::header::USER_AGENT,
+            concat!("odin/", env!("CARGO_PKG_VERSION")),
+        )
+        .timeout(Duration::from_secs(10))
         .send()
         .context("failed to reach GitHub releases API")?;
 

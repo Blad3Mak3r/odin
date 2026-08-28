@@ -184,6 +184,37 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
     Ok(instance)
 }
 
+/// Removes an instance's on-disk directory — optionally preserving its
+/// `backups` subdirectory — and its row from the database. Shared by
+/// `commands::delete::run` and `web::routes::instances::delete_instance`,
+/// which differ only in how they gate/confirm the call, not in what it does.
+pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
+    if keep_backups {
+        let backups_dir = paths::instance_backups_dir(&instance.dir);
+        for entry in std::fs::read_dir(&instance.dir)
+            .with_context(|| format!("failed to read instance dir {}", instance.dir.display()))?
+        {
+            let entry = entry?;
+            if entry.path() == backups_dir {
+                continue;
+            }
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            }
+            .with_context(|| format!("failed to remove {}", path.display()))?;
+        }
+    } else {
+        std::fs::remove_dir_all(&instance.dir)
+            .with_context(|| format!("failed to remove instance dir {}", instance.dir.display()))?;
+    }
+
+    crate::db::instances::delete(db, &instance.state.name)?;
+    Ok(())
+}
+
 fn check_port_available(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
     for other in super::list_all(paths, db)? {
         if other.state.name == instance.state.name {

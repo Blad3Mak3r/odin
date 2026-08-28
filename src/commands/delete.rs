@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::commands::confirm;
 use crate::db::Db;
@@ -25,28 +25,7 @@ pub fn run(paths: &Paths, db: &Db, server_name: &str, yes: bool, keep_backups: b
         }
     }
 
-    if keep_backups {
-        for entry in std::fs::read_dir(&instance.dir)
-            .with_context(|| format!("failed to read instance dir {}", instance.dir.display()))?
-        {
-            let entry = entry?;
-            if entry.file_name() == "backups" {
-                continue;
-            }
-            let path = entry.path();
-            if entry.file_type()?.is_dir() {
-                std::fs::remove_dir_all(&path)
-            } else {
-                std::fs::remove_file(&path)
-            }
-            .with_context(|| format!("failed to remove {}", path.display()))?;
-        }
-    } else {
-        std::fs::remove_dir_all(&instance.dir)
-            .with_context(|| format!("failed to remove instance dir {}", instance.dir.display()))?;
-    }
-
-    crate::db::instances::delete(db, server_name)?;
+    lifecycle::delete(db, &instance, keep_backups)?;
 
     println!("deleted '{server_name}'");
     Ok(())

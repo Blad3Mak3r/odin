@@ -60,12 +60,9 @@ fn format_duration(duration: chrono::Duration) -> String {
 /// Looks up this machine's public IP via a short-timeout outbound request.
 /// Returns `None` (never an error) if offline or the lookup is slow/unavailable.
 fn public_ip() -> Option<String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .ok()?;
-    let ip = client
+    let ip = crate::http::CLIENT
         .get("https://api.ipify.org")
+        .timeout(Duration::from_secs(3))
         .send()
         .ok()?
         .error_for_status()

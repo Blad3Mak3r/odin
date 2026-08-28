@@ -1,5 +1,15 @@
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
-import { Bell, Blocks, LayoutDashboard, ListChecks, Menu, Server, Webhook, X } from 'lucide-react'
+import {
+  Bell,
+  Blocks,
+  LayoutDashboard,
+  ListChecks,
+  Menu,
+  Server,
+  Settings,
+  Webhook,
+  X,
+} from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { ActivityFeedPanel } from '@/components/ActivityFeedPanel'
@@ -15,6 +25,7 @@ const NAV_ITEMS = [
   { to: '/mods', label: 'Mods', icon: Blocks, end: false },
   { to: '/jobs', label: 'Jobs', icon: ListChecks, end: false },
   { to: '/webhooks', label: 'Webhooks', icon: Webhook, end: false },
+  { to: '/settings', label: 'Settings', icon: Settings, end: false },
 ]
 
 function SidebarNav({

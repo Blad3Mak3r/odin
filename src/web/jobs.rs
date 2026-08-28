@@ -33,6 +33,7 @@ pub enum JobKindDescr {
     SteamcmdInstall,
     ModAdd { instance: String, mod_id: String },
     ModUpdate { instance: String },
+    ModUpload { instance: String, name: String },
     BackupCreate { instance: String },
     BackupRestore { instance: String, backup_id: String },
 }

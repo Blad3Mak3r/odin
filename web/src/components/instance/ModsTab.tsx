@@ -4,12 +4,16 @@ import { toast } from 'sonner'
 import { JobProgress } from '@/components/JobProgress'
 import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
+import { NexusModSearch } from '@/components/NexusModSearch'
+import { UploadModForm } from '@/components/UploadModForm'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useJobSocket } from '@/hooks/useJobSocket'
+import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
 import { useAddMod, useMods, useRemoveMod, useSetModEnabled, useUpdateMods } from '@/lib/queries'
 
 const ModConfigFiles = lazy(() =>
@@ -91,7 +95,10 @@ function InstalledMods({ name }: { name: string }) {
               <div className="flex items-center gap-3">
                 <ModIcon src={m.icon} />
                 <div>
-                  <p className="text-sm font-medium">{m.mod_id}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium">{m.mod_id}</p>
+                    <Badge variant="outline">{MOD_SOURCE_LABEL[getModSource(m.mod_id)]}</Badge>
+                  </div>
                   <p className="text-xs text-muted-foreground">v{m.version}</p>
                 </div>
               </div>
@@ -124,20 +131,33 @@ function ModInstallSearch({ name }: { name: string }) {
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
 
+  const handleSelect = (mod: { mod_id: string }) =>
+    addMod.mutate(
+      { name, modId: mod.mod_id },
+      {
+        onSuccess: (handle) => setJobId(handle.id),
+        onError: (e) => toast.error(e.message),
+      },
+    )
+
   return (
     <div className="flex flex-col gap-3">
-      <ModSearch
-        selectDisabled={() => addMod.isPending}
-        onSelect={(mod) =>
-          addMod.mutate(
-            { name, modId: mod.mod_id },
-            {
-              onSuccess: (handle) => setJobId(handle.id),
-              onError: (e) => toast.error(e.message),
-            },
-          )
-        }
-      />
+      <Tabs defaultValue="thunderstore">
+        <TabsList variant="line">
+          <TabsTrigger value="thunderstore">Thunderstore</TabsTrigger>
+          <TabsTrigger value="nexus">Nexus Mods</TabsTrigger>
+          <TabsTrigger value="upload">Upload</TabsTrigger>
+        </TabsList>
+        <TabsContent value="thunderstore">
+          <ModSearch selectDisabled={() => addMod.isPending} onSelect={handleSelect} />
+        </TabsContent>
+        <TabsContent value="nexus">
+          <NexusModSearch selectDisabled={() => addMod.isPending} onSelect={handleSelect} />
+        </TabsContent>
+        <TabsContent value="upload">
+          <UploadModForm name={name} />
+        </TabsContent>
+      </Tabs>
 
       {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
     </div>

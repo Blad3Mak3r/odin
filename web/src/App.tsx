@@ -19,6 +19,9 @@ const JobsPage = lazy(() => import('@/pages/JobsPage').then((m) => ({ default: m
 const WebhooksPage = lazy(() =>
   import('@/pages/WebhooksPage').then((m) => ({ default: m.WebhooksPage })),
 )
+const SettingsPage = lazy(() =>
+  import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+)
 
 function RouteFallback() {
   return (
@@ -39,6 +42,7 @@ function App() {
           <Route path="/mods" element={<GlobalModsPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/webhooks" element={<WebhooksPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </Suspense>
     </AppShell>

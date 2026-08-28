@@ -8,8 +8,8 @@
 //! write lock.
 //!
 //! Each data domain gets its own thin repository module (`instances`,
-//! `mods`, `lists`, `backups`, `activity`, `cache`) that takes `&Db` and
-//! exposes calls shaped like the file-I/O functions they replace.
+//! `mods`, `lists`, `backups`, `activity`, `cache`, `settings`) that takes
+//! `&Db` and exposes calls shaped like the file-I/O functions they replace.
 
 pub mod activity;
 pub mod backup_schedules;
@@ -22,6 +22,7 @@ pub mod jobs;
 pub mod lists;
 mod migrations;
 pub mod resource_samples;
+pub mod settings;
 pub mod webhooks;
 
 use std::path::Path;

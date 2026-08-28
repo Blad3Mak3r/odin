@@ -1,13 +1,19 @@
 use axum::Router;
-use axum::routing::{delete, get, post};
+use axum::extract::DefaultBodyLimit;
+use axum::routing::{delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bulk, config_files, doctor, events, install, instances, jobs, lists, mods, players,
-    resources, version, webhooks,
+    backups, bulk, config_files, doctor, events, install, instances, jobs, lists, mods, nexus,
+    players, resources, settings, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
+
+/// Ceiling for an uploaded mod `.zip` — generous enough for a real modpack
+/// while still bounding memory/disk from a runaway or malicious upload.
+/// Axum's own default body limit (2 MiB) applies to every other route.
+const MOD_UPLOAD_BODY_LIMIT: usize = 500 * 1024 * 1024;
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -45,6 +51,10 @@ pub fn build_router(state: AppState) -> Router {
             get(mods::list_mods).post(mods::add_mod),
         )
         .route("/instances/{name}/mods/update", post(mods::update_mods))
+        .route(
+            "/instances/{name}/mods/upload",
+            post(mods::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
+        )
         .route("/instances/{name}/mods/{mod_id}", delete(mods::remove_mod))
         .route(
             "/instances/{name}/mods/{mod_id}/enable",
@@ -79,8 +89,15 @@ pub fn build_router(state: AppState) -> Router {
             get(config_files::get_config_file).put(config_files::set_config_file),
         )
         .route("/mods/search", get(mods::search_mods))
+        .route("/mods/nexus/trending", get(nexus::trending_mods))
+        .route("/mods/nexus/lookup", get(nexus::lookup_mod))
         .route("/mods", get(mods::list_global_mods))
         .route("/mods/{mod_id}", delete(mods::prune_mod))
+        .route("/settings", get(settings::get_settings))
+        .route(
+            "/settings/nexus-api-key",
+            put(settings::set_nexus_api_key).delete(settings::clear_nexus_api_key),
+        )
         .route(
             "/instances/{name}/lists/{kind}",
             get(lists::get_list)

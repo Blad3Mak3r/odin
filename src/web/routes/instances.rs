@@ -7,7 +7,7 @@ use crate::activity::ActivityKind;
 use crate::db::Db;
 use crate::instance::state::InstanceState;
 use crate::instance::{self, Instance, InstanceError, lifecycle};
-use crate::paths::{self, Paths};
+use crate::paths::Paths;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -128,49 +128,17 @@ pub async fn delete_instance(
     let activity = state.activity.clone();
     let delete_name = name.clone();
     run_blocking(move || {
-        delete_instance_dir(&paths, &db, &delete_name, query.keep_backups)?;
+        let instance = Instance::load_existing(&paths, &db, &delete_name)?;
+        if lifecycle::is_running(&instance)? {
+            return Err(InstanceError::AlreadyRunning(delete_name).into());
+        }
+        lifecycle::delete(&db, &instance, query.keep_backups)?;
         activity.record(ActivityKind::InstanceDeleted, Some(delete_name));
         Ok(())
     })
     .await?;
     state.runtime.remove_instance(&name);
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// Same behavior as `commands::delete::run`, minus the interactive
-/// confirmation prompt — the frontend asks for confirmation itself.
-fn delete_instance_dir(
-    paths: &Paths,
-    db: &Db,
-    name: &str,
-    keep_backups: bool,
-) -> anyhow::Result<()> {
-    let instance = Instance::load_existing(paths, db, name)?;
-    if lifecycle::is_running(&instance)? {
-        return Err(InstanceError::AlreadyRunning(name.to_string()).into());
-    }
-
-    if keep_backups {
-        let backups_dir = paths::instance_backups_dir(&instance.dir);
-        for entry in std::fs::read_dir(&instance.dir)? {
-            let entry = entry?;
-            if entry.path() == backups_dir {
-                continue;
-            }
-            let path = entry.path();
-            if entry.file_type()?.is_dir() {
-                std::fs::remove_dir_all(&path)
-            } else {
-                std::fs::remove_file(&path)
-            }?;
-        }
-    } else {
-        std::fs::remove_dir_all(&instance.dir)?;
-    }
-
-    crate::db::instances::delete(db, name)?;
-
-    Ok(())
 }
 
 #[derive(Serialize)]

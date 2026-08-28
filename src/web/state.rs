@@ -13,7 +13,7 @@ use crate::web::supervisor::Supervisor;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub paths: Paths,
+    pub paths: Arc<Paths>,
     pub db: Arc<Db>,
     pub jobs: JobRegistry,
     pub resources: Arc<Mutex<System>>,
@@ -28,7 +28,7 @@ impl AppState {
     pub fn new(paths: Paths, db: Arc<Db>) -> Self {
         let activity = ActivityLog::load(db.clone());
         Self {
-            paths,
+            paths: Arc::new(paths),
             db,
             jobs: JobRegistry::new(),
             resources: Arc::new(Mutex::new(System::new_all())),

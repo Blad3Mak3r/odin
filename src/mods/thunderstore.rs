@@ -99,7 +99,9 @@ pub fn fetch_index(db: &Db) -> Result<Vec<ThunderstorePackage>> {
         url = PACKAGE_INDEX_URL,
         "fetching Thunderstore package index"
     );
-    let raw = reqwest::blocking::get(PACKAGE_INDEX_URL)
+    let raw = crate::http::CLIENT
+        .get(PACKAGE_INDEX_URL)
+        .send()
         .context("failed to fetch Thunderstore package index")?
         .error_for_status()
         .context("Thunderstore package index request returned an error status")?
@@ -201,7 +203,9 @@ pub fn download_zip(url: &str, dest_dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(dest_dir)?;
     let dest_file = dest_dir.join(format!("download-{}.zip", uuid::Uuid::new_v4()));
 
-    let mut response = reqwest::blocking::get(url)
+    let mut response = crate::http::CLIENT
+        .get(url)
+        .send()
         .with_context(|| format!("failed to download {url}"))?
         .error_for_status()
         .with_context(|| format!("download of {url} returned an error status"))?;

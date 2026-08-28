@@ -21,6 +21,7 @@ pub mod instances;
 pub mod jobs;
 pub mod lists;
 mod migrations;
+pub mod webhooks;
 
 use std::path::Path;
 use std::sync::Mutex;

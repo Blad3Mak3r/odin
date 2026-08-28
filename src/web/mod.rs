@@ -15,6 +15,7 @@ mod sse;
 mod state;
 mod static_files;
 pub mod supervisor;
+mod webhooks;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -37,6 +38,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let state = AppState::new(paths, db);
     spawn_telemetry(state.clone());
     backup_scheduler::spawn(state.clone());
+    webhooks::spawn(state.clone());
 
     let router = router::build_router(state);
     let listener = tokio::net::TcpListener::bind(addr)

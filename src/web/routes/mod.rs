@@ -10,3 +10,4 @@ pub mod mods;
 pub mod players;
 pub mod resources;
 pub mod version;
+pub mod webhooks;

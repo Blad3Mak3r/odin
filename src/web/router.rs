@@ -4,7 +4,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
     backups, config_files, doctor, events, install, instances, jobs, lists, mods, players,
-    resources, version,
+    resources, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -108,6 +108,14 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{name}/players",
             get(players::get_instance_players),
         )
+        .route(
+            "/webhooks",
+            get(webhooks::list_webhooks).post(webhooks::create_webhook),
+        )
+        .route("/webhooks/{id}", delete(webhooks::delete_webhook))
+        .route("/webhooks/{id}/enable", post(webhooks::enable_webhook))
+        .route("/webhooks/{id}/disable", post(webhooks::disable_webhook))
+        .route("/webhooks/{id}/test", post(webhooks::test_webhook))
         .with_state(state);
 
     Router::new()

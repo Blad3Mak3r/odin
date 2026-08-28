@@ -138,6 +138,17 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
     let host = compute_host_snapshot(state);
     state.runtime.push_host_sample(host);
 
+    // Decided once per tick (not per series) so the host and every
+    // instance's sample for this tick either all get persisted together or
+    // none do.
+    let persist_now = state.runtime.should_persist_now();
+    let now = chrono::Utc::now();
+    if persist_now {
+        state
+            .runtime
+            .persist_sample(None, now, host.cpu_percent, host.memory_used_bytes);
+    }
+
     let mut entries = Vec::new();
     let mut running_names = Vec::new();
     let mut crashed_with_auto_restart = Vec::new();
@@ -147,6 +158,14 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 continue;
             };
             let name = &inst.state.name;
+            if persist_now && snapshot.running {
+                state.runtime.persist_sample(
+                    Some(name),
+                    now,
+                    snapshot.cpu_percent,
+                    snapshot.memory_bytes,
+                );
+            }
             if state.runtime.push_instance_sample(name, snapshot) {
                 let kind = if snapshot.running {
                     ActivityKind::InstanceStarted
@@ -192,6 +211,10 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 players: state.players.snapshot(name),
             });
         }
+    }
+
+    if persist_now {
+        state.runtime.prune_old_samples();
     }
 
     state.runtime.broadcast_tick(ResourcesTick {

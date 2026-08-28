@@ -101,12 +101,20 @@ pub fn build_router(state: AppState) -> Router {
             get(resources::get_host_resources_history),
         )
         .route(
+            "/system/resources/history/export",
+            get(resources::export_host_resources_history),
+        )
+        .route(
             "/instances/{name}/resources",
             get(resources::get_instance_resources),
         )
         .route(
             "/instances/{name}/resources/history",
             get(resources::get_instance_resources_history),
+        )
+        .route(
+            "/instances/{name}/resources/history/export",
+            get(resources::export_instance_resources_history),
         )
         .route(
             "/instances/{name}/players",

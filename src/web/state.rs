@@ -28,12 +28,13 @@ impl AppState {
     pub fn new(paths: Paths, db: Arc<Db>) -> Self {
         let activity = ActivityLog::load(db.clone());
         let jobs = JobRegistry::load(db.clone());
+        let runtime = RuntimeRegistry::new(db.clone());
         Self {
             paths: Arc::new(paths),
             db,
             jobs,
             resources: Arc::new(Mutex::new(System::new_all())),
-            runtime: RuntimeRegistry::new(),
+            runtime,
             activity,
             players: PlayerRegistry::new(),
             supervisor: Supervisor::new(),

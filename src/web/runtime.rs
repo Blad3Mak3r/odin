@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use crate::db::Db;
 use crate::web::players::PlayerInfo;
 
 /// Samples kept per series (host, and each instance). At the telemetry
@@ -22,11 +23,30 @@ const HISTORY_CAPACITY: usize = 120;
 /// out a brief send stall without ever needing much memory.
 const TICK_BROADCAST_CAPACITY: usize = 32;
 
+/// How often a downsampled sample gets written to `resource_samples` for
+/// long-range history — the in-memory buffer above already covers the
+/// short term at full resolution, so this only needs to be coarse.
+const PERSIST_INTERVAL: chrono::Duration = chrono::Duration::minutes(3);
+
+/// How long a persisted sample is kept before `prune_old_samples` deletes
+/// it.
+const RETENTION: chrono::Duration = chrono::Duration::days(7);
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ResourceSample {
     pub at: DateTime<Utc>,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
+}
+
+impl From<crate::db::resource_samples::ResourceSampleRow> for ResourceSample {
+    fn from(row: crate::db::resource_samples::ResourceSampleRow) -> Self {
+        Self {
+            at: row.at,
+            cpu_percent: row.cpu_percent,
+            memory_bytes: row.memory_bytes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -80,16 +100,20 @@ pub struct RuntimeRegistry {
     instances: Arc<Mutex<HashMap<String, InstanceState>>>,
     ticks: broadcast::Sender<ResourcesTick>,
     auto_restart_attempts: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
+    db: Arc<Db>,
+    last_persisted_at: Arc<Mutex<Option<DateTime<Utc>>>>,
 }
 
 impl RuntimeRegistry {
-    pub fn new() -> Self {
+    pub fn new(db: Arc<Db>) -> Self {
         let (ticks, _receiver) = broadcast::channel(TICK_BROADCAST_CAPACITY);
         Self {
             host: Arc::new(Mutex::new(HostState::default())),
             instances: Arc::new(Mutex::new(HashMap::new())),
             ticks,
             auto_restart_attempts: Arc::new(Mutex::new(HashMap::new())),
+            db,
+            last_persisted_at: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -204,11 +228,57 @@ impl RuntimeRegistry {
             }
         }
     }
-}
 
-impl Default for RuntimeRegistry {
-    fn default() -> Self {
-        Self::new()
+    /// Whether it's time to write a downsampled sample to durable storage —
+    /// call once per telemetry tick, not once per series, since the check
+    /// (and the timestamp it records) should be shared across the host and
+    /// every instance sampled in the same tick.
+    pub fn should_persist_now(&self) -> bool {
+        let now = Utc::now();
+        let mut last = self
+            .last_persisted_at
+            .lock()
+            .expect("runtime last-persisted lock poisoned");
+        match *last {
+            Some(prev) if now - prev < PERSIST_INTERVAL => false,
+            _ => {
+                *last = Some(now);
+                true
+            }
+        }
+    }
+
+    /// Persists one series' sample for long-range history. Best-effort: a
+    /// write failure is logged, not surfaced, since this is a durability
+    /// nicety layered on top of the in-memory history that already serves
+    /// the live chart.
+    pub fn persist_sample(
+        &self,
+        instance_name: Option<&str>,
+        at: DateTime<Utc>,
+        cpu_percent: f32,
+        memory_bytes: u64,
+    ) {
+        if let Err(e) = crate::db::resource_samples::insert(
+            &self.db,
+            instance_name,
+            at,
+            cpu_percent,
+            memory_bytes,
+        ) {
+            tracing::warn!(error = %e, "failed to persist resource sample");
+        }
+    }
+
+    /// Deletes persisted samples older than the retention window. Cheap
+    /// enough to call once per persisted tick rather than on its own
+    /// schedule.
+    pub fn prune_old_samples(&self) {
+        if let Err(e) =
+            crate::db::resource_samples::prune_older_than(&self.db, Utc::now() - RETENTION)
+        {
+            tracing::warn!(error = %e, "failed to prune old resource samples");
+        }
     }
 }
 
@@ -222,10 +292,28 @@ fn push_capped(buf: &mut VecDeque<ResourceSample>, sample: ResourceSample) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::Paths;
+
+    fn temp_registry(label: &str) -> RuntimeRegistry {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-runtime-test-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Arc::new(
+            Db::open(&Paths {
+                data_dir: dir.clone(),
+                config_dir: dir,
+            })
+            .unwrap(),
+        );
+        RuntimeRegistry::new(db)
+    }
 
     #[test]
     fn auto_restart_is_gated_by_cooldown_per_instance() {
-        let registry = RuntimeRegistry::new();
+        let registry = temp_registry("cooldown");
         let cooldown = chrono::Duration::hours(1);
 
         assert!(registry.should_attempt_auto_restart("my-server", cooldown));
@@ -241,11 +329,55 @@ mod tests {
 
     #[test]
     fn auto_restart_is_allowed_again_once_the_cooldown_elapses() {
-        let registry = RuntimeRegistry::new();
+        let registry = temp_registry("elapsed");
         assert!(registry.should_attempt_auto_restart("my-server", chrono::Duration::zero()));
         assert!(
             registry.should_attempt_auto_restart("my-server", chrono::Duration::zero()),
             "a zero-length cooldown should never block a retry"
         );
+    }
+
+    #[test]
+    fn should_persist_now_is_gated_by_interval() {
+        let registry = temp_registry("persist-gate");
+        assert!(
+            registry.should_persist_now(),
+            "never persisted: due immediately"
+        );
+        assert!(
+            !registry.should_persist_now(),
+            "a second check right after should be refused"
+        );
+    }
+
+    #[test]
+    fn persist_sample_and_prune_round_trip_through_the_database() {
+        let registry = temp_registry("persist-roundtrip");
+        let now = Utc::now();
+
+        registry.persist_sample(None, now, 12.5, 4096);
+        let host = crate::db::resource_samples::range(
+            &registry.db,
+            None,
+            now - chrono::Duration::seconds(1),
+        )
+        .unwrap();
+        assert_eq!(host.len(), 1);
+        assert_eq!(host[0].cpu_percent, 12.5);
+
+        registry.persist_sample(None, now - chrono::Duration::days(10), 1.0, 100);
+        registry.prune_old_samples();
+        let remaining = crate::db::resource_samples::range(
+            &registry.db,
+            None,
+            now - chrono::Duration::days(30),
+        )
+        .unwrap();
+        assert_eq!(
+            remaining.len(),
+            1,
+            "only the stale sample should have been pruned"
+        );
+        assert_eq!(remaining[0].cpu_percent, 12.5);
     }
 }

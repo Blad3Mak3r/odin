@@ -21,6 +21,7 @@ pub mod instances;
 pub mod jobs;
 pub mod lists;
 mod migrations;
+pub mod resource_samples;
 pub mod webhooks;
 
 use std::path::Path;

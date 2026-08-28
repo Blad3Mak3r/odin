@@ -1,6 +1,8 @@
+import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { DeleteInstanceDialog } from '@/components/instance/DeleteInstanceDialog'
 import { PageHeader } from '@/components/PageHeader'
 import { PlayersBadge } from '@/components/PlayersBadge'
 import { QueryError } from '@/components/QueryError'
@@ -20,11 +22,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   useCreateInstance,
+  useInstanceResources,
   useInstances,
   useRestartInstance,
   useStartInstance,
   useStopInstance,
 } from '@/lib/queries'
+import { formatBytes } from '@/lib/utils'
 
 export function InstancesPage() {
   const instances = useInstances()
@@ -45,6 +49,7 @@ export function InstancesPage() {
             <TableHead className="hidden md:table-cell">World</TableHead>
             <TableHead className="hidden md:table-cell">Port</TableHead>
             <TableHead className="hidden sm:table-cell">Mods</TableHead>
+            <TableHead className="hidden lg:table-cell">Resources</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -54,21 +59,21 @@ export function InstancesPage() {
               // Loading placeholder rows have no stable id and never reorder.
               // eslint-disable-next-line react/no-array-index-key
               <TableRow key={i}>
-                <TableCell colSpan={6}>
+                <TableCell colSpan={7}>
                   <Skeleton className="h-5 w-full" />
                 </TableCell>
               </TableRow>
             ))}
           {instances.isError && (
             <TableRow>
-              <TableCell colSpan={6}>
+              <TableCell colSpan={7}>
                 <QueryError error={instances.error} />
               </TableCell>
             </TableRow>
           )}
           {instances.data?.length === 0 && (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground">
+              <TableCell colSpan={7} className="text-center text-muted-foreground">
                 No instances yet — create one to get started.
               </TableCell>
             </TableRow>
@@ -91,6 +96,9 @@ export function InstancesPage() {
               <TableCell className="hidden md:table-cell">{instance.world_name}</TableCell>
               <TableCell className="hidden md:table-cell">{instance.port}</TableCell>
               <TableCell className="hidden sm:table-cell">{instance.installed_mods.length}</TableCell>
+              <TableCell className="hidden text-muted-foreground lg:table-cell">
+                <InstanceResourceCell name={instance.name} running={instance.running} />
+              </TableCell>
               <TableCell className="text-right">
                 <InstanceActions name={instance.name} running={instance.running} />
               </TableCell>
@@ -102,15 +110,31 @@ export function InstancesPage() {
   )
 }
 
+function InstanceResourceCell({ name, running }: { name: string; running: boolean }) {
+  const resources = useInstanceResources(name, running)
+
+  if (!running || !resources.data) {
+    return <span>—</span>
+  }
+
+  return (
+    <span className="text-sm">
+      {resources.data.cpu_percent.toFixed(0)}% · {formatBytes(resources.data.memory_bytes)}
+    </span>
+  )
+}
+
 function InstanceActions({ name, running }: { name: string; running: boolean }) {
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const busy = start.isPending || stop.isPending || restart.isPending
 
   return (
     <div className="flex justify-end gap-2">
+      <DeleteInstanceDialog name={name} open={deleteOpen} onOpenChange={setDeleteOpen} />
       {running ? (
         <>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => restart.mutate(name)}>
@@ -142,6 +166,15 @@ function InstanceActions({ name, running }: { name: string; running: boolean }) 
           Start
         </Button>
       )}
+      <Button
+        size="sm"
+        variant="destructive"
+        disabled={running}
+        aria-label={`Delete ${name}`}
+        onClick={() => setDeleteOpen(true)}
+      >
+        <Trash2 className="size-4" />
+      </Button>
     </div>
   )
 }

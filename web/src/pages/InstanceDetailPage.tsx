@@ -1,17 +1,16 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
 import { AccessListsTab } from '@/components/instance/AccessListsTab'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { ConfigTab } from '@/components/instance/ConfigTab'
+import { DeleteInstanceDialog } from '@/components/instance/DeleteInstanceDialog'
 import { InstanceHeader } from '@/components/instance/InstanceHeader'
 import { LogsTab } from '@/components/instance/LogsTab'
 import { ModsTab } from '@/components/instance/ModsTab'
 import { PlayersTab } from '@/components/instance/PlayersTab'
 import { ResourcesTab } from '@/components/instance/ResourcesTab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { useConfirmDialog } from '@/components/ConfirmDialog'
-import { useDeleteInstance, useInstance } from '@/lib/queries'
+import { useInstance } from '@/lib/queries'
 
 const TABS = ['logs', 'config', 'mods', 'lists', 'backups', 'resources', 'players'] as const
 type Tab = (typeof TABS)[number]
@@ -20,38 +19,23 @@ export function InstanceDetailPage() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('logs')
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const instance = useInstance(name ?? '')
-  const deleteInstance = useDeleteInstance()
-  const { confirm, dialog } = useConfirmDialog()
 
   if (!name) return null
 
-  const handleDelete = async () => {
-    const confirmed = await confirm({
-      title: `Delete '${name}'?`,
-      description: `Permanently delete '${name}'? This removes its world saves, config, and mods.`,
-      confirmLabel: 'Delete instance',
-    })
-    if (!confirmed) return
-    deleteInstance.mutate(
-      { name, keepBackups: false },
-      {
-        onSuccess: () => {
-          toast.success(`Instance '${name}' deleted`)
-          navigate('/instances')
-        },
-        onError: (e) => toast.error(e.message),
-      },
-    )
-  }
-
   return (
     <div className="flex flex-col gap-6">
-      {dialog}
+      <DeleteInstanceDialog
+        name={name}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={() => navigate('/instances')}
+      />
       <InstanceHeader
         instance={instance.data}
         loading={instance.isLoading}
-        onDelete={handleDelete}
+        onDelete={() => setDeleteOpen(true)}
       />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>

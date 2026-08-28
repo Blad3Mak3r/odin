@@ -1,0 +1,1 @@
+ALTER TABLE instances ADD COLUMN auto_restart INTEGER NOT NULL DEFAULT 0;

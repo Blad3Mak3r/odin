@@ -1,13 +1,28 @@
 use std::time::Duration;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
+use chrono::Utc;
+use serde::Deserialize;
 use sysinfo::{Disks, Pid, System};
 
+use crate::db::resource_samples::{self, ResourceSampleRow};
 use crate::instance::{Instance, lifecycle};
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::runtime::{HostSnapshot, InstanceSnapshot, ResourceSample};
 use crate::web::state::AppState;
+
+/// A range beyond what `RuntimeRegistry`'s in-memory buffer covers (~6
+/// minutes) — present means "read from the database", absent keeps today's
+/// fast in-memory path for the live chart.
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub hours: Option<u32>,
+}
+
+const DEFAULT_EXPORT_HOURS: u32 = 24 * 7;
 
 /// Kept short deliberately: this runs inside the telemetry tick's
 /// `spawn_blocking` context, once per instance per tick — a wedged
@@ -23,8 +38,28 @@ pub async fn get_host_resources(State(state): State<AppState>) -> Json<HostSnaps
 
 pub async fn get_host_resources_history(
     State(state): State<AppState>,
-) -> Json<Vec<ResourceSample>> {
-    Json(state.runtime.host_history())
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    match query.hours {
+        Some(hours) => {
+            let db = state.db.clone();
+            let since = Utc::now() - chrono::Duration::hours(hours as i64);
+            let rows = run_blocking(move || resource_samples::range(&db, None, since)).await?;
+            Ok(Json(rows.into_iter().map(Into::into).collect()))
+        }
+        None => Ok(Json(state.runtime.host_history())),
+    }
+}
+
+pub async fn export_host_resources_history(
+    State(state): State<AppState>,
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Response> {
+    let hours = query.hours.unwrap_or(DEFAULT_EXPORT_HOURS);
+    let db = state.db.clone();
+    let since = Utc::now() - chrono::Duration::hours(hours as i64);
+    let rows = run_blocking(move || resource_samples::range(&db, None, since)).await?;
+    Ok(csv_response("host-resources.csv", &rows))
 }
 
 pub async fn get_instance_resources(
@@ -41,12 +76,65 @@ pub async fn get_instance_resources(
 pub async fn get_instance_resources_history(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<ResourceSample>>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let load_name = name.clone();
     run_blocking(move || Instance::load_existing(&paths, &db, &load_name)).await?;
-    Ok(Json(state.runtime.instance_history(&name)))
+
+    match query.hours {
+        Some(hours) => {
+            let db = state.db.clone();
+            let since = Utc::now() - chrono::Duration::hours(hours as i64);
+            let rows =
+                run_blocking(move || resource_samples::range(&db, Some(&name), since)).await?;
+            Ok(Json(rows.into_iter().map(Into::into).collect()))
+        }
+        None => Ok(Json(state.runtime.instance_history(&name))),
+    }
+}
+
+pub async fn export_instance_resources_history(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Response> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let load_name = name.clone();
+    run_blocking(move || Instance::load_existing(&paths, &db, &load_name)).await?;
+
+    let hours = query.hours.unwrap_or(DEFAULT_EXPORT_HOURS);
+    let db = state.db.clone();
+    let since = Utc::now() - chrono::Duration::hours(hours as i64);
+    let export_name = name.clone();
+    let rows =
+        run_blocking(move || resource_samples::range(&db, Some(&export_name), since)).await?;
+    Ok(csv_response(&format!("{name}-resources.csv"), &rows))
+}
+
+fn csv_response(filename: &str, rows: &[ResourceSampleRow]) -> Response {
+    let mut csv = String::from("at,cpu_percent,memory_bytes\n");
+    for row in rows {
+        csv.push_str(&format!(
+            "{},{},{}\n",
+            row.at.to_rfc3339(),
+            row.cpu_percent,
+            row.memory_bytes
+        ));
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "text/csv".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        csv,
+    )
+        .into_response()
 }
 
 /// Computed by `spawn_telemetry` on its background tick — refreshes

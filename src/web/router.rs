@@ -4,8 +4,8 @@ use axum::routing::{delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, config_files, doctor, events, install, instances, jobs, lists, mods, nexus, players,
-    resources, settings, version,
+    backups, bulk, config_files, doctor, events, install, instances, jobs, lists, mods, nexus,
+    players, resources, settings, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -25,6 +25,10 @@ pub fn build_router(state: AppState) -> Router {
             "/instances",
             get(instances::list_instances).post(instances::create_instance),
         )
+        .route("/instances/bulk/start", post(bulk::bulk_start))
+        .route("/instances/bulk/stop", post(bulk::bulk_stop))
+        .route("/instances/bulk/restart", post(bulk::bulk_restart))
+        .route("/instances/bulk/mods/update", post(bulk::bulk_update_mods))
         .route(
             "/instances/{name}",
             get(instances::get_instance).delete(instances::delete_instance),
@@ -73,6 +77,10 @@ pub fn build_router(state: AppState) -> Router {
             delete(backups::delete_backup),
         )
         .route(
+            "/instances/{name}/backup-schedule",
+            get(backups::get_backup_schedule).put(backups::set_backup_schedule),
+        )
+        .route(
             "/instances/{name}/bepinex/config",
             get(config_files::list_config_files),
         )
@@ -110,6 +118,10 @@ pub fn build_router(state: AppState) -> Router {
             get(resources::get_host_resources_history),
         )
         .route(
+            "/system/resources/history/export",
+            get(resources::export_host_resources_history),
+        )
+        .route(
             "/instances/{name}/resources",
             get(resources::get_instance_resources),
         )
@@ -118,9 +130,21 @@ pub fn build_router(state: AppState) -> Router {
             get(resources::get_instance_resources_history),
         )
         .route(
+            "/instances/{name}/resources/history/export",
+            get(resources::export_instance_resources_history),
+        )
+        .route(
             "/instances/{name}/players",
             get(players::get_instance_players),
         )
+        .route(
+            "/webhooks",
+            get(webhooks::list_webhooks).post(webhooks::create_webhook),
+        )
+        .route("/webhooks/{id}", delete(webhooks::delete_webhook))
+        .route("/webhooks/{id}/enable", post(webhooks::enable_webhook))
+        .route("/webhooks/{id}/disable", post(webhooks::disable_webhook))
+        .route("/webhooks/{id}/test", post(webhooks::test_webhook))
         .with_state(state);
 
     Router::new()
@@ -128,4 +152,34 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(static_files::serve_index))
         .route("/{*path}", get(static_files::serve_asset))
         .layer(TraceLayer::new_for_http())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+    use crate::paths::Paths;
+    use std::sync::Arc;
+
+    // `Router::route` panics at registration time if two routes' path
+    // shapes are ambiguous — e.g. a literal segment landing where another
+    // route already has a `{param}` at the same depth (`/instances/bulk/...`
+    // vs. `/instances/{name}/...`). This is the only place that would
+    // surface, since nothing else calls `build_router` outside `odin serve`.
+    #[test]
+    fn router_builds_without_panicking_on_overlapping_route_shapes() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let state = AppState::new(paths, db);
+        let _ = build_router(state);
+    }
 }

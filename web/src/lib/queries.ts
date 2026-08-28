@@ -3,6 +3,8 @@ import { api } from './api-client'
 import type {
   ActivityEvent,
   BackupEntry,
+  BackupScheduleView,
+  BulkResult,
   CheckResult,
   ConfigFileEntry,
   ConfigFileView,
@@ -23,6 +25,7 @@ import type {
   ResourceSample,
   SettingsView,
   VersionView,
+  WebhookView,
 } from './types'
 
 // These have a live push counterpart (see `useLiveSocket`) that keeps their
@@ -77,11 +80,21 @@ export function useInstanceResources(name: string, enabled = true) {
   })
 }
 
-export function useInstanceResourceHistory(name: string, enabled = true) {
+// `hours` omitted keeps the existing live-socket-fed, in-memory (~6 minute)
+// history — its query key deliberately matches `useLiveSocket`'s writes.
+// A specific `hours` reads a downsampled long-range history straight from
+// the database instead, under its own query key so it doesn't collide with
+// the live one.
+export function useInstanceResourceHistory(name: string, hours?: number, enabled = true) {
   return useQuery({
-    queryKey: ['resource-history', 'instance', name],
-    queryFn: () => api.get<ResourceSample[]>(`/instances/${name}/resources/history`),
-    staleTime: Infinity,
+    queryKey: hours
+      ? ['resource-history', 'instance', name, hours]
+      : ['resource-history', 'instance', name],
+    queryFn: () =>
+      api.get<ResourceSample[]>(
+        `/instances/${name}/resources/history${hours ? `?hours=${hours}` : ''}`,
+      ),
+    staleTime: hours ? 60_000 : Infinity,
     enabled,
   })
 }
@@ -142,6 +155,28 @@ function useInstanceAction(action: 'start' | 'stop' | 'restart') {
 export const useStartInstance = () => useInstanceAction('start')
 export const useStopInstance = () => useInstanceAction('stop')
 export const useRestartInstance = () => useInstanceAction('restart')
+
+function useBulkInstanceAction(action: 'start' | 'stop' | 'restart') {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (names: string[]) =>
+      api.post<BulkResult[]>(`/instances/bulk/${action}`, { names }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances'] }),
+  })
+}
+
+export const useBulkStartInstances = () => useBulkInstanceAction('start')
+export const useBulkStopInstances = () => useBulkInstanceAction('stop')
+export const useBulkRestartInstances = () => useBulkInstanceAction('restart')
+
+export function useBulkUpdateMods() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (names: string[]) =>
+      api.post<JobHandle[]>('/instances/bulk/mods/update', { names }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+  })
+}
 
 export function useRenameInstance() {
   const queryClient = useQueryClient()
@@ -296,6 +331,24 @@ export function useDeleteBackup() {
   })
 }
 
+export function useBackupSchedule(name: string) {
+  return useQuery({
+    queryKey: ['instances', name, 'backup-schedule'],
+    queryFn: () => api.get<BackupScheduleView>(`/instances/${name}/backup-schedule`),
+  })
+}
+
+export function useSetBackupSchedule(name: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: Omit<BackupScheduleView, 'last_run_at'>) =>
+      api.put<BackupScheduleView>(`/instances/${name}/backup-schedule`, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-schedule'] })
+    },
+  })
+}
+
 export function useGlobalMods() {
   return useQuery({
     queryKey: ['mods', 'global'],
@@ -388,10 +441,19 @@ export function useList(name: string, kind: ListKind) {
   })
 }
 
-export function useSetList(name: string, kind: ListKind) {
+export function useAddListEntry(name: string, kind: ListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (ids: string[]) => api.put<void>(`/instances/${name}/lists/${kind}`, { ids }),
+    mutationFn: (id: string) => api.post<void>(`/instances/${name}/lists/${kind}`, { id }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
+  })
+}
+
+export function useRemoveListEntry(name: string, kind: ListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.delete<void>(`/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
   })
 }
@@ -448,5 +510,44 @@ export function useJobs() {
     queryKey: ['jobs'],
     queryFn: () => api.get<JobSummary[]>('/jobs'),
     refetchInterval: 3_000,
+  })
+}
+
+export function useWebhooks() {
+  return useQuery({
+    queryKey: ['webhooks'],
+    queryFn: () => api.get<WebhookView[]>('/webhooks'),
+  })
+}
+
+export function useCreateWebhook() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { url: string; event_kinds: string[] }) =>
+      api.post<WebhookView>('/webhooks', req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
+  })
+}
+
+export function useDeleteWebhook() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/webhooks/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
+  })
+}
+
+export function useSetWebhookEnabled() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api.post<void>(`/webhooks/${id}/${enabled ? 'enable' : 'disable'}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
+  })
+}
+
+export function useTestWebhook() {
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/webhooks/${id}/test`),
   })
 }

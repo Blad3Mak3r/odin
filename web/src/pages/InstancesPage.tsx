@@ -1,11 +1,14 @@
+import { Loader2, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { DeleteInstanceDialog } from '@/components/instance/DeleteInstanceDialog'
 import { PageHeader } from '@/components/PageHeader'
 import { PlayersBadge } from '@/components/PlayersBadge'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -19,15 +22,35 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
+  useBulkRestartInstances,
+  useBulkStartInstances,
+  useBulkStopInstances,
+  useBulkUpdateMods,
   useCreateInstance,
+  useInstanceResources,
   useInstances,
   useRestartInstance,
   useStartInstance,
   useStopInstance,
 } from '@/lib/queries'
+import type { BulkResult } from '@/lib/types'
+import { formatBytes } from '@/lib/utils'
 
 export function InstancesPage() {
   const instances = useInstances()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  const names = instances.data?.map((i) => i.name) ?? []
+  const allSelected = names.length > 0 && names.every((n) => selected.has(n))
+
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(names))
+  const toggleOne = (name: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
 
   return (
     <div className="flex flex-col gap-6">
@@ -37,14 +60,29 @@ export function InstancesPage() {
         action={<CreateInstanceDialog />}
       />
 
+      {selected.size > 0 && (
+        <BulkActionBar
+          selected={[...selected]}
+          onDone={() => setSelected(new Set())}
+        />
+      )}
+
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-8">
+              <Checkbox
+                checked={allSelected}
+                onCheckedChange={toggleAll}
+                aria-label="Select all instances"
+              />
+            </TableHead>
             <TableHead className="w-full">Name</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="hidden md:table-cell">World</TableHead>
             <TableHead className="hidden md:table-cell">Port</TableHead>
             <TableHead className="hidden sm:table-cell">Mods</TableHead>
+            <TableHead className="hidden lg:table-cell">Resources</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -54,27 +92,34 @@ export function InstancesPage() {
               // Loading placeholder rows have no stable id and never reorder.
               // eslint-disable-next-line react/no-array-index-key
               <TableRow key={i}>
-                <TableCell colSpan={6}>
+                <TableCell colSpan={8}>
                   <Skeleton className="h-5 w-full" />
                 </TableCell>
               </TableRow>
             ))}
           {instances.isError && (
             <TableRow>
-              <TableCell colSpan={6}>
+              <TableCell colSpan={8}>
                 <QueryError error={instances.error} />
               </TableCell>
             </TableRow>
           )}
           {instances.data?.length === 0 && (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground">
+              <TableCell colSpan={8} className="text-center text-muted-foreground">
                 No instances yet — create one to get started.
               </TableCell>
             </TableRow>
           )}
           {instances.data?.map((instance) => (
             <TableRow key={instance.name}>
+              <TableCell>
+                <Checkbox
+                  checked={selected.has(instance.name)}
+                  onCheckedChange={() => toggleOne(instance.name)}
+                  aria-label={`Select ${instance.name}`}
+                />
+              </TableCell>
               <TableCell className="font-medium">
                 <Link to={`/instances/${instance.name}`} className="hover:underline">
                   {instance.name}
@@ -91,6 +136,9 @@ export function InstancesPage() {
               <TableCell className="hidden md:table-cell">{instance.world_name}</TableCell>
               <TableCell className="hidden md:table-cell">{instance.port}</TableCell>
               <TableCell className="hidden sm:table-cell">{instance.installed_mods.length}</TableCell>
+              <TableCell className="hidden text-muted-foreground lg:table-cell">
+                <InstanceResourceCell name={instance.name} running={instance.running} />
+              </TableCell>
               <TableCell className="text-right">
                 <InstanceActions name={instance.name} running={instance.running} />
               </TableCell>
@@ -102,15 +150,129 @@ export function InstancesPage() {
   )
 }
 
+function reportBulkResults(results: BulkResult[], verb: string) {
+  const failed = results.filter((r) => !r.ok)
+  if (failed.length === 0) {
+    toast.success(`${verb} ${results.length} instance${results.length === 1 ? '' : 's'}`)
+    return
+  }
+  toast.error(
+    `Failed to ${verb.toLowerCase()} ${failed.length} instance${failed.length === 1 ? '' : 's'}: ${failed
+      .map((f) => f.name)
+      .join(', ')}`,
+  )
+}
+
+function BulkActionBar({ selected, onDone }: { selected: string[]; onDone: () => void }) {
+  const bulkStart = useBulkStartInstances()
+  const bulkStop = useBulkStopInstances()
+  const bulkRestart = useBulkRestartInstances()
+  const bulkUpdateMods = useBulkUpdateMods()
+
+  const busy =
+    bulkStart.isPending || bulkStop.isPending || bulkRestart.isPending || bulkUpdateMods.isPending
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-muted/30 px-3 py-2">
+      <span className="text-sm text-muted-foreground">
+        {selected.length} instance{selected.length === 1 ? '' : 's'} selected
+      </span>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            bulkStart.mutate(selected, {
+              onSuccess: (results) => {
+                reportBulkResults(results, 'Started')
+                onDone()
+              },
+            })
+          }
+        >
+          {bulkStart.isPending && <Loader2 className="size-4 animate-spin" />}
+          Start
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            bulkStop.mutate(selected, {
+              onSuccess: (results) => {
+                reportBulkResults(results, 'Stopped')
+                onDone()
+              },
+            })
+          }
+        >
+          {bulkStop.isPending && <Loader2 className="size-4 animate-spin" />}
+          Stop
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            bulkRestart.mutate(selected, {
+              onSuccess: (results) => {
+                reportBulkResults(results, 'Restarted')
+                onDone()
+              },
+            })
+          }
+        >
+          {bulkRestart.isPending && <Loader2 className="size-4 animate-spin" />}
+          Restart
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            bulkUpdateMods.mutate(selected, {
+              onSuccess: (jobs) => {
+                toast.success(`Queued mod updates for ${jobs.length} instance${jobs.length === 1 ? '' : 's'}`)
+                onDone()
+              },
+              onError: (e) => toast.error(e.message),
+            })
+          }
+        >
+          {bulkUpdateMods.isPending && <Loader2 className="size-4 animate-spin" />}
+          Update mods
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function InstanceResourceCell({ name, running }: { name: string; running: boolean }) {
+  const resources = useInstanceResources(name, running)
+
+  if (!running || !resources.data) {
+    return <span>—</span>
+  }
+
+  return (
+    <span className="text-sm">
+      {resources.data.cpu_percent.toFixed(0)}% · {formatBytes(resources.data.memory_bytes)}
+    </span>
+  )
+}
+
 function InstanceActions({ name, running }: { name: string; running: boolean }) {
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const busy = start.isPending || stop.isPending || restart.isPending
 
   return (
     <div className="flex justify-end gap-2">
+      <DeleteInstanceDialog name={name} open={deleteOpen} onOpenChange={setDeleteOpen} />
       {running ? (
         <>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => restart.mutate(name)}>
@@ -142,6 +304,15 @@ function InstanceActions({ name, running }: { name: string; running: boolean }) 
           Start
         </Button>
       )}
+      <Button
+        size="sm"
+        variant="destructive"
+        disabled={running}
+        aria-label={`Delete ${name}`}
+        onClick={() => setDeleteOpen(true)}
+      >
+        <Trash2 className="size-4" />
+      </Button>
     </div>
   )
 }

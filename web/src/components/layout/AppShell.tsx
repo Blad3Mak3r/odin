@@ -7,6 +7,7 @@ import {
   Menu,
   Server,
   Settings,
+  Webhook,
   X,
 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
   { to: '/instances', label: 'Instances', icon: Server, end: false },
   { to: '/mods', label: 'Mods', icon: Blocks, end: false },
   { to: '/jobs', label: 'Jobs', icon: ListChecks, end: false },
+  { to: '/webhooks', label: 'Webhooks', icon: Webhook, end: false },
   { to: '/settings', label: 'Settings', icon: Settings, end: false },
 ]
 

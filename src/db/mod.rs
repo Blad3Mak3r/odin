@@ -12,14 +12,18 @@
 //! `&Db` and exposes calls shaped like the file-I/O functions they replace.
 
 pub mod activity;
+pub mod backup_schedules;
 pub mod backups;
 pub mod cache;
 pub mod global_mods;
 mod import;
 pub mod instances;
+pub mod jobs;
 pub mod lists;
 mod migrations;
+pub mod resource_samples;
 pub mod settings;
+pub mod webhooks;
 
 use std::path::Path;
 use std::sync::Mutex;

@@ -147,6 +147,7 @@ pub struct ConfigView {
     pub port: u16,
     pub password: Option<String>,
     pub public: bool,
+    pub auto_restart: bool,
 }
 
 pub async fn get_config(
@@ -161,6 +162,7 @@ pub async fn get_config(
         port: instance.state.port,
         password: instance.state.password,
         public: instance.state.public,
+        auto_restart: instance.state.auto_restart,
     }))
 }
 
@@ -170,6 +172,7 @@ pub struct ConfigUpdateRequest {
     pub port: Option<u16>,
     pub password: Option<String>,
     pub public: Option<bool>,
+    pub auto_restart: Option<bool>,
 }
 
 pub async fn set_config(
@@ -185,6 +188,7 @@ pub async fn set_config(
         port: instance.state.port,
         password: instance.state.password,
         public: instance.state.public,
+        auto_restart: instance.state.auto_restart,
     }))
 }
 
@@ -216,6 +220,9 @@ fn update_config(
     }
     if let Some(public) = req.public {
         instance.state.public = public;
+    }
+    if let Some(auto_restart) = req.auto_restart {
+        instance.state.auto_restart = auto_restart;
     }
     instance.save(db)?;
     Ok(instance)

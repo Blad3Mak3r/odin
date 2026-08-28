@@ -19,6 +19,7 @@ export function ConfigTab({ name }: { name: string }) {
   const [port, setPort] = useState('')
   const [password, setPassword] = useState('')
   const [isPublic, setIsPublic] = useState(true)
+  const [autoRestart, setAutoRestart] = useState(false)
 
   useEffect(() => {
     if (!config.data) return
@@ -26,6 +27,7 @@ export function ConfigTab({ name }: { name: string }) {
     setPort(String(config.data.port))
     setPassword(config.data.password ?? '')
     setIsPublic(config.data.public)
+    setAutoRestart(config.data.auto_restart)
   }, [config.data])
 
   if (config.isError) {
@@ -49,7 +51,7 @@ export function ConfigTab({ name }: { name: string }) {
   const handleSave = () => {
     if (portInvalid) return
     updateConfig.mutate(
-      { world, port: portNumber, password, public: isPublic },
+      { world, port: portNumber, password, public: isPublic, auto_restart: autoRestart },
       {
         onSuccess: () => toast.success('Config updated — restart the instance to apply it'),
         onError: (e) => toast.error(e.message),
@@ -78,6 +80,15 @@ export function ConfigTab({ name }: { name: string }) {
       <div className="flex items-center justify-between rounded-xl border p-3">
         <Label htmlFor="public">Public</Label>
         <Switch id="public" checked={isPublic} onCheckedChange={setIsPublic} />
+      </div>
+      <div className="flex items-center justify-between rounded-xl border p-3">
+        <div>
+          <Label htmlFor="auto-restart">Restart automatically</Label>
+          <p className="text-xs text-muted-foreground">
+            If the server crashes, start it again without waiting for you to notice.
+          </p>
+        </div>
+        <Switch id="auto-restart" checked={autoRestart} onCheckedChange={setAutoRestart} />
       </div>
 
       <Button className="w-fit" onClick={handleSave} disabled={updateConfig.isPending || portInvalid}>

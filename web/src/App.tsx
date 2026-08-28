@@ -16,6 +16,9 @@ const GlobalModsPage = lazy(() =>
   import('@/pages/GlobalModsPage').then((m) => ({ default: m.GlobalModsPage })),
 )
 const JobsPage = lazy(() => import('@/pages/JobsPage').then((m) => ({ default: m.JobsPage })))
+const WebhooksPage = lazy(() =>
+  import('@/pages/WebhooksPage').then((m) => ({ default: m.WebhooksPage })),
+)
 const SettingsPage = lazy(() =>
   import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 )
@@ -38,6 +41,7 @@ function App() {
           <Route path="/instances/:name" element={<InstanceDetailPage />} />
           <Route path="/mods" element={<GlobalModsPage />} />
           <Route path="/jobs" element={<JobsPage />} />
+          <Route path="/webhooks" element={<WebhooksPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </Suspense>

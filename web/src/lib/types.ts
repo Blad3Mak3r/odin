@@ -47,6 +47,7 @@ export interface ConfigView {
   port: number
   password: string | null
   public: boolean
+  auto_restart: boolean
 }
 
 export interface ConfigUpdateRequest {
@@ -54,6 +55,7 @@ export interface ConfigUpdateRequest {
   port?: number
   password?: string
   public?: boolean
+  auto_restart?: boolean
 }
 
 export interface LogsView {
@@ -132,6 +134,13 @@ export interface BackupEntry {
   size_bytes: number
 }
 
+export interface BackupScheduleView {
+  interval_hours: number
+  retain_count: number
+  enabled: boolean
+  last_run_at: string | null
+}
+
 export interface ConfigFileView {
   content: string
 }
@@ -181,12 +190,14 @@ export type ActivityKind =
   | { kind: 'instance_deleted' }
   | { kind: 'instance_started' }
   | { kind: 'instance_stopped' }
+  | { kind: 'instance_auto_restarted' }
   | { kind: 'server_installed' }
   | { kind: 'mod_installed'; mod_id: string }
   | { kind: 'mod_removed'; mod_id: string }
   | { kind: 'mods_updated' }
   | { kind: 'backup_created'; backup_id: string }
   | { kind: 'backup_restored'; backup_id: string }
+  | { kind: 'backup_pruned'; backup_id: string }
   | { kind: 'player_joined'; name: string }
   | { kind: 'player_left'; name: string }
 
@@ -195,6 +206,20 @@ export interface ActivityEvent {
   at: string
   instance: string | null
   kind: ActivityKind
+}
+
+export interface BulkResult {
+  name: string
+  ok: boolean
+  error: string | null
+}
+
+export interface WebhookView {
+  id: string
+  url: string
+  enabled: boolean
+  event_kinds: ActivityKind['kind'][]
+  created_at: string
 }
 
 export interface SettingsView {

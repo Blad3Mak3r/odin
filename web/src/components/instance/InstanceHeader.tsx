@@ -1,11 +1,20 @@
-import { ArrowLeft, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Loader2, Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { PlayersBadge } from '@/components/PlayersBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useRestartInstance, useStartInstance, useStopInstance } from '@/lib/queries'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useRenameInstance, useRestartInstance, useStartInstance, useStopInstance } from '@/lib/queries'
 import type { InstanceView } from '@/lib/types'
 
 export function InstanceHeader({
@@ -41,6 +50,7 @@ export function InstanceHeader({
                 {instance.running ? 'running' : 'stopped'}
               </Badge>
               <PlayersBadge name={instance.name} running={instance.running} />
+              <RenameInstanceDialog name={instance.name} />
             </>
           )}
         </div>
@@ -100,6 +110,75 @@ export function InstanceHeader({
         </div>
       )}
     </div>
+  )
+}
+
+function RenameInstanceDialog({ name }: { name: string }) {
+  const [open, setOpen] = useState(false)
+  const [newName, setNewName] = useState(name)
+  const navigate = useNavigate()
+  const renameInstance = useRenameInstance()
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next)
+    if (next) setNewName(name)
+  }
+
+  const handleRename = () => {
+    const trimmed = newName.trim()
+    if (!trimmed || trimmed === name) return
+    renameInstance.mutate(
+      { name, newName: trimmed },
+      {
+        onSuccess: () => {
+          setOpen(false)
+          toast.success(`Instance renamed to '${trimmed}'`)
+          navigate(`/instances/${trimmed}`)
+        },
+        onError: (e) => toast.error(e.message),
+      },
+    )
+  }
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Rename instance"
+        onClick={() => handleOpenChange(true)}
+      >
+        <Pencil className="size-3.5" />
+      </Button>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename instance</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="rename-instance">Name</Label>
+            <Input
+              id="rename-instance"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+            />
+            <p className="text-xs text-muted-foreground">
+              Lowercase letters, digits, and hyphens only.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              disabled={!newName.trim() || newName.trim() === name || renameInstance.isPending}
+              onClick={handleRename}
+            >
+              {renameInstance.isPending && <Loader2 className="size-4 animate-spin" />}
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

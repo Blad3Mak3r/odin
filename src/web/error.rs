@@ -9,6 +9,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::backup::BackupError;
+use crate::db::webhooks::WebhookError;
 use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
@@ -59,6 +60,9 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         None => {}
     }
     if let Some(BackupError::NotFound(_)) = err.downcast_ref::<BackupError>() {
+        return StatusCode::NOT_FOUND;
+    }
+    if let Some(WebhookError::NotFound(_)) = err.downcast_ref::<WebhookError>() {
         return StatusCode::NOT_FOUND;
     }
     match err.downcast_ref::<NexusError>() {

@@ -1,4 +1,5 @@
 pub mod backups;
+pub mod bulk;
 pub mod config_files;
 pub mod doctor;
 pub mod events;
@@ -12,3 +13,4 @@ pub mod players;
 pub mod resources;
 pub mod settings;
 pub mod version;
+pub mod webhooks;

@@ -1,14 +1,24 @@
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { JobProgress } from '@/components/JobProgress'
 import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useJobSocket } from '@/hooks/useJobSocket'
-import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup } from '@/lib/queries'
+import {
+  useBackups,
+  useBackupSchedule,
+  useCreateBackup,
+  useDeleteBackup,
+  useRestoreBackup,
+  useSetBackupSchedule,
+} from '@/lib/queries'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 
 export function BackupsTab({ name, running }: { name: string; running: boolean }) {
@@ -74,6 +84,8 @@ export function BackupsTab({ name, running }: { name: string; running: boolean }
         </Button>
       </div>
 
+      <BackupScheduleSection name={name} />
+
       {running && (
         <p className="text-xs text-muted-foreground">
           Restore is disabled while '{name}' is running — stop it first.
@@ -134,6 +146,94 @@ export function BackupsTab({ name, running }: { name: string; running: boolean }
       )}
 
       {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
+    </div>
+  )
+}
+
+function BackupScheduleSection({ name }: { name: string }) {
+  const schedule = useBackupSchedule(name)
+  const setSchedule = useSetBackupSchedule(name)
+
+  const [enabled, setEnabled] = useState(false)
+  const [intervalHours, setIntervalHours] = useState('24')
+  const [retainCount, setRetainCount] = useState('7')
+
+  useEffect(() => {
+    if (!schedule.data) return
+    setEnabled(schedule.data.enabled)
+    setIntervalHours(String(schedule.data.interval_hours))
+    setRetainCount(String(schedule.data.retain_count))
+  }, [schedule.data])
+
+  if (schedule.isLoading) {
+    return <Skeleton className="h-24 w-full" />
+  }
+  if (schedule.isError) {
+    return <QueryError error={schedule.error} />
+  }
+
+  const intervalValue = Number(intervalHours)
+  const retainValue = Number(retainCount)
+  const invalid =
+    intervalHours.trim() === '' ||
+    retainCount.trim() === '' ||
+    Number.isNaN(intervalValue) ||
+    Number.isNaN(retainValue) ||
+    intervalValue < 1 ||
+    retainValue < 1
+
+  const handleSave = () => {
+    if (invalid) return
+    setSchedule.mutate(
+      { interval_hours: intervalValue, retain_count: retainValue, enabled },
+      {
+        onSuccess: () => toast.success('Backup schedule saved'),
+        onError: (e) => toast.error(e.message),
+      },
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border p-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium">Automatic backups</p>
+          <p className="text-xs text-muted-foreground">
+            {schedule.data?.last_run_at
+              ? `Last ran ${formatRelativeTime(schedule.data.last_run_at)}`
+              : 'Not run yet.'}
+          </p>
+        </div>
+        <Switch checked={enabled} onCheckedChange={setEnabled} />
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="backup-interval">Every (hours)</Label>
+          <Input
+            id="backup-interval"
+            type="number"
+            min={1}
+            className="w-24"
+            value={intervalHours}
+            onChange={(e) => setIntervalHours(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="backup-retain">Keep last</Label>
+          <Input
+            id="backup-retain"
+            type="number"
+            min={1}
+            className="w-24"
+            value={retainCount}
+            onChange={(e) => setRetainCount(e.target.value)}
+          />
+        </div>
+        <Button size="sm" disabled={invalid || setSchedule.isPending} onClick={handleSave}>
+          {setSchedule.isPending && <Loader2 className="size-4 animate-spin" />}
+          Save
+        </Button>
+      </div>
     </div>
   )
 }

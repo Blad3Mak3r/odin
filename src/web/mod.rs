@@ -3,6 +3,7 @@
 //! is synchronous — this module (and `commands::serve`) is the only place
 //! async/tokio is used.
 
+mod backup_scheduler;
 mod error;
 pub mod jobs;
 mod log_tail;
@@ -14,6 +15,7 @@ mod sse;
 mod state;
 mod static_files;
 pub mod supervisor;
+mod webhooks;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -35,6 +37,8 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let db = Arc::new(Db::open(&paths).context("failed to open database")?);
     let state = AppState::new(paths, db);
     spawn_telemetry(state.clone());
+    backup_scheduler::spawn(state.clone());
+    webhooks::spawn(state.clone());
 
     let router = router::build_router(state);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -61,6 +65,11 @@ fn local_network_ip() -> Option<IpAddr> {
 }
 
 const TELEMETRY_INTERVAL: Duration = Duration::from_secs(3);
+// How long to wait between automatic-restart attempts for the same
+// instance. Without this, an instance that crashes immediately on every
+// start (a broken mod, say) would get a fresh attempt on every telemetry
+// tick — every few seconds, forever.
+const AUTO_RESTART_COOLDOWN: chrono::Duration = chrono::Duration::seconds(60);
 
 /// Background task keeping the dashboard's live view of the world warm:
 /// refreshes `sysinfo` (its per-process CPU usage is a delta since the
@@ -69,27 +78,57 @@ const TELEMETRY_INTERVAL: Duration = Duration::from_secs(3);
 /// `state.runtime` so HTTP handlers and the live WebSocket feed just read a
 /// cached snapshot instead of recomputing it per request. Also supervises
 /// one player-tracking log tailer per currently-running instance, starting
-/// and stopping them as instances start and stop.
+/// and stopping them as instances start and stop, and restarts any instance
+/// found dead that has opted into automatic crash recovery.
 fn spawn_telemetry(state: AppState) {
     tokio::spawn(async move {
         let mut tailers: HashMap<String, AbortHandle> = HashMap::new();
         loop {
             let tick_state = state.clone();
-            let running = tokio::task::spawn_blocking(move || run_telemetry_tick(&tick_state))
+            let tick = tokio::task::spawn_blocking(move || run_telemetry_tick(&tick_state))
                 .await
                 .unwrap_or_default();
 
-            reconcile_log_tailers(&state, &mut tailers, &running).await;
+            reconcile_log_tailers(&state, &mut tailers, &tick.running).await;
+            for name in tick.crashed_with_auto_restart {
+                attempt_auto_restart(&state, name).await;
+            }
 
             tokio::time::sleep(TELEMETRY_INTERVAL).await;
         }
     });
 }
 
-/// One tick of resource sampling; returns the names of instances found
-/// running this tick, so the caller can reconcile player tailers against
-/// them without a second pass over `instance::list_all`.
-fn run_telemetry_tick(state: &AppState) -> Vec<String> {
+/// Restarts an instance the telemetry tick found dead with automatic
+/// restart enabled, recording a distinct activity kind from a deliberate
+/// manual start so the feed doesn't conflate "an admin started it" with "it
+/// crashed and came back on its own".
+async fn attempt_auto_restart(state: &AppState, name: String) {
+    tracing::warn!(instance = %name, "instance found dead; attempting automatic restart");
+    match instance::lifecycle::start(&state.paths, &state.db, &name).await {
+        Ok(_) => state
+            .activity
+            .record(ActivityKind::InstanceAutoRestarted, Some(name)),
+        Err(e) => {
+            tracing::warn!(instance = %name, error = %e, "automatic restart failed");
+        }
+    }
+}
+
+#[derive(Default)]
+struct TelemetryTick {
+    /// Names of instances found running this tick, so the caller can
+    /// reconcile player tailers against them without a second pass over
+    /// `instance::list_all`.
+    running: Vec<String>,
+    /// Names of instances found dead with automatic restart enabled (and
+    /// past their cooldown), for the caller to restart — done outside this
+    /// function since starting an instance is async and this runs on the
+    /// blocking thread pool.
+    crashed_with_auto_restart: Vec<String>,
+}
+
+fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
     state
         .resources
         .lock()
@@ -99,14 +138,34 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
     let host = compute_host_snapshot(state);
     state.runtime.push_host_sample(host);
 
+    // Decided once per tick (not per series) so the host and every
+    // instance's sample for this tick either all get persisted together or
+    // none do.
+    let persist_now = state.runtime.should_persist_now();
+    let now = chrono::Utc::now();
+    if persist_now {
+        state
+            .runtime
+            .persist_sample(None, now, host.cpu_percent, host.memory_used_bytes);
+    }
+
     let mut entries = Vec::new();
     let mut running_names = Vec::new();
+    let mut crashed_with_auto_restart = Vec::new();
     if let Ok(instances) = instance::list_all(&state.paths, &state.db) {
         for inst in &instances {
             let Ok(snapshot) = compute_instance_snapshot(state, inst) else {
                 continue;
             };
             let name = &inst.state.name;
+            if persist_now && snapshot.running {
+                state.runtime.persist_sample(
+                    Some(name),
+                    now,
+                    snapshot.cpu_percent,
+                    snapshot.memory_bytes,
+                );
+            }
             if state.runtime.push_instance_sample(name, snapshot) {
                 let kind = if snapshot.running {
                     ActivityKind::InstanceStarted
@@ -135,6 +194,14 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
                 let _ =
                     std::fs::remove_file(crate::supervisor::events_sock_path(&state.paths, name));
                 let _ = std::fs::remove_file(crate::supervisor::pidfile_path(&state.paths, name));
+
+                if inst.state.auto_restart
+                    && state
+                        .runtime
+                        .should_attempt_auto_restart(name, AUTO_RESTART_COOLDOWN)
+                {
+                    crashed_with_auto_restart.push(name.clone());
+                }
             }
             entries.push(InstanceResourceEntry {
                 name: name.clone(),
@@ -146,12 +213,19 @@ fn run_telemetry_tick(state: &AppState) -> Vec<String> {
         }
     }
 
+    if persist_now {
+        state.runtime.prune_old_samples();
+    }
+
     state.runtime.broadcast_tick(ResourcesTick {
         host,
         instances: entries,
     });
 
-    running_names
+    TelemetryTick {
+        running: running_names,
+        crashed_with_auto_restart,
+    }
 }
 
 /// Starts a live console feed (`web::log_tail`) for any newly-running

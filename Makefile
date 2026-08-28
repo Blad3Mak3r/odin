@@ -42,11 +42,11 @@ install:
 	@sudo -v
 	@if [ -f /etc/debian_version ]; then \
 		$(MAKE) deb; \
-		sudo apt install --reinstall -y ./target/debian/odin_*.deb; \
+		sudo apt install --reinstall -y ./target/debian/odin-server_*.deb; \
 	elif [ -f /etc/redhat-release ] || [ -f /etc/fedora-release ]; then \
 		$(MAKE) rpm; \
-		sudo dnf reinstall -y ./target/generate-rpm/odin-*.rpm || \
-			sudo dnf install -y ./target/generate-rpm/odin-*.rpm; \
+		sudo dnf reinstall -y ./target/generate-rpm/odin-server-*.rpm || \
+			sudo dnf install -y ./target/generate-rpm/odin-server-*.rpm; \
 	else \
 		echo "Unsupported distro (no /etc/debian_version or /etc/redhat-release)." >&2; \
 		echo "Use 'make install-user' for a per-user install, or 'make deb'/'make rpm'" >&2; \
@@ -64,9 +64,9 @@ install-user: release
 uninstall:
 	@sudo -v
 	@if [ -f /etc/debian_version ]; then \
-		sudo apt remove -y odin; \
+		sudo apt remove -y odin-server; \
 	elif command -v dnf >/dev/null 2>&1; then \
-		sudo dnf remove -y odin; \
+		sudo dnf remove -y odin-server; \
 	else \
 		echo "Not a package-managed install; use 'make uninstall-user' instead." >&2; \
 		exit 1; \

@@ -24,12 +24,15 @@ use tokio::io::BufReader;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 
-use super::protocol::{Event, Request, Response, read_frame, write_frame};
+use super::protocol::{
+    ErrorCode, Event, PROTOCOL_VERSION, Request, Response, read_frame, write_frame,
+};
 use crate::db::Db;
 use crate::instance::{Instance, lifecycle, process};
 use crate::paths::{self, Paths};
 
 const EVENT_BROADCAST_CAPACITY: usize = 256;
+const CONTROL_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const LOG_POLL_INTERVAL: Duration = Duration::from_millis(500);
 // Matches `web::TELEMETRY_INTERVAL` in value only — independently owned,
 // since this tick loop belongs to a different process (`odin run`, not
@@ -153,7 +156,13 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     let pidfile = super::pidfile_path(&paths, instance_name);
 
     let control_listener = bind_private(&control_path)?;
-    let events_listener = bind_private(&events_path)?;
+    let events_listener = match bind_private(&events_path) {
+        Ok(listener) => listener,
+        Err(error) => {
+            let _ = std::fs::remove_file(&control_path);
+            return Err(error);
+        }
+    };
     write_pidfile(&pidfile)?;
 
     let spawned = spawn_child(&instance, &paths, instance_name).await?;
@@ -313,14 +322,34 @@ fn cleanup(control_path: &Path, events_path: &Path, pidfile: &Path) {
     let _ = std::fs::remove_file(pidfile);
 }
 
-/// Binds a Unix socket at `path`, removing any stale socket file left
-/// behind by a previous, uncleanly-terminated run first, and restricting
-/// its permissions to the owner — the socket accepts a `Stop` request, so
-/// it shouldn't be world-writable.
+/// Binds a Unix socket at `path`, reclaiming a stale socket file but refusing
+/// to replace a live listener. The bind itself is the per-instance exclusion
+/// point: concurrent supervisors cannot both own the control socket.
 fn bind_private(path: &Path) -> Result<UnixListener> {
-    let _ = std::fs::remove_file(path);
-    let listener =
-        UnixListener::bind(path).with_context(|| format!("failed to bind {}", path.display()))?;
+    let listener = loop {
+        match UnixListener::bind(path) {
+            Ok(listener) => break listener,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                match std::os::unix::net::UnixStream::connect(path) {
+                    Ok(_) => {
+                        anyhow::bail!("supervisor socket is already in use: {}", path.display())
+                    }
+                    Err(_) => match std::fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => {
+                            return Err(error).with_context(|| {
+                                format!("failed to remove stale socket {}", path.display())
+                            });
+                        }
+                    },
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to bind {}", path.display()));
+            }
+        }
+    };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("failed to set permissions on {}", path.display()))?;
     Ok(listener)
@@ -348,20 +377,28 @@ async fn handle_control_connection(
     } = handles;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
-    let request = match read_frame::<Request, _>(&mut reader).await {
-        Ok(Some(request)) => request,
-        Ok(None) => return,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to read control request");
-            return;
-        }
-    };
+    let request =
+        match tokio::time::timeout(CONTROL_READ_TIMEOUT, read_frame::<Request, _>(&mut reader))
+            .await
+        {
+            Ok(Ok(Some(request))) => request,
+            Ok(Ok(None)) => return,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "failed to read control request");
+                return;
+            }
+            Err(_) => {
+                tracing::warn!("timed out waiting for control request");
+                return;
+            }
+        };
 
     let response = match request {
         Request::Ping => Response::Pong {
             pid,
             pid_started_at,
             started_at,
+            protocol_version: PROTOCOL_VERSION,
             odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             ready: *ready.lock().expect("ready lock poisoned"),
         },
@@ -380,6 +417,7 @@ async fn handle_control_connection(
                 memory_bytes,
             },
             None => Response::Error {
+                code: ErrorCode::StatsNotReady,
                 message: "stats not yet available".to_string(),
             },
         },
@@ -439,7 +477,10 @@ async fn handle_events_connection(mut stream: UnixStream, mut rx: broadcast::Rec
     loop {
         let event = match rx.recv().await {
             Ok(event) => event,
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(skipped, "closing lagged supervisor event stream");
+                return;
+            }
             Err(broadcast::error::RecvError::Closed) => return,
         };
         let is_exit = matches!(event, Event::Exited { .. });
@@ -583,6 +624,21 @@ mod tests {
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
         writeln!(file, "{line}").unwrap();
+    }
+
+    #[tokio::test]
+    async fn bind_private_refuses_a_live_socket() {
+        let paths = temp_paths("bind-live");
+        let socket_path = paths.runtime_dir().join("live.sock");
+        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
+        let listener = bind_private(&socket_path).unwrap();
+
+        let result = bind_private(&socket_path);
+        assert!(result.unwrap_err().to_string().contains("already in use"));
+
+        drop(listener);
+        std::fs::remove_file(socket_path).ok();
+        std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 
     /// Unlike the resources refresher (which needs a live OS process

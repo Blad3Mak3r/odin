@@ -246,12 +246,14 @@ async fn reconcile_log_tailers(
     let running_set: HashSet<&str> = running.iter().map(String::as_str).collect();
 
     tailers.retain(|name, handle| {
-        if running_set.contains(name.as_str()) {
+        if running_set.contains(name.as_str()) && !handle.is_finished() {
             true
         } else {
             handle.abort();
-            state.players.clear_instance(name);
-            state.world_saves.clear_instance(name);
+            if !running_set.contains(name.as_str()) {
+                state.players.clear_instance(name);
+                state.world_saves.clear_instance(name);
+            }
             false
         }
     });

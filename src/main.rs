@@ -12,6 +12,7 @@ mod mods;
 mod odin_update;
 mod paths;
 mod player_events;
+mod save_events;
 mod steamcmd;
 mod supervisor;
 mod valheim_update;

@@ -16,6 +16,7 @@ mod state;
 mod static_files;
 pub mod supervisor;
 mod webhooks;
+mod world_saves;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -209,6 +210,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 cpu_percent: snapshot.cpu_percent,
                 memory_bytes: snapshot.memory_bytes,
                 players: state.players.snapshot(name),
+                last_saved_at: state.world_saves.get(name),
             });
         }
     }
@@ -248,6 +250,7 @@ async fn reconcile_log_tailers(
         } else {
             handle.abort();
             state.players.clear_instance(name);
+            state.world_saves.clear_instance(name);
             false
         }
     });
@@ -263,6 +266,7 @@ async fn reconcile_log_tailers(
                 name,
                 &state.log_tail,
                 &state.players,
+                &state.world_saves,
                 &state.activity,
             )
             .await
@@ -276,6 +280,7 @@ async fn reconcile_log_tailers(
                     log_file,
                     sender,
                     state.players.clone(),
+                    state.world_saves.clone(),
                     state.activity.clone(),
                 ))
                 .abort_handle()

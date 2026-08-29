@@ -32,6 +32,10 @@ pub enum Request {
     /// `console.log` parsing (see `server`'s player tracker) — the latest
     /// state, not a live re-scan.
     Players,
+    /// When the world was last saved, as recognized by the supervisor's own
+    /// `console.log` parsing — `None` if it hasn't saved since this
+    /// supervisor started.
+    LastSaved,
 }
 
 /// The reply to a `Request`, over the same control-socket connection.
@@ -55,6 +59,10 @@ pub enum Response {
     /// The currently-connected player list — see `Request::Players`.
     Players {
         players: Vec<PlayerInfo>,
+    },
+    /// The last-save timestamp — see `Request::LastSaved`.
+    LastSaved {
+        at: Option<DateTime<Utc>>,
     },
     Error {
         message: String,
@@ -86,6 +94,11 @@ pub enum Event {
     /// `odin serve` can record the same `InstanceAutoRestarted` activity it
     /// used to detect on its own (much later) via polling.
     Restarted,
+    /// Pushed in addition to the `LogLine` carrying the same source line,
+    /// whenever the supervisor's own parsing recognizes a save completing.
+    WorldSaved {
+        at: DateTime<Utc>,
+    },
     Exited {
         code: Option<i32>,
     },
@@ -274,6 +287,48 @@ mod tests {
         let mut reader = tokio::io::BufReader::new(&mut server);
         let received = read_frame::<Event, _>(&mut reader).await.unwrap();
         assert!(matches!(received, Some(Event::Restarted)));
+    }
+
+    #[tokio::test]
+    async fn last_saved_request_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(&mut client, &Request::LastSaved).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Request::LastSaved)));
+    }
+
+    #[tokio::test]
+    async fn last_saved_response_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        let at = Utc::now();
+        write_frame(&mut server, &Response::LastSaved { at: Some(at) })
+            .await
+            .unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut client);
+        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
+        match received {
+            Some(Response::LastSaved { at: Some(got) }) => assert_eq!(got, at),
+            other => panic!("expected LastSaved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn world_saved_event_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        let at = Utc::now();
+        write_frame(&mut client, &Event::WorldSaved { at })
+            .await
+            .unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
+        match received {
+            Some(Event::WorldSaved { at: got }) => assert_eq!(got, at),
+            other => panic!("expected WorldSaved, got {other:?}"),
+        }
     }
 
     #[tokio::test]

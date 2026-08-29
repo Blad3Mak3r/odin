@@ -116,6 +116,7 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
     queryClient.setQueryData<PlayerInfo[]>(['players', entry.name], (prev) =>
       samePlayers(prev, entry.players) ? prev : entry.players,
     )
+    queryClient.setQueryData<string | null>(['last-saved', entry.name], entry.last_saved_at)
 
     if (entry.running) {
       queryClient.setQueryData<ResourceSample[]>(

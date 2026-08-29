@@ -72,6 +72,7 @@ pub struct InstanceResourceEntry {
     pub cpu_percent: f32,
     pub memory_bytes: u64,
     pub players: Vec<PlayerInfo>,
+    pub last_saved_at: Option<DateTime<Utc>>,
 }
 
 /// One telemetry tick's worth of host + per-instance samples, broadcast to

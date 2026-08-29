@@ -3,8 +3,8 @@ import { QueryError } from '@/components/QueryError'
 import { ResourceMetric, ResourceMetricSkeleton } from '@/components/ResourceMetric'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { useInstanceResourceHistory, useInstanceResources } from '@/lib/queries'
-import { cn, formatBytes } from '@/lib/utils'
+import { useInstanceResourceHistory, useInstanceResources, useLastSaved } from '@/lib/queries'
+import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 
 const RANGES = [
   { label: 'Live', hours: undefined },
@@ -17,6 +17,7 @@ export function ResourcesTab({ name, running }: { name: string; running: boolean
   const [hours, setHours] = useState<number | undefined>(undefined)
   const resources = useInstanceResources(name, running)
   const history = useInstanceResourceHistory(name, hours, running)
+  const lastSaved = useLastSaved(name)
 
   if (!running) {
     return <p className="text-sm text-muted-foreground">Instance is stopped — nothing to measure.</p>
@@ -66,6 +67,11 @@ export function ResourcesTab({ name, running }: { name: string; running: boolean
           Export CSV
         </a>
       </div>
+      {lastSaved.data && (
+        <p className="text-sm text-muted-foreground">
+          World last saved {formatRelativeTime(lastSaved.data)}
+        </p>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardContent className="text-sm">

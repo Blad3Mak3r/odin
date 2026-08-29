@@ -108,6 +108,17 @@ export function usePlayers(name: string, enabled = true) {
   })
 }
 
+// No REST endpoint backs this — unlike `players`, there's nothing worth
+// fetching on first load (a fresh page just shows "no save yet" for a few
+// seconds until the next live tick arrives). Purely fed by `useLiveSocket`.
+export function useLastSaved(name: string) {
+  return useQuery({
+    queryKey: ['last-saved', name],
+    queryFn: () => Promise.resolve<string | null>(null),
+    staleTime: Infinity,
+  })
+}
+
 export function useActivityFeed() {
   return useQuery({
     queryKey: ['activity-feed'],

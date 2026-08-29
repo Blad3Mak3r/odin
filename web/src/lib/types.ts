@@ -178,6 +178,7 @@ export interface InstanceResourceEntry {
   cpu_percent: number
   memory_bytes: number
   players: PlayerInfo[]
+  last_saved_at: string | null
 }
 
 export interface ResourcesTick {

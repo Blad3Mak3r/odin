@@ -60,6 +60,23 @@ struct TrackedPlayer {
     info: crate::player_events::PlayerInfo,
 }
 
+/// Shared with `handle_control_connection`: when the world was last saved,
+/// as recognized by `poll_console_log`'s own parsing (`crate::save_events::
+/// is_world_saved_line`). `None` until the first save this supervisor has
+/// seen.
+type SavedHandle = Arc<Mutex<Option<chrono::DateTime<Utc>>>>;
+
+/// Bundles the self-monitoring state `handle_control_connection` reads
+/// from, so spawning it per connection doesn't need one parameter per
+/// tracker (clippy's `too_many_arguments`) — cheap to clone, since every
+/// field is itself just an `Arc`.
+#[derive(Clone)]
+struct SharedHandles {
+    stats: StatsHandle,
+    players: PlayersHandle,
+    last_saved: SavedHandle,
+}
+
 /// A freshly spawned (or respawned, on automatic restart) child and its
 /// identity fingerprint — everything `run_instance` needs to update its
 /// local state and the DB, whether this is the initial spawn or a later
@@ -129,14 +146,21 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     let (events_tx, _) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
     let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
     let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
+    let last_saved: SavedHandle = Arc::new(Mutex::new(None));
     let log_poller = tokio::spawn(poll_console_log(
         console_log,
         events_tx.clone(),
         players.clone(),
+        last_saved.clone(),
     ));
 
     let stats: StatsHandle = Arc::new(Mutex::new(None));
     let mut stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
+    let handles = SharedHandles {
+        stats: stats.clone(),
+        players: players.clone(),
+        last_saved: last_saved.clone(),
+    };
 
     let (stop_tx, mut stop_rx) = mpsc::channel::<u64>(1);
     // Set once a `Stop` request starts the shutdown sequence below, so the
@@ -214,8 +238,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
                     pid_started_at,
                     started_at,
                     stop_tx.clone(),
-                    stats.clone(),
-                    players.clone(),
+                    handles.clone(),
                 ));
             }
             Ok((stream, _)) = events_listener.accept() => {
@@ -277,9 +300,13 @@ async fn handle_control_connection(
     pid_started_at: i64,
     started_at: chrono::DateTime<Utc>,
     stop_tx: mpsc::Sender<u64>,
-    stats: StatsHandle,
-    players: PlayersHandle,
+    handles: SharedHandles,
 ) {
+    let SharedHandles {
+        stats,
+        players,
+        last_saved,
+    } = handles;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let request = match read_frame::<Request, _>(&mut reader).await {
@@ -322,6 +349,9 @@ async fn handle_control_connection(
                 .iter()
                 .map(|p| p.info.clone())
                 .collect(),
+        },
+        Request::LastSaved => Response::LastSaved {
+            at: *last_saved.lock().expect("last saved lock poisoned"),
         },
     };
 
@@ -381,17 +411,19 @@ async fn handle_events_connection(mut stream: UnixStream, mut rx: broadcast::Rec
 /// closer to the process actually producing the file, and `odin serve`
 /// receives lines pushed over `events.sock` instead of polling on its own.
 ///
-/// Also recognizes player joins/leaves in each line (see
-/// `crate::player_events::parse_line`), maintains `players`, and pushes the
-/// corresponding `Event::PlayerJoined`/`PlayerLeft` alongside the
-/// unconditional `LogLine` for the same line — self-monitoring connected
-/// players the same way `refresh_stats_periodically` self-monitors
-/// CPU/memory, instead of `odin serve` re-parsing raw lines it receives
-/// secondhand.
+/// Also recognizes player joins/leaves (see `crate::player_events::
+/// parse_line`) and world saves (see `crate::save_events::
+/// is_world_saved_line`) in each line, maintaining `players`/`last_saved`
+/// and pushing the corresponding
+/// `Event::PlayerJoined`/`PlayerLeft`/`WorldSaved` alongside the
+/// unconditional `LogLine` for the same line — self-monitoring the same way
+/// `refresh_stats_periodically` self-monitors CPU/memory, instead of `odin
+/// serve` re-parsing raw lines it receives secondhand.
 async fn poll_console_log(
     log_file: PathBuf,
     events_tx: broadcast::Sender<Event>,
     players: PlayersHandle,
+    last_saved: SavedHandle,
 ) {
     let mut pos = tokio::task::spawn_blocking({
         let log_file = log_file.clone();
@@ -418,6 +450,11 @@ async fn poll_console_log(
                 && let Some(pushed) = apply_player_event(&players, event)
             {
                 let _ = events_tx.send(pushed);
+            }
+            if crate::save_events::is_world_saved_line(line) {
+                let at = Utc::now();
+                *last_saved.lock().expect("last saved lock poisoned") = Some(at);
+                let _ = events_tx.send(Event::WorldSaved { at });
             }
             let _ = events_tx.send(Event::LogLine {
                 line: line.to_string(),
@@ -486,8 +523,8 @@ mod tests {
     }
 
     /// Unlike the resources refresher (which needs a live OS process
-    /// tree), `poll_console_log`'s player detection only needs a real file
-    /// and a channel — no Valheim binary required, so this runs by
+    /// tree), `poll_console_log`'s player/save detection only needs a real
+    /// file and a channel — no Valheim binary required, so this runs by
     /// default rather than being gated behind `--ignored`.
     #[tokio::test]
     async fn poll_console_log_pushes_structured_player_events() {
@@ -502,10 +539,12 @@ mod tests {
 
         let (events_tx, mut events_rx) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
         let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
+        let last_saved: SavedHandle = Arc::new(Mutex::new(None));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
             events_tx.clone(),
             players.clone(),
+            last_saved.clone(),
         ));
 
         // Give the poller a moment to record the file's starting length
@@ -557,6 +596,55 @@ mod tests {
         }
         assert!(saw_left);
         assert!(players.lock().unwrap().is_empty());
+
+        poller.abort();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn poll_console_log_pushes_world_saved_events() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-poll-console-log-save-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_file = dir.join("console.log");
+        std::fs::write(&log_file, "").unwrap();
+
+        let (events_tx, mut events_rx) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
+        let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
+        let last_saved: SavedHandle = Arc::new(Mutex::new(None));
+        let poller = tokio::spawn(poll_console_log(
+            log_file.clone(),
+            events_tx.clone(),
+            players.clone(),
+            last_saved.clone(),
+        ));
+
+        assert!(last_saved.lock().unwrap().is_none());
+
+        tokio::time::sleep(LOG_POLL_INTERVAL / 2).await;
+        append_line(&log_file, "14:32:00: World saved");
+
+        let mut saw_saved = false;
+        let mut saw_log_line = false;
+        for _ in 0..2 {
+            match tokio::time::timeout(Duration::from_secs(2), events_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                Event::WorldSaved { .. } => saw_saved = true,
+                Event::LogLine { line } => {
+                    assert!(line.contains("World saved"));
+                    saw_log_line = true;
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(saw_saved && saw_log_line);
+        assert!(last_saved.lock().unwrap().is_some());
 
         poller.abort();
         std::fs::remove_dir_all(&dir).ok();

@@ -10,6 +10,7 @@ use crate::web::log_tail::LogTailRegistry;
 use crate::web::players::PlayerRegistry;
 use crate::web::runtime::RuntimeRegistry;
 use crate::web::supervisor::Supervisor;
+use crate::web::world_saves::WorldSaveRegistry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,6 +21,7 @@ pub struct AppState {
     pub runtime: RuntimeRegistry,
     pub activity: ActivityLog,
     pub players: PlayerRegistry,
+    pub world_saves: WorldSaveRegistry,
     pub supervisor: Supervisor,
     pub log_tail: LogTailRegistry,
 }
@@ -37,6 +39,7 @@ impl AppState {
             runtime,
             activity,
             players: PlayerRegistry::new(),
+            world_saves: WorldSaveRegistry::new(),
             supervisor: Supervisor::new(),
             log_tail: LogTailRegistry::new(),
         }

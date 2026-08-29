@@ -19,6 +19,7 @@ use tokio::sync::broadcast;
 
 use crate::activity::ActivityLog;
 use crate::web::players::PlayerRegistry;
+use crate::web::world_saves::WorldSaveRegistry;
 
 const BROADCAST_CAPACITY: usize = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -49,18 +50,19 @@ impl LogTailRegistry {
 }
 
 /// The single poll loop for a running instance's `console.log`: reads
-/// newly-appended bytes, applies any player join/leave recognized in each
-/// line, and broadcasts the line to every live subscriber. Runs until
-/// aborted by the telemetry loop when the instance stops running (see
-/// `web::mod`'s `reconcile_log_tailers`). Starts tailing from the file's
-/// current end, not its beginning, since this only spawns once an instance
-/// is observed running — replaying its whole history isn't useful and
-/// could be a lot of lines for a long-running server.
+/// newly-appended bytes, applies any player join/leave or world-save
+/// recognized in each line, and broadcasts the line to every live
+/// subscriber. Runs until aborted by the telemetry loop when the instance
+/// stops running (see `web::mod`'s `reconcile_log_tailers`). Starts tailing
+/// from the file's current end, not its beginning, since this only spawns
+/// once an instance is observed running — replaying its whole history
+/// isn't useful and could be a lot of lines for a long-running server.
 pub async fn tail_and_broadcast(
     instance_name: String,
     log_file: PathBuf,
     sender: broadcast::Sender<String>,
     players: PlayerRegistry,
+    world_saves: WorldSaveRegistry,
     activity: ActivityLog,
 ) {
     let mut pos = tokio::task::spawn_blocking({
@@ -86,6 +88,9 @@ pub async fn tail_and_broadcast(
         for line in chunk.lines() {
             if let Some(kind) = players.apply_line(&instance_name, line) {
                 activity.record(kind, Some(instance_name.clone()));
+            }
+            if crate::save_events::is_world_saved_line(line) {
+                world_saves.set(&instance_name, chrono::Utc::now());
             }
             let _ = sender.send(line.to_string());
         }

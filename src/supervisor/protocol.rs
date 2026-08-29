@@ -21,6 +21,11 @@ pub enum Request {
     /// Stop the Valheim process (SIGINT, then SIGKILL after `timeout_secs`)
     /// and exit once it's gone.
     Stop { timeout_secs: u64 },
+    /// Current resource usage of the Valheim child and its true
+    /// descendants, as last computed by the supervisor's own background
+    /// refresher — never computed synchronously on request, so this can't
+    /// block the connection on a fresh `sysinfo` walk.
+    Stats,
 }
 
 /// The reply to a `Request`, over the same control-socket connection.
@@ -33,6 +38,14 @@ pub enum Response {
         started_at: DateTime<Utc>,
     },
     Stopped,
+    /// Summed CPU/memory for the Valheim process plus any real child
+    /// processes it has (never threads — see
+    /// `instance::process::descendant_pids`). Replied with `Error` instead
+    /// if the supervisor hasn't completed its first background refresh yet.
+    Stats {
+        cpu_percent: f32,
+        memory_bytes: u64,
+    },
     Error {
         message: String,
     },
@@ -121,6 +134,39 @@ mod tests {
                 assert_eq!(pid_started_at, 1_700_000_000);
             }
             other => panic!("expected Pong, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stats_request_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(&mut client, &Request::Stats).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Request::Stats)));
+    }
+
+    #[tokio::test]
+    async fn stats_response_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        let response = Response::Stats {
+            cpu_percent: 12.5,
+            memory_bytes: 1_267_296,
+        };
+        write_frame(&mut server, &response).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut client);
+        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
+        match received {
+            Some(Response::Stats {
+                cpu_percent,
+                memory_bytes,
+            }) => {
+                assert_eq!(cpu_percent, 12.5);
+                assert_eq!(memory_bytes, 1_267_296);
+            }
+            other => panic!("expected Stats, got {other:?}"),
         }
     }
 

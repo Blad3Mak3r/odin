@@ -14,11 +14,12 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sysinfo::Signal;
+use sysinfo::{Pid, Signal, System};
 use tokio::io::BufReader;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
@@ -30,6 +31,15 @@ use crate::paths::{self, Paths};
 
 const EVENT_BROADCAST_CAPACITY: usize = 256;
 const LOG_POLL_INTERVAL: Duration = Duration::from_millis(500);
+// Matches `web::TELEMETRY_INTERVAL` in value only — independently owned,
+// since this tick loop belongs to a different process (`odin run`, not
+// `odin serve`) and can evolve on its own.
+const STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Shared with `handle_control_connection`: `None` until the first
+/// background refresh completes, then the latest `(cpu_percent,
+/// memory_bytes)` snapshot.
+type StatsHandle = Arc<Mutex<Option<(f32, u64)>>>;
 
 /// Runs the supervisor for `instance_name` end to end: prepares and spawns
 /// the Valheim process, serves the control/events sockets, and blocks until
@@ -65,6 +75,9 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
     let log_poller = tokio::spawn(poll_console_log(console_log, events_tx.clone()));
 
+    let stats: StatsHandle = Arc::new(Mutex::new(None));
+    let stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
+
     let (stop_tx, mut stop_rx) = mpsc::channel::<u64>(1);
 
     let exit_code = loop {
@@ -79,6 +92,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
                     pid_started_at,
                     started_at,
                     stop_tx.clone(),
+                    stats.clone(),
                 ));
             }
             Ok((stream, _)) = events_listener.accept() => {
@@ -100,6 +114,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     };
 
     log_poller.abort();
+    stats_refresher.abort();
     let _ = events_tx.send(Event::Exited { code: exit_code });
     crate::db::instances::clear_pid(&db, instance_name, Utc::now())?;
     cleanup(&control_path, &events_path, &pidfile);
@@ -138,6 +153,7 @@ async fn handle_control_connection(
     pid_started_at: i64,
     started_at: chrono::DateTime<Utc>,
     stop_tx: mpsc::Sender<u64>,
+    stats: StatsHandle,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -165,10 +181,50 @@ async fn handle_control_connection(
             let _ = stop_tx.send(timeout_secs).await;
             Response::Stopped
         }
+        Request::Stats => match *stats.lock().expect("stats lock poisoned") {
+            Some((cpu_percent, memory_bytes)) => Response::Stats {
+                cpu_percent,
+                memory_bytes,
+            },
+            None => Response::Error {
+                message: "stats not yet available".to_string(),
+            },
+        },
     };
 
     if let Err(e) = write_frame(&mut write_half, &response).await {
         tracing::warn!(error = %e, "failed to write control response");
+    }
+}
+
+/// Refreshes `stats` on `STATS_REFRESH_INTERVAL`: sums `memory()`/
+/// `cpu_usage()` over the Valheim child and its true (non-thread)
+/// descendants, mirroring what `web::routes::resources` used to compute
+/// centrally for every instance from `odin serve`'s own host-wide process
+/// table — done here instead, scoped to just this one instance's process
+/// tree, since `odin run` already knows its exact child pid. Runs forever;
+/// aborted by `run_instance` alongside `log_poller` once the child exits.
+async fn refresh_stats_periodically(pid: u32, stats: StatsHandle) {
+    let mut system = System::new_all();
+    loop {
+        system = tokio::task::spawn_blocking(move || {
+            system.refresh_all();
+            system
+        })
+        .await
+        .unwrap_or_else(|_| System::new_all());
+
+        let mut cpu_percent = 0.0;
+        let mut memory_bytes = 0;
+        for descendant in process::descendant_pids(&system, &[pid]) {
+            if let Some(p) = system.process(Pid::from_u32(descendant)) {
+                cpu_percent += p.cpu_usage();
+                memory_bytes += p.memory();
+            }
+        }
+        *stats.lock().expect("stats lock poisoned") = Some((cpu_percent, memory_bytes));
+
+        tokio::time::sleep(STATS_REFRESH_INTERVAL).await;
     }
 }
 
@@ -286,6 +342,21 @@ mod tests {
             other => panic!("expected Pong, got {other:?}"),
         };
         assert!(process::is_alive(pid, pid_started_at));
+
+        // Past one STATS_REFRESH_INTERVAL, so the background refresher has
+        // had time to complete its first pass.
+        tokio::time::sleep(STATS_REFRESH_INTERVAL + Duration::from_secs(1)).await;
+        let stats_paths = paths.clone();
+        let stats_response = tokio::task::spawn_blocking(move || {
+            client::stats_blocking(&stats_paths, "e2e-run", Duration::from_secs(2))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(stats_response, Response::Stats { memory_bytes, .. } if memory_bytes > 0),
+            "expected Stats with nonzero memory_bytes, got {stats_response:?}"
+        );
 
         client::stop(&paths, "e2e-run", 30).await.unwrap();
         supervisor_task.await.unwrap().unwrap();

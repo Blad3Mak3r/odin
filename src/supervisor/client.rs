@@ -103,6 +103,29 @@ pub async fn ping_with_retry(
 /// short timeout is simpler and just as correct there. A slow/wedged
 /// supervisor reads as "unreachable" rather than stalling the tick.
 pub fn ping_blocking(paths: &Paths, instance_name: &str, timeout: Duration) -> Result<Response> {
+    request_blocking(paths, instance_name, timeout, &Request::Ping)
+}
+
+/// Synchronous `Stats` request — same rationale and same blocking-I/O
+/// context as `ping_blocking`. A `Response::Error` reply typically means
+/// the supervisor hasn't completed its first background stats refresh yet
+/// (racy right after a fresh start/restart) or predates the `Stats`
+/// request entirely (an old supervisor from before an upgrade); callers
+/// should treat either exactly like a ping timeout: fall back to the
+/// host-side sysinfo walk for this tick.
+pub fn stats_blocking(paths: &Paths, instance_name: &str, timeout: Duration) -> Result<Response> {
+    request_blocking(paths, instance_name, timeout, &Request::Stats)
+}
+
+/// Shared body for the blocking request variants: connect, write one
+/// request frame, read one response frame. See `ping_blocking`'s doc
+/// comment for why this stays plain blocking I/O rather than tokio.
+fn request_blocking(
+    paths: &Paths,
+    instance_name: &str,
+    timeout: Duration,
+    req: &Request,
+) -> Result<Response> {
     use std::io::{BufRead, Write};
     use std::os::unix::net::UnixStream as StdUnixStream;
 
@@ -115,17 +138,17 @@ pub fn ping_blocking(paths: &Paths, instance_name: &str, timeout: Duration) -> R
         .set_write_timeout(Some(timeout))
         .context("failed to set write timeout")?;
 
-    let mut line = serde_json::to_string(&Request::Ping).context("failed to encode Ping")?;
+    let mut line = serde_json::to_string(req).context("failed to encode request")?;
     line.push('\n');
     stream
         .write_all(line.as_bytes())
-        .context("failed to write Ping")?;
+        .context("failed to write request")?;
 
     let mut response_line = String::new();
     std::io::BufReader::new(stream)
         .read_line(&mut response_line)
-        .context("failed to read ping response")?;
-    serde_json::from_str(response_line.trim_end()).context("failed to decode ping response")
+        .context("failed to read response")?;
+    serde_json::from_str(response_line.trim_end()).context("failed to decode response")
 }
 
 /// Asks the supervisor to stop the instance (SIGINT, then SIGKILL after
@@ -329,6 +352,95 @@ mod tests {
             Duration::from_millis(200),
         );
         assert!(result.is_err());
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn stats_blocking_returns_the_supervisors_response() {
+        let paths = temp_paths("stats-blocking");
+        let sock_path = super::super::control_sock_path(&paths, "client-test-stats-blocking");
+        std::fs::create_dir_all(sock_path.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&sock_path);
+        let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
+
+        let server = std::thread::spawn(move || {
+            use std::io::{BufRead, Write};
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let mut writer = stream;
+            let mut response = serde_json::to_string(&Response::Stats {
+                cpu_percent: 4.5,
+                memory_bytes: 1_267_296,
+            })
+            .unwrap();
+            response.push('\n');
+            writer.write_all(response.as_bytes()).unwrap();
+        });
+
+        let response =
+            stats_blocking(&paths, "client-test-stats-blocking", Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            response,
+            Response::Stats {
+                memory_bytes: 1_267_296,
+                ..
+            }
+        ));
+
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&sock_path);
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn stats_blocking_fails_fast_when_nothing_is_listening() {
+        let paths = temp_paths("stats-blocking-fail");
+        let result = stats_blocking(
+            &paths,
+            "client-test-stats-blocking-fail",
+            Duration::from_millis(200),
+        );
+        assert!(result.is_err());
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    /// Simulates an old, pre-upgrade supervisor that doesn't know the
+    /// `Stats` request variant: its `read_frame` fails to deserialize the
+    /// unknown tag, so (per `handle_control_connection`'s existing
+    /// behavior) it logs a warning and closes the connection without
+    /// writing a response. The client should see this exactly like a ping
+    /// timeout — an error, not a panic or a hang — so callers can fall back
+    /// uniformly.
+    #[test]
+    fn stats_blocking_surfaces_a_closed_connection_as_unreachable() {
+        let paths = temp_paths("stats-blocking-old-supervisor");
+        let sock_path =
+            super::super::control_sock_path(&paths, "client-test-stats-blocking-old-supervisor");
+        std::fs::create_dir_all(sock_path.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&sock_path);
+        let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
+
+        let server = std::thread::spawn(move || {
+            use std::io::BufRead;
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            // Connection drops here without a reply, exactly like an old
+            // supervisor's `handle_control_connection` on an unknown tag.
+        });
+
+        let result = stats_blocking(
+            &paths,
+            "client-test-stats-blocking-old-supervisor",
+            Duration::from_secs(2),
+        );
+        assert!(result.is_err());
+
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&sock_path);
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 

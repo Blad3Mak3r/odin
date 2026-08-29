@@ -1,9 +1,9 @@
 name: Release
 
-# Manually triggered: pick a tag (e.g. v0.4.0), and this bumps Cargo.toml's
-# version to match, builds the dashboard + release binary, packages .deb and
-# .rpm, then publishes a GitHub Release with both attached (plus uploading
-# them as workflow artifacts).
+# Manually triggered: pick a semantic version increment. The workflow calculates
+# the next version from the latest GitHub Release, bumps Cargo.toml to match,
+# builds the dashboard + release binary, packages .deb and .rpm, then publishes
+# a GitHub Release with both attached (plus uploading them as workflow artifacts).
 #
 # Requires Settings -> Actions -> General -> Workflow permissions to be set
 # to "Read and write permissions" so the default GITHUB_TOKEN can push the
@@ -11,13 +11,17 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Tag to release, e.g. v0.4.0"
+      version_bump:
+        description: "Version increment"
         required: true
-        type: string
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 concurrency:
-  group: release-${{ github.event.inputs.tag }}
+  group: release
   cancel-in-progress: false
 
 permissions:
@@ -27,20 +31,40 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate tag input
-        run: |
-          TAG="${{ inputs.tag }}"
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid tag '$TAG'. Expected format vX.Y.Z (e.g. v0.4.0)." >&2
-            exit 1
-          fi
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Calculate version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! LATEST_TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName'); then
+            echo "::error::Could not determine the latest GitHub Release." >&2
+            exit 1
+          fi
+          if ! [[ "$LATEST_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Latest release tag '$LATEST_TAG' is not in vX.Y.Z format." >&2
+            exit 1
+          fi
+
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+          case "${{ inputs.version_bump }}" in
+            major) VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) VERSION="$MAJOR.$((MINOR + 1)).0" ;;
+            patch) VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+            *)
+              echo "::error::Unsupported version increment '${{ inputs.version_bump }}'." >&2
+              exit 1
+              ;;
+          esac
+
+          echo "TAG=v$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Releasing v$VERSION from $LATEST_TAG (${{ inputs.version_bump }} increment)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check tag does not already exist
         run: |

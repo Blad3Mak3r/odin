@@ -126,6 +126,19 @@ sudo env ODIN_DATA_DIR=/path/to/a/scratch/dir \
 ## Git workflow
 
 - Work on a feature/fix/chore branch, not directly on `main`.
+- Name branches with `<type>/<short-description>` using lowercase kebab-case:
+  - `feature/...` — new functionality.
+  - `fix/...` — bug fixes.
+  - `docs/...` — documentation-only changes.
+  - `chore/...` — maintenance, dependencies, or tooling changes.
+  - `refactor/...` — code changes without behavior changes.
+  - `test/...` — adding or updating tests.
+  - `perf/...` — performance improvements.
+  - `build/...` — build-system or packaging changes.
+  - `ci/...` — CI/CD configuration changes.
+  - `hotfix/...` — urgent production fixes.
+  Examples: `feature/server-backups`, `docs/api-reference`,
+  `chore/update-dependencies`.
 - Commit incrementally as changes are made rather than batching everything
   into one commit at the end.
 - Open a PR when the work is ready, rather than leaving commits sitting on

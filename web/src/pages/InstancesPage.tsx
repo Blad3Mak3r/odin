@@ -121,9 +121,14 @@ export function InstancesPage() {
                 />
               </TableCell>
               <TableCell className="font-medium">
-                <Link to={`/instances/${instance.name}`} className="hover:underline">
-                  {instance.name}
-                </Link>
+                <div className="flex flex-col">
+                  <Link to={`/instances/${instance.name}`} className="hover:underline">
+                    {instance.name}
+                  </Link>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}
+                  </span>
+                </div>
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">

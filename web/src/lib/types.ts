@@ -41,6 +41,7 @@ export interface InstanceView {
   bepinex_installed: boolean
   installed_mods: InstalledMod[]
   running: boolean
+  odin_version: string | null
 }
 
 export interface ConfigView {

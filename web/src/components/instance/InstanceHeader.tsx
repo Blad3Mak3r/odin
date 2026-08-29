@@ -55,7 +55,14 @@ export function InstanceHeader({
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">{instance?.name ?? '…'}</h1>
+          <div className="flex flex-col">
+            <h1 className="text-2xl font-semibold tracking-tight">{instance?.name ?? '…'}</h1>
+            {instance && (
+              <span className="text-sm text-muted-foreground">
+                Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}
+              </span>
+            )}
+          </div>
           {!loading && instance && (
             <>
               <Badge variant={instance.running ? 'default' : 'secondary'}>

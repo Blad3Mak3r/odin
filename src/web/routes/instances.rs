@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -8,6 +10,8 @@ use crate::db::Db;
 use crate::instance::state::InstanceState;
 use crate::instance::{self, Instance, InstanceError, lifecycle};
 use crate::paths::Paths;
+use crate::supervisor::client;
+use crate::supervisor::protocol::Response;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -16,13 +20,24 @@ pub struct InstanceView {
     #[serde(flatten)]
     pub state: InstanceState,
     pub running: bool,
+    pub odin_version: Option<String>,
 }
 
-fn view(instance: Instance) -> anyhow::Result<InstanceView> {
+fn view(paths: &Paths, instance: Instance) -> anyhow::Result<InstanceView> {
     let running = lifecycle::is_running(&instance)?;
+    let odin_version = if running {
+        match client::ping_blocking(paths, &instance.state.name, Duration::from_millis(300)) {
+            Ok(Response::Pong { odin_version, .. }) => odin_version,
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     Ok(InstanceView {
         state: instance.state,
         running,
+        odin_version,
     })
 }
 
@@ -32,7 +47,7 @@ pub async fn list_instances(State(state): State<AppState>) -> ApiResult<Json<Vec
     let views = run_blocking(move || {
         instance::list_all(&paths, &db)?
             .into_iter()
-            .map(view)
+            .map(|instance| view(&paths, instance))
             .collect::<anyhow::Result<Vec<_>>>()
     })
     .await?;
@@ -58,7 +73,9 @@ pub async fn create_instance(
         Ok(instance)
     })
     .await?;
-    Ok(Json(view(created)?))
+    let paths = state.paths.clone();
+    let instance_view = run_blocking(move || view(&paths, created)).await?;
+    Ok(Json(instance_view))
 }
 
 pub async fn get_instance(
@@ -67,8 +84,12 @@ pub async fn get_instance(
 ) -> ApiResult<Json<InstanceView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let instance = run_blocking(move || Instance::load_existing(&paths, &db, &name)).await?;
-    Ok(Json(view(instance)?))
+    let instance_view = run_blocking(move || {
+        let instance = Instance::load_existing(&paths, &db, &name)?;
+        view(&paths, instance)
+    })
+    .await?;
+    Ok(Json(instance_view))
 }
 
 pub async fn start_instance(
@@ -76,7 +97,9 @@ pub async fn start_instance(
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
     let started = lifecycle::start(&state.paths, &state.db, &name).await?;
-    Ok(Json(view(started)?))
+    let paths = state.paths.clone();
+    let instance_view = run_blocking(move || view(&paths, started)).await?;
+    Ok(Json(instance_view))
 }
 
 pub async fn stop_instance(
@@ -92,7 +115,9 @@ pub async fn restart_instance(
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
     let restarted = lifecycle::restart(&state.paths, &state.db, &name).await?;
-    Ok(Json(view(restarted)?))
+    let paths = state.paths.clone();
+    let instance_view = run_blocking(move || view(&paths, restarted)).await?;
+    Ok(Json(instance_view))
 }
 
 #[derive(Deserialize)]
@@ -109,7 +134,9 @@ pub async fn rename_instance(
     let db = state.db.clone();
     let renamed =
         run_blocking(move || lifecycle::rename(&paths, &db, &old_name, &req.new_name)).await?;
-    Ok(Json(view(renamed)?))
+    let paths = state.paths.clone();
+    let instance_view = run_blocking(move || view(&paths, renamed)).await?;
+    Ok(Json(instance_view))
 }
 
 #[derive(Deserialize)]

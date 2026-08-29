@@ -68,6 +68,19 @@ pub async fn ping(paths: &Paths, instance_name: &str) -> Result<Response> {
     request(&mut stream, &Request::Ping).await
 }
 
+/// Sends `Players` over a fresh connection and returns the response —
+/// async (unlike `stats_blocking`), since its only caller,
+/// `web::supervisor::Supervisor::try_bridge_events`, already runs in async
+/// context (it seeds `PlayerRegistry` with this once, right after
+/// connecting to the events socket, before applying subsequent pushed
+/// `Event::PlayerJoined`/`PlayerLeft`).
+pub async fn players(paths: &Paths, instance_name: &str) -> Result<Response> {
+    let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
+        .await
+        .context("failed to connect to control socket")?;
+    request(&mut stream, &Request::Players).await
+}
+
 /// Pings `instance_name`'s control socket, retrying at a fixed interval
 /// until it responds or `timeout` elapses. Meant to be called right after
 /// `spawn_detached`: bounded by `odin run`'s own startup time, not by how

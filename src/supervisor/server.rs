@@ -41,6 +41,17 @@ const STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 /// memory_bytes)` snapshot.
 type StatsHandle = Arc<Mutex<Option<(f32, u64)>>>;
 
+/// Shared with `handle_control_connection`: the currently-connected player
+/// list, as recognized by `poll_console_log`'s own parsing. Peer ids are
+/// only meaningful at this source (the supervisor resolves them; consumers
+/// only ever see names), so they're kept here rather than exposed further.
+type PlayersHandle = Arc<Mutex<Vec<TrackedPlayer>>>;
+
+struct TrackedPlayer {
+    peer: String,
+    info: crate::player_events::PlayerInfo,
+}
+
 /// Runs the supervisor for `instance_name` end to end: prepares and spawns
 /// the Valheim process, serves the control/events sockets, and blocks until
 /// the process exits (either on its own or via a `Stop` request) and
@@ -73,7 +84,12 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
 
     let (events_tx, _) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
     let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
-    let log_poller = tokio::spawn(poll_console_log(console_log, events_tx.clone()));
+    let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
+    let log_poller = tokio::spawn(poll_console_log(
+        console_log,
+        events_tx.clone(),
+        players.clone(),
+    ));
 
     let stats: StatsHandle = Arc::new(Mutex::new(None));
     let stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
@@ -93,6 +109,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
                     started_at,
                     stop_tx.clone(),
                     stats.clone(),
+                    players.clone(),
                 ));
             }
             Ok((stream, _)) = events_listener.accept() => {
@@ -154,6 +171,7 @@ async fn handle_control_connection(
     started_at: chrono::DateTime<Utc>,
     stop_tx: mpsc::Sender<u64>,
     stats: StatsHandle,
+    players: PlayersHandle,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -189,6 +207,14 @@ async fn handle_control_connection(
             None => Response::Error {
                 message: "stats not yet available".to_string(),
             },
+        },
+        Request::Players => Response::Players {
+            players: players
+                .lock()
+                .expect("players lock poisoned")
+                .iter()
+                .map(|p| p.info.clone())
+                .collect(),
         },
     };
 
@@ -247,7 +273,19 @@ async fn handle_events_connection(mut stream: UnixStream, mut rx: broadcast::Rec
 /// when `odin serve` itself polled the file — that logic now lives here,
 /// closer to the process actually producing the file, and `odin serve`
 /// receives lines pushed over `events.sock` instead of polling on its own.
-async fn poll_console_log(log_file: PathBuf, events_tx: broadcast::Sender<Event>) {
+///
+/// Also recognizes player joins/leaves in each line (see
+/// `crate::player_events::parse_line`), maintains `players`, and pushes the
+/// corresponding `Event::PlayerJoined`/`PlayerLeft` alongside the
+/// unconditional `LogLine` for the same line — self-monitoring connected
+/// players the same way `refresh_stats_periodically` self-monitors
+/// CPU/memory, instead of `odin serve` re-parsing raw lines it receives
+/// secondhand.
+async fn poll_console_log(
+    log_file: PathBuf,
+    events_tx: broadcast::Sender<Event>,
+    players: PlayersHandle,
+) {
     let mut pos = tokio::task::spawn_blocking({
         let log_file = log_file.clone();
         move || std::fs::metadata(&log_file).map(|m| m.len()).unwrap_or(0)
@@ -269,9 +307,49 @@ async fn poll_console_log(log_file: PathBuf, events_tx: broadcast::Sender<Event>
         }
 
         for line in chunk.lines() {
+            if let Some(event) = crate::player_events::parse_line(line)
+                && let Some(pushed) = apply_player_event(&players, event)
+            {
+                let _ = events_tx.send(pushed);
+            }
             let _ = events_tx.send(Event::LogLine {
                 line: line.to_string(),
             });
+        }
+    }
+}
+
+/// Applies a recognized join/leave to `players`, returning the structured
+/// `Event` to push if it actually changed the tracked list (a duplicate
+/// join, or a leave for an untracked peer, is silently ignored — same
+/// semantics as `web::players::PlayerRegistry::apply`).
+fn apply_player_event(
+    players: &PlayersHandle,
+    event: crate::player_events::PlayerEvent,
+) -> Option<Event> {
+    use crate::player_events::{PlayerEvent, PlayerInfo};
+
+    let mut players = players.lock().expect("players lock poisoned");
+    match event {
+        PlayerEvent::Joined { peer, name } => {
+            if players.iter().any(|p| p.peer == peer) {
+                return None;
+            }
+            players.push(TrackedPlayer {
+                peer,
+                info: PlayerInfo {
+                    name: name.clone(),
+                    connected_at: Utc::now(),
+                },
+            });
+            Some(Event::PlayerJoined { name })
+        }
+        PlayerEvent::Left { peer } => {
+            let index = players.iter().position(|p| p.peer == peer)?;
+            let removed = players.remove(index);
+            Some(Event::PlayerLeft {
+                name: removed.info.name,
+            })
         }
     }
 }
@@ -292,6 +370,89 @@ mod tests {
             data_dir: dir.clone(),
             config_dir: dir,
         }
+    }
+
+    fn append_line(path: &std::path::Path, line: &str) {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(file, "{line}").unwrap();
+    }
+
+    /// Unlike the resources refresher (which needs a live OS process
+    /// tree), `poll_console_log`'s player detection only needs a real file
+    /// and a channel — no Valheim binary required, so this runs by
+    /// default rather than being gated behind `--ignored`.
+    #[tokio::test]
+    async fn poll_console_log_pushes_structured_player_events() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-poll-console-log-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_file = dir.join("console.log");
+        std::fs::write(&log_file, "").unwrap();
+
+        let (events_tx, mut events_rx) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
+        let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
+        let poller = tokio::spawn(poll_console_log(
+            log_file.clone(),
+            events_tx.clone(),
+            players.clone(),
+        ));
+
+        // Give the poller a moment to record the file's starting length
+        // before it grows. Appended, like the real console.log (never
+        // rotated or truncated — see `web::log_tail`'s module doc comment).
+        tokio::time::sleep(LOG_POLL_INTERVAL / 2).await;
+        append_line(
+            &log_file,
+            "14:32:10: Got character ZDOID from client 0 : Bjorn",
+        );
+
+        let mut saw_joined = false;
+        let mut saw_log_line = false;
+        for _ in 0..2 {
+            match tokio::time::timeout(Duration::from_secs(2), events_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                Event::PlayerJoined { name } => {
+                    assert_eq!(name, "Bjorn");
+                    saw_joined = true;
+                }
+                Event::LogLine { line } => {
+                    assert!(line.contains("Bjorn"));
+                    saw_log_line = true;
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(saw_joined && saw_log_line);
+        assert_eq!(players.lock().unwrap().len(), 1);
+
+        append_line(&log_file, "14:40:02: Closing socket 0");
+        let mut saw_left = false;
+        for _ in 0..2 {
+            match tokio::time::timeout(Duration::from_secs(2), events_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                Event::PlayerLeft { name } => {
+                    assert_eq!(name, "Bjorn");
+                    saw_left = true;
+                }
+                Event::LogLine { .. } => {}
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(saw_left);
+        assert!(players.lock().unwrap().is_empty());
+
+        poller.abort();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// End-to-end against the *real* `valheim_server.x86_64` on this host

@@ -1,64 +1,26 @@
-//! Tracks which players are currently connected to each running instance by
-//! recognizing Valheim's own connection messages in `console.log` lines fed
-//! to it by the shared tailer in `web::log_tail` — the dedicated server has
-//! no RCON or other admin protocol, so this is the only signal available.
+//! Tracks which players are currently connected to each running instance.
 //!
-//! The patterns below are a best-effort reconstruction from how Valheim's
-//! `ZNet`/`ZDOID` logging is known to behave (a numeric peer id shows up in
-//! both the join and the disconnect line), not verified against a real
-//! `console.log`. If they don't match a real server's output, `parse_line`
-//! is the one place to fix: it's a pure function, easy to test/adjust in
-//! isolation without touching the registry around it. An unmatched line —
-//! including a disconnect whose peer id isn't currently tracked — is
-//! silently ignored rather than guessed at, so a bad pattern degrades to
-//! "missing a leave event" rather than corrupting the list.
+//! Two sources feed this registry: a reachable instance's supervisor
+//! (`odin run`) does its own `console.log` parsing and pushes structured
+//! join/leave events (`web::supervisor::Supervisor::try_bridge_events`,
+//! via `mark_joined`/`mark_left`/`replace_snapshot` below); an instance
+//! with no reachable supervisor falls back to `web::log_tail` parsing raw
+//! lines locally (`apply_line`, unchanged) — see `crate::player_events` for
+//! the shared parsing logic itself.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Utc};
-use regex::Regex;
-use serde::Serialize;
+use chrono::Utc;
 
 use crate::activity::ActivityKind;
+use crate::player_events::{PlayerEvent, parse_line};
 
-#[derive(Debug, Clone, Serialize)]
-pub struct PlayerInfo {
-    pub name: String,
-    pub connected_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PlayerEvent {
-    Joined { peer: String, name: String },
-    Left { peer: String },
-}
-
-static ZDOID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Got character ZDOID from client (\d+)\s*:\s*(.+)$").unwrap());
-static DISCONNECT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Closing socket (\d+)").unwrap());
-
-/// Recognizes a join or leave in a single `console.log` line. See the
-/// module doc comment — this is the best-effort, adjustable part.
-fn parse_line(line: &str) -> Option<PlayerEvent> {
-    if let Some(caps) = ZDOID_RE.captures(line) {
-        return Some(PlayerEvent::Joined {
-            peer: caps[1].to_string(),
-            name: caps[2].trim().to_string(),
-        });
-    }
-    if let Some(caps) = DISCONNECT_RE.captures(line) {
-        return Some(PlayerEvent::Left {
-            peer: caps[1].to_string(),
-        });
-    }
-    None
-}
+pub use crate::player_events::PlayerInfo;
 
 struct ConnectedPlayer {
-    peer: String,
+    peer: Option<String>,
     info: PlayerInfo,
 }
 
@@ -94,10 +56,10 @@ impl PlayerRegistry {
     }
 
     /// Recognizes a join/leave in a single `console.log` line (see
-    /// `parse_line`) and applies it, returning the activity to record if
-    /// the line mattered. Called by `web::log_tail`'s shared tailer for
-    /// every new line it reads, so player tracking never needs its own
-    /// file-polling loop.
+    /// `crate::player_events::parse_line`) and applies it, returning the
+    /// activity to record if the line mattered. Used by `web::log_tail`'s
+    /// fallback poller, for an instance with no reachable supervisor to
+    /// push structured events instead.
     pub fn apply_line(&self, instance: &str, line: &str) -> Option<ActivityKind> {
         let event = parse_line(line)?;
         self.apply(instance, event)
@@ -111,11 +73,11 @@ impl PlayerRegistry {
         let players = instances.entry(instance.to_string()).or_default();
         match event {
             PlayerEvent::Joined { peer, name } => {
-                if players.iter().any(|p| p.peer == peer) {
+                if players.iter().any(|p| p.peer.as_deref() == Some(&*peer)) {
                     return None;
                 }
                 players.push(ConnectedPlayer {
-                    peer,
+                    peer: Some(peer),
                     info: PlayerInfo {
                         name: name.clone(),
                         connected_at: Utc::now(),
@@ -124,13 +86,76 @@ impl PlayerRegistry {
                 Some(ActivityKind::PlayerJoined { name })
             }
             PlayerEvent::Left { peer } => {
-                let index = players.iter().position(|p| p.peer == peer)?;
+                let index = players
+                    .iter()
+                    .position(|p| p.peer.as_deref() == Some(&*peer))?;
                 let removed = players.remove(index);
                 Some(ActivityKind::PlayerLeft {
                     name: removed.info.name,
                 })
             }
         }
+    }
+
+    /// Records a join pushed by a reachable supervisor as a structured
+    /// `Event::PlayerJoined` (see `web::supervisor::Supervisor::
+    /// try_bridge_events`) — the supervisor already resolved the peer id
+    /// internally, so this is keyed by name, deduplicated the same way
+    /// `apply`'s peer-keyed path is.
+    pub fn mark_joined(&self, instance: &str, name: String) -> Option<ActivityKind> {
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("players registry lock poisoned");
+        let players = instances.entry(instance.to_string()).or_default();
+        if players
+            .iter()
+            .any(|p| p.peer.is_none() && p.info.name == name)
+        {
+            return None;
+        }
+        players.push(ConnectedPlayer {
+            peer: None,
+            info: PlayerInfo {
+                name: name.clone(),
+                connected_at: Utc::now(),
+            },
+        });
+        Some(ActivityKind::PlayerJoined { name })
+    }
+
+    /// The `Event::PlayerLeft` counterpart to `mark_joined`.
+    pub fn mark_left(&self, instance: &str, name: &str) -> Option<ActivityKind> {
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("players registry lock poisoned");
+        let players = instances.entry(instance.to_string()).or_default();
+        let index = players
+            .iter()
+            .position(|p| p.peer.is_none() && p.info.name == name)?;
+        let removed = players.remove(index);
+        Some(ActivityKind::PlayerLeft {
+            name: removed.info.name,
+        })
+    }
+
+    /// Seeds `instance`'s current player list from a supervisor's
+    /// authoritative `Response::Players` snapshot, replacing whatever was
+    /// tracked before — used right after a bridge connects, to pick up
+    /// anyone who joined before this subscription started (e.g. `odin
+    /// serve` restarted while the game kept running).
+    pub fn replace_snapshot(&self, instance: &str, players: Vec<PlayerInfo>) {
+        self.instances
+            .lock()
+            .expect("players registry lock poisoned")
+            .insert(
+                instance.to_string(),
+                players
+                    .into_iter()
+                    .map(|info| ConnectedPlayer { peer: None, info })
+                    .collect(),
+            );
     }
 }
 
@@ -147,34 +172,6 @@ pub fn console_log_path(instance_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn zdoid_line_is_a_join() {
-        let event = parse_line("14:32:10: Got character ZDOID from client 0 : Bjorn");
-        assert_eq!(
-            event,
-            Some(PlayerEvent::Joined {
-                peer: "0".to_string(),
-                name: "Bjorn".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn closing_socket_line_is_a_leave() {
-        let event = parse_line("14:40:02: Closing socket 0");
-        assert_eq!(
-            event,
-            Some(PlayerEvent::Left {
-                peer: "0".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn unrelated_line_is_ignored() {
-        assert_eq!(parse_line("14:32:00: World saved"), None);
-    }
 
     #[test]
     fn join_then_leave_round_trips_through_the_registry() {
@@ -210,5 +207,51 @@ mod tests {
             },
         );
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn mark_joined_then_mark_left_round_trips() {
+        let registry = PlayerRegistry::new();
+
+        let joined = registry.mark_joined("my-server", "Bjorn".to_string());
+        assert!(matches!(joined, Some(ActivityKind::PlayerJoined { name }) if name == "Bjorn"));
+        assert_eq!(registry.snapshot("my-server").len(), 1);
+
+        // A duplicate join for the same name is a no-op, same as apply's
+        // peer-keyed dedup.
+        assert!(
+            registry
+                .mark_joined("my-server", "Bjorn".to_string())
+                .is_none()
+        );
+        assert_eq!(registry.snapshot("my-server").len(), 1);
+
+        let left = registry.mark_left("my-server", "Bjorn");
+        assert!(matches!(left, Some(ActivityKind::PlayerLeft { name }) if name == "Bjorn"));
+        assert_eq!(registry.snapshot("my-server").len(), 0);
+    }
+
+    #[test]
+    fn replace_snapshot_seeds_the_current_list() {
+        let registry = PlayerRegistry::new();
+        registry.apply(
+            "my-server",
+            PlayerEvent::Joined {
+                peer: "0".to_string(),
+                name: "Stale".to_string(),
+            },
+        );
+
+        registry.replace_snapshot(
+            "my-server",
+            vec![PlayerInfo {
+                name: "Bjorn".to_string(),
+                connected_at: Utc::now(),
+            }],
+        );
+
+        let snapshot = registry.snapshot("my-server");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].name, "Bjorn");
     }
 }

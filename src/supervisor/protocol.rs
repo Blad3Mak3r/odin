@@ -62,6 +62,11 @@ pub enum Response {
         pid: u32,
         pid_started_at: i64,
         started_at: DateTime<Utc>,
+        /// Odin version that owns this supervisor. `None` means the
+        /// supervisor predates this protocol field and therefore needs a
+        /// restart after Odin itself is upgraded.
+        #[serde(default)]
+        odin_version: Option<String>,
         /// Whether Valheim has finished loading the world and is actually
         /// accepting connections — not just "the process exists and this
         /// socket answers". `false` from the moment the child is spawned
@@ -189,6 +194,7 @@ mod tests {
             pid: 4242,
             pid_started_at: 1_700_000_000,
             started_at: Utc::now(),
+            odin_version: Some("0.7.0".to_string()),
             ready: true,
         };
         write_frame(&mut server, &response).await.unwrap();
@@ -198,13 +204,32 @@ mod tests {
             Some(Response::Pong {
                 pid,
                 pid_started_at,
+                odin_version,
                 ..
             }) => {
-                assert_eq!(pid, 4242);
-                assert_eq!(pid_started_at, 1_700_000_000);
+                assert_eq!(
+                    (pid, pid_started_at, odin_version.as_deref()),
+                    (4242, 1_700_000_000, Some("0.7.0"))
+                );
             }
             other => panic!("expected Pong, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pong_without_odin_version_decodes_as_an_old_supervisor() {
+        let response: Response = serde_json::from_str(
+            r#"{"type":"pong","pid":4242,"pid_started_at":1700000000,"started_at":"2026-08-29T00:00:00Z","ready":true}"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            response,
+            Response::Pong {
+                odin_version: None,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

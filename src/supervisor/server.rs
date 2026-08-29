@@ -362,6 +362,7 @@ async fn handle_control_connection(
             pid,
             pid_started_at,
             started_at,
+            odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             ready: *ready.lock().expect("ready lock poisoned"),
         },
         Request::Stop { timeout_secs } => {

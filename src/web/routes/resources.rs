@@ -200,6 +200,18 @@ pub(crate) fn compute_instance_snapshot(
         return Ok(InstanceSnapshot::default());
     }
 
+    // Whether Valheim itself is done loading, not just "the process/socket
+    // exists" — only a reachable supervisor can tell us this (it's the one
+    // parsing `console.log` for the readiness marker). No host-side
+    // fallback exists for it, unlike CPU/memory, so an unreachable
+    // supervisor just falls back to treating "running" as "ready" — the
+    // same experience the dashboard already had before this distinction
+    // existed.
+    let ready = match &supervisor_ping {
+        Ok(crate::supervisor::protocol::Response::Pong { ready, .. }) => *ready,
+        _ => running,
+    };
+
     // A reachable supervisor already tracks its own child's resource usage
     // (a background refresh loop scoped to just that one process tree, no
     // need to guess from odin serve's own host-wide process table) — prefer
@@ -218,6 +230,7 @@ pub(crate) fn compute_instance_snapshot(
     {
         return Ok(InstanceSnapshot {
             running: true,
+            ready,
             cpu_percent,
             memory_bytes,
         });
@@ -237,6 +250,7 @@ pub(crate) fn compute_instance_snapshot(
 
     Ok(InstanceSnapshot {
         running: true,
+        ready,
         cpu_percent,
         memory_bytes,
     })

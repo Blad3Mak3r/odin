@@ -61,6 +61,11 @@ pub struct HostSnapshot {
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct InstanceSnapshot {
     pub running: bool,
+    /// Whether Valheim has actually finished loading and is accepting
+    /// connections, not just "the process/socket exists" — see
+    /// `routes::resources::compute_instance_snapshot`. Always `false` when
+    /// `running` is (the `Default` derive already gives that for free).
+    pub ready: bool,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
 }
@@ -69,6 +74,7 @@ pub struct InstanceSnapshot {
 pub struct InstanceResourceEntry {
     pub name: String,
     pub running: bool,
+    pub ready: bool,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
     pub players: Vec<PlayerInfo>,

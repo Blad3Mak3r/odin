@@ -14,7 +14,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useRenameInstance, useRestartInstance, useStartInstance, useStopInstance } from '@/lib/queries'
+import {
+  useInstanceResources,
+  useRenameInstance,
+  useRestartInstance,
+  useStartInstance,
+  useStopInstance,
+} from '@/lib/queries'
 import type { InstanceView } from '@/lib/types'
 
 export function InstanceHeader({
@@ -30,6 +36,12 @@ export function InstanceHeader({
   const stop = useStopInstance()
   const restart = useRestartInstance()
   const busy = start.isPending || stop.isPending || restart.isPending
+  // `undefined`/`true` both read as "don't second-guess running" — only an
+  // explicit `false` (a live tick that's actually seen the supervisor say
+  // so) shows "starting" instead, so a fresh page load never flashes it
+  // incorrectly before the first tick arrives.
+  const resources = useInstanceResources(instance?.name ?? '', !!instance?.running)
+  const starting = instance?.running && resources.data?.ready === false
 
   return (
     <div className="flex flex-col gap-3">
@@ -47,7 +59,7 @@ export function InstanceHeader({
           {!loading && instance && (
             <>
               <Badge variant={instance.running ? 'default' : 'secondary'}>
-                {instance.running ? 'running' : 'stopped'}
+                {instance.running ? (starting ? 'starting' : 'running') : 'stopped'}
               </Badge>
               <PlayersBadge name={instance.name} running={instance.running} />
               <RenameInstanceDialog name={instance.name} />

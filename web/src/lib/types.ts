@@ -157,6 +157,7 @@ export interface HostResources {
 
 export interface InstanceResources {
   running: boolean
+  ready: boolean
   cpu_percent: number
   memory_bytes: number
 }
@@ -175,6 +176,7 @@ export interface PlayerInfo {
 export interface InstanceResourceEntry {
   name: string
   running: boolean
+  ready: boolean
   cpu_percent: number
   memory_bytes: number
   players: PlayerInfo[]

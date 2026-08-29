@@ -46,6 +46,12 @@ pub enum Response {
         pid: u32,
         pid_started_at: i64,
         started_at: DateTime<Utc>,
+        /// Whether Valheim has finished loading the world and is actually
+        /// accepting connections — not just "the process exists and this
+        /// socket answers". `false` from the moment the child is spawned
+        /// (or respawned, on automatic restart) until the supervisor's own
+        /// `console.log` parsing recognizes it's come up.
+        ready: bool,
     },
     Stopped,
     /// Summed CPU/memory for the Valheim process plus any real child
@@ -163,6 +169,7 @@ mod tests {
             pid: 4242,
             pid_started_at: 1_700_000_000,
             started_at: Utc::now(),
+            ready: true,
         };
         write_frame(&mut server, &response).await.unwrap();
         let mut reader = tokio::io::BufReader::new(&mut client);

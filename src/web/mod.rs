@@ -207,6 +207,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
             entries.push(InstanceResourceEntry {
                 name: name.clone(),
                 running: snapshot.running,
+                ready: snapshot.ready,
                 cpu_percent: snapshot.cpu_percent,
                 memory_bytes: snapshot.memory_bytes,
                 players: state.players.snapshot(name),

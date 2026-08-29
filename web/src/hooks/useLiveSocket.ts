@@ -106,6 +106,7 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
   for (const entry of tick.instances) {
     const resources: InstanceResources = {
       running: entry.running,
+      ready: entry.ready,
       cpu_percent: entry.cpu_percent,
       memory_bytes: entry.memory_bytes,
     }

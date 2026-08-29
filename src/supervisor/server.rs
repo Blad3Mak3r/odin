@@ -66,6 +66,12 @@ struct TrackedPlayer {
 /// seen.
 type SavedHandle = Arc<Mutex<Option<chrono::DateTime<Utc>>>>;
 
+/// Shared with `handle_control_connection`: whether Valheim has finished
+/// loading and is actually accepting connections, as recognized by
+/// `poll_console_log`'s own parsing (`crate::readiness_events::
+/// is_ready_line`) — `false` from spawn (or respawn) until then.
+type ReadyHandle = Arc<Mutex<bool>>;
+
 /// Bundles the self-monitoring state `handle_control_connection` reads
 /// from, so spawning it per connection doesn't need one parameter per
 /// tracker (clippy's `too_many_arguments`) — cheap to clone, since every
@@ -75,6 +81,7 @@ struct SharedHandles {
     stats: StatsHandle,
     players: PlayersHandle,
     last_saved: SavedHandle,
+    ready: ReadyHandle,
 }
 
 /// A freshly spawned (or respawned, on automatic restart) child and its
@@ -147,11 +154,13 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
     let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
     let last_saved: SavedHandle = Arc::new(Mutex::new(None));
+    let ready: ReadyHandle = Arc::new(Mutex::new(false));
     let log_poller = tokio::spawn(poll_console_log(
         console_log,
         events_tx.clone(),
         players.clone(),
         last_saved.clone(),
+        ready.clone(),
     ));
 
     let stats: StatsHandle = Arc::new(Mutex::new(None));
@@ -160,6 +169,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
         stats: stats.clone(),
         players: players.clone(),
         last_saved: last_saved.clone(),
+        ready: ready.clone(),
     };
 
     let (stop_tx, mut stop_rx) = mpsc::channel::<u64>(1);
@@ -222,6 +232,9 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
                         stats_refresher.abort();
                         *stats.lock().expect("stats lock poisoned") = None;
                         stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
+
+                        // The new child hasn't reached readiness yet either.
+                        *ready.lock().expect("ready lock poisoned") = false;
 
                         let _ = events_tx.send(Event::Restarted);
                     }
@@ -306,6 +319,7 @@ async fn handle_control_connection(
         stats,
         players,
         last_saved,
+        ready,
     } = handles;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -323,6 +337,7 @@ async fn handle_control_connection(
             pid,
             pid_started_at,
             started_at,
+            ready: *ready.lock().expect("ready lock poisoned"),
         },
         Request::Stop { timeout_secs } => {
             // Best-effort: if the main loop already stopped listening (e.g.
@@ -412,18 +427,22 @@ async fn handle_events_connection(mut stream: UnixStream, mut rx: broadcast::Rec
 /// receives lines pushed over `events.sock` instead of polling on its own.
 ///
 /// Also recognizes player joins/leaves (see `crate::player_events::
-/// parse_line`) and world saves (see `crate::save_events::
-/// is_world_saved_line`) in each line, maintaining `players`/`last_saved`
+/// parse_line`), world saves (see `crate::save_events::
+/// is_world_saved_line`), and readiness (see `crate::readiness_events::
+/// is_ready_line`) in each line, maintaining `players`/`last_saved`/`ready`
 /// and pushing the corresponding
 /// `Event::PlayerJoined`/`PlayerLeft`/`WorldSaved` alongside the
 /// unconditional `LogLine` for the same line — self-monitoring the same way
 /// `refresh_stats_periodically` self-monitors CPU/memory, instead of `odin
-/// serve` re-parsing raw lines it receives secondhand.
+/// serve` re-parsing raw lines it receives secondhand. Readiness has no
+/// dedicated push event: it rides on the next `Ping`/`Pong` instead, which
+/// `odin serve` already polls regularly.
 async fn poll_console_log(
     log_file: PathBuf,
     events_tx: broadcast::Sender<Event>,
     players: PlayersHandle,
     last_saved: SavedHandle,
+    ready: ReadyHandle,
 ) {
     let mut pos = tokio::task::spawn_blocking({
         let log_file = log_file.clone();
@@ -455,6 +474,9 @@ async fn poll_console_log(
                 let at = Utc::now();
                 *last_saved.lock().expect("last saved lock poisoned") = Some(at);
                 let _ = events_tx.send(Event::WorldSaved { at });
+            }
+            if crate::readiness_events::is_ready_line(line) {
+                *ready.lock().expect("ready lock poisoned") = true;
             }
             let _ = events_tx.send(Event::LogLine {
                 line: line.to_string(),
@@ -540,11 +562,13 @@ mod tests {
         let (events_tx, mut events_rx) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
         let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
         let last_saved: SavedHandle = Arc::new(Mutex::new(None));
+        let ready: ReadyHandle = Arc::new(Mutex::new(false));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),
+            ready.clone(),
         ));
 
         // Give the poller a moment to record the file's starting length
@@ -615,11 +639,13 @@ mod tests {
         let (events_tx, mut events_rx) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
         let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
         let last_saved: SavedHandle = Arc::new(Mutex::new(None));
+        let ready: ReadyHandle = Arc::new(Mutex::new(false));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),
+            ready.clone(),
         ));
 
         assert!(last_saved.lock().unwrap().is_none());
@@ -645,6 +671,50 @@ mod tests {
         }
         assert!(saw_saved && saw_log_line);
         assert!(last_saved.lock().unwrap().is_some());
+
+        poller.abort();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Readiness has no dedicated push event (see `poll_console_log`'s doc
+    /// comment) — it rides on the next `Ping`, so this checks the shared
+    /// `ReadyHandle` directly instead of the events channel.
+    #[tokio::test]
+    async fn poll_console_log_flips_ready_on_the_readiness_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-poll-console-log-ready-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_file = dir.join("console.log");
+        std::fs::write(&log_file, "").unwrap();
+
+        let (events_tx, _events_rx) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
+        let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
+        let last_saved: SavedHandle = Arc::new(Mutex::new(None));
+        let ready: ReadyHandle = Arc::new(Mutex::new(false));
+        let poller = tokio::spawn(poll_console_log(
+            log_file.clone(),
+            events_tx.clone(),
+            players.clone(),
+            last_saved.clone(),
+            ready.clone(),
+        ));
+
+        assert!(!*ready.lock().unwrap());
+
+        tokio::time::sleep(LOG_POLL_INTERVAL / 2).await;
+        append_line(&log_file, "08/29 20:18:16: Game server connected");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !*ready.lock().unwrap() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "ready was never set after the readiness line"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
 
         poller.abort();
         std::fs::remove_dir_all(&dir).ok();
@@ -698,6 +768,25 @@ mod tests {
             other => panic!("expected Pong, got {other:?}"),
         };
         assert!(process::is_alive(pid, pid_started_at));
+
+        // `ready` starts false and stays that way until the supervisor's
+        // own parsing sees "Game server connected" — deterministic and
+        // provable here without depending on a real Steam GameServer login
+        // actually succeeding (this dev sandbox's network doesn't let one
+        // through, confirmed via `[Steamworks.NET] GameServer.Init()
+        // failed.` in console.log — a UDP restriction, not a bug: the same
+        // parsing logic against a synthetic "Game server connected" line is
+        // covered deterministically by
+        // `poll_console_log_pushes_ready_events` below, and the real
+        // end-to-end transition is left to manual verification against an
+        // install with working Steam connectivity).
+        assert!(
+            matches!(
+                client::ping(&paths, "e2e-run").await,
+                Ok(Response::Pong { ready: false, .. })
+            ),
+            "expected a freshly spawned instance to report ready: false"
+        );
 
         // Past one STATS_REFRESH_INTERVAL, so the background refresher has
         // had time to complete its first pass.

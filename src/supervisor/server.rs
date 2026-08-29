@@ -43,6 +43,10 @@ const STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 // fallback path — this one is strictly faster since the supervisor learns
 // about the exit instantly instead of on the next ~3s telemetry poll.
 const RESTART_COOLDOWN: Duration = Duration::from_secs(60);
+// How many trailing `console.log` lines `Request::LastExit` carries —
+// enough to see what led up to a crash without turning every exit
+// diagnostic into a full log dump.
+pub(crate) const RECENT_LINES_CAPACITY: usize = 20;
 
 /// Shared with `handle_control_connection`: `None` until the first
 /// background refresh completes, then the latest `(cpu_percent,
@@ -72,6 +76,16 @@ type SavedHandle = Arc<Mutex<Option<chrono::DateTime<Utc>>>>;
 /// is_ready_line`) — `false` from spawn (or respawn) until then.
 type ReadyHandle = Arc<Mutex<bool>>;
 
+/// Shared with `handle_control_connection`: a bounded tail of the most
+/// recent `console.log` lines, oldest first — snapshotted into
+/// `LastExitHandle` whenever the child exits, so `Request::LastExit`
+/// carries the context leading up to it.
+type RecentLinesHandle = Arc<Mutex<std::collections::VecDeque<String>>>;
+
+/// Shared with `handle_control_connection`: diagnostics for the most
+/// recent exit of this supervisor's child — `None` until the first exit.
+type LastExitHandle = Arc<Mutex<Option<super::protocol::LastExitInfo>>>;
+
 /// Bundles the self-monitoring state `handle_control_connection` reads
 /// from, so spawning it per connection doesn't need one parameter per
 /// tracker (clippy's `too_many_arguments`) — cheap to clone, since every
@@ -82,6 +96,7 @@ struct SharedHandles {
     players: PlayersHandle,
     last_saved: SavedHandle,
     ready: ReadyHandle,
+    last_exit: LastExitHandle,
 }
 
 /// A freshly spawned (or respawned, on automatic restart) child and its
@@ -155,12 +170,15 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
     let last_saved: SavedHandle = Arc::new(Mutex::new(None));
     let ready: ReadyHandle = Arc::new(Mutex::new(false));
+    let recent_lines: RecentLinesHandle = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let last_exit: LastExitHandle = Arc::new(Mutex::new(None));
     let log_poller = tokio::spawn(poll_console_log(
         console_log,
         events_tx.clone(),
         players.clone(),
         last_saved.clone(),
         ready.clone(),
+        recent_lines.clone(),
     ));
 
     let stats: StatsHandle = Arc::new(Mutex::new(None));
@@ -170,6 +188,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
         players: players.clone(),
         last_saved: last_saved.clone(),
         ready: ready.clone(),
+        last_exit: last_exit.clone(),
     };
 
     let (stop_tx, mut stop_rx) = mpsc::channel::<u64>(1);
@@ -184,6 +203,11 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
         tokio::select! {
             status = child.wait() => {
                 let code = status.ok().and_then(|s| s.code());
+                *last_exit.lock().expect("last exit lock poisoned") = Some(super::protocol::LastExitInfo {
+                    code,
+                    at: Utc::now(),
+                    recent_lines: recent_lines.lock().expect("recent lines lock poisoned").iter().cloned().collect(),
+                });
                 if stopping {
                     break code;
                 }
@@ -320,6 +344,7 @@ async fn handle_control_connection(
         players,
         last_saved,
         ready,
+        last_exit,
     } = handles;
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -367,6 +392,9 @@ async fn handle_control_connection(
         },
         Request::LastSaved => Response::LastSaved {
             at: *last_saved.lock().expect("last saved lock poisoned"),
+        },
+        Request::LastExit => Response::LastExit {
+            info: last_exit.lock().expect("last exit lock poisoned").clone(),
         },
     };
 
@@ -437,12 +465,17 @@ async fn handle_events_connection(mut stream: UnixStream, mut rx: broadcast::Rec
 /// serve` re-parsing raw lines it receives secondhand. Readiness has no
 /// dedicated push event: it rides on the next `Ping`/`Pong` instead, which
 /// `odin serve` already polls regularly.
+///
+/// Also keeps `recent_lines` (a bounded tail, capped at
+/// `RECENT_LINES_CAPACITY`) so `run_instance` has something to snapshot
+/// into `Request::LastExit`'s diagnostics whenever the child exits.
 async fn poll_console_log(
     log_file: PathBuf,
     events_tx: broadcast::Sender<Event>,
     players: PlayersHandle,
     last_saved: SavedHandle,
     ready: ReadyHandle,
+    recent_lines: RecentLinesHandle,
 ) {
     let mut pos = tokio::task::spawn_blocking({
         let log_file = log_file.clone();
@@ -477,6 +510,13 @@ async fn poll_console_log(
             }
             if crate::readiness_events::is_ready_line(line) {
                 *ready.lock().expect("ready lock poisoned") = true;
+            }
+            {
+                let mut recent = recent_lines.lock().expect("recent lines lock poisoned");
+                if recent.len() >= RECENT_LINES_CAPACITY {
+                    recent.pop_front();
+                }
+                recent.push_back(line.to_string());
             }
             let _ = events_tx.send(Event::LogLine {
                 line: line.to_string(),
@@ -563,12 +603,15 @@ mod tests {
         let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
         let last_saved: SavedHandle = Arc::new(Mutex::new(None));
         let ready: ReadyHandle = Arc::new(Mutex::new(false));
+        let recent_lines: RecentLinesHandle =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),
             ready.clone(),
+            recent_lines.clone(),
         ));
 
         // Give the poller a moment to record the file's starting length
@@ -640,12 +683,15 @@ mod tests {
         let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
         let last_saved: SavedHandle = Arc::new(Mutex::new(None));
         let ready: ReadyHandle = Arc::new(Mutex::new(false));
+        let recent_lines: RecentLinesHandle =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),
             ready.clone(),
+            recent_lines.clone(),
         ));
 
         assert!(last_saved.lock().unwrap().is_none());
@@ -694,12 +740,15 @@ mod tests {
         let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
         let last_saved: SavedHandle = Arc::new(Mutex::new(None));
         let ready: ReadyHandle = Arc::new(Mutex::new(false));
+        let recent_lines: RecentLinesHandle =
+            Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),
             ready.clone(),
+            recent_lines.clone(),
         ));
 
         assert!(!*ready.lock().unwrap());
@@ -891,6 +940,23 @@ mod tests {
         };
         assert!(process::is_alive(second_pid, second_pid_started_at));
         assert!(!process::is_alive(first_pid, first_pid_started_at));
+
+        // The control socket stays alive across an in-place restart
+        // (unlike after a real `Stop`), so this is the one real-process
+        // window where `LastExit` is both populated and still reachable —
+        // proving the unconditional exit-diagnostics snapshot in the
+        // `child.wait()` branch actually ran for a real SIGKILL, not just
+        // the synthetic line fed to it in `poll_console_log`'s own test.
+        match client::last_exit(&paths, "e2e-auto-restart").await {
+            Ok(Response::LastExit { info: Some(info) }) => {
+                assert!(
+                    info.code.is_none(),
+                    "a SIGKILL'd process has no exit code, got {:?}",
+                    info.code
+                );
+            }
+            other => panic!("expected LastExit with recorded info, got {other:?}"),
+        }
 
         client::stop(&paths, "e2e-auto-restart", 30).await.unwrap();
         supervisor_task.await.unwrap().unwrap();

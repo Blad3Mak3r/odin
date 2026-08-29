@@ -62,6 +62,12 @@ export interface LogsView {
   lines: string[]
 }
 
+export interface LastExitInfo {
+  code: number | null
+  at: string
+  recent_lines: string[]
+}
+
 export interface ModSearchResult {
   mod_id: string
   name: string

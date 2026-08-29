@@ -4,8 +4,8 @@ use axum::routing::{delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bulk, config_files, doctor, events, install, instances, jobs, lists, mods, nexus,
-    players, resources, settings, version, webhooks,
+    backups, bulk, config_files, diagnostics, doctor, events, install, instances, jobs, lists,
+    mods, nexus, players, resources, settings, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -46,6 +46,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/instances/{name}/logs", get(instances::get_logs))
         .route("/instances/{name}/logs/sse", get(sse::logs_sse))
+        .route(
+            "/instances/{name}/last-exit",
+            get(diagnostics::get_last_exit),
+        )
         .route(
             "/instances/{name}/mods",
             get(mods::list_mods).post(mods::add_mod),

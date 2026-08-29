@@ -5,7 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useLogSocket } from '@/hooks/useLogSocket'
-import { useLogs } from '@/lib/queries'
+import { useLastExit, useLogs } from '@/lib/queries'
+import { formatRelativeTime } from '@/lib/utils'
 
 const LINE_OPTIONS = [100, 200, 500, 1000]
 // Matches the backend WS's fixed replay length (`TAIL_LINES` in `web::ws`) —
@@ -17,6 +18,7 @@ export function LogsTab({ name }: { name: string }) {
   const [lineCount, setLineCount] = useState(200)
   const [filter, setFilter] = useState('')
   const logs = useLogs(name, lineCount)
+  const lastExit = useLastExit(name)
   const socket = useLogSocket(name)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -74,6 +76,14 @@ export function LogsTab({ name }: { name: string }) {
           </div>
         </div>
       </div>
+
+      {lastExit.data && (
+        <p className="text-sm text-muted-foreground">
+          Last exit: {lastExit.data.code === null ? 'killed by signal' : `code ${lastExit.data.code}`}
+          {' · '}
+          {formatRelativeTime(lastExit.data.at)}
+        </p>
+      )}
 
       <Input
         placeholder="Filter lines…"

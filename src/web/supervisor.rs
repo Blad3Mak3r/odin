@@ -77,6 +77,12 @@ impl Supervisor {
                             activity.record(kind, Some(name.clone()));
                         }
                     }
+                    Event::Restarted => {
+                        activity.record(
+                            crate::activity::ActivityKind::InstanceAutoRestarted,
+                            Some(name.clone()),
+                        );
+                    }
                     Event::Exited { .. } => break,
                 }
             }

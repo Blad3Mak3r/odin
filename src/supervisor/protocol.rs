@@ -79,6 +79,13 @@ pub enum Event {
     PlayerLeft {
         name: String,
     },
+    /// The supervisor respawned its child in place after an unexpected
+    /// exit (the instance has automatic restart enabled) instead of
+    /// exiting itself — no fields, since a subscriber already re-reads the
+    /// new pid from the next telemetry tick; this exists purely so
+    /// `odin serve` can record the same `InstanceAutoRestarted` activity it
+    /// used to detect on its own (much later) via polling.
+    Restarted,
     Exited {
         code: Option<i32>,
     },
@@ -257,6 +264,16 @@ mod tests {
         let mut reader = tokio::io::BufReader::new(&mut server);
         let received = read_frame::<Event, _>(&mut reader).await.unwrap();
         assert!(matches!(received, Some(Event::PlayerLeft { name }) if name == "Bjorn"));
+    }
+
+    #[tokio::test]
+    async fn restarted_event_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(&mut client, &Event::Restarted).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Event::Restarted)));
     }
 
     #[tokio::test]

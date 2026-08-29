@@ -26,7 +26,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use super::protocol::{Event, Request, Response, read_frame, write_frame};
 use crate::db::Db;
-use crate::instance::{lifecycle, process};
+use crate::instance::{Instance, lifecycle, process};
 use crate::paths::{self, Paths};
 
 const EVENT_BROADCAST_CAPACITY: usize = 256;
@@ -35,6 +35,14 @@ const LOG_POLL_INTERVAL: Duration = Duration::from_millis(500);
 // since this tick loop belongs to a different process (`odin run`, not
 // `odin serve`) and can evolve on its own.
 const STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+// Matches `web::AUTO_RESTART_COOLDOWN` in value only — independently owned
+// (see that constant's doc comment for the rationale: without a cooldown,
+// an instance that crashes immediately on every start would get a fresh
+// attempt every time `child.wait()` resolves). `odin serve`'s own copy of
+// this cooldown still applies too, for the instance-has-no-live-supervisor
+// fallback path — this one is strictly faster since the supervisor learns
+// about the exit instantly instead of on the next ~3s telemetry poll.
+const RESTART_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Shared with `handle_control_connection`: `None` until the first
 /// background refresh completes, then the latest `(cpu_percent,
@@ -52,10 +60,48 @@ struct TrackedPlayer {
     info: crate::player_events::PlayerInfo,
 }
 
+/// A freshly spawned (or respawned, on automatic restart) child and its
+/// identity fingerprint — everything `run_instance` needs to update its
+/// local state and the DB, whether this is the initial spawn or a later
+/// in-place restart.
+struct SpawnedChild {
+    child: tokio::process::Child,
+    pid: u32,
+    pid_started_at: i64,
+    started_at: chrono::DateTime<Utc>,
+}
+
+/// Builds and spawns `instance`'s Valheim process, reading its own kernel
+/// start time right away for the liveness fingerprint. Shared by
+/// `run_instance`'s initial spawn and its automatic-restart path so both
+/// go through identical setup.
+async fn spawn_child(
+    instance: &Instance,
+    paths: &Paths,
+    instance_name: &str,
+) -> Result<SpawnedChild> {
+    let cmd = process::build_command(instance, paths)?;
+    let child = process::spawn(cmd)
+        .await
+        .with_context(|| format!("failed to start instance '{instance_name}'"))?;
+    let pid = child.id().context("spawned child has no pid")?;
+    let pid_started_at = process::start_time_of(pid)?;
+    let started_at = Utc::now();
+    Ok(SpawnedChild {
+        child,
+        pid,
+        pid_started_at,
+        started_at,
+    })
+}
+
 /// Runs the supervisor for `instance_name` end to end: prepares and spawns
 /// the Valheim process, serves the control/events sockets, and blocks until
-/// the process exits (either on its own or via a `Stop` request) and
-/// cleanup is complete. `commands::run::run` just calls this and returns.
+/// the process exits for good (either on its own with no automatic restart
+/// eligible, or via a `Stop` request) and cleanup is complete. An exit that
+/// *is* eligible for automatic restart (see `RESTART_COOLDOWN`) respawns
+/// the child in place instead of returning. `commands::run::run` just calls
+/// this and returns.
 pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     let db = Db::open(&paths).context("failed to open database")?;
     let mut instance = lifecycle::prepare_start(&paths, &db, instance_name)?;
@@ -71,13 +117,11 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     let events_listener = bind_private(&events_path)?;
     write_pidfile(&pidfile)?;
 
-    let cmd = process::build_command(&instance, &paths)?;
-    let mut child = process::spawn(cmd)
-        .await
-        .with_context(|| format!("failed to start instance '{instance_name}'"))?;
-    let pid = child.id().context("spawned child has no pid")?;
-    let pid_started_at = process::start_time_of(pid)?;
-    let started_at = Utc::now();
+    let spawned = spawn_child(&instance, &paths, instance_name).await?;
+    let mut child = spawned.child;
+    let mut pid = spawned.pid;
+    let mut pid_started_at = spawned.pid_started_at;
+    let mut started_at = spawned.started_at;
     instance.state.pid = Some(pid);
     instance.state.pid_started_at = Some(pid_started_at);
     crate::db::instances::set_pid(&db, instance_name, pid, pid_started_at, started_at)?;
@@ -92,14 +136,76 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     ));
 
     let stats: StatsHandle = Arc::new(Mutex::new(None));
-    let stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
+    let mut stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
 
     let (stop_tx, mut stop_rx) = mpsc::channel::<u64>(1);
+    // Set once a `Stop` request starts the shutdown sequence below, so the
+    // `child.wait()` arm that then fires can tell "asked to stop" apart
+    // from "exited on its own" — only the latter is ever eligible for
+    // automatic restart.
+    let mut stopping = false;
+    let mut last_restart_attempt: Option<tokio::time::Instant> = None;
 
     let exit_code = loop {
         tokio::select! {
             status = child.wait() => {
-                break status.ok().and_then(|s| s.code());
+                let code = status.ok().and_then(|s| s.code());
+                if stopping {
+                    break code;
+                }
+
+                // Re-read from the DB rather than trusting the `instance`
+                // snapshot loaded at startup — an operator can toggle
+                // auto-restart from the dashboard while this instance is
+                // running.
+                let auto_restart = crate::db::instances::load(&db, instance_name)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|s| s.auto_restart);
+                let cooldown_elapsed = last_restart_attempt
+                    .is_none_or(|at| at.elapsed() >= RESTART_COOLDOWN);
+
+                if !auto_restart || !cooldown_elapsed {
+                    break code;
+                }
+                last_restart_attempt = Some(tokio::time::Instant::now());
+
+                tracing::warn!(
+                    instance = instance_name,
+                    ?code,
+                    "instance exited unexpectedly; attempting automatic restart"
+                );
+                match spawn_child(&instance, &paths, instance_name).await {
+                    Ok(respawned) => {
+                        child = respawned.child;
+                        pid = respawned.pid;
+                        pid_started_at = respawned.pid_started_at;
+                        started_at = respawned.started_at;
+                        if let Err(e) = crate::db::instances::set_pid(
+                            &db,
+                            instance_name,
+                            pid,
+                            pid_started_at,
+                            started_at,
+                        ) {
+                            tracing::warn!(instance = instance_name, error = %e, "failed to persist restarted pid");
+                        }
+
+                        // The old refresher is still tracking the dead
+                        // pid; abort it before resetting the shared slot so
+                        // nothing else can observe the stale value racing
+                        // with the reset.
+                        stats_refresher.abort();
+                        *stats.lock().expect("stats lock poisoned") = None;
+                        stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
+
+                        let _ = events_tx.send(Event::Restarted);
+                    }
+                    Err(e) => {
+                        tracing::warn!(instance = instance_name, error = %e, "automatic restart failed");
+                        break code;
+                    }
+                }
             }
             Ok((stream, _)) = control_listener.accept() => {
                 tokio::spawn(handle_control_connection(
@@ -116,6 +222,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
                 tokio::spawn(handle_events_connection(stream, events_tx.subscribe()));
             }
             Some(timeout_secs) = stop_rx.recv() => {
+                stopping = true;
                 let _ = process::send_signal(pid, pid_started_at, Signal::Interrupt);
                 if !process::wait_until_gone(pid, pid_started_at, Duration::from_secs(timeout_secs)).await {
                     tracing::warn!(
@@ -533,6 +640,85 @@ mod tests {
         assert!(!lifecycle::is_running(&reloaded).unwrap());
         assert_eq!(reloaded.state.pid, None);
 
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    /// End-to-end against the real Valheim binary, same setup as
+    /// `run_instance_e2e_against_a_real_server_binary`: kills the running
+    /// process directly (simulating an unwitnessed crash — an OOM kill or
+    /// an external `kill -9`, not the supervisor's own `Stop` path) for an
+    /// instance with `auto_restart` enabled, then confirms the *same*
+    /// supervisor process respawns it in place — a `Pong` with a different
+    /// pid than before, without ever going through
+    /// `instance::lifecycle::start` (which is what `odin serve`'s slower,
+    /// polling-based fallback would use instead, if this path didn't
+    /// exist). Skipped by default, same as the other e2e test: `cargo test
+    /// -- --ignored run_instance_e2e`.
+    #[tokio::test]
+    #[ignore]
+    async fn run_instance_e2e_auto_restarts_after_an_unexpected_exit() {
+        let real_install = directories::ProjectDirs::from("", "", "odin")
+            .unwrap()
+            .data_dir()
+            .join("install")
+            .join("valheim");
+        assert!(
+            real_install.join("valheim_server.x86_64").is_file(),
+            "expected a real Valheim install at {}; run `odin install` first",
+            real_install.display()
+        );
+
+        let paths = temp_paths("run-e2e-auto-restart");
+        std::fs::create_dir_all(paths.shared_install_dir().parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_install, paths.shared_install_dir()).unwrap();
+
+        let db = Db::open(&paths).unwrap();
+        let mut instance = Instance::create(&paths, &db, "e2e-auto-restart").unwrap();
+        instance.state.auto_restart = true;
+        instance.save(&db).unwrap();
+        drop(db);
+
+        let supervisor_task = tokio::spawn(run_instance(paths.clone(), "e2e-auto-restart"));
+
+        let response = client::ping_with_retry(&paths, "e2e-auto-restart", Duration::from_secs(10))
+            .await
+            .unwrap();
+        let (first_pid, first_pid_started_at) = match response {
+            Response::Pong {
+                pid,
+                pid_started_at,
+                ..
+            } => (pid, pid_started_at),
+            other => panic!("expected Pong, got {other:?}"),
+        };
+        assert!(process::is_alive(first_pid, first_pid_started_at));
+
+        process::send_signal(first_pid, first_pid_started_at, Signal::Kill).unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let (second_pid, second_pid_started_at) = loop {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "supervisor did not respawn the instance within the deadline"
+            );
+            if let Ok(Response::Pong {
+                pid,
+                pid_started_at,
+                ..
+            }) = client::ping(&paths, "e2e-auto-restart").await
+                && pid != first_pid
+            {
+                break (pid, pid_started_at);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        assert!(process::is_alive(second_pid, second_pid_started_at));
+        assert!(!process::is_alive(first_pid, first_pid_started_at));
+
+        client::stop(&paths, "e2e-auto-restart", 30).await.unwrap();
+        supervisor_task.await.unwrap().unwrap();
+
+        assert!(!process::is_alive(second_pid, second_pid_started_at));
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 }

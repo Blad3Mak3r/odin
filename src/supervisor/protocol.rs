@@ -36,6 +36,22 @@ pub enum Request {
     /// `console.log` parsing — `None` if it hasn't saved since this
     /// supervisor started.
     LastSaved,
+    /// Diagnostics for the most recent exit of this supervisor's child
+    /// (deliberate or not — including one already superseded by an
+    /// in-place automatic restart), so a crash-loop is debuggable without
+    /// digging through raw `console.log`. `None` if the current child
+    /// hasn't exited yet.
+    LastExit,
+}
+
+/// See `Request::LastExit`/`Response::LastExit`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LastExitInfo {
+    pub code: Option<i32>,
+    pub at: DateTime<Utc>,
+    /// The tail of `console.log` right before this exit — bounded by
+    /// `server::RECENT_LINES_CAPACITY`, oldest first.
+    pub recent_lines: Vec<String>,
 }
 
 /// The reply to a `Request`, over the same control-socket connection.
@@ -69,6 +85,10 @@ pub enum Response {
     /// The last-save timestamp — see `Request::LastSaved`.
     LastSaved {
         at: Option<DateTime<Utc>>,
+    },
+    /// Diagnostics for the most recent exit — see `Request::LastExit`.
+    LastExit {
+        info: Option<LastExitInfo>,
     },
     Error {
         message: String,
@@ -319,6 +339,47 @@ mod tests {
         match received {
             Some(Response::LastSaved { at: Some(got) }) => assert_eq!(got, at),
             other => panic!("expected LastSaved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn last_exit_request_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(&mut client, &Request::LastExit).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Request::LastExit)));
+    }
+
+    #[tokio::test]
+    async fn last_exit_response_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        let at = Utc::now();
+        let response = Response::LastExit {
+            info: Some(LastExitInfo {
+                code: Some(1),
+                at,
+                recent_lines: vec!["boom".to_string()],
+            }),
+        };
+        write_frame(&mut server, &response).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut client);
+        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
+        match received {
+            Some(Response::LastExit {
+                info:
+                    Some(LastExitInfo {
+                        code: Some(1),
+                        at: got_at,
+                        recent_lines,
+                    }),
+            }) => {
+                assert_eq!(got_at, at);
+                assert_eq!(recent_lines, vec!["boom".to_string()]);
+            }
+            other => panic!("expected LastExit, got {other:?}"),
         }
     }
 

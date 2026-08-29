@@ -92,6 +92,18 @@ pub async fn last_saved(paths: &Paths, instance_name: &str) -> Result<Response> 
     request(&mut stream, &Request::LastSaved).await
 }
 
+/// Sends `LastExit` over a fresh connection and returns the response —
+/// async, queried on demand by a REST handler (there's no live tick this
+/// needs to feed, unlike `players`/`last_saved`, so no local registry or
+/// seeding dance either — just ask the supervisor directly each time it's
+/// requested).
+pub async fn last_exit(paths: &Paths, instance_name: &str) -> Result<Response> {
+    let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
+        .await
+        .context("failed to connect to control socket")?;
+    request(&mut stream, &Request::LastExit).await
+}
+
 /// Pings `instance_name`'s control socket, retrying at a fixed interval
 /// until it responds or `timeout` elapses. Meant to be called right after
 /// `spawn_detached`: bounded by `odin run`'s own startup time, not by how

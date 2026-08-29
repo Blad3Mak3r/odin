@@ -17,6 +17,7 @@ import type {
   InstanceView,
   JobHandle,
   JobSummary,
+  LastExitInfo,
   ListKind,
   ListView,
   LogsView,
@@ -229,6 +230,15 @@ export function useLogs(name: string, lines = 200) {
   return useQuery({
     queryKey: ['instances', name, 'logs', lines],
     queryFn: () => api.get<LogsView>(`/instances/${name}/logs?lines=${lines}`),
+  })
+}
+
+// Diagnostics for the most recent exit — not part of the live tick (there's
+// nothing to push it live for), so this is a plain on-demand fetch.
+export function useLastExit(name: string) {
+  return useQuery({
+    queryKey: ['instances', name, 'last-exit'],
+    queryFn: () => api.get<LastExitInfo | null>(`/instances/${name}/last-exit`),
   })
 }
 

@@ -13,10 +13,13 @@ use tokio::io::BufReader;
 use tokio::net::UnixStream;
 use tokio::process::Command;
 
-use super::protocol::{Event, Request, Response, read_frame, write_frame};
+#[cfg(test)]
+use super::protocol::PROTOCOL_VERSION;
+use super::protocol::{Event, MAX_FRAME_BYTES, Request, Response, read_frame, write_frame};
 use crate::paths::Paths;
 
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Spawns `odin run --instance <name>` detached: its own process group
 /// (same mechanism `instance::process::build_command` already uses for the
@@ -62,10 +65,13 @@ pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
 /// socket doesn't exist or nothing answers — see `ping_with_retry` for
 /// waiting out a just-spawned supervisor's startup time.
 pub async fn ping(paths: &Paths, instance_name: &str) -> Result<Response> {
-    let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
-        .await
-        .context("failed to connect to control socket")?;
-    request(&mut stream, &Request::Ping).await
+    request_path(
+        paths,
+        instance_name,
+        &Request::Ping,
+        CONTROL_REQUEST_TIMEOUT,
+    )
+    .await
 }
 
 /// Sends `Players` over a fresh connection and returns the response —
@@ -75,10 +81,13 @@ pub async fn ping(paths: &Paths, instance_name: &str) -> Result<Response> {
 /// connecting to the events socket, before applying subsequent pushed
 /// `Event::PlayerJoined`/`PlayerLeft`).
 pub async fn players(paths: &Paths, instance_name: &str) -> Result<Response> {
-    let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
-        .await
-        .context("failed to connect to control socket")?;
-    request(&mut stream, &Request::Players).await
+    request_path(
+        paths,
+        instance_name,
+        &Request::Players,
+        CONTROL_REQUEST_TIMEOUT,
+    )
+    .await
 }
 
 /// Sends `LastSaved` over a fresh connection and returns the response —
@@ -86,10 +95,13 @@ pub async fn players(paths: &Paths, instance_name: &str) -> Result<Response> {
 /// after connecting to the events socket, before applying subsequent pushed
 /// `Event::WorldSaved`.
 pub async fn last_saved(paths: &Paths, instance_name: &str) -> Result<Response> {
-    let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
-        .await
-        .context("failed to connect to control socket")?;
-    request(&mut stream, &Request::LastSaved).await
+    request_path(
+        paths,
+        instance_name,
+        &Request::LastSaved,
+        CONTROL_REQUEST_TIMEOUT,
+    )
+    .await
 }
 
 /// Sends `LastExit` over a fresh connection and returns the response —
@@ -98,10 +110,13 @@ pub async fn last_saved(paths: &Paths, instance_name: &str) -> Result<Response> 
 /// seeding dance either — just ask the supervisor directly each time it's
 /// requested).
 pub async fn last_exit(paths: &Paths, instance_name: &str) -> Result<Response> {
-    let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
-        .await
-        .context("failed to connect to control socket")?;
-    request(&mut stream, &Request::LastExit).await
+    request_path(
+        paths,
+        instance_name,
+        &Request::LastExit,
+        CONTROL_REQUEST_TIMEOUT,
+    )
+    .await
 }
 
 /// Pings `instance_name`'s control socket, retrying at a fixed interval
@@ -119,7 +134,13 @@ pub async fn ping_with_retry(
 ) -> Result<Response> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        match ping(paths, instance_name).await {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let result = if remaining >= CONTROL_REQUEST_TIMEOUT {
+            ping(paths, instance_name).await
+        } else {
+            request_path(paths, instance_name, &Request::Ping, remaining).await
+        };
+        match result {
             Ok(response) => return Ok(response),
             Err(_) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
@@ -181,9 +202,12 @@ fn request_blocking(
         .context("failed to write request")?;
 
     let mut response_line = String::new();
-    std::io::BufReader::new(stream)
+    let bytes_read = std::io::BufReader::new(stream)
         .read_line(&mut response_line)
         .context("failed to read response")?;
+    if bytes_read > MAX_FRAME_BYTES {
+        bail!("supervisor frame exceeds {MAX_FRAME_BYTES} bytes");
+    }
     serde_json::from_str(response_line.trim_end()).context("failed to decode response")
 }
 
@@ -193,14 +217,34 @@ fn request_blocking(
 /// itself removes the DB pid and its socket/pidfiles once it does);
 /// `instance::lifecycle::stop` waits for the actual exit separately.
 pub async fn stop(paths: &Paths, instance_name: &str, timeout_secs: u64) -> Result<()> {
-    let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
-        .await
-        .context("failed to connect to control socket")?;
-    match request(&mut stream, &Request::Stop { timeout_secs }).await? {
+    match request_path(
+        paths,
+        instance_name,
+        &Request::Stop { timeout_secs },
+        CONTROL_REQUEST_TIMEOUT,
+    )
+    .await?
+    {
         Response::Stopped => Ok(()),
-        Response::Error { message } => bail!(message),
+        Response::Error { message, .. } => bail!(message),
         other => bail!("unexpected response to Stop: {other:?}"),
     }
+}
+
+async fn request_path(
+    paths: &Paths,
+    instance_name: &str,
+    req: &Request,
+    timeout: Duration,
+) -> Result<Response> {
+    tokio::time::timeout(timeout, async {
+        let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
+            .await
+            .context("failed to connect to control socket")?;
+        request(&mut stream, req).await
+    })
+    .await
+    .context("timed out waiting for supervisor control response")?
 }
 
 async fn request(stream: &mut UnixStream, req: &Request) -> Result<Response> {
@@ -220,13 +264,24 @@ pub async fn subscribe_events(
     paths: &Paths,
     instance_name: &str,
 ) -> Result<impl Stream<Item = Event> + use<>> {
-    let stream = UnixStream::connect(super::events_sock_path(paths, instance_name))
-        .await
-        .context("failed to connect to events socket")?;
+    let stream = tokio::time::timeout(
+        CONTROL_REQUEST_TIMEOUT,
+        UnixStream::connect(super::events_sock_path(paths, instance_name)),
+    )
+    .await
+    .context("timed out connecting to events socket")?
+    .context("failed to connect to events socket")?;
     let mut reader = BufReader::new(stream);
     Ok(async_stream::stream! {
-        while let Ok(Some(event)) = read_frame::<Event, _>(&mut reader).await {
-            yield event;
+        loop {
+            match read_frame::<Event, _>(&mut reader).await {
+                Ok(Some(event)) => yield event,
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::warn!(error = %error, "supervisor event stream failed");
+                    break;
+                }
+            }
         }
     })
 }
@@ -287,6 +342,7 @@ mod tests {
                         pid: 1234,
                         pid_started_at: 999,
                         started_at: chrono::Utc::now(),
+                        protocol_version: PROTOCOL_VERSION,
                         odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                         ready: true,
                     },
@@ -320,6 +376,7 @@ mod tests {
                         pid: 4321,
                         pid_started_at: 111,
                         started_at: chrono::Utc::now(),
+                        protocol_version: PROTOCOL_VERSION,
                         odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                         ready: true,
                     },
@@ -349,6 +406,29 @@ mod tests {
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 
+    #[tokio::test]
+    async fn ping_times_out_if_supervisor_accepts_without_reply() {
+        let paths = temp_paths("ping-stalled");
+        let sock_path = super::super::control_sock_path(&paths, "client-test-ping-stalled");
+        let listener = bind_fresh(&sock_path);
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+
+        let result = super::request_path(
+            &paths,
+            "client-test-ping-stalled",
+            &Request::Ping,
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(result.is_err());
+
+        server.await.unwrap();
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
     #[test]
     fn ping_blocking_returns_the_supervisors_response() {
         let paths = temp_paths("ping-blocking");
@@ -368,6 +448,7 @@ mod tests {
                 pid: 555,
                 pid_started_at: 42,
                 started_at: chrono::Utc::now(),
+                protocol_version: PROTOCOL_VERSION,
                 odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                 ready: true,
             })
@@ -513,6 +594,7 @@ mod tests {
                     &paths,
                     "client-test-stop-err",
                     Response::Error {
+                        code: super::super::protocol::ErrorCode::Unknown,
                         message: "boom".to_string(),
                     },
                 )

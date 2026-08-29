@@ -8,9 +8,23 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt};
 
 use crate::player_events::PlayerInfo;
+
+/// Current wire-protocol version. New fields must remain decodable by older
+/// peers, and callers should use this value to decide whether an optional
+/// operation is supported.
+pub const PROTOCOL_VERSION: u16 = 1;
+
+/// Maximum encoded frame size, including its trailing newline.
+pub const MAX_FRAME_BYTES: usize = 256 * 1024;
+
+fn default_ready() -> bool {
+    // Supervisors predating readiness reporting were considered ready as soon
+    // as their control socket answered.
+    true
+}
 
 /// A request sent over an instance's control socket. One request per
 /// connection: the client connects, sends one `Request`, reads one
@@ -62,6 +76,9 @@ pub enum Response {
         pid: u32,
         pid_started_at: i64,
         started_at: DateTime<Utc>,
+        /// Wire-protocol version implemented by the supervisor.
+        #[serde(default)]
+        protocol_version: u16,
         /// Odin version that owns this supervisor. `None` means the
         /// supervisor predates this protocol field and therefore needs a
         /// restart after Odin itself is upgraded.
@@ -72,6 +89,7 @@ pub enum Response {
         /// socket answers". `false` from the moment the child is spawned
         /// (or respawned, on automatic restart) until the supervisor's own
         /// `console.log` parsing recognizes it's come up.
+        #[serde(default = "default_ready")]
         ready: bool,
     },
     Stopped,
@@ -96,8 +114,19 @@ pub enum Response {
         info: Option<LastExitInfo>,
     },
     Error {
+        #[serde(default)]
+        code: ErrorCode,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    StatsNotReady,
+    #[serde(other)]
+    #[default]
+    Unknown,
 }
 
 /// A message pushed unprompted over an instance's events socket. One
@@ -141,16 +170,37 @@ pub enum Event {
 pub async fn read_frame<T, R>(reader: &mut R) -> Result<Option<T>>
 where
     T: for<'de> Deserialize<'de>,
-    R: AsyncBufReadExt + Unpin,
+    R: AsyncBufRead + Unpin,
 {
-    let mut line = String::new();
-    let n = reader
-        .read_line(&mut line)
-        .await
-        .context("failed to read a frame from the supervisor socket")?;
-    if n == 0 {
+    let mut frame = Vec::with_capacity(256);
+    loop {
+        let chunk = reader
+            .fill_buf()
+            .await
+            .context("failed to read a frame from the supervisor socket")?;
+        if chunk.is_empty() {
+            break;
+        }
+
+        let (consumed, found_newline) = match chunk.iter().position(|byte| *byte == b'\n') {
+            Some(position) => (position + 1, true),
+            None => (chunk.len(), false),
+        };
+        if frame.len() + consumed > MAX_FRAME_BYTES {
+            anyhow::bail!("supervisor frame exceeds {MAX_FRAME_BYTES} bytes");
+        }
+        frame.extend_from_slice(&chunk[..consumed]);
+        reader.consume(consumed);
+        if found_newline {
+            break;
+        }
+    }
+
+    if frame.is_empty() {
         return Ok(None);
     }
+
+    let line = std::str::from_utf8(&frame).context("supervisor frame is not UTF-8")?;
     let value = serde_json::from_str(line.trim_end())
         .with_context(|| format!("failed to decode frame: {line:?}"))?;
     Ok(Some(value))
@@ -163,6 +213,9 @@ where
 {
     let mut line = serde_json::to_string(value).context("failed to encode frame as JSON")?;
     line.push('\n');
+    if line.len() > MAX_FRAME_BYTES {
+        anyhow::bail!("supervisor frame exceeds {MAX_FRAME_BYTES} bytes");
+    }
     writer
         .write_all(line.as_bytes())
         .await
@@ -194,6 +247,7 @@ mod tests {
             pid: 4242,
             pid_started_at: 1_700_000_000,
             started_at: Utc::now(),
+            protocol_version: PROTOCOL_VERSION,
             odin_version: Some("0.7.0".to_string()),
             ready: true,
         };
@@ -219,7 +273,7 @@ mod tests {
     #[test]
     fn pong_without_odin_version_decodes_as_an_old_supervisor() {
         let response: Response = serde_json::from_str(
-            r#"{"type":"pong","pid":4242,"pid_started_at":1700000000,"started_at":"2026-08-29T00:00:00Z","ready":true}"#,
+            r#"{"type":"pong","pid":4242,"pid_started_at":1700000000,"started_at":"2026-08-29T00:00:00Z"}"#,
         )
         .unwrap();
 
@@ -227,6 +281,8 @@ mod tests {
             response,
             Response::Pong {
                 odin_version: None,
+                protocol_version: 0,
+                ready: true,
                 ..
             }
         ));
@@ -448,5 +504,18 @@ mod tests {
         let mut reader = tokio::io::BufReader::new(&mut server);
         let received = read_frame::<Request, _>(&mut reader).await.unwrap();
         assert!(received.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_frame_rejects_oversized_frames() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let payload = vec![b'x'; MAX_FRAME_BYTES + 1];
+        let writer = tokio::spawn(async move {
+            client.write_all(&payload).await.unwrap();
+        });
+        let mut reader = tokio::io::BufReader::new(server);
+        let result = read_frame::<Request, _>(&mut reader).await;
+        assert!(result.is_err());
+        writer.await.unwrap();
     }
 }

@@ -47,12 +47,17 @@ fn outdated_running_instances(paths: &Paths, db: &Db) -> anyhow::Result<Vec<Stri
             continue;
         }
 
-        let Ok(Response::Pong { odin_version, .. }) =
-            client::ping_blocking(paths, &instance.state.name, SUPERVISOR_PING_TIMEOUT)
+        let Ok(Response::Pong {
+            protocol_version,
+            odin_version,
+            ..
+        }) = client::ping_blocking(paths, &instance.state.name, SUPERVISOR_PING_TIMEOUT)
         else {
             continue;
         };
-        if supervisor_is_outdated(odin_version.as_deref(), env!("CARGO_PKG_VERSION")) {
+        if protocol_version < crate::supervisor::protocol::PROTOCOL_VERSION
+            || supervisor_is_outdated(odin_version.as_deref(), env!("CARGO_PKG_VERSION"))
+        {
             outdated.push(instance.state.name);
         }
     }

@@ -1,4 +1,4 @@
-import { Sparkles, X } from 'lucide-react'
+import { Sparkles, TriangleAlert, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useVersion } from '@/lib/queries'
@@ -22,44 +22,67 @@ function writeDismissedVersion(version: string) {
   }
 }
 
-/// Persistent bar shown when a newer Odin release is available, dismissible
-/// per-version so it doesn't nag again until an even newer one ships.
+/// Persistent bar for Odin updates: a release notice can be dismissed per
+/// version, while running instances left on an older supervisor stay visible
+/// until they are restarted.
 export function UpdateBanner() {
   const version = useVersion()
   const [dismissed, setDismissed] = useState<string | null>(() => readDismissedVersion())
 
   const latest = version.data?.update_available ? version.data.latest_version : null
-  if (!latest || latest === dismissed) {
+  const availableRelease = latest && latest !== dismissed ? latest : null
+  const outdated = version.data?.outdated_instances ?? []
+  if (!availableRelease && outdated.length === 0) {
     return null
   }
 
   return (
-    <div className="flex items-center justify-between gap-3 border-b bg-accent px-4 py-2 text-sm text-accent-foreground">
-      <span className="flex items-center gap-2">
-        <Sparkles className="size-4 shrink-0" />
-        Odin {latest} is available.
-        {version.data?.latest_release_url && (
-          <a
-            href={version.data.latest_release_url}
-            target="_blank"
-            rel="noreferrer"
-            className="underline underline-offset-2"
-          >
-            View release
-          </a>
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-start justify-between gap-3 border-b bg-accent px-4 py-2 text-sm text-accent-foreground"
+    >
+      <div className="flex min-w-0 flex-col gap-1">
+        {outdated.length > 0 && (
+          <span className="flex items-start gap-2">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>
+              {outdated.length} running{' '}
+              {outdated.length === 1 ? 'instance still uses' : 'instances still use'} an older
+              Odin supervisor. Restart {outdated.join(', ')} to finish applying the update.
+            </span>
+          </span>
         )}
-      </span>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Dismiss update notice"
-        onClick={() => {
-          writeDismissedVersion(latest)
-          setDismissed(latest)
-        }}
-      >
-        <X className="size-4" />
-      </Button>
+        {availableRelease && (
+          <span className="flex items-center gap-2">
+            <Sparkles className="size-4 shrink-0" aria-hidden="true" />
+            Odin {availableRelease} is available.
+            {version.data?.latest_release_url && (
+              <a
+                href={version.data.latest_release_url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2"
+              >
+                View release
+              </a>
+            )}
+          </span>
+        )}
+      </div>
+      {availableRelease && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Dismiss update notice"
+          onClick={() => {
+            writeDismissedVersion(availableRelease)
+            setDismissed(availableRelease)
+          }}
+        >
+          <X />
+        </Button>
+      )}
     </div>
   )
 }

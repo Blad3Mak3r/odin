@@ -160,6 +160,7 @@ function useInstanceAction(action: 'start' | 'stop' | 'restart') {
     onSuccess: (_data, name) => {
       queryClient.invalidateQueries({ queryKey: ['instances'] })
       queryClient.invalidateQueries({ queryKey: ['instances', name] })
+      queryClient.invalidateQueries({ queryKey: ['version'] })
     },
   })
 }
@@ -173,7 +174,10 @@ function useBulkInstanceAction(action: 'start' | 'stop' | 'restart') {
   return useMutation({
     mutationFn: (names: string[]) =>
       api.post<BulkResult[]>(`/instances/bulk/${action}`, { names }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] })
+      queryClient.invalidateQueries({ queryKey: ['version'] })
+    },
   })
 }
 

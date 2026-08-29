@@ -287,6 +287,7 @@ mod tests {
                         pid: 1234,
                         pid_started_at: 999,
                         started_at: chrono::Utc::now(),
+                        odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                         ready: true,
                     },
                 )
@@ -319,6 +320,7 @@ mod tests {
                         pid: 4321,
                         pid_started_at: 111,
                         started_at: chrono::Utc::now(),
+                        odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                         ready: true,
                     },
                 )
@@ -366,6 +368,7 @@ mod tests {
                 pid: 555,
                 pid_started_at: 42,
                 started_at: chrono::Utc::now(),
+                odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                 ready: true,
             })
             .unwrap();

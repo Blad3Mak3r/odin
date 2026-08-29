@@ -101,7 +101,7 @@ fn latest_release(db: &Db) -> Result<Option<GithubRelease>> {
 }
 
 /// True if `tag` (e.g. "v0.4.0") is strictly newer than `current`.
-fn is_newer(tag: &str, current: &str) -> bool {
+pub(crate) fn is_newer(tag: &str, current: &str) -> bool {
     fn parse(v: &str) -> Option<(u64, u64, u64)> {
         let mut parts = v.strip_prefix('v').unwrap_or(v).split('.');
         Some((

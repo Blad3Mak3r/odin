@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
+use crate::player_events::PlayerInfo;
+
 /// A request sent over an instance's control socket. One request per
 /// connection: the client connects, sends one `Request`, reads one
 /// `Response`, and disconnects.
@@ -21,6 +23,15 @@ pub enum Request {
     /// Stop the Valheim process (SIGINT, then SIGKILL after `timeout_secs`)
     /// and exit once it's gone.
     Stop { timeout_secs: u64 },
+    /// Current resource usage of the Valheim child and its true
+    /// descendants, as last computed by the supervisor's own background
+    /// refresher — never computed synchronously on request, so this can't
+    /// block the connection on a fresh `sysinfo` walk.
+    Stats,
+    /// Currently-connected players, as tracked by the supervisor's own
+    /// `console.log` parsing (see `server`'s player tracker) — the latest
+    /// state, not a live re-scan.
+    Players,
 }
 
 /// The reply to a `Request`, over the same control-socket connection.
@@ -33,6 +44,18 @@ pub enum Response {
         started_at: DateTime<Utc>,
     },
     Stopped,
+    /// Summed CPU/memory for the Valheim process plus any real child
+    /// processes it has (never threads — see
+    /// `instance::process::descendant_pids`). Replied with `Error` instead
+    /// if the supervisor hasn't completed its first background refresh yet.
+    Stats {
+        cpu_percent: f32,
+        memory_bytes: u64,
+    },
+    /// The currently-connected player list — see `Request::Players`.
+    Players {
+        players: Vec<PlayerInfo>,
+    },
     Error {
         message: String,
     },
@@ -44,8 +67,21 @@ pub enum Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    LogLine { line: String },
-    Exited { code: Option<i32> },
+    LogLine {
+        line: String,
+    },
+    /// Pushed in addition to the `LogLine` carrying the same source line,
+    /// whenever the supervisor's own parsing recognizes a join.
+    PlayerJoined {
+        name: String,
+    },
+    /// The `PlayerJoined` counterpart, pushed on a recognized leave.
+    PlayerLeft {
+        name: String,
+    },
+    Exited {
+        code: Option<i32>,
+    },
 }
 
 /// Reads one newline-delimited JSON message. `Ok(None)` means the peer
@@ -122,6 +158,105 @@ mod tests {
             }
             other => panic!("expected Pong, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn stats_request_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(&mut client, &Request::Stats).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Request::Stats)));
+    }
+
+    #[tokio::test]
+    async fn stats_response_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        let response = Response::Stats {
+            cpu_percent: 12.5,
+            memory_bytes: 1_267_296,
+        };
+        write_frame(&mut server, &response).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut client);
+        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
+        match received {
+            Some(Response::Stats {
+                cpu_percent,
+                memory_bytes,
+            }) => {
+                assert_eq!(cpu_percent, 12.5);
+                assert_eq!(memory_bytes, 1_267_296);
+            }
+            other => panic!("expected Stats, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn players_request_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(&mut client, &Request::Players).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Request::Players)));
+    }
+
+    #[tokio::test]
+    async fn players_response_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        let response = Response::Players {
+            players: vec![PlayerInfo {
+                name: "Bjorn".to_string(),
+                connected_at: Utc::now(),
+            }],
+        };
+        write_frame(&mut server, &response).await.unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut client);
+        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
+        match received {
+            Some(Response::Players { players }) => {
+                assert_eq!(players.len(), 1);
+                assert_eq!(players[0].name, "Bjorn");
+            }
+            other => panic!("expected Players, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn player_joined_event_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(
+            &mut client,
+            &Event::PlayerJoined {
+                name: "Bjorn".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Event::PlayerJoined { name }) if name == "Bjorn"));
+    }
+
+    #[tokio::test]
+    async fn player_left_event_round_trips_through_a_duplex_stream() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+
+        write_frame(
+            &mut client,
+            &Event::PlayerLeft {
+                name: "Bjorn".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut reader = tokio::io::BufReader::new(&mut server);
+        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
+        assert!(matches!(received, Some(Event::PlayerLeft { name }) if name == "Bjorn"));
     }
 
     #[tokio::test]

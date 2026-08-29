@@ -6,7 +6,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::Deserialize;
-use sysinfo::{Disks, Pid, System};
+use sysinfo::{Disks, Pid};
 
 use crate::db::resource_samples::{self, ResourceSampleRow};
 use crate::instance::{Instance, lifecycle};
@@ -187,23 +187,48 @@ pub(crate) fn compute_instance_snapshot(
     // necessarily seen the new pid. Fall back to the pid check for an
     // instance with no reachable supervisor (started by a pre-upgrade
     // binary, or whose supervisor has crashed but Valheim itself survived).
-    let running = match crate::supervisor::client::ping_blocking(
+    let supervisor_ping = crate::supervisor::client::ping_blocking(
         &state.paths,
         &instance.state.name,
         SUPERVISOR_PING_TIMEOUT,
-    ) {
+    );
+    let running = match &supervisor_ping {
         Ok(_) => true,
         Err(_) => lifecycle::is_running(instance)?,
     };
     if !running {
         return Ok(InstanceSnapshot::default());
     }
+
+    // A reachable supervisor already tracks its own child's resource usage
+    // (a background refresh loop scoped to just that one process tree, no
+    // need to guess from odin serve's own host-wide process table) — prefer
+    // its answer. `Response::Error` here means either an old supervisor that
+    // doesn't understand `Stats`, or a fresh one that hasn't completed its
+    // first refresh yet; either way, fall through to the host-side walk.
+    if supervisor_ping.is_ok()
+        && let Ok(crate::supervisor::protocol::Response::Stats {
+            cpu_percent,
+            memory_bytes,
+        }) = crate::supervisor::client::stats_blocking(
+            &state.paths,
+            &instance.state.name,
+            SUPERVISOR_PING_TIMEOUT,
+        )
+    {
+        return Ok(InstanceSnapshot {
+            running: true,
+            cpu_percent,
+            memory_bytes,
+        });
+    }
+
     let root_pids: Vec<u32> = instance.state.pid.into_iter().collect();
 
     let system = state.resources.lock().expect("resources lock poisoned");
     let mut cpu_percent = 0.0;
     let mut memory_bytes = 0;
-    for pid in collect_descendants(&system, &root_pids) {
+    for pid in crate::instance::process::descendant_pids(&system, &root_pids) {
         if let Some(process) = system.process(Pid::from_u32(pid)) {
             cpu_percent += process.cpu_usage();
             memory_bytes += process.memory();
@@ -215,32 +240,4 @@ pub(crate) fn compute_instance_snapshot(
         cpu_percent,
         memory_bytes,
     })
-}
-
-/// `pid` normally *is* the Valheim server process directly (it's spawned
-/// straight from `process::build_command`, no intermediate shell), but this
-/// also walks any descendants so resource usage stays correct regardless.
-fn collect_descendants(system: &System, roots: &[u32]) -> Vec<u32> {
-    let mut children_by_parent: std::collections::HashMap<u32, Vec<u32>> =
-        std::collections::HashMap::new();
-    for (candidate_pid, process) in system.processes() {
-        if let Some(parent) = process.parent() {
-            children_by_parent
-                .entry(parent.as_u32())
-                .or_default()
-                .push(candidate_pid.as_u32());
-        }
-    }
-
-    let mut result: Vec<u32> = roots.to_vec();
-    let mut frontier: Vec<u32> = roots.to_vec();
-    while let Some(pid) = frontier.pop() {
-        for &candidate in children_by_parent.get(&pid).into_iter().flatten() {
-            if !result.contains(&candidate) {
-                result.push(candidate);
-                frontier.push(candidate);
-            }
-        }
-    }
-    result
 }

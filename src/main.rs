@@ -11,6 +11,7 @@ mod log_poll;
 mod mods;
 mod odin_update;
 mod paths;
+mod player_events;
 mod steamcmd;
 mod supervisor;
 mod valheim_update;

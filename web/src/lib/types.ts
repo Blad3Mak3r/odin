@@ -140,6 +140,7 @@ export interface BackupEntry {
   id: string
   created_at: string
   size_bytes: number
+  storage: 'local' | BackupStorageProvider
 }
 
 export interface BackupScheduleView {
@@ -147,6 +148,31 @@ export interface BackupScheduleView {
   retain_count: number
   enabled: boolean
   last_run_at: string | null
+}
+
+export type BackupStorageProvider = 'aws_s3' | 'cloudflare_r2'
+
+export interface BackupStorageView {
+  configured: boolean
+  enabled: boolean
+  provider: BackupStorageProvider | null
+  endpoint: string
+  region: string
+  bucket: string
+  prefix: string
+  access_key_id: string
+  secret_access_key_configured: boolean
+}
+
+export interface BackupStorageRequest {
+  enabled: boolean
+  provider: BackupStorageProvider
+  endpoint: string | null
+  region: string | null
+  bucket: string
+  prefix: string
+  access_key_id: string
+  secret_access_key: string | null
 }
 
 export interface ConfigFileView {

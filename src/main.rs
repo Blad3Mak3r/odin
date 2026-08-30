@@ -1,5 +1,6 @@
 mod activity;
 mod backup;
+mod backup_storage;
 mod cli;
 mod commands;
 mod config;

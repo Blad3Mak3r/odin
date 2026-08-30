@@ -63,7 +63,9 @@ all from a browser, on one host or several.
 - **Backups with a safety net.** Snapshot a world's save files to a zip
   archive at any time; restoring always takes a fresh snapshot of the
   current state first, so a restore is never a one-way, unrecoverable
-  action.
+  action. Per-instance remote storage can send new backups to AWS S3 or
+  Cloudflare R2; Odin removes the temporary local zip only after the upload
+  succeeds and keeps it locally if the upload fails.
 - **State you can trust.** An instance's "running" status is always derived
   live from the OS process itself (its pid, cross-checked against its own
   start time so a reused pid never lies to you), never from a flag that can
@@ -97,7 +99,8 @@ legacy — don't expect new features to show up there first.
   automatically on first `odin install`; you don't need to have it set up
   beforehand.
 - **Outbound network access** to Steam's content servers (to install/update
-  the game) and to `thunderstore.io` (to install/update mods).
+  the game) and to `thunderstore.io` (to install/update mods), plus the
+  configured AWS S3 or Cloudflare R2 endpoint when remote backups are enabled.
 - **[Node.js](https://nodejs.org/) is only needed to build the web
   dashboard's frontend** (`make web-build`, run automatically by `make
   build`/`release`). The compiled `odin` binary itself has no Node.js or
@@ -243,7 +246,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
 | Command | Description |
 |---|---|
-| `odin backup <server-name>` | Zip the instance's save files into a timestamped archive. |
+| `odin backup <server-name>` | Zip the instance's save files into a timestamped archive. If remote backup storage was configured in the dashboard, upload it there and remove the local zip after a successful upload. |
 | `odin restore <server-name> [backup-id]` | With no id, lists available backups. With an id, restores it — the instance must be stopped first, and Odin always takes a fresh backup of the current state before overwriting it. |
 
 ### Mods
@@ -292,6 +295,10 @@ create/start/stop/restart/rename/delete, per-instance config, mod
 search/install/enable via Thunderstore, a live console and log tail, and
 editing `adminlist.txt`/`bannedlist.txt`/`permittedlist.txt` — plus live
 host and per-instance CPU/RAM usage that isn't exposed by the CLI at all.
+Each instance's Backups tab also configures automatic backups and optional
+AWS S3 or Cloudflare R2 storage. Remote backups remain listed and can be
+restored or deleted from Odin; restores download a temporary zip and remove
+it again when the operation finishes.
 
 **There is no authentication.** `odin serve` binds to `127.0.0.1` by
 default for exactly this reason; if you want to reach it from another
@@ -352,7 +359,7 @@ In both modes, the data dir is resolved in this order:
     state.json                   # instance metadata: port, world, password, visibility, mods, timestamps
     server -> ../../install/valheim
     saves/                       # the world's save files
-    backups/<id>.zip              # snapshots created by `odin backup`
+    backups/<id>.zip              # local snapshots; remote uploads are removed after success
     logs/console.log              # captured console output, tailed by `odin logs`
     console.in                    # named pipe carrying console input (`odin exec`/dashboard)
     BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>  # present only while enabled

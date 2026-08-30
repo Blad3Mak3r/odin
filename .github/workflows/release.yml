@@ -64,6 +64,7 @@ jobs:
 
           echo "TAG=v$VERSION" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
           echo "Releasing v$VERSION from $LATEST_TAG (${{ inputs.version_bump }} increment)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check tag does not already exist
@@ -86,6 +87,20 @@ jobs:
         run: |
           sed -i "0,/^version = \".*\"$/s//version = \"$VERSION\"/" Cargo.toml
           grep -m1 '^version = ' Cargo.toml
+
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "/repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" \
+            -f target_commitish="$GITHUB_SHA" \
+            -f previous_tag_name="$LATEST_TAG" \
+            --jq '.body' \
+            | sed -E 's/^## /### /; s/^\* /- /' > release-notes.md
+
+      - name: Update changelog
+        run: scripts/update-changelog.sh "$VERSION" "$(date -u +%F)" release-notes.md
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -120,7 +135,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
+          git add Cargo.toml Cargo.lock CHANGELOG.md
           git commit -m "Release $TAG"
 
       - name: Tag release
@@ -154,7 +169,7 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           name: ${{ env.TAG }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             target/debian/*.deb
             target/generate-rpm/*.rpm

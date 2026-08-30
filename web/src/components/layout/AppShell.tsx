@@ -69,7 +69,19 @@ function SidebarNav({
         <ThemeToggle />
         <div className="flex items-center gap-1">
           {import.meta.env.VITE_ODIN_VERSION && (
-            <span className="text-xs text-muted-foreground">v{import.meta.env.VITE_ODIN_VERSION}</span>
+            <NavLink
+              to="/changelog"
+              onClick={onNavigate}
+              aria-label={`View changelog for Odin v${import.meta.env.VITE_ODIN_VERSION}`}
+              className={({ isActive }) =>
+                cn(
+                  'rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+                  isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
+                )
+              }
+            >
+              v{import.meta.env.VITE_ODIN_VERSION}
+            </NavLink>
           )}
           <Button
             variant="ghost"

@@ -22,6 +22,9 @@ const WebhooksPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 )
+const ChangelogPage = lazy(() =>
+  import('@/pages/ChangelogPage').then((m) => ({ default: m.ChangelogPage })),
+)
 
 function RouteFallback() {
   return (
@@ -43,6 +46,7 @@ function App() {
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/webhooks" element={<WebhooksPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/changelog" element={<ChangelogPage />} />
         </Routes>
       </Suspense>
     </AppShell>

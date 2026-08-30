@@ -5,6 +5,17 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
+export interface ChangelogSection {
+  title: string
+  changes: string[]
+}
+
+export interface ChangelogRelease {
+  version: string
+  date: string | null
+  sections: ChangelogSection[]
+}
+
 export interface CheckResult {
   label: string
   ok: boolean

@@ -4,8 +4,8 @@ use axum::routing::{delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bulk, config_files, diagnostics, doctor, events, install, instances, jobs, lists,
-    mods, nexus, players, resources, settings, version, webhooks,
+    backups, bulk, changelog, config_files, diagnostics, doctor, events, install, instances, jobs,
+    lists, mods, nexus, players, resources, settings, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -18,6 +18,7 @@ const MOD_UPLOAD_BODY_LIMIT: usize = 500 * 1024 * 1024;
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .route("/version", get(version::get_version))
+        .route("/changelog", get(changelog::get_changelog))
         .route("/doctor", get(doctor::get_doctor))
         .route("/install", post(install::install_server))
         .route("/install/status", get(install::get_install_status))

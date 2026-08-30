@@ -7,6 +7,7 @@ import type {
   BackupStorageRequest,
   BackupStorageView,
   BulkResult,
+  ChangelogRelease,
   CheckResult,
   ConfigFileEntry,
   ConfigFileView,
@@ -47,6 +48,14 @@ export function useVersion() {
     queryFn: () => api.get<VersionView>('/version'),
     staleTime: Infinity,
     refetchInterval: VERSION_CHECK_INTERVAL,
+  })
+}
+
+export function useChangelog() {
+  return useQuery({
+    queryKey: ['changelog'],
+    queryFn: () => api.get<ChangelogRelease[]>('/changelog'),
+    staleTime: Infinity,
   })
 }
 

@@ -4,6 +4,8 @@ import type {
   ActivityEvent,
   BackupEntry,
   BackupScheduleView,
+  BackupStorageRequest,
+  BackupStorageView,
   BulkResult,
   CheckResult,
   ConfigFileEntry,
@@ -370,6 +372,24 @@ export function useSetBackupSchedule(name: string) {
       api.put<BackupScheduleView>(`/instances/${name}/backup-schedule`, req),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-schedule'] })
+    },
+  })
+}
+
+export function useBackupStorage(name: string) {
+  return useQuery({
+    queryKey: ['instances', name, 'backup-storage'],
+    queryFn: () => api.get<BackupStorageView>(`/instances/${name}/backup-storage`),
+  })
+}
+
+export function useSetBackupStorage(name: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: BackupStorageRequest) =>
+      api.put<BackupStorageView>(`/instances/${name}/backup-storage`, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-storage'] })
     },
   })
 }

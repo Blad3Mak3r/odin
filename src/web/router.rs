@@ -85,6 +85,10 @@ pub fn build_router(state: AppState) -> Router {
             get(backups::get_backup_schedule).put(backups::set_backup_schedule),
         )
         .route(
+            "/instances/{name}/backup-storage",
+            get(backups::get_backup_storage).put(backups::set_backup_storage),
+        )
+        .route(
             "/instances/{name}/bepinex/config",
             get(config_files::list_config_files),
         )

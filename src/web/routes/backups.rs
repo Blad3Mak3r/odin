@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
 use crate::backup::{self, BackupEntry};
+use crate::backup_storage::{BackupStorageConfig, StorageProvider};
 use crate::db::backup_schedules;
 use crate::instance::Instance;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
@@ -44,15 +45,12 @@ pub async fn create_backup(
             logger.line(format!("backing up '{name}'"));
             let instance = Instance::load_existing(&paths, &db, &name)?;
             let result = backup::create(&instance, &db);
-            if let Ok(path) = &result {
-                logger.line(format!("done: {}", path.display()));
-                let backup_id = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default()
-                    .to_string();
+            if let Ok(entry) = &result {
+                logger.line(format!("done: {} ({:?})", entry.id, entry.storage));
                 activity.record(
-                    ActivityKind::BackupCreated { backup_id },
+                    ActivityKind::BackupCreated {
+                        backup_id: entry.id.clone(),
+                    },
                     Some(name.clone()),
                 );
             }
@@ -60,6 +58,137 @@ pub async fn create_backup(
         },
     );
     Json(JobHandle { id })
+}
+
+#[derive(Serialize)]
+pub struct BackupStorageView {
+    pub configured: bool,
+    pub enabled: bool,
+    pub provider: Option<StorageProvider>,
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    pub secret_access_key_configured: bool,
+}
+
+impl BackupStorageView {
+    fn from_config(config: Option<BackupStorageConfig>) -> Self {
+        match config {
+            Some(config) => Self {
+                configured: true,
+                enabled: config.enabled,
+                provider: Some(config.provider),
+                endpoint: config.endpoint,
+                region: config.region,
+                bucket: config.bucket,
+                prefix: config.prefix,
+                access_key_id: config.access_key_id,
+                secret_access_key_configured: !config.secret_access_key.is_empty(),
+            },
+            None => Self {
+                configured: false,
+                enabled: false,
+                provider: None,
+                endpoint: String::new(),
+                region: "us-east-1".to_string(),
+                bucket: String::new(),
+                prefix: "odin".to_string(),
+                access_key_id: String::new(),
+                secret_access_key_configured: false,
+            },
+        }
+    }
+}
+
+pub async fn get_backup_storage(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<BackupStorageView>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        Instance::load_existing(&paths, &db, &name)?;
+        let config = crate::db::backup_storage::get(&db, &name)?;
+        Ok(BackupStorageView::from_config(config))
+    })
+    .await?;
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+pub struct SetBackupStorageRequest {
+    pub enabled: bool,
+    pub provider: StorageProvider,
+    pub endpoint: Option<String>,
+    pub region: Option<String>,
+    pub bucket: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    pub secret_access_key: Option<String>,
+}
+
+pub async fn set_backup_storage(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<SetBackupStorageRequest>,
+) -> ApiResult<Json<BackupStorageView>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        Instance::load_existing(&paths, &db, &name)?;
+        let existing = crate::db::backup_storage::get(&db, &name)?;
+        let access_key_id = req.access_key_id.trim().to_string();
+        let secret_access_key = match req.secret_access_key.as_deref().map(str::trim) {
+            Some(secret) if !secret.is_empty() => secret.to_string(),
+            _ if existing
+                .as_ref()
+                .is_some_and(|config| config.access_key_id == access_key_id) =>
+            {
+                existing
+                    .as_ref()
+                    .map(|config| config.secret_access_key.clone())
+                    .unwrap_or_default()
+            }
+            _ => {
+                return Err(BadRequest(
+                    "secret_access_key is required when configuring or changing an access key"
+                        .to_string(),
+                )
+                .into());
+            }
+        };
+        let (endpoint, region) = match req.provider {
+            StorageProvider::AwsS3 => {
+                let region = req.region.unwrap_or_default().trim().to_string();
+                (format!("https://s3.{region}.amazonaws.com"), region)
+            }
+            StorageProvider::CloudflareR2 => (
+                req.endpoint
+                    .unwrap_or_default()
+                    .trim()
+                    .trim_end_matches('/')
+                    .to_string(),
+                "auto".to_string(),
+            ),
+        };
+        let config = BackupStorageConfig {
+            provider: req.provider,
+            endpoint,
+            region,
+            bucket: req.bucket.trim().to_string(),
+            prefix: req.prefix.trim().trim_matches('/').to_string(),
+            access_key_id,
+            secret_access_key,
+            enabled: req.enabled,
+        };
+        config.validate().map_err(BadRequest)?;
+        crate::db::backup_storage::upsert(&db, &name, &config)?;
+        Ok(BackupStorageView::from_config(Some(config)))
+    })
+    .await?;
+    Ok(Json(view))
 }
 
 pub async fn restore_backup(

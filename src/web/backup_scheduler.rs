@@ -69,13 +69,9 @@ fn spawn_scheduled_backup(state: &AppState, schedule: BackupScheduleRow) {
         move |logger| {
             logger.line(format!("scheduled backup of '{name}'"));
             let instance = Instance::load_existing(&paths, &db, &name)?;
-            let path = backup::create(&instance, &db)?;
-            let backup_id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string();
-            logger.line(format!("done: {}", path.display()));
+            let entry = backup::create(&instance, &db)?;
+            let backup_id = entry.id;
+            logger.line(format!("done: {backup_id} ({:?})", entry.storage));
             activity.record(
                 ActivityKind::BackupCreated { backup_id },
                 Some(name.clone()),

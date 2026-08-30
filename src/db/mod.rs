@@ -13,6 +13,7 @@
 
 pub mod activity;
 pub mod backup_schedules;
+pub mod backup_storage;
 pub mod backups;
 pub mod cache;
 pub mod global_mods;

@@ -232,7 +232,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.release.outputs.tag }}
+            type=raw,value=${{ needs.release.outputs.version }}
             type=raw,value=latest
           labels: |
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
@@ -318,5 +318,5 @@ jobs:
 
       - name: Summarize image
         run: |
-          echo "Published $IMAGE_NAME:${{ needs.release.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published $IMAGE_NAME:${{ needs.release.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Digest: ${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

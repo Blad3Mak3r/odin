@@ -137,7 +137,7 @@ Release images are published for `linux/amd64` at
 for testing but changes whenever a new release is published:
 
 ```sh
-ODIN_IMAGE=ghcr.io/blad3mak3r/odin:vX.Y.Z
+ODIN_IMAGE=ghcr.io/blad3mak3r/odin:x.y.z
 docker pull "$ODIN_IMAGE"
 docker volume create odin-data
 docker run -d \

@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   ArchiveX,
   CircleCheck,
+  Download,
   type LucideIcon,
   Package,
   PackageMinus,
@@ -31,6 +32,8 @@ export function describeActivity(kind: ActivityKind): string {
       return 'Instance restarted automatically after crashing'
     case 'server_installed':
       return 'Server files installed/updated'
+    case 'server_update_available':
+      return `Valheim server update available: build ${kind.installed_build_id} → ${kind.latest_build_id}`
     case 'mod_installed':
       return `Mod installed: ${kind.mod_id}`
     case 'mod_removed':
@@ -60,6 +63,7 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind['kind'], string> = {
   instance_stopped: 'Instance stopped',
   instance_auto_restarted: 'Auto-restarted after a crash',
   server_installed: 'Server files installed/updated',
+  server_update_available: 'Valheim update available',
   mod_installed: 'Mod installed',
   mod_removed: 'Mod removed',
   mods_updated: 'Mods updated',
@@ -77,6 +81,7 @@ export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   instance_stopped: Square,
   instance_auto_restarted: RefreshCcw,
   server_installed: CircleCheck,
+  server_update_available: Download,
   mod_installed: PackagePlus,
   mod_removed: PackageMinus,
   mods_updated: Package,

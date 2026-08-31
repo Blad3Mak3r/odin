@@ -11,8 +11,8 @@ use crate::db::webhooks as db_webhooks;
 use crate::web::state::AppState;
 
 pub fn spawn(state: AppState) {
+    let (_history, mut rx) = state.activity.subscribe();
     tokio::spawn(async move {
-        let (_history, mut rx) = state.activity.subscribe();
         loop {
             match rx.recv().await {
                 Ok(event) => forward(&state, event).await,
@@ -90,6 +90,12 @@ fn describe(event: &ActivityEvent) -> String {
             format!("♻️ **{instance}** crashed and was restarted automatically")
         }
         ActivityKind::ServerInstalled => "⬇️ Valheim server files installed/updated".to_string(),
+        ActivityKind::ServerUpdateAvailable {
+            installed_build_id,
+            latest_build_id,
+        } => format!(
+            "⬆️ Valheim server update available: build {installed_build_id} → {latest_build_id}"
+        ),
         ActivityKind::ModInstalled { mod_id } => {
             format!("📦 Mod installed on **{instance}**: {mod_id}")
         }

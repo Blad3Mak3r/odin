@@ -393,8 +393,15 @@ mod tests {
             Ok(())
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let (log, _status, _rx) = registry.subscribe(&id).expect("job should exist");
+        let mut log = Vec::new();
+        for _ in 0..100 {
+            let (current_log, _status, _rx) = registry.subscribe(&id).expect("job should exist");
+            if !current_log.is_empty() {
+                log = current_log;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         assert_eq!(log, vec!["first".to_string()]);
     }
 

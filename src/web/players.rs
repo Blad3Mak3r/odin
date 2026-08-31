@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 
 use crate::activity::ActivityKind;
-use crate::player_events::{PlayerEvent, parse_line};
+use crate::player_events::{PlayerEvent, PlayerEventParser};
 
 pub use crate::player_events::PlayerInfo;
 
@@ -27,12 +27,14 @@ struct ConnectedPlayer {
 #[derive(Clone)]
 pub struct PlayerRegistry {
     instances: Arc<Mutex<HashMap<String, Vec<ConnectedPlayer>>>>,
+    parsers: Arc<Mutex<HashMap<String, PlayerEventParser>>>,
 }
 
 impl PlayerRegistry {
     pub fn new() -> Self {
         Self {
             instances: Arc::new(Mutex::new(HashMap::new())),
+            parsers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -53,15 +55,25 @@ impl PlayerRegistry {
             .lock()
             .expect("players registry lock poisoned")
             .remove(instance);
+        self.parsers
+            .lock()
+            .expect("player parsers lock poisoned")
+            .remove(instance);
     }
 
-    /// Recognizes a join/leave in a single `console.log` line (see
-    /// `crate::player_events::parse_line`) and applies it, returning the
+    /// Recognizes a join/leave in a `console.log` line (see
+    /// `crate::player_events::PlayerEventParser`) and applies it, returning the
     /// activity to record if the line mattered. Used by `web::log_tail`'s
     /// fallback poller, for an instance with no reachable supervisor to
     /// push structured events instead.
     pub fn apply_line(&self, instance: &str, line: &str) -> Option<ActivityKind> {
-        let event = parse_line(line)?;
+        let event = self
+            .parsers
+            .lock()
+            .expect("player parsers lock poisoned")
+            .entry(instance.to_string())
+            .or_default()
+            .parse_line(line)?;
         self.apply(instance, event)
     }
 
@@ -74,6 +86,13 @@ impl PlayerRegistry {
         match event {
             PlayerEvent::Joined { peer, name } => {
                 if players.iter().any(|p| p.peer.as_deref() == Some(&*peer)) {
+                    return None;
+                }
+                if let Some(player) = players
+                    .iter_mut()
+                    .find(|p| p.peer.is_none() && p.info.name == name)
+                {
+                    player.peer = Some(peer);
                     return None;
                 }
                 players.push(ConnectedPlayer {

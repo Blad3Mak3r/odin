@@ -497,7 +497,7 @@ async fn handle_events_connection(mut stream: UnixStream, mut rx: broadcast::Rec
 /// receives lines pushed over `events.sock` instead of polling on its own.
 ///
 /// Also recognizes player joins/leaves (see `crate::player_events::
-/// parse_line`), world saves (see `crate::save_events::
+/// PlayerEventParser`), world saves (see `crate::save_events::
 /// is_world_saved_line`), and readiness (see `crate::readiness_events::
 /// is_ready_line`) in each line, maintaining `players`/`last_saved`/`ready`
 /// and pushing the corresponding
@@ -519,6 +519,7 @@ async fn poll_console_log(
     ready: ReadyHandle,
     recent_lines: RecentLinesHandle,
 ) {
+    let mut player_parser = crate::player_events::PlayerEventParser::default();
     let mut pos = tokio::task::spawn_blocking({
         let log_file = log_file.clone();
         move || std::fs::metadata(&log_file).map(|m| m.len()).unwrap_or(0)
@@ -540,7 +541,7 @@ async fn poll_console_log(
         }
 
         for line in chunk.lines() {
-            if let Some(event) = crate::player_events::parse_line(line)
+            if let Some(event) = player_parser.parse_line(line)
                 && let Some(pushed) = apply_player_event(&players, event)
             {
                 let _ = events_tx.send(pushed);

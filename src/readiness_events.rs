@@ -8,7 +8,7 @@
 //! same reason those are: easy to isolate and fix if the real log output
 //! doesn't match.
 
-/// Best-effort, like `player_events::parse_line`/`save_events::
+/// Best-effort, like `player_events::PlayerEventParser`/`save_events::
 /// is_world_saved_line` — not verified against a real `console.log`. If it
 /// doesn't match a real server's output, this is the one place to fix.
 pub fn is_ready_line(line: &str) -> bool {

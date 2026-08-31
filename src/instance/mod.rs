@@ -38,6 +38,8 @@ pub enum InstanceError {
     AlreadyExists(String),
     #[error("invalid server name: {0}")]
     InvalidName(String),
+    #[error("instance '{0}' is running; stop it first to change its mods")]
+    ModsLocked(String),
 }
 
 pub struct Instance {

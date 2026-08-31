@@ -171,6 +171,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
                 <div className="flex items-center gap-3">
                   <Switch
                     checked={entry.enabled}
+                    disabled={entry.running || setEnabled.isPending}
                     onCheckedChange={(enabled) =>
                       setEnabled.mutate(
                         { name: entry.instance, modId: mod.mod_id, enabled },
@@ -181,6 +182,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
                   <Button
                     size="sm"
                     variant="destructive"
+                    disabled={entry.running}
                     onClick={() => handleRemove(entry.instance)}
                   >
                     Remove

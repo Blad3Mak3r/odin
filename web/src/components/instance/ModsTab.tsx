@@ -21,7 +21,7 @@ const ModConfigFiles = lazy(() =>
   import('./ModConfigFiles').then((m) => ({ default: m.ModConfigFiles })),
 )
 
-export function ModsTab({ name }: { name: string }) {
+export function ModsTab({ name, running }: { name: string; running: boolean }) {
   return (
     <Tabs defaultValue="installed">
       <TabsList variant="line">
@@ -30,20 +30,20 @@ export function ModsTab({ name }: { name: string }) {
       </TabsList>
       <TabsContent value="installed">
         <div className="flex flex-col gap-8">
-          <InstalledMods name={name} />
+          <InstalledMods name={name} running={running} />
           <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
             <ModConfigFiles name={name} />
           </Suspense>
         </div>
       </TabsContent>
       <TabsContent value="marketplace">
-        <ModInstallSearch name={name} />
+        <ModInstallSearch name={name} running={running} />
       </TabsContent>
     </Tabs>
   )
 }
 
-function InstalledMods({ name }: { name: string }) {
+function InstalledMods({ name, running }: { name: string; running: boolean }) {
   const mods = useMods(name)
   const setEnabled = useSetModEnabled()
   const removeMod = useRemoveMod()
@@ -102,6 +102,12 @@ function InstalledMods({ name }: { name: string }) {
         <p className="text-sm text-muted-foreground">No mods installed yet.</p>
       )}
 
+      {running && (
+        <p className="text-xs text-muted-foreground">
+          Mods can't be changed while '{name}' is running — stop it first.
+        </p>
+      )}
+
       <div className="grid gap-2 xl:grid-cols-2 2xl:grid-cols-3">
         {mods.data?.map((m) => (
           <Card key={m.mod_id} size="sm">
@@ -119,6 +125,7 @@ function InstalledMods({ name }: { name: string }) {
               <div className="flex items-center gap-3">
                 <Switch
                   checked={m.enabled}
+                  disabled={running || setEnabled.isPending}
                   onCheckedChange={(enabled) =>
                     setEnabled.mutate(
                       { name, modId: m.mod_id, enabled },
@@ -126,7 +133,12 @@ function InstalledMods({ name }: { name: string }) {
                     )
                   }
                 />
-                <Button size="sm" variant="destructive" onClick={() => handleRemove(m.mod_id)}>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={running}
+                  onClick={() => handleRemove(m.mod_id)}
+                >
                   Remove
                 </Button>
               </div>
@@ -140,7 +152,7 @@ function InstalledMods({ name }: { name: string }) {
   )
 }
 
-function ModInstallSearch({ name }: { name: string }) {
+function ModInstallSearch({ name, running }: { name: string; running: boolean }) {
   const addMod = useAddMod()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
@@ -163,13 +175,16 @@ function ModInstallSearch({ name }: { name: string }) {
           <TabsTrigger value="upload">Upload</TabsTrigger>
         </TabsList>
         <TabsContent value="thunderstore">
-          <ModSearch selectDisabled={() => addMod.isPending} onSelect={handleSelect} />
+          <ModSearch selectDisabled={() => running || addMod.isPending} onSelect={handleSelect} />
         </TabsContent>
         <TabsContent value="nexus">
-          <NexusModSearch selectDisabled={() => addMod.isPending} onSelect={handleSelect} />
+          <NexusModSearch
+            selectDisabled={() => running || addMod.isPending}
+            onSelect={handleSelect}
+          />
         </TabsContent>
         <TabsContent value="upload">
-          <UploadModForm name={name} />
+          <UploadModForm name={name} running={running} />
         </TabsContent>
       </Tabs>
 

@@ -99,15 +99,13 @@ pub struct JobHandle {
     pub id: String,
 }
 
-// Returns a bare `Json<JobHandle>` rather than `ApiResult<...>` like other
-// mutating routes: spawning a job onto the registry can't fail synchronously
-// today, so there's nothing for `ApiResult` to wrap. This is intentional,
-// not an oversight.
 pub async fn add_mod(
     State(state): State<AppState>,
     Path(name): Path<String>,
     Json(req): Json<AddModRequest>,
-) -> Json<JobHandle> {
+) -> ApiResult<Json<JobHandle>> {
+    check_not_running(&state, &name).await?;
+
     let paths = state.paths.clone();
     let db = state.db.clone();
     let activity = state.activity.clone();
@@ -131,7 +129,23 @@ pub async fn add_mod(
             result
         },
     );
-    Json(JobHandle { id })
+    Ok(Json(JobHandle { id }))
+}
+
+/// Fails fast with a 409 if the instance is running, instead of spawning a
+/// job that's doomed to fail inside `mods::add`/`add_local` once it runs.
+async fn check_not_running(state: &AppState, name: &str) -> ApiResult<()> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let name = name.to_string();
+    run_blocking(move || {
+        let instance = crate::instance::Instance::load_existing(&paths, &db, &name)?;
+        if crate::instance::lifecycle::is_running(&instance)? {
+            return Err(crate::instance::InstanceError::ModsLocked(name).into());
+        }
+        Ok(())
+    })
+    .await
 }
 
 pub async fn remove_mod(
@@ -200,7 +214,9 @@ pub(crate) fn spawn_mod_update_job(state: &AppState, name: String) -> String {
     )
 }
 
-// See the comment on `add_mod` above: intentionally not `ApiResult`-wrapped.
+// Returns a bare `Json<JobHandle>` rather than `ApiResult<...>`: spawning a
+// job onto the registry can't fail synchronously today, so there's nothing
+// for `ApiResult` to wrap. This is intentional, not an oversight.
 pub async fn update_mods(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -320,6 +336,11 @@ pub async fn upload_mod(
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
     let zip_path = zip_path.ok_or_else(|| BadRequest("no file was uploaded".to_string()))?;
+
+    if let Err(e) = check_not_running(&state, &name).await {
+        tokio::fs::remove_file(&zip_path).await.ok();
+        return Err(e);
+    }
 
     let paths = state.paths.clone();
     let db = state.db.clone();

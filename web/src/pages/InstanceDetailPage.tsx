@@ -57,7 +57,7 @@ export function InstanceDetailPage() {
           <ConfigTab name={name} />
         </TabsContent>
         <TabsContent value="mods">
-          <ModsTab name={name} />
+          <ModsTab name={name} running={instance.data?.running ?? false} />
         </TabsContent>
         <TabsContent value="lists">
           <AccessListsTab name={name} />

@@ -57,6 +57,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/instances/{name}/mods/update", post(mods::update_mods))
         .route(
+            "/instances/{name}/mods/modpack",
+            get(mods::download_modpack),
+        )
+        .route(
             "/instances/{name}/mods/upload",
             post(mods::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
         )

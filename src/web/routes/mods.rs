@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -63,6 +64,29 @@ pub async fn list_mods(
     })
     .await?;
     Ok(Json(views))
+}
+
+/// Streams a zip of every currently-enabled mod's files for the instance,
+/// ready to extract into a player's client `BepInEx/plugins` folder.
+pub async fn download_modpack(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Response> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let zip_name = name.clone();
+    let bytes = run_blocking(move || mods::build_modpack(&paths, &db, &zip_name)).await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{name}-modpack.zip\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

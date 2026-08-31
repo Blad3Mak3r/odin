@@ -15,6 +15,7 @@ pub mod source;
 pub mod thunderstore;
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -281,6 +282,103 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
 pub fn list(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<InstalledMod>> {
     let instance = Instance::load_existing(paths, db, server_name)?;
     Ok(instance.state.installed_mods)
+}
+
+#[derive(Serialize)]
+struct ModpackManifestEntry {
+    mod_id: String,
+    version: String,
+}
+
+const MODPACK_README: &str = "\
+This ModPack contains the mods currently enabled on this Valheim server.
+
+To install it on your game client:
+1. Make sure BepInEx is already installed for your Valheim client (this pack
+   does not include it).
+2. Extract this zip's `BepInEx` folder into your Valheim install directory,
+   merging with the existing `BepInEx/plugins` folder.
+3. Make sure every mod matches the version listed in manifest.json — a
+   version mismatch with the server can cause connection issues.
+";
+
+/// Builds a downloadable zip of every currently-enabled mod's files for an
+/// instance, laid out as `BepInEx/plugins/<mod_id>/...` so it can be
+/// extracted straight into a player's client BepInEx install. Reads
+/// straight from the shared global mod store (`paths.mod_dir`) — the same
+/// files an instance itself symlinks in — so it works the same regardless
+/// of whether a mod came from Thunderstore, Nexus, or a manual upload.
+pub fn build_modpack(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<u8>> {
+    let instance = Instance::load_existing(paths, db, server_name)?;
+    let enabled: Vec<&InstalledMod> = instance
+        .state
+        .installed_mods
+        .iter()
+        .filter(|m| m.enabled)
+        .collect();
+    if enabled.is_empty() {
+        anyhow::bail!("'{server_name}' has no enabled mods to include in a ModPack");
+    }
+
+    let mut buf = Vec::new();
+    let cursor = std::io::Cursor::new(&mut buf);
+    let mut writer = zip::ZipWriter::new(cursor);
+    let options = zip::write::SimpleFileOptions::default();
+
+    writer.start_file("README.txt", options)?;
+    writer.write_all(MODPACK_README.as_bytes())?;
+
+    let manifest: Vec<ModpackManifestEntry> = enabled
+        .iter()
+        .map(|m| ModpackManifestEntry {
+            mod_id: m.mod_id.clone(),
+            version: m.version.clone(),
+        })
+        .collect();
+    writer.start_file("manifest.json", options)?;
+    writer.write_all(serde_json::to_string_pretty(&manifest)?.as_bytes())?;
+
+    for m in &enabled {
+        let mod_dir = paths.mod_dir(&m.mod_id);
+        if !mod_dir.is_dir() {
+            tracing::warn!(
+                mod_id = %m.mod_id,
+                "enabled mod is missing from the global store; skipping it in the ModPack"
+            );
+            continue;
+        }
+        let archive_root = format!("BepInEx/plugins/{}", m.mod_id);
+        add_dir_to_modpack_zip(&mut writer, &mod_dir, &mod_dir, &archive_root, options)?;
+    }
+
+    writer.finish().context("failed to finalize ModPack zip")?;
+    Ok(buf)
+}
+
+fn add_dir_to_modpack_zip(
+    writer: &mut zip::ZipWriter<std::io::Cursor<&mut Vec<u8>>>,
+    root: &Path,
+    dir: &Path,
+    archive_root: &str,
+    options: zip::write::SimpleFileOptions,
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .expect("path is produced by walking root, so it is always prefixed by it")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if entry.file_type()?.is_dir() {
+            add_dir_to_modpack_zip(writer, root, &path, archive_root, options)?;
+        } else {
+            writer.start_file(format!("{archive_root}/{relative}"), options)?;
+            let mut file = std::fs::File::open(&path)?;
+            std::io::copy(&mut file, writer)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn remove(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
@@ -875,5 +973,80 @@ mod tests {
 
         std::fs::remove_dir_all(&paths.data_dir).ok();
         std::fs::remove_dir_all(&upload_dir).ok();
+    }
+
+    #[test]
+    fn build_modpack_zips_only_enabled_mods_with_manifest_and_readme() {
+        let (paths, db) = temp_paths_and_db("build-modpack");
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "author-EnabledMod".to_string(),
+            version: "1.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: true,
+        });
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "author-DisabledMod".to_string(),
+            version: "2.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: false,
+        });
+        instance.save(&db).unwrap();
+
+        std::fs::create_dir_all(paths.mod_dir("author-EnabledMod")).unwrap();
+        std::fs::write(
+            paths.mod_dir("author-EnabledMod").join("plugin.dll"),
+            b"enabled plugin bytes",
+        )
+        .unwrap();
+        std::fs::create_dir_all(paths.mod_dir("author-DisabledMod")).unwrap();
+        std::fs::write(
+            paths.mod_dir("author-DisabledMod").join("plugin.dll"),
+            b"disabled plugin bytes",
+        )
+        .unwrap();
+
+        let zip_bytes = build_modpack(&paths, &db, "my-server").unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
+
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"manifest.json".to_string()));
+        assert!(names.contains(&"README.txt".to_string()));
+        assert!(names.contains(&"BepInEx/plugins/author-EnabledMod/plugin.dll".to_string()));
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.starts_with("BepInEx/plugins/author-DisabledMod/")),
+            "disabled mod must not be included in the ModPack"
+        );
+
+        let mut manifest = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("manifest.json").unwrap(),
+            &mut manifest,
+        )
+        .unwrap();
+        assert!(manifest.contains("author-EnabledMod"));
+        assert!(!manifest.contains("author-DisabledMod"));
+
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn build_modpack_fails_when_no_mods_are_enabled() {
+        let (paths, db) = temp_paths_and_db("build-modpack-empty");
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "author-DisabledMod".to_string(),
+            version: "2.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: false,
+        });
+        instance.save(&db).unwrap();
+
+        assert!(build_modpack(&paths, &db, "my-server").is_err());
+        std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 }

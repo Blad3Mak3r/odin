@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react'
+import { Download, Loader2 } from 'lucide-react'
 import { lazy, Suspense, useState } from 'react'
 import { toast } from 'sonner'
 import { JobProgress } from '@/components/JobProgress'
@@ -7,7 +7,7 @@ import { ModSearch } from '@/components/ModSearch'
 import { NexusModSearch } from '@/components/NexusModSearch'
 import { UploadModForm } from '@/components/UploadModForm'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -15,6 +15,7 @@ import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useJobSocket } from '@/hooks/useJobSocket'
 import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
 import { useAddMod, useMods, useRemoveMod, useSetModEnabled, useUpdateMods } from '@/lib/queries'
+import { cn } from '@/lib/utils'
 
 const ModConfigFiles = lazy(() =>
   import('./ModConfigFiles').then((m) => ({ default: m.ModConfigFiles })),
@@ -68,20 +69,33 @@ function InstalledMods({ name }: { name: string }) {
         <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Installed mods
         </h2>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={updateMods.isPending}
-          onClick={() =>
-            updateMods.mutate(name, {
-              onSuccess: (handle) => setJobId(handle.id),
-              onError: (e) => toast.error(e.message),
-            })
-          }
-        >
-          {updateMods.isPending && <Loader2 className="size-4 animate-spin" />}
-          Update all
-        </Button>
+        <div className="flex items-center gap-2">
+          <a
+            href={`/api/instances/${name}/mods/modpack`}
+            download
+            className={cn(
+              buttonVariants({ variant: 'outline', size: 'sm' }),
+              !mods.data?.some((m) => m.enabled) && 'pointer-events-none opacity-50',
+            )}
+          >
+            <Download className="size-4" />
+            Download ModPack
+          </a>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={updateMods.isPending}
+            onClick={() =>
+              updateMods.mutate(name, {
+                onSuccess: (handle) => setJobId(handle.id),
+                onError: (e) => toast.error(e.message),
+              })
+            }
+          >
+            {updateMods.isPending && <Loader2 className="size-4 animate-spin" />}
+            Update all
+          </Button>
+        </div>
       </div>
 
       {mods.data?.length === 0 && (

@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-08-31
+
+### What's Changed
+- Block mod install/remove/toggle while an instance is running by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/62
+- Add production container image by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/63
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.8.3...v0.8.4
+
 ## [0.8.3] - 2026-08-31
 
 ### What's Changed

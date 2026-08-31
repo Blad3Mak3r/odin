@@ -4,6 +4,10 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `odin serve` now checks Steam for Valheim server updates every 15 minutes and emits a webhook event once for each new build.
+
 ## [0.8.4] - 2026-08-31
 
 ### What's Changed

@@ -1,4 +1,5 @@
 /target
+/dist
 
 # Dashboard frontend build artifacts. web/dist/index.html is intentionally
 # tracked as a placeholder so a bare `cargo build` still compiles (rust-embed

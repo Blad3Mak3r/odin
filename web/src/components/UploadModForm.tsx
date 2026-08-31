@@ -9,7 +9,13 @@ import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useJobSocket } from '@/hooks/useJobSocket'
 import { useUploadMod } from '@/lib/queries'
 
-export function UploadModForm({ name }: { name: string }) {
+export function UploadModForm({
+  name,
+  running = false,
+}: {
+  name: string
+  running?: boolean
+}) {
   const [modName, setModName] = useState('')
   const [version, setVersion] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -18,7 +24,7 @@ export function UploadModForm({ name }: { name: string }) {
   const job = useJobSocket(jobId)
   const { confirm, dialog } = useConfirmDialog()
 
-  const canSubmit = modName.trim().length > 0 && file !== null && !uploadMod.isPending
+  const canSubmit = modName.trim().length > 0 && file !== null && !uploadMod.isPending && !running
 
   const handleSubmit = async () => {
     if (!file) return

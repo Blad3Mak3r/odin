@@ -23,8 +23,8 @@ use chrono::Utc;
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::instance::Instance;
 use crate::instance::state::InstalledMod;
+use crate::instance::{Instance, InstanceError, lifecycle};
 use crate::paths::{self, Paths};
 use source::ModSource;
 use thunderstore::ModRef;
@@ -35,6 +35,9 @@ const METADATA_ENTRIES: &[&str] = &["icon.png", "manifest.json", "README.md", "C
 
 pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
+    if lifecycle::is_running(&instance)? {
+        return Err(InstanceError::ModsLocked(server_name.to_string()).into());
+    }
     ensure_bepinex(db, &mut instance)?;
 
     let (version, download_url) = match source::mod_source(mod_id) {
@@ -68,13 +71,6 @@ pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()
     )?;
     link_and_record(db, &mut instance, mod_id, &version, &global_dir)?;
 
-    if crate::instance::lifecycle::is_running(&instance)? {
-        tracing::warn!(
-            instance = server_name,
-            "instance is currently running; the new mod won't be loaded until it's restarted"
-        );
-    }
-
     Ok(())
 }
 
@@ -94,6 +90,9 @@ pub fn add_local(
     let _cleanup = CleanupFile(zip_path);
 
     let mut instance = Instance::load_existing(paths, db, server_name)?;
+    if lifecycle::is_running(&instance)? {
+        return Err(InstanceError::ModsLocked(server_name.to_string()).into());
+    }
     ensure_bepinex(db, &mut instance)?;
 
     let mod_id = source::make_local_mod_id(name);
@@ -105,13 +104,6 @@ pub fn add_local(
         ModPayload::LocalFile(zip_path.to_path_buf()),
     )?;
     link_and_record(db, &mut instance, &mod_id, version, &global_dir)?;
-
-    if crate::instance::lifecycle::is_running(&instance)? {
-        tracing::warn!(
-            instance = server_name,
-            "instance is currently running; the new mod won't be loaded until it's restarted"
-        );
-    }
 
     Ok(mod_id)
 }
@@ -383,6 +375,9 @@ fn add_dir_to_modpack_zip(
 
 pub fn remove(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
+    if lifecycle::is_running(&instance)? {
+        return Err(InstanceError::ModsLocked(server_name.to_string()).into());
+    }
 
     if !instance
         .state
@@ -399,13 +394,6 @@ pub fn remove(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result
 
     instance.state.installed_mods.retain(|m| m.mod_id != mod_id);
     instance.save(db)?;
-
-    if crate::instance::lifecycle::is_running(&instance)? {
-        tracing::warn!(
-            instance = server_name,
-            "instance is currently running; the mod stays loaded until it's restarted"
-        );
-    }
 
     Ok(())
 }
@@ -434,6 +422,10 @@ pub fn set_enabled(
         return Ok(false);
     }
 
+    if lifecycle::is_running(&instance)? {
+        return Err(InstanceError::ModsLocked(server_name.to_string()).into());
+    }
+
     if enabled {
         let global_dir = paths.mod_dir(mod_id);
         if !global_dir.is_dir() {
@@ -457,13 +449,6 @@ pub fn set_enabled(
         entry.enabled = enabled;
     }
     instance.save(db)?;
-
-    if crate::instance::lifecycle::is_running(&instance)? {
-        tracing::warn!(
-            instance = server_name,
-            "instance is currently running; the change won't take effect until it's restarted"
-        );
-    }
 
     Ok(true)
 }
@@ -1047,6 +1032,75 @@ mod tests {
         instance.save(&db).unwrap();
 
         assert!(build_modpack(&paths, &db, "my-server").is_err());
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    /// Marks `instance` as running by recording a real child process's
+    /// `(pid, pid_started_at)` — `lifecycle::is_running` always does a live
+    /// syscall, so faking "running" needs an actual process, same as
+    /// `process.rs`'s own liveness test.
+    fn mark_running(instance: &mut crate::instance::Instance, db: &Db) -> std::process::Child {
+        let child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let started_at = crate::instance::process::start_time_of(pid).unwrap();
+        instance.state.pid = Some(pid);
+        instance.state.pid_started_at = Some(started_at);
+        instance.save(db).unwrap();
+        child
+    }
+
+    #[test]
+    fn set_enabled_is_blocked_while_running_but_no_op_still_succeeds() {
+        let (paths, db) = temp_paths_and_db("set-enabled-running");
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "author-SomeMod".to_string(),
+            version: "1.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: true,
+        });
+        instance.save(&db).unwrap();
+        let mut child = mark_running(&mut instance, &db);
+
+        // No-op (already enabled) must still succeed while running.
+        assert!(!set_enabled(&paths, &db, "my-server", "author-SomeMod", true).unwrap());
+
+        // An actual state change must be refused.
+        let err = set_enabled(&paths, &db, "my-server", "author-SomeMod", false).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<InstanceError>(),
+            Some(InstanceError::ModsLocked(_))
+        ));
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn remove_is_blocked_while_instance_is_running() {
+        let (paths, db) = temp_paths_and_db("remove-running");
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "author-SomeMod".to_string(),
+            version: "1.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: true,
+        });
+        instance.save(&db).unwrap();
+        let mut child = mark_running(&mut instance, &db);
+
+        let err = remove(&paths, &db, "my-server", "author-SomeMod").unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<InstanceError>(),
+            Some(InstanceError::ModsLocked(_))
+        ));
+
+        child.kill().unwrap();
+        child.wait().unwrap();
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 }

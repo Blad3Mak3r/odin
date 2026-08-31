@@ -38,7 +38,8 @@ all from a browser, on one host or several.
   see host/instance resource usage. See [Web dashboard](#web-dashboard)
   below.
 - **One binary, no runtime dependencies** beyond (transparently managed)
-  SteamCMD — no Python, no Docker, no terminal multiplexer required.
+  SteamCMD and a handful of OS shared libraries — no Python, no Docker, no
+  terminal multiplexer required.
 - **Multiple named instances.** Orchestrate several independent Valheim
   servers on one host, each with its own world, port, password,
   visibility, and mod set, sharing a single downloaded copy of the game
@@ -101,6 +102,15 @@ legacy — don't expect new features to show up there first.
 - **Outbound network access** to Steam's content servers (to install/update
   the game) and to `thunderstore.io` (to install/update mods), plus the
   configured AWS S3 or Cloudflare R2 endpoint when remote backups are enabled.
+- **A handful of OS shared libraries.** SteamCMD's Linux distribution ships
+  a 32-bit binary (needs `lib32gcc-s1`/`lib32gcc1` + `lib32stdc++6` on
+  Debian/Ubuntu, or `glibc.i686` + `libstdc++.i686` on Fedora/RHEL), and
+  Valheim's Unity engine loads ALSA/PulseAudio for its audio backend even
+  headless (`libasound2`/`libasound2t64` + `libpulse0` on Debian/Ubuntu, or
+  `alsa-lib` + `pulseaudio-libs` on Fedora/RHEL). The `.deb`/`.rpm`
+  packages declare these as dependencies and apt/dnf install them for you;
+  this only matters if you're building/installing from source on a
+  minimal system.
 - **[Node.js](https://nodejs.org/) is only needed to build the web
   dashboard's frontend** (`make web-build`, run automatically by `make
   build`/`release`). The compiled `odin` binary itself has no Node.js or

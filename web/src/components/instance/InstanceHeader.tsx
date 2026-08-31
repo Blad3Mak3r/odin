@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   useInstanceResources,
+  useInstanceTransition,
   useRenameInstance,
   useRestartInstance,
   useStartInstance,
@@ -35,7 +36,8 @@ export function InstanceHeader({
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
-  const busy = start.isPending || stop.isPending || restart.isPending
+  const transition = useInstanceTransition(instance?.name ?? '').data
+  const busy = start.isPending || stop.isPending || restart.isPending || transition !== null
   // `undefined`/`true` both read as "don't second-guess running" — only an
   // explicit `false` (a live tick that's actually seen the supervisor say
   // so) shows "starting" instead, so a fresh page load never flashes it
@@ -66,7 +68,7 @@ export function InstanceHeader({
           {!loading && instance && (
             <>
               <Badge variant={instance.running ? 'default' : 'secondary'}>
-                {instance.running ? (starting ? 'starting' : 'running') : 'stopped'}
+                {transition ?? (instance.running ? (starting ? 'starting' : 'running') : 'stopped')}
               </Badge>
               <PlayersBadge name={instance.name} running={instance.running} />
               <RenameInstanceDialog name={instance.name} />
@@ -113,7 +115,7 @@ export function InstanceHeader({
             size="icon"
             aria-label="Delete instance"
             onClick={onDelete}
-            disabled={instance?.running}
+            disabled={busy || instance?.running}
           >
             <Trash2 className="size-4" />
           </Button>

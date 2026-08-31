@@ -207,6 +207,9 @@ export interface InstanceResources {
   memory_bytes: number
 }
 
+export type InstanceTransition = 'starting' | 'stopping' | 'restarting'
+export type InstanceTransitions = Record<string, InstanceTransition>
+
 export interface ResourceSample {
   at: string
   cpu_percent: number

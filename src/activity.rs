@@ -28,14 +28,32 @@ pub enum ActivityKind {
     InstanceStopped,
     InstanceAutoRestarted,
     ServerInstalled,
-    ModInstalled { mod_id: String },
-    ModRemoved { mod_id: String },
+    ServerUpdateAvailable {
+        installed_build_id: u64,
+        latest_build_id: u64,
+    },
+    ModInstalled {
+        mod_id: String,
+    },
+    ModRemoved {
+        mod_id: String,
+    },
     ModsUpdated,
-    BackupCreated { backup_id: String },
-    BackupRestored { backup_id: String },
-    BackupPruned { backup_id: String },
-    PlayerJoined { name: String },
-    PlayerLeft { name: String },
+    BackupCreated {
+        backup_id: String,
+    },
+    BackupRestored {
+        backup_id: String,
+    },
+    BackupPruned {
+        backup_id: String,
+    },
+    PlayerJoined {
+        name: String,
+    },
+    PlayerLeft {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -23,7 +23,7 @@ use crate::paths::Paths;
 use crate::steamcmd::{self, SteamCmd, VALHEIM_DEDICATED_SERVER_APP_ID};
 
 const LATEST_BUILD_ID_CACHE_KEY: &str = "valheim_latest_build_id";
-const LATEST_BUILD_ID_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+pub(crate) const CHECK_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateStatus {
@@ -34,7 +34,7 @@ pub struct UpdateStatus {
 
 /// Compares the locally installed build (read from SteamCMD's ACF manifest)
 /// against the current build Steam has live on the `public` branch, using a
-/// cached remote lookup (see `LATEST_BUILD_ID_CACHE_TTL`) so repeated
+/// cached remote lookup (see `CHECK_INTERVAL`) so repeated
 /// dashboard polls don't re-run `steamcmd` every time.
 pub fn check(paths: &Paths, db: &Db) -> Result<UpdateStatus> {
     let installed_build_id =
@@ -55,7 +55,7 @@ pub fn check(paths: &Paths, db: &Db) -> Result<UpdateStatus> {
 fn latest_build_id(paths: &Paths, db: &Db) -> Result<Option<u64>> {
     if let Some(entry) = crate::db::cache::get(db, LATEST_BUILD_ID_CACHE_KEY)?
         && let Ok(age) = (chrono::Utc::now() - entry.fetched_at).to_std()
-        && age < LATEST_BUILD_ID_CACHE_TTL
+        && age < CHECK_INTERVAL
         && let Ok(build_id) = entry.value.parse::<u64>()
     {
         return Ok(Some(build_id));

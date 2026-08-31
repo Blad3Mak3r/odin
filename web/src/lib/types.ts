@@ -243,6 +243,7 @@ export type ActivityKind =
   | { kind: 'instance_stopped' }
   | { kind: 'instance_auto_restarted' }
   | { kind: 'server_installed' }
+  | { kind: 'server_update_available'; installed_build_id: number; latest_build_id: number }
   | { kind: 'mod_installed'; mod_id: string }
   | { kind: 'mod_removed'; mod_id: string }
   | { kind: 'mods_updated' }

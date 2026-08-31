@@ -15,6 +15,7 @@ mod sse;
 mod state;
 mod static_files;
 pub mod supervisor;
+mod update_monitor;
 mod webhooks;
 mod world_saves;
 
@@ -41,9 +42,10 @@ const STOP_INSTANCES_ON_SHUTDOWN_ENV: &str = "ODIN_STOP_INSTANCES_ON_SHUTDOWN";
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let db = Arc::new(Db::open(&paths).context("failed to open database")?);
     let state = AppState::new(paths, db);
+    webhooks::spawn(state.clone());
+    update_monitor::spawn(state.clone());
     spawn_telemetry(state.clone());
     backup_scheduler::spawn(state.clone());
-    webhooks::spawn(state.clone());
 
     let router = router::build_router(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)

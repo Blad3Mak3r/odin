@@ -4,6 +4,17 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-31
+
+### What's Changed
+- Declare SteamCMD/Valheim runtime library deps in .deb/.rpm by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/64
+- Monitor Valheim server updates in odin serve by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/65
+- Version mods per instance by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/66
+- Fix player tracking for current Valheim logs by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/67
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.8.4...v0.9.0
+
 ### Added
 
 - `odin serve` now checks Steam for Valheim server updates every 15 minutes and emits a webhook event once for each new build.

@@ -12,6 +12,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::db::Db;
+use crate::instance::InstanceError;
 use crate::web::players::PlayerInfo;
 
 /// Samples kept per series (host, and each instance). At the telemetry
@@ -22,6 +23,18 @@ const HISTORY_CAPACITY: usize = 120;
 /// clients polling roughly every tick, so a short buffer is enough to ride
 /// out a brief send stall without ever needing much memory.
 const TICK_BROADCAST_CAPACITY: usize = 32;
+
+const TRANSITION_BROADCAST_CAPACITY: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceTransition {
+    Starting,
+    Stopping,
+    Restarting,
+}
+
+pub type InstanceTransitions = HashMap<String, InstanceTransition>;
 
 /// How often a downsampled sample gets written to `resource_samples` for
 /// long-range history — the in-memory buffer above already covers the
@@ -106,6 +119,8 @@ pub struct RuntimeRegistry {
     host: Arc<Mutex<HostState>>,
     instances: Arc<Mutex<HashMap<String, InstanceState>>>,
     ticks: broadcast::Sender<ResourcesTick>,
+    transitions: Arc<Mutex<InstanceTransitions>>,
+    transition_events: broadcast::Sender<InstanceTransitions>,
     auto_restart_attempts: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     db: Arc<Db>,
     last_persisted_at: Arc<Mutex<Option<DateTime<Utc>>>>,
@@ -114,10 +129,13 @@ pub struct RuntimeRegistry {
 impl RuntimeRegistry {
     pub fn new(db: Arc<Db>) -> Self {
         let (ticks, _receiver) = broadcast::channel(TICK_BROADCAST_CAPACITY);
+        let (transition_events, _receiver) = broadcast::channel(TRANSITION_BROADCAST_CAPACITY);
         Self {
             host: Arc::new(Mutex::new(HostState::default())),
             instances: Arc::new(Mutex::new(HashMap::new())),
             ticks,
+            transitions: Arc::new(Mutex::new(HashMap::new())),
+            transition_events,
             auto_restart_attempts: Arc::new(Mutex::new(HashMap::new())),
             db,
             last_persisted_at: Arc::new(Mutex::new(None)),
@@ -133,6 +151,44 @@ impl RuntimeRegistry {
 
     pub fn subscribe_ticks(&self) -> broadcast::Receiver<ResourcesTick> {
         self.ticks.subscribe()
+    }
+
+    /// Marks one instance as transitioning and returns a guard that clears
+    /// the marker on every exit path, including cancellation and errors.
+    pub fn begin_transition(
+        &self,
+        name: &str,
+        transition: InstanceTransition,
+    ) -> Result<InstanceTransitionGuard, InstanceError> {
+        let mut transitions = self
+            .transitions
+            .lock()
+            .expect("runtime transitions lock poisoned");
+        if transitions.contains_key(name) {
+            return Err(InstanceError::TransitionInProgress(name.to_string()));
+        }
+        transitions.insert(name.to_string(), transition);
+        let _ = self.transition_events.send(transitions.clone());
+        Ok(InstanceTransitionGuard {
+            runtime: self.clone(),
+            name: name.to_string(),
+        })
+    }
+
+    /// Returns one atomic current snapshot plus a receiver for later full
+    /// snapshots. Full replacement lets a client recover even if it lagged
+    /// over an earlier transition event.
+    pub fn subscribe_transitions(
+        &self,
+    ) -> (
+        InstanceTransitions,
+        broadcast::Receiver<InstanceTransitions>,
+    ) {
+        let transitions = self
+            .transitions
+            .lock()
+            .expect("runtime transitions lock poisoned");
+        (transitions.clone(), self.transition_events.subscribe())
     }
 
     pub fn push_host_sample(&self, snapshot: HostSnapshot) {
@@ -289,6 +345,23 @@ impl RuntimeRegistry {
     }
 }
 
+pub struct InstanceTransitionGuard {
+    runtime: RuntimeRegistry,
+    name: String,
+}
+
+impl Drop for InstanceTransitionGuard {
+    fn drop(&mut self) {
+        let mut transitions = self
+            .runtime
+            .transitions
+            .lock()
+            .expect("runtime transitions lock poisoned");
+        transitions.remove(&self.name);
+        let _ = self.runtime.transition_events.send(transitions.clone());
+    }
+}
+
 fn push_capped(buf: &mut VecDeque<ResourceSample>, sample: ResourceSample) {
     buf.push_back(sample);
     if buf.len() > HISTORY_CAPACITY {
@@ -355,6 +428,29 @@ mod tests {
             !registry.should_persist_now(),
             "a second check right after should be refused"
         );
+    }
+
+    #[test]
+    fn transition_guard_broadcasts_full_snapshots_and_clears_on_drop() {
+        let registry = temp_registry("transitions");
+        let (initial, mut receiver) = registry.subscribe_transitions();
+        assert!(initial.is_empty());
+
+        let guard = registry
+            .begin_transition("my-server", InstanceTransition::Restarting)
+            .unwrap();
+        let active = receiver.try_recv().unwrap();
+        assert_eq!(
+            active.get("my-server"),
+            Some(&InstanceTransition::Restarting)
+        );
+        assert!(matches!(
+            registry.begin_transition("my-server", InstanceTransition::Stopping),
+            Err(InstanceError::TransitionInProgress(name)) if name == "my-server"
+        ));
+
+        drop(guard);
+        assert!(receiver.try_recv().unwrap().is_empty());
     }
 
     #[test]

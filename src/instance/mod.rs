@@ -30,6 +30,8 @@ pub enum InstanceError {
     AlreadyRunning(String),
     #[error("instance '{0}' is not running")]
     NotRunning(String),
+    #[error("instance '{0}' already has a lifecycle transition in progress")]
+    TransitionInProgress(String),
     #[error("instance '{0}' does not exist; run `odin start {0}` to create it")]
     NotFound(String),
     #[error("instance '{0}' already exists")]

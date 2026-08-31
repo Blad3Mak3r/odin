@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::instance::lifecycle;
 use crate::web::routes::mods::{JobHandle, spawn_mod_update_job};
+use crate::web::runtime::InstanceTransition;
 use crate::web::state::AppState;
 
 #[derive(Deserialize)]
@@ -31,7 +32,13 @@ pub async fn bulk_start(
 ) -> Json<Vec<BulkResult>> {
     let mut results = Vec::with_capacity(req.names.len());
     for name in req.names {
-        let result = lifecycle::start(&state.paths, &state.db, &name).await;
+        let result = match state
+            .runtime
+            .begin_transition(&name, InstanceTransition::Starting)
+        {
+            Ok(_transition) => lifecycle::start(&state.paths, &state.db, &name).await,
+            Err(error) => Err(error.into()),
+        };
         results.push(BulkResult {
             ok: result.is_ok(),
             error: result.err().map(|e| format!("{e:#}")),
@@ -47,7 +54,13 @@ pub async fn bulk_stop(
 ) -> Json<Vec<BulkResult>> {
     let mut results = Vec::with_capacity(req.names.len());
     for name in req.names {
-        let result = lifecycle::stop(&state.paths, &state.db, &name).await;
+        let result = match state
+            .runtime
+            .begin_transition(&name, InstanceTransition::Stopping)
+        {
+            Ok(_transition) => lifecycle::stop(&state.paths, &state.db, &name).await,
+            Err(error) => Err(error.into()),
+        };
         results.push(BulkResult {
             ok: result.is_ok(),
             error: result.err().map(|e| format!("{e:#}")),
@@ -63,7 +76,13 @@ pub async fn bulk_restart(
 ) -> Json<Vec<BulkResult>> {
     let mut results = Vec::with_capacity(req.names.len());
     for name in req.names {
-        let result = lifecycle::restart(&state.paths, &state.db, &name).await;
+        let result = match state
+            .runtime
+            .begin_transition(&name, InstanceTransition::Restarting)
+        {
+            Ok(_transition) => lifecycle::restart(&state.paths, &state.db, &name).await,
+            Err(error) => Err(error.into()),
+        };
         results.push(BulkResult {
             ok: result.is_ok(),
             error: result.err().map(|e| format!("{e:#}")),

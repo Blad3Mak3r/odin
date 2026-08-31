@@ -80,7 +80,8 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         Some(
             InstanceError::AlreadyRunning(_)
             | InstanceError::AlreadyExists(_)
-            | InstanceError::NotRunning(_),
+            | InstanceError::NotRunning(_)
+            | InstanceError::TransitionInProgress(_),
         ) => StatusCode::CONFLICT,
         None => StatusCode::INTERNAL_SERVER_ERROR,
     }

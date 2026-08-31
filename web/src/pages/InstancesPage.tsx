@@ -28,12 +28,14 @@ import {
   useBulkUpdateMods,
   useCreateInstance,
   useInstanceResources,
+  useInstanceTransition,
+  useInstanceTransitions,
   useInstances,
   useRestartInstance,
   useStartInstance,
   useStopInstance,
 } from '@/lib/queries'
-import type { BulkResult } from '@/lib/types'
+import type { BulkResult, InstanceTransition, InstanceView } from '@/lib/types'
 import { formatBytes } from '@/lib/utils'
 
 export function InstancesPage() {
@@ -112,46 +114,71 @@ export function InstancesPage() {
             </TableRow>
           )}
           {instances.data?.map((instance) => (
-            <TableRow key={instance.name}>
-              <TableCell>
-                <Checkbox
-                  checked={selected.has(instance.name)}
-                  onCheckedChange={() => toggleOne(instance.name)}
-                  aria-label={`Select ${instance.name}`}
-                />
-              </TableCell>
-              <TableCell className="font-medium">
-                <div className="flex flex-col">
-                  <Link to={`/instances/${instance.name}`} className="hover:underline">
-                    {instance.name}
-                  </Link>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <Badge variant={instance.running ? 'default' : 'secondary'}>
-                    {instance.running ? 'running' : 'stopped'}
-                  </Badge>
-                  <PlayersBadge name={instance.name} running={instance.running} />
-                </div>
-              </TableCell>
-              <TableCell className="hidden md:table-cell">{instance.world_name}</TableCell>
-              <TableCell className="hidden md:table-cell">{instance.port}</TableCell>
-              <TableCell className="hidden sm:table-cell">{instance.installed_mods.length}</TableCell>
-              <TableCell className="hidden text-muted-foreground lg:table-cell">
-                <InstanceResourceCell name={instance.name} running={instance.running} />
-              </TableCell>
-              <TableCell className="text-right">
-                <InstanceActions name={instance.name} running={instance.running} />
-              </TableCell>
-            </TableRow>
+            <InstanceRow
+              key={instance.name}
+              instance={instance}
+              selected={selected.has(instance.name)}
+              onToggle={() => toggleOne(instance.name)}
+            />
           ))}
         </TableBody>
       </Table>
     </div>
+  )
+}
+
+function InstanceRow({
+  instance,
+  selected,
+  onToggle,
+}: {
+  instance: InstanceView
+  selected: boolean
+  onToggle: () => void
+}) {
+  const transition = useInstanceTransition(instance.name).data
+
+  return (
+    <TableRow>
+      <TableCell>
+        <Checkbox
+          checked={selected}
+          onCheckedChange={onToggle}
+          aria-label={`Select ${instance.name}`}
+        />
+      </TableCell>
+      <TableCell className="font-medium">
+        <div className="flex flex-col">
+          <Link to={`/instances/${instance.name}`} className="hover:underline">
+            {instance.name}
+          </Link>
+          <span className="text-xs font-normal text-muted-foreground">
+            Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}
+          </span>
+        </div>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2">
+          <Badge variant={instance.running ? 'default' : 'secondary'}>
+            {transition ?? (instance.running ? 'running' : 'stopped')}
+          </Badge>
+          <PlayersBadge name={instance.name} running={instance.running} />
+        </div>
+      </TableCell>
+      <TableCell className="hidden md:table-cell">{instance.world_name}</TableCell>
+      <TableCell className="hidden md:table-cell">{instance.port}</TableCell>
+      <TableCell className="hidden sm:table-cell">{instance.installed_mods.length}</TableCell>
+      <TableCell className="hidden text-muted-foreground lg:table-cell">
+        <InstanceResourceCell name={instance.name} running={instance.running} />
+      </TableCell>
+      <TableCell className="text-right">
+        <InstanceActions
+          name={instance.name}
+          running={instance.running}
+          transition={transition}
+        />
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -173,9 +200,14 @@ function BulkActionBar({ selected, onDone }: { selected: string[]; onDone: () =>
   const bulkStop = useBulkStopInstances()
   const bulkRestart = useBulkRestartInstances()
   const bulkUpdateMods = useBulkUpdateMods()
+  const transitions = useInstanceTransitions()
 
   const busy =
-    bulkStart.isPending || bulkStop.isPending || bulkRestart.isPending || bulkUpdateMods.isPending
+    bulkStart.isPending ||
+    bulkStop.isPending ||
+    bulkRestart.isPending ||
+    bulkUpdateMods.isPending ||
+    selected.some((name) => name in transitions.data)
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-muted/30 px-3 py-2">
@@ -267,13 +299,21 @@ function InstanceResourceCell({ name, running }: { name: string; running: boolea
   )
 }
 
-function InstanceActions({ name, running }: { name: string; running: boolean }) {
+function InstanceActions({
+  name,
+  running,
+  transition,
+}: {
+  name: string
+  running: boolean
+  transition: InstanceTransition | null
+}) {
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
   const [deleteOpen, setDeleteOpen] = useState(false)
 
-  const busy = start.isPending || stop.isPending || restart.isPending
+  const busy = start.isPending || stop.isPending || restart.isPending || transition !== null
 
   return (
     <div className="flex justify-end gap-2">
@@ -312,7 +352,7 @@ function InstanceActions({ name, running }: { name: string; running: boolean }) 
       <Button
         size="sm"
         variant="destructive"
-        disabled={running}
+        disabled={busy || running}
         aria-label={`Delete ${name}`}
         onClick={() => setDeleteOpen(true)}
       >

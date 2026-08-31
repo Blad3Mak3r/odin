@@ -17,6 +17,8 @@ import type {
   HostResources,
   InstallStatusView,
   InstanceResources,
+  InstanceTransition,
+  InstanceTransitions,
   InstanceView,
   JobHandle,
   JobSummary,
@@ -153,6 +155,25 @@ export function useInstance(name: string) {
     queryKey: ['instances', name],
     queryFn: () => api.get<InstanceView>(`/instances/${name}`),
     refetchInterval: 5_000,
+  })
+}
+
+export function useInstanceTransition(name: string) {
+  return useQuery({
+    queryKey: ['instance-transitions'],
+    queryFn: () => Promise.resolve<InstanceTransitions>({}),
+    initialData: {} as InstanceTransitions,
+    staleTime: Infinity,
+    select: (transitions): InstanceTransition | null => transitions[name] ?? null,
+  })
+}
+
+export function useInstanceTransitions() {
+  return useQuery({
+    queryKey: ['instance-transitions'],
+    queryFn: () => Promise.resolve<InstanceTransitions>({}),
+    initialData: {} as InstanceTransitions,
+    staleTime: Infinity,
   })
 }
 

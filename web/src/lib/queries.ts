@@ -335,6 +335,30 @@ export function useSetModEnabled() {
   })
 }
 
+export function useSelectModVersion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, modId, version }: { name: string; modId: string; version: string }) =>
+      api.put<void>(`/instances/${name}/mods/${encodeURIComponent(modId)}/version`, { version }),
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+      queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
+    },
+  })
+}
+
+export function useSetModPinned() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, modId, pinned }: { name: string; modId: string; pinned: boolean }) =>
+      api.put<void>(`/instances/${name}/mods/${encodeURIComponent(modId)}/pinned`, { pinned }),
+    onSuccess: (_data, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+      queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
+    },
+  })
+}
+
 export function useUpdateMods() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -436,6 +460,17 @@ export function usePruneMod() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (modId: string) => api.delete<void>(`/mods/${encodeURIComponent(modId)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mods', 'global'] }),
+  })
+}
+
+export function usePruneModVersion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ modId, version }: { modId: string; version: string }) =>
+      api.delete<void>(
+        `/mods/${encodeURIComponent(modId)}/versions/${encodeURIComponent(version)}`,
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mods', 'global'] }),
   })
 }

@@ -29,6 +29,7 @@ import {
   useGlobalMods,
   useInstances,
   usePruneMod,
+  usePruneModVersion,
   useRemoveMod,
   useSetModEnabled,
 } from '@/lib/queries'
@@ -96,11 +97,13 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
   const setEnabled = useSetModEnabled()
   const removeMod = useRemoveMod()
   const pruneMod = usePruneMod()
+  const pruneVersion = usePruneModVersion()
   const [installOpen, setInstallOpen] = useState(false)
   const { confirm, dialog } = useConfirmDialog()
 
   const installedOn = new Set(mod.instances.map((i) => i.instance))
   const candidateInstances = instanceNames.filter((n) => !installedOn.has(n))
+  const versionsInUse = new Set(mod.instances.map((entry) => entry.version))
 
   const handlePrune = async () => {
     const confirmed = await confirm({
@@ -122,6 +125,19 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
     removeMod.mutate({ name: instanceName, modId: mod.mod_id }, { onError: (e) => toast.error(e.message) })
   }
 
+  const handlePruneVersion = async (version: string) => {
+    const confirmed = await confirm({
+      title: `Remove ${mod.mod_id} v${version}?`,
+      description: `Delete this cached version from the shared store. Other versions are preserved.`,
+      confirmLabel: 'Remove version',
+    })
+    if (!confirmed) return
+    pruneVersion.mutate(
+      { modId: mod.mod_id, version },
+      { onError: (e) => toast.error(e.message) },
+    )
+  }
+
   return (
     <Card>
       {dialog}
@@ -134,7 +150,9 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
               <Badge variant="outline">{MOD_SOURCE_LABEL[getModSource(mod.mod_id)]}</Badge>
             </div>
             <p className="text-xs text-muted-foreground">
-              {mod.global_version ? `v${mod.global_version} in the shared store` : 'missing from the shared store'}
+              {mod.stored_versions.length > 0
+                ? `${mod.stored_versions.length} cached version${mod.stored_versions.length === 1 ? '' : 's'}`
+                : 'missing from the shared store'}
             </p>
           </div>
         </div>
@@ -152,6 +170,27 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
       </CardHeader>
 
       <CardContent>
+        {mod.stored_versions.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            {mod.stored_versions.map((version) => (
+              <div key={version} className="flex items-center gap-1">
+                <Badge variant={versionsInUse.has(version) ? 'secondary' : 'outline'}>
+                  v{version}
+                </Badge>
+                {!versionsInUse.has(version) && (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={pruneVersion.isPending}
+                    onClick={() => handlePruneVersion(version)}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {mod.instances.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             Not installed on any instance — an orphaned download.
@@ -166,6 +205,7 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
                 <div className="flex items-center gap-2 text-sm">
                   <span className="font-medium">{entry.instance}</span>
                   <span className="text-xs text-muted-foreground">v{entry.version}</span>
+                  {entry.pinned && <Badge variant="secondary">pinned</Badge>}
                   {entry.running && <Badge variant="default">running</Badge>}
                 </div>
                 <div className="flex items-center gap-3">

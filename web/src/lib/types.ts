@@ -35,6 +35,8 @@ export interface InstalledMod {
   version: string
   installed_at: string
   enabled: boolean
+  pinned: boolean
+  available_versions: string[]
   icon: string | null
 }
 
@@ -128,12 +130,13 @@ export interface GlobalModInstanceEntry {
   instance: string
   version: string
   enabled: boolean
+  pinned: boolean
   running: boolean
 }
 
 export interface GlobalMod {
   mod_id: string
-  global_version: string | null
+  stored_versions: string[]
   icon: string | null
   instances: GlobalModInstanceEntry[]
 }

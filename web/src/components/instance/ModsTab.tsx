@@ -9,12 +9,28 @@ import { UploadModForm } from '@/components/UploadModForm'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useJobSocket } from '@/hooks/useJobSocket'
 import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
-import { useAddMod, useMods, useRemoveMod, useSetModEnabled, useUpdateMods } from '@/lib/queries'
+import {
+  useAddMod,
+  useMods,
+  useRemoveMod,
+  useSelectModVersion,
+  useSetModEnabled,
+  useSetModPinned,
+  useUpdateMods,
+} from '@/lib/queries'
+import type { InstalledMod } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const ModConfigFiles = lazy(() =>
@@ -48,7 +64,9 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
   const setEnabled = useSetModEnabled()
   const removeMod = useRemoveMod()
   const updateMods = useUpdateMods()
+  const setPinned = useSetModPinned()
   const [jobId, setJobId] = useState<string | null>(null)
+  const [versionMod, setVersionMod] = useState<InstalledMod | null>(null)
   const job = useJobSocket(jobId)
   const { confirm, dialog } = useConfirmDialog()
 
@@ -120,9 +138,33 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
                     <Badge variant="outline">{MOD_SOURCE_LABEL[getModSource(m.mod_id)]}</Badge>
                   </div>
                   <p className="text-xs text-muted-foreground">v{m.version}</p>
+                  {m.pinned && <Badge variant="secondary">pinned</Badge>}
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {m.available_versions.length > 1 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={running}
+                    onClick={() => setVersionMod(m)}
+                  >
+                    Change version
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={setPinned.isPending}
+                  onClick={() =>
+                    setPinned.mutate(
+                      { name, modId: m.mod_id, pinned: !m.pinned },
+                      { onError: (e) => toast.error(e.message) },
+                    )
+                  }
+                >
+                  {m.pinned ? 'Allow updates' : 'Pin version'}
+                </Button>
                 <Switch
                   checked={m.enabled}
                   disabled={running || setEnabled.isPending}
@@ -148,7 +190,65 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
       </div>
 
       {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
+      <VersionDialog
+        name={name}
+        mod={versionMod}
+        open={versionMod !== null}
+        onOpenChange={(open) => !open && setVersionMod(null)}
+      />
     </div>
+  )
+}
+
+function VersionDialog({
+  name,
+  mod,
+  open,
+  onOpenChange,
+}: {
+  name: string
+  mod: InstalledMod | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const selectVersion = useSelectModVersion()
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Choose version</DialogTitle>
+          <DialogDescription>
+            Switching versions pins this mod. Allow updates again when you want it to follow the
+            latest release.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-2">
+          {mod?.available_versions.map((version) => (
+            <Button
+              key={version}
+              variant={version === mod.version ? 'secondary' : 'outline'}
+              disabled={selectVersion.isPending}
+              onClick={() =>
+                selectVersion.mutate(
+                  { name, modId: mod.mod_id, version },
+                  {
+                    onSuccess: () => {
+                      toast.success(`Using ${mod.mod_id} v${version}`)
+                      onOpenChange(false)
+                    },
+                    onError: (e) => toast.error(e.message),
+                  },
+                )
+              }
+            >
+              v{version}
+              {version === mod.version ? ' (current)' : ''}
+            </Button>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

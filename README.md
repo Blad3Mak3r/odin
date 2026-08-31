@@ -53,10 +53,9 @@ all from a browser, on one host or several.
   [BepInEx](https://github.com/BepInEx/BepInEx) automatically and installs
   mods straight from the [Thunderstore](https://thunderstore.io/c/valheim)
   API by name — no manual unzipping into the right folder. Mods download
-  once into a shared global store and get symlinked into every instance
-  that wants them, so running the same mod on several servers doesn't mean
-  downloading it several times; enabling/disabling a mod per instance never
-  requires reinstalling it.
+  once per version into a shared global store and get symlinked into every
+  instance that wants them. Each instance can use and pin its own exact
+  version without duplicating downloads or changing another server.
 - **Ready-to-share connect info.** The dashboard (and `odin status`) shows
   each instance's public address and password alongside its live state, so
   getting a friend into your world doesn't mean a round-trip through raw
@@ -331,7 +330,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 |---|---|
 | `odin mods search <server-name> <query> [-l\|--list]` | Search the Thunderstore package index by name or author, ranked by relevance (name match beats owner match, ties broken by downloads), showing whether each result is already installed on `<server-name>`. Interactive by default — prompts for a result number to install afterward; pass `-l`/`--list` to just list. |
 | `odin mods add <server-name> <mod-id>` | Install a mod by its Thunderstore id (`namespace-name` or `namespace-name-version`). Bootstraps BepInEx into the instance automatically on first use. Downloads into the shared global mod store only if it isn't already there. |
-| `odin mods update <server-name>` | Update all of an instance's installed mods to their latest available versions. Replaces the one shared copy in the global store, so this affects every other instance currently linking that mod too. |
+| `odin mods update <server-name>` | Update an instance's unpinned mods to their latest available versions. Other instances keep their exact versions. |
 | `odin mods list <server-name>` | List installed mods, their versions, and whether each is currently enabled (reads local state only, no network call). |
 | `odin mods manage <server-name>` | Interactively toggle which installed mods are enabled via a checkbox list (space to toggle, enter to confirm, esc to cancel). Doesn't install new mods — use `odin mods search` for that. |
 | `odin mods enable <server-name> <mod-id>` | Re-enable a previously disabled mod — relinks it from the global store, no reinstall needed. |
@@ -429,8 +428,7 @@ In both modes, the data dir is resolved in this order:
   steamcmd/                     # SteamCMD installation
   install/valheim/               # shared Valheim dedicated server binaries — every instance
                                   # symlinks to this, so `odin install` updates them all at once
-  mods/<mod-id>/                 # shared, global mod store — one download per mod, no matter
-                                  # how many instances have it enabled
+  mods/<mod-id>/<version>/       # immutable shared payload — one download per exact version
   servers/<name>/
     state.json                   # instance metadata: port, world, password, visibility, mods, timestamps
     server -> ../../install/valheim
@@ -438,20 +436,23 @@ In both modes, the data dir is resolved in this order:
     backups/<id>.zip              # local snapshots; remote uploads are removed after success
     logs/console.log              # captured console output, tailed by `odin logs`
     console.in                    # named pipe carrying console input (`odin exec`/dashboard)
-    BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>  # present only while enabled
+    BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>/<version>  # exact enabled version
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
 
 Each instance's game binaries are a symlink into one shared, SteamCMD-managed
 install — so every instance always runs the same game version, and updating
 is a single `odin install` rather than one download per server. Mods work
-the same way: `odin mods add` downloads a mod once into the shared `mods/`
-store, and every instance that has it enabled just symlinks to that same
-copy — `odin mods enable`/`disable` add or remove that symlink instead of
-copying or moving files around. Because the store isn't versioned per mod,
-`odin mods update` replaces the one shared copy wherever it's linked; if you
-need two servers pinned to two different versions of the same mod at the
-same time, that isn't currently supported.
+the same way, but versioned: `odin mods add` downloads each `(mod, version)`
+once into the shared `mods/` store, and every enabled instance symlinks to
+its exact version. Updating one instance creates or reuses the newer payload
+and only repoints that instance; pinned instances remain unchanged. The
+dashboard can switch back to any cached version and prune versions no longer
+used by an instance.
+
+On the first start after upgrading, Odin automatically moves the legacy
+single-version mod store into this layout and repoints every existing instance;
+no migration command or dashboard action is required.
 
 An instance's **running/stopped status is never trusted from a stored
 flag** — it's always derived on demand by checking whether its recorded

@@ -1,7 +1,7 @@
 //! Dispatches mod-related behavior by where a `mod_id` came from. The source
 //! is encoded as a prefix on the id itself rather than a separate DB column:
 //! Thunderstore ids stay bare `<namespace>-<name>` (so existing installs and
-//! on-disk `mods_dir()/<mod_id>` directories keep working unchanged), while
+//! on-disk `mods_dir()/<mod_id>` roots keep working unchanged), while
 //! Nexus and user-uploaded mods get a `nexus:`/`local:` prefix. Colons are
 //! valid in Linux filenames, so the prefixed string works directly as a
 //! directory name and symlink name with no further encoding.

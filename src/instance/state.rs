@@ -24,15 +24,13 @@ pub struct InstalledMod {
     pub mod_id: String,
     pub version: String,
     pub installed_at: DateTime<Utc>,
-    /// Whether `BepInEx/plugins/<mod_id>` currently exists as a symlink into
-    /// the global mod store (loaded) or is absent (parked/disabled). The
-    /// downloaded mod files themselves always live in the global store, one
-    /// shared copy per mod_id — every instance referencing it sees whichever
-    /// version was most recently fetched there (`version` below just
-    /// records what this instance last saw, and can lag if another
-    /// instance updates the shared copy).
+    /// Whether `BepInEx/plugins/<mod_id>` currently links to this exact
+    /// version in the global store (loaded) or is absent (parked/disabled).
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Pinned mods are skipped by bulk/per-instance update operations.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +117,7 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: true,
+            pinned: false,
         });
         let raw = serde_json::to_string_pretty(&original).unwrap();
         std::fs::write(&state_file, raw).unwrap();

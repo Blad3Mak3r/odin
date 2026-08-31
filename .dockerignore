@@ -1,0 +1,8 @@
+**
+!Containerfile
+!packaging/
+packaging/*
+!packaging/config.toml.default
+!dist/
+dist/*
+!dist/odin-linux-amd64

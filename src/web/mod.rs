@@ -23,7 +23,8 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use futures_util::future::join_all;
 use tokio::task::AbortHandle;
 
 use crate::activity::ActivityKind;
@@ -35,6 +36,8 @@ use runtime::InstanceTransition;
 use runtime::{InstanceResourceEntry, ResourcesTick};
 use state::AppState;
 
+const STOP_INSTANCES_ON_SHUTDOWN_ENV: &str = "ODIN_STOP_INSTANCES_ON_SHUTDOWN";
+
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let db = Arc::new(Db::open(&paths).context("failed to open database")?);
     let state = AppState::new(paths, db);
@@ -42,7 +45,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     backup_scheduler::spawn(state.clone());
     webhooks::spawn(state.clone());
 
-    let router = router::build_router(state);
+    let router = router::build_router(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind {addr}"))?;
@@ -52,9 +55,64 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     if let Some(ip) = local_network_ip() {
         println!("Network: http://{ip}:{}", addr.port());
     }
-    axum::serve(listener, router)
-        .await
-        .context("web server error")
+
+    let server = axum::serve(listener, router);
+    if !stop_instances_on_shutdown() {
+        return server.await.context("web server error");
+    }
+
+    tokio::select! {
+        result = server => result.context("web server error"),
+        signal = shutdown_signal() => {
+            signal?;
+            tracing::info!("shutdown signal received; stopping running instances");
+            stop_running_instances(&state).await
+        }
+    }
+}
+
+fn stop_instances_on_shutdown() -> bool {
+    let value = std::env::var(STOP_INSTANCES_ON_SHUTDOWN_ENV).ok();
+    shutdown_flag_enabled(value.as_deref())
+}
+
+fn shutdown_flag_enabled(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+async fn shutdown_signal() -> Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .context("failed to register SIGTERM handler")?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result.context("failed to register SIGINT handler")?,
+        _ = terminate.recv() => {}
+    }
+    Ok(())
+}
+
+async fn stop_running_instances(state: &AppState) -> Result<()> {
+    let names = instance::running_instance_names(&state.paths, &state.db)?;
+    let results = join_all(
+        names
+            .iter()
+            .map(|name| instance::lifecycle::stop(&state.paths, &state.db, name)),
+    )
+    .await;
+
+    let failures = names
+        .iter()
+        .zip(results)
+        .filter_map(|(name, result)| result.err().map(|error| format!("{name}: {error:#}")))
+        .collect::<Vec<_>>();
+    if !failures.is_empty() {
+        bail!(
+            "failed to stop one or more instances during shutdown: {}",
+            failures.join("; ")
+        );
+    }
+
+    tracing::info!(count = names.len(), "running instances stopped cleanly");
+    Ok(())
 }
 
 /// Best-effort discovery of the host's LAN IP, for display alongside the bind
@@ -301,5 +359,25 @@ async fn reconcile_log_tailers(
             }
         };
         tailers.insert(name.clone(), handle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shutdown_flag_enabled;
+
+    #[test]
+    fn shutdown_flag_is_enabled_for_one() {
+        assert!(shutdown_flag_enabled(Some("1")));
+    }
+
+    #[test]
+    fn shutdown_flag_is_enabled_for_case_insensitive_true() {
+        assert!(shutdown_flag_enabled(Some("TRUE")));
+    }
+
+    #[test]
+    fn shutdown_flag_is_disabled_when_missing() {
+        assert!(!shutdown_flag_enabled(None));
     }
 }

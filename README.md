@@ -130,6 +130,72 @@ Alternatively, grab the `.deb`/`.rpm` yourself from the [Releases
 page](https://github.com/Blad3Mak3r/odin/releases) and install it with
 `apt install ./odin-server_*.deb` or `dnf install ./odin-server-*.rpm`.
 
+### Container
+
+Release images are published for `linux/amd64` at
+`ghcr.io/blad3mak3r/odin`. Pin a version in production; `latest` is useful
+for testing but changes whenever a new release is published:
+
+```sh
+ODIN_IMAGE=ghcr.io/blad3mak3r/odin:x.y.z
+docker pull "$ODIN_IMAGE"
+docker volume create odin-data
+docker run -d \
+  --name odin \
+  --restart unless-stopped \
+  --network host \
+  --stop-timeout 60 \
+  --tmpfs /run/odin:rw,nosuid,nodev,noexec,size=16m,mode=0750,uid=10001,gid=10001 \
+  --mount source=odin-data,target=/var/lib/odin \
+  "$ODIN_IMAGE"
+```
+
+Open `http://127.0.0.1:7331` on the host. The image deliberately binds the
+dashboard to loopback by default because it has no authentication. Use an
+SSH tunnel or an authenticating reverse proxy if it must be reachable from
+another machine.
+
+Host networking (`--network host`; `network_mode: host` in Compose or
+`Network=host` in a Quadlet) is the recommended production setup on Linux.
+Each Valheim instance uses its configured UDP port plus the next two ports,
+and Odin assigns a new three-port block to every additional instance. Host
+networking lets that dynamic allocation work without pre-publishing a large
+UDP range or recreating the container whenever another instance is added.
+Port publishing with `-p` is ignored while host networking is enabled.
+
+Bridge networking is still useful for dashboard-only testing. Bind the
+dashboard to all container interfaces and explicitly publish both its TCP
+port and enough UDP ports for every instance you intend to run:
+
+```sh
+docker run --rm \
+  --publish 127.0.0.1:7331:7331 \
+  --publish 2456-2470:2456-2470/udp \
+  --mount source=odin-data,target=/var/lib/odin \
+  ghcr.io/blad3mak3r/odin:latest \
+  serve --bind 0.0.0.0 --port 7331
+```
+
+The container filesystem contract is intentionally small:
+
+| Path | Persistence | Purpose |
+|---|---|---|
+| `/var/lib/odin` | Required volume | Database, SteamCMD, shared Valheim install, worlds, backups, mods, and logs. |
+| `/etc/odin/config.toml` | Image default; optional read-only bind mount | Global configuration. Its default data directory is `/var/lib/odin`. |
+| `/run/odin` | Ephemeral `tmpfs` | Per-instance supervisor sockets and pidfiles. |
+
+Keep `/var/lib/odin` as one volume: Odin's shared install and mod store use
+links into per-instance directories, and the SQLite database coordinates all
+of that state. The image runs as the fixed unprivileged user and group
+`10001:10001`; a host bind mount must be writable by that identity. The
+binary and configuration remain owned by root inside the image.
+
+`docker stop odin` asks every running instance to save and stop concurrently
+before the container exits. The 60-second stop timeout above gives Valheim's
+30-second graceful shutdown window enough room. To upgrade Odin, pull the new
+version and recreate the container with the same `odin-data` volume; do not
+install packages or replace the binary inside a running container.
+
 ### Build from source
 
 Only needed if you want a version other than the latest release, or your
@@ -404,6 +470,17 @@ make web-install     # install the dashboard frontend's npm dependencies
 make web-build       # build the dashboard frontend (output embedded into the binary)
 make web-dev          # run the frontend's Vite dev server, proxying /api to `odin serve`
 make help              # list all targets
+```
+
+To test the container image built from the current checkout, stage the same
+release binary layout used by the Release workflow and build the
+`Containerfile`:
+
+```sh
+make release
+install -Dm755 target/release/odin dist/odin-linux-amd64
+docker build -f Containerfile -t odin:local .
+docker run --rm --network host --mount source=odin-test,target=/var/lib/odin odin:local
 ```
 
 The release profile (`[profile.release]` in `Cargo.toml`) is tuned for a

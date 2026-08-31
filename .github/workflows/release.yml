@@ -3,7 +3,7 @@ name: Release
 # Manually triggered: pick a semantic version increment. The workflow calculates
 # the next version from the latest GitHub Release, bumps Cargo.toml to match,
 # builds the dashboard + release binary, packages .deb and .rpm, then publishes
-# a GitHub Release with both attached (plus uploading them as workflow artifacts).
+# the native artifacts in a GitHub Release and the tested container image to GHCR.
 #
 # Requires Settings -> Actions -> General -> Workflow permissions to be set
 # to "Read and write permissions" so the default GITHUB_TOKEN can push the
@@ -30,6 +30,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,6 +40,7 @@ jobs:
           fetch-depth: 0
 
       - name: Calculate version
+        id: version
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -65,6 +69,8 @@ jobs:
           echo "TAG=v$VERSION" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing v$VERSION from $LATEST_TAG (${{ inputs.version_bump }} increment)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check tag does not already exist
@@ -131,6 +137,12 @@ jobs:
       - name: Verify Cargo.lock is in sync
         run: grep -A2 '^name = "odin"' Cargo.lock | grep -m1 "version = \"$VERSION\""
 
+      - name: Stage release binary
+        run: |
+          install -Dm755 target/release/odin dist/odin-linux-amd64
+          cd dist
+          sha256sum odin-linux-amd64 > odin-linux-amd64.sha256
+
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
@@ -164,6 +176,15 @@ jobs:
           path: target/generate-rpm/*.rpm
           if-no-files-found: error
 
+      - name: Upload Linux binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: odin-${{ env.VERSION }}-linux-amd64
+          path: |
+            dist/odin-linux-amd64
+            dist/odin-linux-amd64.sha256
+          if-no-files-found: error
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -171,5 +192,131 @@ jobs:
           name: ${{ env.TAG }}
           body_path: release-notes.md
           files: |
+            dist/odin-linux-amd64
+            dist/odin-linux-amd64.sha256
             target/debian/*.deb
             target/generate-rpm/*.rpm
+
+  container:
+    name: Container
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout released source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: odin-${{ needs.release.outputs.version }}-linux-amd64
+          path: dist
+
+      - name: Verify Linux binary
+        working-directory: dist
+        run: sha256sum --check odin-linux-amd64.sha256
+
+      - name: Set image name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract image metadata
+        id: metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.release.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+
+      - name: Build image for smoke tests
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64
+          load: true
+          tags: odin:release-test
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=odin-container
+          cache-to: type=gha,mode=max,scope=odin-container
+
+      - name: Smoke test image
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          container=odin-release-test
+          volume=odin-release-test-data
+          cleanup() {
+            docker rm --force "$container" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          test "$(docker run --rm odin:release-test --version)" = "odin $VERSION"
+          docker volume create "$volume" >/dev/null
+          docker run --detach --name "$container" \
+            --publish 127.0.0.1:17331:7331 \
+            --tmpfs /run/odin:rw,nosuid,nodev,noexec,size=16m,mode=0750,uid=10001,gid=10001 \
+            --volume "$volume:/var/lib/odin" \
+            odin:release-test serve --bind 0.0.0.0 --port 7331 >/dev/null
+
+          for _ in $(seq 1 60); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' "$container")
+            [ "$status" = healthy ] && break
+            [ "$status" = unhealthy ] && {
+              docker logs "$container"
+              exit 1
+            }
+            [ "$(docker inspect --format '{{.State.Running}}' "$container")" = true ] || {
+              docker logs "$container"
+              exit 1
+            }
+            sleep 1
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container")" = healthy
+          curl --fail --silent --show-error http://127.0.0.1:17331/ >/dev/null
+          test "$(docker exec "$container" id --user)" = 10001
+          docker exec "$container" test -w /var/lib/odin
+          docker exec "$container" test -w /run/odin
+          docker exec "$container" touch /var/lib/odin/container-volume-probe
+
+          docker stop --time 60 "$container" >/dev/null
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$container")" = 0
+          docker rm "$container" >/dev/null
+          docker run --rm --volume "$volume:/var/lib/odin" \
+            --entrypoint /usr/bin/test odin:release-test \
+            -f /var/lib/odin/container-volume-probe
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=odin-container
+
+      - name: Summarize image
+        run: |
+          echo "Published $IMAGE_NAME:${{ needs.release.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Digest: ${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

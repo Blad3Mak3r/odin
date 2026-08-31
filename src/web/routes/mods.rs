@@ -30,12 +30,24 @@ pub async fn prune_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn prune_mod_version(
+    State(state): State<AppState>,
+    Path((mod_id, version)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || mods::prune_version(&paths, &db, &mod_id, &version)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Serialize)]
 pub struct InstalledModView {
     pub mod_id: String,
     pub version: String,
     pub installed_at: DateTime<Utc>,
     pub enabled: bool,
+    pub pinned: bool,
+    pub available_versions: Vec<String>,
     pub icon: Option<String>,
 }
 
@@ -51,16 +63,21 @@ pub async fn list_mods(
             tracing::warn!(error = %e, "failed to fetch Thunderstore index; mods will show without icons");
             Vec::new()
         });
-        Ok(installed
+        installed
             .into_iter()
-            .map(|m| InstalledModView {
-                icon: thunderstore::find_icon(&index, &m.mod_id, &m.version),
-                mod_id: m.mod_id,
-                version: m.version,
-                installed_at: m.installed_at,
-                enabled: m.enabled,
+            .map(|m| {
+                let available_versions = crate::db::global_mods::list_versions(&db, &m.mod_id)?;
+                Ok(InstalledModView {
+                    icon: thunderstore::find_icon(&index, &m.mod_id, &m.version),
+                    mod_id: m.mod_id,
+                    version: m.version,
+                    installed_at: m.installed_at,
+                    enabled: m.enabled,
+                    pinned: m.pinned,
+                    available_versions,
+                })
             })
-            .collect())
+            .collect::<anyhow::Result<Vec<_>>>()
     })
     .await?;
     Ok(Json(views))
@@ -188,6 +205,38 @@ pub async fn disable_mod(
     let paths = state.paths.clone();
     let db = state.db.clone();
     run_blocking(move || mods::set_enabled(&paths, &db, &name, &mod_id, false)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct SelectVersionRequest {
+    pub version: String,
+}
+
+pub async fn select_mod_version(
+    State(state): State<AppState>,
+    Path((name, mod_id)): Path<(String, String)>,
+    Json(req): Json<SelectVersionRequest>,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || mods::select_version(&paths, &db, &name, &mod_id, &req.version)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct SetPinnedRequest {
+    pub pinned: bool,
+}
+
+pub async fn set_mod_pinned(
+    State(state): State<AppState>,
+    Path((name, mod_id)): Path<(String, String)>,
+    Json(req): Json<SetPinnedRequest>,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || mods::set_pinned(&paths, &db, &name, &mod_id, req.pinned)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

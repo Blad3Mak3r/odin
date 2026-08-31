@@ -144,7 +144,7 @@ fn import_global_mod_versions(db: &Db, paths: &Paths) -> Result<()> {
         let Ok(marker) = std::fs::read_to_string(entry.path().join(".odin-version")) else {
             continue;
         };
-        super::global_mods::set_version(db, &mod_id, marker.trim())?;
+        super::global_mods::insert(db, &mod_id, marker.trim())?;
         count += 1;
     }
 
@@ -235,6 +235,7 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: true,
+            pinned: false,
         });
         let raw = serde_json::to_string_pretty(&state).unwrap();
         std::fs::write(paths::instance_state_file(&instance_dir), raw).unwrap();
@@ -297,10 +298,7 @@ mod tests {
 
         let db = Db::open(&paths).unwrap();
 
-        assert_eq!(
-            crate::db::global_mods::current_version(&db, "owner-mod").unwrap(),
-            Some("1.2.3".to_string())
-        );
+        assert!(crate::db::global_mods::contains(&db, "owner-mod", "1.2.3").unwrap());
     }
 
     #[test]

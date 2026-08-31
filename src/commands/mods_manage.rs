@@ -86,6 +86,7 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled,
+            pinned: false,
         }
     }
 

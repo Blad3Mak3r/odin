@@ -61,9 +61,16 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
     .with_context(|| format!("failed to clear installed mods for '{}'", state.name))?;
     for m in &state.installed_mods {
         tx.execute(
-            "INSERT INTO installed_mods (instance_name, mod_id, version, installed_at, enabled) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![state.name, m.mod_id, m.version, m.installed_at, m.enabled],
+            "INSERT INTO installed_mods (instance_name, mod_id, version, installed_at, enabled, pinned) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                state.name,
+                m.mod_id,
+                m.version,
+                m.installed_at,
+                m.enabled,
+                m.pinned
+            ],
         )
         .with_context(|| {
             format!(
@@ -173,7 +180,7 @@ pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
 
 fn load_installed_mods(conn: &Connection, instance_name: &str) -> Result<Vec<InstalledMod>> {
     let mut stmt = conn.prepare(
-        "SELECT mod_id, version, installed_at, enabled FROM installed_mods \
+        "SELECT mod_id, version, installed_at, enabled, pinned FROM installed_mods \
          WHERE instance_name = ?1 ORDER BY mod_id",
     )?;
     let mods = stmt
@@ -183,6 +190,7 @@ fn load_installed_mods(conn: &Connection, instance_name: &str) -> Result<Vec<Ins
                 version: row.get(1)?,
                 installed_at: row.get(2)?,
                 enabled: row.get(3)?,
+                pinned: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -216,6 +224,7 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: true,
+            pinned: false,
         });
         state
     }
@@ -269,6 +278,7 @@ mod tests {
             version: "2.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: false,
+            pinned: true,
         });
         save(&db, &state).unwrap();
 

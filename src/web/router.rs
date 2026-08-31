@@ -74,6 +74,14 @@ pub fn build_router(state: AppState) -> Router {
             post(mods::disable_mod),
         )
         .route(
+            "/instances/{name}/mods/{mod_id}/version",
+            put(mods::select_mod_version),
+        )
+        .route(
+            "/instances/{name}/mods/{mod_id}/pinned",
+            put(mods::set_mod_pinned),
+        )
+        .route(
             "/instances/{name}/backups",
             get(backups::list_backups).post(backups::create_backup),
         )
@@ -106,6 +114,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/mods/nexus/lookup", get(nexus::lookup_mod))
         .route("/mods", get(mods::list_global_mods))
         .route("/mods/{mod_id}", delete(mods::prune_mod))
+        .route(
+            "/mods/{mod_id}/versions/{version}",
+            delete(mods::prune_mod_version),
+        )
         .route("/settings", get(settings::get_settings))
         .route(
             "/settings/nexus-api-key",

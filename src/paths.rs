@@ -81,11 +81,15 @@ impl Paths {
         self.data_dir.join("mods")
     }
 
-    /// A mod's payload in the global store — one shared copy per mod_id,
-    /// whichever version was most recently fetched. Instances symlink into
-    /// this rather than each keeping their own copy.
+    /// Root of every cached version of one mod.
     pub fn mod_dir(&self, mod_id: &str) -> PathBuf {
         self.mods_dir().join(mod_id)
+    }
+
+    /// One immutable mod payload in the shared store. Instances symlink to
+    /// this exact version, so updating one instance cannot affect another.
+    pub fn mod_version_dir(&self, mod_id: &str, version: &str) -> PathBuf {
+        self.mod_dir(mod_id).join(version)
     }
 
     /// A short, OS-managed directory for ephemeral runtime files — the

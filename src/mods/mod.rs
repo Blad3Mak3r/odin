@@ -1,12 +1,9 @@
 //! Manages mods installed from Thunderstore.
 //!
-//! Downloaded mod payloads live in one global store (`paths.mod_dir(mod_id)`),
-//! one copy per mod id shared across every instance. An instance "has" a mod
-//! by symlinking `BepInEx/plugins/<mod_id>` into that shared copy
-//! (`link_into_instance`); disabling a mod just removes that symlink
-//! (`remove_link_if_present`) without touching the shared download. Each
-//! instance's own state (`InstalledMod`) only records which version it last
-//! saw and whether it's currently linked in.
+//! Downloaded payloads live in a versioned global store, one immutable copy
+//! per `(mod_id, version)`. Each instance symlinks its enabled mods to the
+//! exact version recorded in [`InstalledMod`], so updates are isolated while
+//! duplicate downloads remain deduplicated.
 
 pub mod bepinex;
 pub mod config;
@@ -32,6 +29,111 @@ use thunderstore::ModRef;
 /// Package metadata files that live at a Thunderstore package's zip root
 /// alongside the actual mod payload; these aren't part of the mod itself.
 const METADATA_ENTRIES: &[&str] = &["icon.png", "manifest.json", "README.md", "CHANGELOG.md"];
+const VERSIONED_STORE_MARKER: &str = ".odin-versioned";
+
+/// Converts the pre-v0.9 mutable `<mods>/<mod_id>` payloads into versioned
+/// directories. The copy-first order keeps existing instance symlinks valid
+/// until their replacements are ready, and the marker makes retries after a
+/// partially completed upgrade idempotent.
+pub(crate) fn migrate_legacy_store(paths: &Paths, db: &Db) -> Result<()> {
+    let mut versions = BTreeMap::new();
+    for (mod_id, version) in crate::db::global_mods::list_all(db)? {
+        versions.entry(mod_id).or_insert(version);
+    }
+    for instance in crate::instance::list_all(paths, db)? {
+        for installed in instance.state.installed_mods {
+            versions
+                .entry(installed.mod_id)
+                .or_insert(installed.version);
+        }
+    }
+    for (mod_id, version) in versions {
+        migrate_legacy_mod(paths, db, &mod_id, &version)?;
+    }
+    Ok(())
+}
+
+fn migrate_legacy_mod(paths: &Paths, db: &Db, mod_id: &str, version: &str) -> Result<()> {
+    validate_version(version)?;
+    let root = paths.mod_dir(mod_id);
+    if !root.is_dir() || root.join(VERSIONED_STORE_MARKER).is_file() {
+        return Ok(());
+    }
+
+    let version_dir = paths.mod_version_dir(mod_id, version);
+    let legacy_entries = std::fs::read_dir(&root)
+        .with_context(|| format!("failed to read legacy mod store {}", root.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|entry| {
+            entry.file_name() != VERSIONED_STORE_MARKER
+                && entry.file_name() != ".odin-version"
+                && entry.path() != version_dir
+        })
+        .collect::<Vec<_>>();
+
+    if !version_dir.is_dir() {
+        let staging = paths
+            .mods_dir()
+            .join(format!(".migrate-tmp-{mod_id}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&staging)?;
+        let _cleanup = CleanupDir(&staging);
+        for entry in &legacy_entries {
+            let target = staging.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_dir_all(&entry.path(), &target)?;
+            } else {
+                std::fs::copy(entry.path(), target)?;
+            }
+        }
+        std::fs::rename(&staging, &version_dir).with_context(|| {
+            format!("failed to move legacy mod '{mod_id}' into version '{version}'")
+        })?;
+    }
+    crate::db::global_mods::insert(db, mod_id, version)?;
+
+    for mut instance in crate::instance::list_all(paths, db)? {
+        let Some(installed) = instance
+            .state
+            .installed_mods
+            .iter_mut()
+            .find(|installed| installed.mod_id == mod_id)
+        else {
+            continue;
+        };
+        installed.version = version.to_string();
+        if installed.enabled {
+            link_into_instance(&instance.dir, mod_id, &version_dir)?;
+        }
+        instance.save(db)?;
+    }
+
+    for entry in legacy_entries {
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    let legacy_marker = root.join(".odin-version");
+    if legacy_marker.exists() {
+        std::fs::remove_file(legacy_marker)?;
+    }
+    std::fs::write(root.join(VERSIONED_STORE_MARKER), [])?;
+    tracing::info!(mod_id, version, "migrated mod payload to versioned store");
+    Ok(())
+}
+
+fn validate_version(version: &str) -> Result<()> {
+    let mut components = Path::new(version).components();
+    if version.is_empty()
+        || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        anyhow::bail!("'{version}' is not a safe mod version");
+    }
+    Ok(())
+}
 
 pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
@@ -40,12 +142,16 @@ pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()
     }
     ensure_bepinex(db, &mut instance)?;
 
-    let (version, download_url) = match source::mod_source(mod_id) {
+    let (canonical_mod_id, version, download_url) = match source::mod_source(mod_id) {
         ModSource::Thunderstore => {
             let mod_ref = ModRef::parse(mod_id)?;
             let index = thunderstore::fetch_index(db)?;
             let (_package, version) = thunderstore::resolve(&mod_ref, &index)?;
-            (version.version_number.clone(), version.download_url.clone())
+            (
+                mod_ref.mod_id(),
+                version.version_number.clone(),
+                version.download_url.clone(),
+            )
         }
         ModSource::Nexus => {
             let game_scoped_id = mod_id
@@ -54,7 +160,7 @@ pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()
             let api_key = nexus_api_key(db)?;
             let nexus_mod = nexus::fetch_mod(&api_key, game_scoped_id)?;
             let (download_url, version) = nexus::resolve_download(&api_key, &nexus_mod.id)?;
-            (version, download_url)
+            (mod_id.to_string(), version, download_url)
         }
         ModSource::Local => anyhow::bail!(
             "'{mod_id}' is a locally uploaded mod and can't be (re-)added by id; \
@@ -65,11 +171,11 @@ pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()
     let global_dir = ensure_global_mod(
         paths,
         db,
-        mod_id,
+        &canonical_mod_id,
         &version,
         ModPayload::Download(download_url),
     )?;
-    link_and_record(db, &mut instance, mod_id, &version, &global_dir)?;
+    link_and_record(db, &mut instance, &canonical_mod_id, &version, &global_dir)?;
 
     Ok(())
 }
@@ -151,6 +257,7 @@ fn link_and_record(
         version: version.to_string(),
         installed_at: Utc::now(),
         enabled: true,
+        pinned: false,
     };
     instance
         .state
@@ -170,6 +277,7 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
         .state
         .installed_mods
         .iter()
+        .filter(|m| !m.pinned)
         .map(|m| m.mod_id.clone())
         .collect();
 
@@ -297,7 +405,7 @@ To install it on your game client:
 /// Builds a downloadable zip of every currently-enabled mod's files for an
 /// instance, laid out as `BepInEx/plugins/<mod_id>/...` so it can be
 /// extracted straight into a player's client BepInEx install. Reads
-/// straight from the shared global mod store (`paths.mod_dir`) — the same
+/// straight from the shared global mod store (`paths.mod_version_dir`) — the same
 /// files an instance itself symlinks in — so it works the same regardless
 /// of whether a mod came from Thunderstore, Nexus, or a manual upload.
 pub fn build_modpack(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<u8>> {
@@ -331,7 +439,7 @@ pub fn build_modpack(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<u8
     writer.write_all(serde_json::to_string_pretty(&manifest)?.as_bytes())?;
 
     for m in &enabled {
-        let mod_dir = paths.mod_dir(&m.mod_id);
+        let mod_dir = paths.mod_version_dir(&m.mod_id, &m.version);
         if !mod_dir.is_dir() {
             tracing::warn!(
                 mod_id = %m.mod_id,
@@ -427,7 +535,14 @@ pub fn set_enabled(
     }
 
     if enabled {
-        let global_dir = paths.mod_dir(mod_id);
+        let version = instance
+            .state
+            .installed_mods
+            .iter()
+            .find(|m| m.mod_id == mod_id)
+            .map(|m| m.version.as_str())
+            .expect("installed mod was found above");
+        let global_dir = paths.mod_version_dir(mod_id, version);
         if !global_dir.is_dir() {
             anyhow::bail!(
                 "'{mod_id}' is missing from the global mod store ({}); \
@@ -453,21 +568,95 @@ pub fn set_enabled(
     Ok(true)
 }
 
+/// Switches one instance to an already-cached version and pins it so a later
+/// "Update all" does not immediately undo the explicit choice.
+pub fn select_version(
+    paths: &Paths,
+    db: &Db,
+    server_name: &str,
+    mod_id: &str,
+    version: &str,
+) -> Result<bool> {
+    validate_version(version)?;
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
+    let installed = instance
+        .state
+        .installed_mods
+        .iter()
+        .find(|m| m.mod_id == mod_id)
+        .ok_or_else(|| anyhow::anyhow!("mod '{mod_id}' is not installed on '{server_name}'"))?;
+    if installed.version == version && installed.pinned {
+        return Ok(false);
+    }
+    if lifecycle::is_running(&instance)? && installed.version != version {
+        return Err(InstanceError::ModsLocked(server_name.to_string()).into());
+    }
+    if !crate::db::global_mods::contains(db, mod_id, version)? {
+        anyhow::bail!("version '{version}' of '{mod_id}' is not in the shared mod store");
+    }
+    let version_dir = paths.mod_version_dir(mod_id, version);
+    if !version_dir.is_dir() {
+        anyhow::bail!(
+            "version '{version}' of '{mod_id}' is missing from the shared mod store ({})",
+            version_dir.display()
+        );
+    }
+
+    if installed.enabled && installed.version != version {
+        link_into_instance(&instance.dir, mod_id, &version_dir)?;
+    }
+    let entry = instance
+        .state
+        .installed_mods
+        .iter_mut()
+        .find(|m| m.mod_id == mod_id)
+        .expect("installed mod was found above");
+    entry.version = version.to_string();
+    entry.installed_at = Utc::now();
+    entry.pinned = true;
+    instance.save(db)?;
+    Ok(true)
+}
+
+/// Controls whether update operations may move this instance's mod to a
+/// newer version. Pinning is metadata-only and is safe while running.
+pub fn set_pinned(
+    paths: &Paths,
+    db: &Db,
+    server_name: &str,
+    mod_id: &str,
+    pinned: bool,
+) -> Result<bool> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
+    let entry = instance
+        .state
+        .installed_mods
+        .iter_mut()
+        .find(|m| m.mod_id == mod_id)
+        .ok_or_else(|| anyhow::anyhow!("mod '{mod_id}' is not installed on '{server_name}'"))?;
+    if entry.pinned == pinned {
+        return Ok(false);
+    }
+    entry.pinned = pinned;
+    instance.save(db)?;
+    Ok(true)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GlobalModInstanceEntry {
     pub instance: String,
     pub version: String,
     pub enabled: bool,
+    pub pinned: bool,
     pub running: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GlobalMod {
     pub mod_id: String,
-    /// Version currently held in the shared store, if it's still there
-    /// (`None` for a mod that some instance's state still references but
-    /// whose download was manually removed from `paths.mods_dir()`).
-    pub global_version: Option<String>,
+    /// Every payload currently cached in the shared store, newest download
+    /// first. Instance entries identify which one they use.
+    pub stored_versions: Vec<String>,
     /// Icon URL, best-effort looked up from the Thunderstore index. `None`
     /// if the index couldn't be fetched or the mod isn't listed there.
     pub icon: Option<String>,
@@ -484,6 +673,18 @@ pub struct GlobalMod {
 pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
     let mut mods: BTreeMap<String, GlobalMod> = BTreeMap::new();
 
+    for (mod_id, version) in crate::db::global_mods::list_all(db)? {
+        mods.entry(mod_id.clone())
+            .or_insert_with(|| GlobalMod {
+                mod_id,
+                stored_versions: Vec::new(),
+                icon: None,
+                instances: Vec::new(),
+            })
+            .stored_versions
+            .push(version);
+    }
+
     let mods_dir = paths.mods_dir();
     if mods_dir.is_dir() {
         for entry in std::fs::read_dir(&mods_dir)
@@ -495,15 +696,12 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
             if mod_id.starts_with('.') || !entry.file_type()?.is_dir() {
                 continue;
             }
-            mods.entry(mod_id.clone())
-                .or_insert_with(|| GlobalMod {
-                    mod_id: mod_id.clone(),
-                    global_version: None,
-                    icon: None,
-                    instances: Vec::new(),
-                })
-                .global_version =
-                crate::db::global_mods::current_version(db, &mod_id).unwrap_or_default();
+            mods.entry(mod_id.clone()).or_insert_with(|| GlobalMod {
+                mod_id: mod_id.clone(),
+                stored_versions: Vec::new(),
+                icon: None,
+                instances: Vec::new(),
+            });
         }
     }
 
@@ -513,7 +711,7 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
             mods.entry(installed.mod_id.clone())
                 .or_insert_with(|| GlobalMod {
                     mod_id: installed.mod_id.clone(),
-                    global_version: None,
+                    stored_versions: Vec::new(),
                     icon: None,
                     instances: Vec::new(),
                 })
@@ -522,6 +720,7 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
                     instance: instance.state.name.clone(),
                     version: installed.version.clone(),
                     enabled: installed.enabled,
+                    pinned: installed.pinned,
                     running,
                 });
         }
@@ -542,8 +741,9 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
             continue;
         }
         let version_for_icon = m
-            .global_version
-            .clone()
+            .stored_versions
+            .first()
+            .cloned()
             .or_else(|| m.instances.first().map(|i| i.version.clone()));
         if let Some(version) = version_for_icon {
             m.icon = thunderstore::find_icon(&index, &m.mod_id, &version);
@@ -578,6 +778,33 @@ pub fn prune_global(paths: &Paths, db: &Db, mod_id: &str) -> Result<()> {
     }
     crate::db::global_mods::remove(db, mod_id)?;
     Ok(())
+}
+
+/// Removes one cached version while preserving the other versions of the
+/// same mod. Refuses while any instance still references the exact payload.
+pub fn prune_version(paths: &Paths, db: &Db, mod_id: &str, version: &str) -> Result<()> {
+    validate_version(version)?;
+    let in_use = crate::instance::list_all(paths, db)?
+        .into_iter()
+        .any(|instance| {
+            instance
+                .state
+                .installed_mods
+                .iter()
+                .any(|m| m.mod_id == mod_id && m.version == version)
+        });
+    if in_use {
+        anyhow::bail!(
+            "version '{version}' of '{mod_id}' is still installed on at least one instance"
+        );
+    }
+
+    let dir = paths.mod_version_dir(mod_id, version);
+    if dir.is_dir() {
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("failed to remove {}", dir.display()))?;
+    }
+    crate::db::global_mods::remove_version(db, mod_id, version)
 }
 
 fn active_plugin_dir(instance_dir: &Path, mod_id: &str) -> PathBuf {
@@ -618,11 +845,8 @@ enum ModPayload {
     LocalFile(PathBuf),
 }
 
-/// Ensures `paths.mod_dir(mod_id)` holds `version_number`, fetching (or
-/// reading, for a local upload) and replacing its contents if it currently
-/// holds a different (or no) version. There's one shared copy per mod_id
-/// (not per version), so updating it affects every instance currently
-/// symlinking it.
+/// Ensures one immutable `(mod_id, version)` payload exists in the shared
+/// store, downloading it only when that exact version is absent.
 fn ensure_global_mod(
     paths: &Paths,
     db: &Db,
@@ -630,8 +854,9 @@ fn ensure_global_mod(
     version_number: &str,
     payload: ModPayload,
 ) -> Result<PathBuf> {
-    let final_dir = paths.mod_dir(mod_id);
-    if crate::db::global_mods::current_version(db, mod_id)?.as_deref() == Some(version_number) {
+    validate_version(version_number)?;
+    let final_dir = paths.mod_version_dir(mod_id, version_number);
+    if crate::db::global_mods::contains(db, mod_id, version_number)? && final_dir.is_dir() {
         return Ok(final_dir);
     }
 
@@ -654,16 +879,21 @@ fn ensure_global_mod(
     extract_zip_to_dir(&zip_path, &extract_dir)?;
     let source_root = effective_source_root(&extract_dir)?;
 
-    if final_dir.is_dir() {
-        std::fs::remove_dir_all(&final_dir)
-            .with_context(|| format!("failed to remove stale copy at {}", final_dir.display()))?;
-    }
     if let Some(parent) = final_dir.parent() {
         std::fs::create_dir_all(parent)?;
+        std::fs::write(parent.join(VERSIONED_STORE_MARKER), [])?;
+    }
+    if final_dir.is_dir() {
+        std::fs::remove_dir_all(&final_dir).with_context(|| {
+            format!(
+                "failed to remove incomplete copy at {}",
+                final_dir.display()
+            )
+        })?;
     }
     copy_dir_contents_excluding_metadata(&source_root, &final_dir)
         .with_context(|| format!("failed to install mod '{mod_id}'"))?;
-    crate::db::global_mods::set_version(db, mod_id, version_number)?;
+    crate::db::global_mods::insert(db, mod_id, version_number)?;
 
     Ok(final_dir)
 }
@@ -895,6 +1125,127 @@ mod tests {
         (paths, db)
     }
 
+    fn cache_test_version(
+        paths: &Paths,
+        db: &Db,
+        mod_id: &str,
+        version: &str,
+        content: &[u8],
+    ) -> PathBuf {
+        let zip_path = paths
+            .data_dir
+            .join(format!("{mod_id}-{version}-{}.zip", uuid::Uuid::new_v4()));
+        write_zip(&zip_path, "plugin.dll", content);
+        let dir = ensure_global_mod(
+            paths,
+            db,
+            mod_id,
+            version,
+            ModPayload::LocalFile(zip_path.clone()),
+        )
+        .unwrap();
+        std::fs::remove_file(zip_path).unwrap();
+        dir
+    }
+
+    #[test]
+    fn global_store_retains_multiple_versions_of_the_same_mod() {
+        let (paths, db) = temp_paths_and_db("multiple-versions");
+        let first = cache_test_version(&paths, &db, "owner-mod", "1.0.0", b"one");
+        let second = cache_test_version(&paths, &db, "owner-mod", "2.0.0", b"two");
+
+        assert_eq!(std::fs::read(first.join("plugin.dll")).unwrap(), b"one");
+        assert_eq!(std::fs::read(second.join("plugin.dll")).unwrap(), b"two");
+        assert_eq!(
+            crate::db::global_mods::list_versions(&db, "owner-mod")
+                .unwrap()
+                .len(),
+            2
+        );
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn selecting_a_cached_version_relinks_and_pins_only_that_instance() {
+        let (paths, db) = temp_paths_and_db("select-version");
+        let first = cache_test_version(&paths, &db, "owner-mod", "1.0.0", b"one");
+        let second = cache_test_version(&paths, &db, "owner-mod", "2.0.0", b"two");
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        link_and_record(&db, &mut instance, "owner-mod", "1.0.0", &first).unwrap();
+        let mut other = crate::instance::Instance::create(&paths, &db, "other-server").unwrap();
+        link_and_record(&db, &mut other, "owner-mod", "1.0.0", &first).unwrap();
+
+        select_version(&paths, &db, "my-server", "owner-mod", "2.0.0").unwrap();
+
+        let reloaded = crate::instance::Instance::load_existing(&paths, &db, "my-server").unwrap();
+        assert_eq!(reloaded.state.installed_mods[0].version, "2.0.0");
+        assert!(reloaded.state.installed_mods[0].pinned);
+        assert_eq!(
+            std::fs::read_link(active_plugin_dir(&reloaded.dir, "owner-mod")).unwrap(),
+            second
+        );
+        let other = crate::instance::Instance::load_existing(&paths, &db, "other-server").unwrap();
+        assert_eq!(other.state.installed_mods[0].version, "1.0.0");
+        assert_eq!(
+            std::fs::read_link(active_plugin_dir(&other.dir, "owner-mod")).unwrap(),
+            first
+        );
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn update_skips_pinned_registry_mods_without_a_network_call() {
+        let (paths, db) = temp_paths_and_db("update-skips-pinned");
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "owner-mod".to_string(),
+            version: "1.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: true,
+            pinned: true,
+        });
+        instance.save(&db).unwrap();
+
+        update(&paths, &db, "my-server").unwrap();
+
+        let reloaded = crate::instance::Instance::load_existing(&paths, &db, "my-server").unwrap();
+        assert_eq!(reloaded.state.installed_mods[0].version, "1.0.0");
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn legacy_store_migration_preserves_payload_and_repairs_instance_link() {
+        let (paths, db) = temp_paths_and_db("legacy-store-migration");
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "owner-mod".to_string(),
+            version: "1.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: true,
+            pinned: false,
+        });
+        instance.save(&db).unwrap();
+        crate::db::global_mods::insert(&db, "owner-mod", "2.0.0").unwrap();
+        let legacy_dir = paths.mod_dir("owner-mod");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("plugin.dll"), b"legacy").unwrap();
+        link_into_instance(&instance.dir, "owner-mod", &legacy_dir).unwrap();
+
+        migrate_legacy_store(&paths, &db).unwrap();
+
+        let version_dir = paths.mod_version_dir("owner-mod", "2.0.0");
+        assert_eq!(
+            std::fs::read(version_dir.join("plugin.dll")).unwrap(),
+            b"legacy"
+        );
+        assert!(!legacy_dir.join("plugin.dll").exists());
+        assert_eq!(
+            std::fs::read_link(active_plugin_dir(&instance.dir, "owner-mod")).unwrap(),
+            version_dir
+        );
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
     #[test]
     fn update_skips_local_mods_without_any_network_call() {
         let (paths, db) = temp_paths_and_db("update-skips-local");
@@ -904,6 +1255,7 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: true,
+            pinned: false,
         });
         instance.save(&db).unwrap();
 
@@ -919,7 +1271,9 @@ mod tests {
     #[test]
     fn add_local_installs_and_links_an_uploaded_zip() {
         let (paths, db) = temp_paths_and_db("add-local");
-        crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
+        instance.state.bepinex_installed = true;
+        instance.save(&db).unwrap();
 
         let upload_dir = temp_dir("add-local-upload");
         let zip_path = upload_dir.join("upload.zip");
@@ -939,12 +1293,9 @@ mod tests {
         assert_eq!(installed.version, "1.0.0");
         assert!(installed.enabled);
 
-        let global_dir = paths.mod_dir(&installed.mod_id);
+        let global_dir = paths.mod_version_dir(&installed.mod_id, &installed.version);
         assert!(global_dir.join("plugin.dll").is_file());
-        assert_eq!(
-            crate::db::global_mods::current_version(&db, &installed.mod_id).unwrap(),
-            Some("1.0.0".to_string())
-        );
+        assert!(crate::db::global_mods::contains(&db, &installed.mod_id, "1.0.0").unwrap());
 
         let link = active_plugin_dir(&instance.dir, &installed.mod_id);
         assert_eq!(std::fs::read_link(&link).unwrap(), global_dir);
@@ -969,24 +1320,30 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: true,
+            pinned: false,
         });
         instance.state.installed_mods.push(InstalledMod {
             mod_id: "author-DisabledMod".to_string(),
             version: "2.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: false,
+            pinned: false,
         });
         instance.save(&db).unwrap();
 
-        std::fs::create_dir_all(paths.mod_dir("author-EnabledMod")).unwrap();
+        std::fs::create_dir_all(paths.mod_version_dir("author-EnabledMod", "1.0.0")).unwrap();
         std::fs::write(
-            paths.mod_dir("author-EnabledMod").join("plugin.dll"),
+            paths
+                .mod_version_dir("author-EnabledMod", "1.0.0")
+                .join("plugin.dll"),
             b"enabled plugin bytes",
         )
         .unwrap();
-        std::fs::create_dir_all(paths.mod_dir("author-DisabledMod")).unwrap();
+        std::fs::create_dir_all(paths.mod_version_dir("author-DisabledMod", "2.0.0")).unwrap();
         std::fs::write(
-            paths.mod_dir("author-DisabledMod").join("plugin.dll"),
+            paths
+                .mod_version_dir("author-DisabledMod", "2.0.0")
+                .join("plugin.dll"),
             b"disabled plugin bytes",
         )
         .unwrap();
@@ -1028,6 +1385,7 @@ mod tests {
             version: "2.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: false,
+            pinned: false,
         });
         instance.save(&db).unwrap();
 
@@ -1061,6 +1419,7 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: true,
+            pinned: false,
         });
         instance.save(&db).unwrap();
         let mut child = mark_running(&mut instance, &db);
@@ -1089,6 +1448,7 @@ mod tests {
             version: "1.0.0".to_string(),
             installed_at: Utc::now(),
             enabled: true,
+            pinned: false,
         });
         instance.save(&db).unwrap();
         let mut child = mark_running(&mut instance, &db);

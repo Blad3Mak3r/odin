@@ -58,6 +58,7 @@ impl Db {
             conn: Mutex::new(conn),
         };
         import::bootstrap_if_empty(&db, paths)?;
+        crate::mods::migrate_legacy_store(paths, &db)?;
         Ok(db)
     }
 

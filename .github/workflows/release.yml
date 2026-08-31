@@ -3,7 +3,7 @@ name: Release
 # Manually triggered: pick a semantic version increment. The workflow calculates
 # the next version from the latest GitHub Release, bumps Cargo.toml to match,
 # builds the dashboard + release binary, packages .deb and .rpm, then publishes
-# a GitHub Release with both attached (plus uploading them as workflow artifacts).
+# the native artifacts in a GitHub Release and the tested container image to GHCR.
 #
 # Requires Settings -> Actions -> General -> Workflow permissions to be set
 # to "Read and write permissions" so the default GITHUB_TOKEN can push the

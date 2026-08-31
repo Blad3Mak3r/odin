@@ -1,3 +1,4 @@
+use std::fs::{File, OpenOptions, TryLockError};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +13,39 @@ use crate::supervisor;
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Cross-process, per-instance exclusion for lifecycle transitions. The
+/// empty lock file is intentionally persistent; the OS releases the lock
+/// automatically if the owning request/process exits unexpectedly.
+#[derive(Debug)]
+struct LifecycleLock {
+    _file: File,
+}
+
+impl LifecycleLock {
+    fn acquire(paths: &Paths, name: &str) -> Result<Self> {
+        validate_instance_name(name).map_err(InstanceError::InvalidName)?;
+        let lock_dir = paths.data_dir.join("locks");
+        std::fs::create_dir_all(&lock_dir)
+            .with_context(|| format!("failed to create {}", lock_dir.display()))?;
+        let path = lock_dir.join(format!("{name}.lifecycle.lock"));
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("failed to open lifecycle lock {}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(TryLockError::WouldBlock) => {
+                bail!(InstanceError::TransitionInProgress(name.to_string()))
+            }
+            Err(TryLockError::Error(error)) => Err(error)
+                .with_context(|| format!("failed to lock lifecycle file {}", path.display())),
+        }
+    }
+}
 
 /// The single canonical liveness check: a live `(pid, pid_started_at)`
 /// comparison against the OS process table, never a cached/in-memory
@@ -58,6 +92,11 @@ pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 /// pid_started_at)` in the database itself once it spawns the process, so
 /// this just reloads the instance afterwards to pick that up.
 pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+    let _lock = LifecycleLock::acquire(paths, name)?;
+    start_unlocked(paths, db, name).await
+}
+
+async fn start_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     prepare_start(paths, db, name)?;
 
     supervisor::client::spawn_detached(paths, name)
@@ -79,6 +118,11 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 /// process is actually gone (or `STOP_TIMEOUT` has been given a full
 /// chance, supervisor-side escalation included).
 pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
+    let _lock = LifecycleLock::acquire(paths, name)?;
+    stop_unlocked(paths, db, name).await
+}
+
+async fn stop_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     let instance = Instance::load_existing(paths, db, name)?;
 
     let (Some(pid), Some(pid_started_at)) = (instance.state.pid, instance.state.pid_started_at)
@@ -135,11 +179,12 @@ async fn stop_via_pid_signal(db: &Db, name: &str, pid: u32, pid_started_at: i64)
 /// Stops the instance if it's running, then starts it again. Requires the
 /// instance to already exist (unlike `start`, which creates it on demand).
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+    let _lock = LifecycleLock::acquire(paths, name)?;
     let instance = Instance::load_existing(paths, db, name)?;
     if is_running(&instance)? {
-        stop(paths, db, name).await?;
+        stop_unlocked(paths, db, name).await?;
     }
-    start(paths, db, name).await
+    start_unlocked(paths, db, name).await
 }
 
 /// Renames an instance on disk and in its state, provided it isn't running
@@ -257,3 +302,35 @@ fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
 // resolves to the real `odin` binary outside a `cargo test` harness — the
 // equivalent coverage now drives `supervisor::server::run_instance`
 // directly (as `odin run` itself would) instead of going through `start`.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_paths(label: &str) -> Paths {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-lifecycle-test-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        }
+    }
+
+    #[test]
+    fn lifecycle_lock_is_exclusive_per_instance_and_released_on_drop() {
+        let paths = temp_paths("lock");
+        let first = LifecycleLock::acquire(&paths, "alpha").unwrap();
+        let error = LifecycleLock::acquire(&paths, "alpha").unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<InstanceError>(),
+            Some(InstanceError::TransitionInProgress(name)) if name == "alpha"
+        ));
+
+        LifecycleLock::acquire(&paths, "bravo").unwrap();
+        drop(first);
+        LifecycleLock::acquire(&paths, "alpha").unwrap();
+    }
+}

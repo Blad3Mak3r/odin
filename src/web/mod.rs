@@ -31,6 +31,7 @@ use crate::db::Db;
 use crate::instance;
 use crate::paths::Paths;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
+use runtime::InstanceTransition;
 use runtime::{InstanceResourceEntry, ResourcesTick};
 use state::AppState;
 
@@ -106,6 +107,16 @@ fn spawn_telemetry(state: AppState) {
 /// crashed and came back on its own".
 async fn attempt_auto_restart(state: &AppState, name: String) {
     tracing::warn!(instance = %name, "instance found dead; attempting automatic restart");
+    let _transition = match state
+        .runtime
+        .begin_transition(&name, InstanceTransition::Starting)
+    {
+        Ok(transition) => transition,
+        Err(error) => {
+            tracing::debug!(instance = %name, %error, "automatic restart skipped");
+            return;
+        }
+    };
     match instance::lifecycle::start(&state.paths, &state.db, &name).await {
         Ok(_) => state
             .activity

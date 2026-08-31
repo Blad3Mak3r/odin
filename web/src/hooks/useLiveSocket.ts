@@ -5,6 +5,7 @@ import type {
   ActivityEvent,
   HostResources,
   InstanceResources,
+  InstanceTransitions,
   InstanceView,
   PlayerInfo,
   ResourceSample,
@@ -17,6 +18,7 @@ const HISTORY_CAP = 120
 type WireEvent =
   | { type: 'activity'; event: ActivityEvent }
   | { type: 'resources'; tick: ResourcesTick }
+  | { type: 'transitions'; transitions: InstanceTransitions }
   | { type: 'lagged'; skipped: number }
 
 /// Keeps a single global SSE connection open for the lifetime of the app
@@ -68,6 +70,19 @@ function applyWireEvent(queryClient: QueryClient, event: WireEvent) {
       const next = [event.event, ...prev]
       return next.length > ACTIVITY_FEED_CAP ? next.slice(0, ACTIVITY_FEED_CAP) : next
     })
+    return
+  }
+  if (event.type === 'transitions') {
+    const previous = queryClient.getQueryData<InstanceTransitions>(['instance-transitions']) ?? {}
+    queryClient.setQueryData(['instance-transitions'], event.transitions)
+
+    const transitionCompleted = Object.keys(previous).some(
+      (name) => !(name in event.transitions),
+    )
+    if (transitionCompleted) {
+      queryClient.invalidateQueries({ queryKey: ['instances'] })
+      queryClient.invalidateQueries({ queryKey: ['version'] })
+    }
     return
   }
 

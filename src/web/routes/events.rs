@@ -14,15 +14,24 @@ use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::activity::ActivityEvent;
-use crate::web::runtime::ResourcesTick;
+use crate::web::runtime::{InstanceTransitions, ResourcesTick};
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WireEvent<'a> {
-    Activity { event: &'a ActivityEvent },
-    Resources { tick: &'a ResourcesTick },
-    Lagged { skipped: u64 },
+    Activity {
+        event: &'a ActivityEvent,
+    },
+    Resources {
+        tick: &'a ResourcesTick,
+    },
+    Transitions {
+        transitions: &'a InstanceTransitions,
+    },
+    Lagged {
+        skipped: u64,
+    },
 }
 
 pub async fn events_sse(
@@ -30,6 +39,7 @@ pub async fn events_sse(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (history, activity_rx) = state.activity.subscribe();
     let ticks_rx = state.runtime.subscribe_ticks();
+    let (transitions, transitions_rx) = state.runtime.subscribe_transitions();
 
     let activity_stream = stream! {
         for event in &history {
@@ -57,8 +67,24 @@ pub async fn events_sse(
         }
     };
 
-    Sse::new(futures_util::stream::select(activity_stream, ticks_stream))
-        .keep_alive(KeepAlive::default())
+    let transitions_stream = stream! {
+        yield Ok(json_event(&WireEvent::Transitions { transitions: &transitions }));
+
+        let mut transitions_rx = transitions_rx;
+        loop {
+            match transitions_rx.recv().await {
+                Ok(transitions) => yield Ok(json_event(&WireEvent::Transitions { transitions: &transitions })),
+                Err(RecvError::Lagged(skipped)) => yield Ok(json_event(&WireEvent::Lagged { skipped })),
+                Err(RecvError::Closed) => return,
+            }
+        }
+    };
+
+    Sse::new(futures_util::stream::select(
+        futures_util::stream::select(activity_stream, ticks_stream),
+        transitions_stream,
+    ))
+    .keep_alive(KeepAlive::default())
 }
 
 fn json_event(event: &WireEvent<'_>) -> Event {

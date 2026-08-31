@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-08-31
+
+### What's Changed
+- Improve instance lifecycle transition atomicity by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/61
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.8.2...v0.8.3
+
 ## [0.8.2] - 2026-08-31
 
 ### What's Changed

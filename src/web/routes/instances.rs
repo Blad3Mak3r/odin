@@ -13,6 +13,7 @@ use crate::paths::Paths;
 use crate::supervisor::client;
 use crate::supervisor::protocol::Response;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
+use crate::web::runtime::InstanceTransition;
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -96,6 +97,9 @@ pub async fn start_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
+    let _transition = state
+        .runtime
+        .begin_transition(&name, InstanceTransition::Starting)?;
     let started = lifecycle::start(&state.paths, &state.db, &name).await?;
     let paths = state.paths.clone();
     let instance_view = run_blocking(move || view(&paths, started)).await?;
@@ -106,6 +110,9 @@ pub async fn stop_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let _transition = state
+        .runtime
+        .begin_transition(&name, InstanceTransition::Stopping)?;
     lifecycle::stop(&state.paths, &state.db, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -114,6 +121,9 @@ pub async fn restart_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<InstanceView>> {
+    let _transition = state
+        .runtime
+        .begin_transition(&name, InstanceTransition::Restarting)?;
     let restarted = lifecycle::restart(&state.paths, &state.db, &name).await?;
     let paths = state.paths.clone();
     let instance_view = run_blocking(move || view(&paths, restarted)).await?;

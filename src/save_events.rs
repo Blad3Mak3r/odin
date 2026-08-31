@@ -4,7 +4,7 @@
 //! instance with no reachable supervisor), same reasoning as
 //! `crate::player_events`.
 
-/// Best-effort, like `player_events::parse_line` — not verified against a
+/// Best-effort, like `player_events::PlayerEventParser` — not verified against a
 /// real `console.log`. If it doesn't match a real server's output, this is
 /// the one place to fix.
 pub fn is_world_saved_line(line: &str) -> bool {

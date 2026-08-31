@@ -450,6 +450,10 @@ and only repoints that instance; pinned instances remain unchanged. The
 dashboard can switch back to any cached version and prune versions no longer
 used by an instance.
 
+On the first start after upgrading, Odin automatically moves the legacy
+single-version mod store into this layout and repoints every existing instance;
+no migration command or dashboard action is required.
+
 An instance's **running/stopped status is never trusted from a stored
 flag** — it's always derived on demand by checking whether its recorded
 process id is still alive, cross-checked against that process's own start

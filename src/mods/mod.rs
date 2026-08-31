@@ -1214,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_store_migration_preserves_payload_and_repairs_instance_link() {
+    fn opening_odin_migrates_legacy_store_without_user_action() {
         let (paths, db) = temp_paths_and_db("legacy-store-migration");
         let mut instance = crate::instance::Instance::create(&paths, &db, "my-server").unwrap();
         instance.state.installed_mods.push(InstalledMod {
@@ -1231,7 +1231,10 @@ mod tests {
         std::fs::write(legacy_dir.join("plugin.dll"), b"legacy").unwrap();
         link_into_instance(&instance.dir, "owner-mod", &legacy_dir).unwrap();
 
-        migrate_legacy_store(&paths, &db).unwrap();
+        drop(db);
+        let db = Db::open(&paths).unwrap();
+        drop(db);
+        let db = Db::open(&paths).unwrap();
 
         let version_dir = paths.mod_version_dir("owner-mod", "2.0.0");
         assert_eq!(
@@ -1243,6 +1246,8 @@ mod tests {
             std::fs::read_link(active_plugin_dir(&instance.dir, "owner-mod")).unwrap(),
             version_dir
         );
+        let migrated = Instance::load_existing(&paths, &db, "my-server").unwrap();
+        assert_eq!(migrated.state.installed_mods[0].version, "2.0.0");
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 

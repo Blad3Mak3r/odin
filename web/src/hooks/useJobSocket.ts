@@ -11,16 +11,19 @@ export function useJobSocket(jobId: string | null) {
   const [status, setStatus] = useState<JobStatus | null>(null)
   const [connected, setConnected] = useState(false)
 
-  useEffect(() => {
-    if (!jobId) {
-      setLog([])
-      setStatus(null)
-      setConnected(false)
-      return
-    }
-
+  // Reset when switching jobs. Comparing against the previous id during
+  // render (instead of an effect) avoids an extra commit.
+  const [prevJobId, setPrevJobId] = useState(jobId)
+  if (jobId !== prevJobId) {
+    setPrevJobId(jobId)
     setLog([])
     setStatus(null)
+    setConnected(false)
+  }
+
+  useEffect(() => {
+    if (!jobId) return
+
     const source = new EventSource(`/api/jobs/${jobId}/sse`)
 
     source.onopen = () => setConnected(true)

@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -28,9 +28,13 @@ export function DeleteInstanceDialog({
 
   // Reset to the default every time the dialog opens, rather than carrying
   // over the choice from the last instance this dialog was used for.
-  useEffect(() => {
+  // Comparing against the previous `open` during render (instead of an
+  // effect) avoids an extra commit.
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (open !== prevOpen) {
+    setPrevOpen(open)
     if (open) setKeepBackups(false)
-  }, [open])
+  }
 
   const handleDelete = () => {
     deleteInstance.mutate(

@@ -88,6 +88,19 @@ pub fn recent(db: &Db, limit: usize) -> Result<Vec<JobRow>> {
     rows.map(|r| r.map_err(Into::into)).collect()
 }
 
+/// Deletes terminal jobs older than `before`, preserving queued and running jobs.
+/// Returns the IDs actually deleted so the in-memory registry can stay in sync.
+pub fn delete_finished_before(db: &Db, before: DateTime<Utc>) -> Result<Vec<String>> {
+    let conn = db.conn();
+    let mut stmt = conn.prepare(
+        "DELETE FROM jobs \
+         WHERE started_at < ?1 AND status IN ('succeeded', 'failed') \
+         RETURNING id",
+    )?;
+    let rows = stmt.query_map(params![before], |row| row.get(0))?;
+    rows.map(|row| row.map_err(Into::into)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +192,66 @@ mod tests {
         assert_eq!(rows[0].id, "job-4");
         assert_eq!(rows[1].id, "job-3");
         assert_eq!(rows[2].id, "job-2");
+    }
+
+    #[test]
+    fn delete_finished_before_preserves_active_and_recent_jobs() {
+        let db = temp_db("retention");
+        let cutoff = Utc::now();
+        let jobs = [
+            (
+                "old-succeeded",
+                "succeeded",
+                r#"{"status":"succeeded"}"#,
+                cutoff - chrono::Duration::seconds(1),
+            ),
+            (
+                "old-failed",
+                "failed",
+                r#"{"status":"failed","message":"boom"}"#,
+                cutoff - chrono::Duration::seconds(1),
+            ),
+            (
+                "old-queued",
+                "queued",
+                r#"{"status":"queued"}"#,
+                cutoff - chrono::Duration::seconds(1),
+            ),
+            (
+                "old-running",
+                "running",
+                r#"{"status":"running"}"#,
+                cutoff - chrono::Duration::seconds(1),
+            ),
+            (
+                "at-cutoff",
+                "succeeded",
+                r#"{"status":"succeeded"}"#,
+                cutoff,
+            ),
+        ];
+        for (id, status, payload, started_at) in jobs {
+            insert(
+                &db,
+                id,
+                "steamcmd_install",
+                r#"{"kind":"steamcmd_install"}"#,
+                status,
+                payload,
+                started_at,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(delete_finished_before(&db, cutoff).unwrap().len(), 2);
+        let ids = recent(&db, 10)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&"old-queued".to_string()));
+        assert!(ids.contains(&"old-running".to_string()));
+        assert!(ids.contains(&"at-cutoff".to_string()));
     }
 }

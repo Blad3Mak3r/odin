@@ -141,6 +141,18 @@ impl ActivityLog {
             self.inner.sender.subscribe(),
         )
     }
+
+    /// Deletes persisted expired events and removes them from the live history.
+    pub fn purge_before(&self, before: DateTime<Utc>) -> anyhow::Result<usize> {
+        let deleted = crate::db::activity::delete_before(&self.inner.db, before)?;
+        let mut buffer = self
+            .inner
+            .buffer
+            .lock()
+            .expect("activity log buffer lock poisoned");
+        buffer.retain(|event| event.at >= before);
+        Ok(deleted)
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +212,32 @@ mod tests {
         assert_eq!(history.len(), 2);
         assert!(matches!(history[0].kind, ActivityKind::ServerInstalled));
         assert!(matches!(history[1].kind, ActivityKind::ModInstalled { .. }));
+    }
+
+    #[test]
+    fn purge_before_removes_expired_events_from_memory() {
+        let db = temp_db();
+        let cutoff = Utc::now();
+        for (id, at) in [
+            ("old", cutoff - chrono::Duration::seconds(1)),
+            ("new", cutoff),
+        ] {
+            crate::db::activity::insert(
+                &db,
+                &ActivityEvent {
+                    id: id.to_string(),
+                    at,
+                    instance: None,
+                    kind: ActivityKind::InstanceCreated,
+                },
+            )
+            .unwrap();
+        }
+        let log = ActivityLog::load(db);
+
+        assert_eq!(log.purge_before(cutoff).unwrap(), 1);
+        let (history, _rx) = log.subscribe();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, "new");
     }
 }

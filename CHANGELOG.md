@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-01
+
+### What's Changed
+- Move Odin version into the dashboard wordmark by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/69
+- Fix dashboard oxlint react warnings by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/70
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.10.0...v0.10.1
+
 ## [0.10.0] - 2026-09-01
 
 ### What's Changed

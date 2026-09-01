@@ -12,7 +12,7 @@ export function ThemeToggle() {
   const { theme, setTheme } = useTheme()
 
   return (
-    <div className="flex items-center gap-1 rounded-md border bg-sidebar p-1">
+    <div className="flex flex-1 items-center gap-1 rounded-lg border bg-sidebar p-1">
       {OPTIONS.map(({ value, label, icon: Icon }) => (
         <button
           key={value}
@@ -21,11 +21,11 @@ export function ThemeToggle() {
           aria-label={label}
           onClick={() => setTheme(value)}
           className={cn(
-            'flex flex-1 items-center justify-center rounded-sm py-1.5 text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground',
+            'flex flex-1 items-center justify-center rounded-md py-2 text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground',
             theme === value && 'bg-sidebar-accent text-sidebar-accent-foreground',
           )}
         >
-          <Icon className="size-4" />
+          <Icon className="size-4.5" />
         </button>
       ))}
     </div>

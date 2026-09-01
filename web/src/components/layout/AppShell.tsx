@@ -82,11 +82,11 @@ function SidebarNav({
           </NavLink>
         ))}
       </nav>
-      <div className="mt-auto flex items-center justify-between px-3 py-3">
+      <div className="mt-auto flex items-center gap-2 px-3 py-3">
         <ThemeToggle />
         <Button
           variant="ghost"
-          size="icon-sm"
+          size="icon"
           aria-label="Open activity feed"
           onClick={onOpenActivity}
         >

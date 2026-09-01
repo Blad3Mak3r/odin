@@ -4,6 +4,17 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-01
+
+### What's Changed
+- Fix: prune expired jobs and activity history by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/75
+- feat: clone instance configuration by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/76
+- feat: route dashboard tabs by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/77
+- feat: make webhook event scopes editable by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/78
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.10.2...v0.11.0
+
 ## [0.10.2] - 2026-09-01
 
 ### What's Changed

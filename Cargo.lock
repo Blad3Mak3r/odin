@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "odin"
-version = "0.10.2"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-stream",

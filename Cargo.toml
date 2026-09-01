@@ -1,6 +1,6 @@
 [package]
 name = "odin"
-version = "0.10.2"
+version = "0.11.0"
 edition = "2024"
 description = "Odin manages the full lifecycle of Valheim dedicated game servers: install, update, mod, and run."
 license = "MIT"

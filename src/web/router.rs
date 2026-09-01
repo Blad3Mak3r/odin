@@ -4,8 +4,8 @@ use axum::routing::{delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bulk, changelog, config_files, diagnostics, doctor, events, install, instances, jobs,
-    lists, mods, nexus, players, resources, settings, version, webhooks,
+    backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, install,
+    instances, jobs, lists, mods, nexus, players, resources, settings, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -30,6 +30,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/instances/bulk/stop", post(bulk::bulk_stop))
         .route("/instances/bulk/restart", post(bulk::bulk_restart))
         .route("/instances/bulk/mods/update", post(bulk::bulk_update_mods))
+        .route(
+            "/instances/bulk/bepinex/update",
+            post(bulk::bulk_update_bepinex),
+        )
         .route(
             "/instances/{name}",
             get(instances::get_instance).delete(instances::delete_instance),
@@ -56,6 +60,8 @@ pub fn build_router(state: AppState) -> Router {
             get(mods::list_mods).post(mods::add_mod),
         )
         .route("/instances/{name}/mods/update", post(mods::update_mods))
+        .route("/instances/{name}/bepinex/status", get(bepinex::status))
+        .route("/instances/{name}/bepinex/update", post(bepinex::update))
         .route(
             "/instances/{name}/mods/modpack",
             get(mods::download_modpack),

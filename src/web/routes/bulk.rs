@@ -10,6 +10,7 @@ use axum::extract::State;
 use serde::{Deserialize, Serialize};
 
 use crate::instance::lifecycle;
+use crate::web::routes::bepinex;
 use crate::web::routes::mods::{JobHandle, spawn_mod_update_job};
 use crate::web::runtime::InstanceTransition;
 use crate::web::state::AppState;
@@ -106,4 +107,33 @@ pub async fn bulk_update_mods(
         })
         .collect();
     Json(handles)
+}
+
+#[derive(Serialize)]
+pub struct BulkBepInExResult {
+    pub name: String,
+    pub job_id: Option<String>,
+    pub error: Option<String>,
+}
+
+pub async fn bulk_update_bepinex(
+    State(state): State<AppState>,
+    Json(req): Json<BulkRequest>,
+) -> Json<Vec<BulkBepInExResult>> {
+    let mut results = Vec::with_capacity(req.names.len());
+    for name in req.names {
+        match bepinex::spawn_update(&state, name.clone()).await {
+            Ok(handle) => results.push(BulkBepInExResult {
+                name,
+                job_id: Some(handle.id),
+                error: None,
+            }),
+            Err(error) => results.push(BulkBepInExResult {
+                name,
+                job_id: None,
+                error: Some(format!("{:#}", error.0)),
+            }),
+        }
+    }
+    Json(results)
 }

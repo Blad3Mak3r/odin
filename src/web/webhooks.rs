@@ -103,6 +103,13 @@ fn describe(event: &ActivityEvent) -> String {
             format!("📦 Mod removed from **{instance}**: {mod_id}")
         }
         ActivityKind::ModsUpdated => format!("📦 Mods updated on **{instance}**"),
+        ActivityKind::BepInExUpdated {
+            from_version,
+            to_version,
+        } => format!(
+            "⬆️ BepInEx updated on **{instance}**: {} → {to_version}",
+            from_version.as_deref().unwrap_or("unknown")
+        ),
         ActivityKind::BackupCreated { backup_id } => {
             format!("💾 Backup created for **{instance}**: {backup_id}")
         }

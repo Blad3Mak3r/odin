@@ -39,6 +39,11 @@ pub enum ActivityKind {
         mod_id: String,
     },
     ModsUpdated,
+    #[serde(rename = "bepinex_updated")]
+    BepInExUpdated {
+        from_version: Option<String>,
+        to_version: String,
+    },
     BackupCreated {
         backup_id: String,
     },

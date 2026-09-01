@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-01
+
+### What's Changed
+- Add BepInEx updates to the web dashboard by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/68
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.9.0...v0.10.0
+
 ## [0.9.0] - 2026-08-31
 
 ### What's Changed

@@ -130,6 +130,36 @@ mod tests {
     }
 
     #[test]
+    fn v11_preserves_legacy_bepinex_as_installed_with_unknown_version() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 11 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO instances (name, port, world_name, public, created_at, bepinex_installed) VALUES ('legacy', 2456, 'legacy', 1, '2024-01-01T00:00:00Z', 1)",
+            [],
+        ).unwrap();
+        run(&mut conn).unwrap();
+        let state: (bool, Option<String>) = conn
+            .query_row(
+                "SELECT bepinex_installed, bepinex_version FROM instances WHERE name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, (true, None));
+    }
+
+    #[test]
     fn v10_preserves_the_payload_version_instances_actually_used() {
         let mut conn = Connection::open_in_memory().unwrap();
         let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();

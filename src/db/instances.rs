@@ -23,8 +23,8 @@ pub fn save(db: &Db, state: &InstanceState) -> Result<()> {
 pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> {
     tx.execute(
         "INSERT INTO instances \
-            (name, port, world_name, password, public, created_at, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+            (name, port, world_name, password, public, created_at, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
          ON CONFLICT(name) DO UPDATE SET \
             port = excluded.port, \
             world_name = excluded.world_name, \
@@ -36,7 +36,8 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
             pid = excluded.pid, \
             pid_started_at = excluded.pid_started_at, \
             bepinex_installed = excluded.bepinex_installed, \
-            auto_restart = excluded.auto_restart",
+            auto_restart = excluded.auto_restart, \
+            bepinex_version = excluded.bepinex_version",
         params![
             state.name,
             state.port,
@@ -50,6 +51,7 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
             state.pid_started_at,
             state.bepinex_installed,
             state.auto_restart,
+            state.bepinex_version,
         ],
     )
     .with_context(|| format!("failed to upsert instance '{}'", state.name))?;
@@ -122,10 +124,10 @@ pub fn delete(db: &Db, name: &str) -> Result<()> {
 }
 
 const SELECT_INSTANCE: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart \
+     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version \
      FROM instances WHERE name = ?1";
 const SELECT_ALL_INSTANCES: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart \
+     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version \
      FROM instances ORDER BY name";
 
 fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
@@ -142,8 +144,20 @@ fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
         pid_started_at: row.get(9)?,
         bepinex_installed: row.get(10)?,
         auto_restart: row.get(11)?,
+        bepinex_version: row.get(12)?,
         installed_mods: Vec::new(),
     })
+}
+
+/// Updates only BepInEx metadata, avoiding lost updates to unrelated state.
+pub fn set_bepinex(db: &Db, name: &str, installed: bool, version: Option<&str>) -> Result<()> {
+    db.conn()
+        .execute(
+            "UPDATE instances SET bepinex_installed = ?2, bepinex_version = ?3 WHERE name = ?1",
+            params![name, installed, version],
+        )
+        .with_context(|| format!("failed to update BepInEx state for '{name}'"))?;
+    Ok(())
 }
 
 /// Persists a freshly spawned process's identity fingerprint after a
@@ -240,6 +254,42 @@ mod tests {
         assert_eq!(loaded.port, original.port);
         assert_eq!(loaded.installed_mods.len(), 1);
         assert_eq!(loaded.installed_mods[0].mod_id, "owner-mod");
+    }
+
+    #[test]
+    fn bepinex_state_round_trips_known_unknown_and_absent_versions() {
+        let db = temp_db("bepinex-version");
+        let mut known = sample("known");
+        known.bepinex_installed = true;
+        known.bepinex_version = Some("5.4.2305".to_string());
+        save(&db, &known).unwrap();
+
+        let mut unknown = sample("unknown");
+        unknown.bepinex_installed = true;
+        save(&db, &unknown).unwrap();
+        save(&db, &sample("absent")).unwrap();
+
+        let known = load(&db, "known").unwrap().unwrap();
+        assert!(known.bepinex_installed);
+        assert_eq!(known.bepinex_version.as_deref(), Some("5.4.2305"));
+        let unknown = load(&db, "unknown").unwrap().unwrap();
+        assert!(unknown.bepinex_installed);
+        assert_eq!(unknown.bepinex_version, None);
+        let absent = load(&db, "absent").unwrap().unwrap();
+        assert!(!absent.bepinex_installed);
+        assert_eq!(absent.bepinex_version, None);
+    }
+
+    #[test]
+    fn narrow_bepinex_update_does_not_overwrite_other_state() {
+        let db = temp_db("narrow-bepinex-update");
+        let original = sample("my-server");
+        save(&db, &original).unwrap();
+        set_bepinex(&db, "my-server", true, Some("5.4.2305")).unwrap();
+        let loaded = load(&db, "my-server").unwrap().unwrap();
+        assert_eq!(loaded.port, original.port);
+        assert_eq!(loaded.installed_mods.len(), 1);
+        assert_eq!(loaded.bepinex_version.as_deref(), Some("5.4.2305"));
     }
 
     #[test]

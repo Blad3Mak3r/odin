@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -16,6 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
@@ -25,6 +27,7 @@ import {
   useDeleteWebhook,
   useSetWebhookEnabled,
   useTestWebhook,
+  useUpdateWebhook,
   useWebhooks,
 } from '@/lib/queries'
 import type { ActivityKind, WebhookView } from '@/lib/types'
@@ -94,7 +97,7 @@ function WebhookRow({ webhook }: { webhook: WebhookView }) {
     <div className="flex flex-col gap-2 rounded-xl border p-3">
       {dialog}
       <div className="flex items-center justify-between gap-3">
-        <span className="min-w-0 flex-1 truncate font-mono text-sm">{webhook.url}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">Webhook #{webhook.id.slice(0, 8)}</span>
         <Switch
           checked={webhook.enabled}
           onCheckedChange={(enabled) =>
@@ -117,6 +120,7 @@ function WebhookRow({ webhook }: { webhook: WebhookView }) {
         )}
       </div>
       <div className="flex justify-end gap-2">
+        <EditWebhookDialog webhook={webhook} />
         <Button size="sm" variant="outline" disabled={testWebhook.isPending} onClick={handleTest}>
           {testWebhook.isPending && <Loader2 className="size-4 animate-spin" />}
           Send test
@@ -131,6 +135,54 @@ function WebhookRow({ webhook }: { webhook: WebhookView }) {
         </Button>
       </div>
     </div>
+  )
+}
+
+function EditWebhookDialog({ webhook }: { webhook: WebhookView }) {
+  const [open, setOpen] = useState(false)
+  const [selectedKinds, setSelectedKinds] = useState<ActivityKind['kind'][]>(webhook.event_kinds)
+  const updateWebhook = useUpdateWebhook()
+
+  const toggleKind = (kind: ActivityKind['kind']) =>
+    setSelectedKinds((prev) =>
+      prev.includes(kind) ? prev.filter((current) => current !== kind) : [...prev, kind],
+    )
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen)
+    if (nextOpen) setSelectedKinds(webhook.event_kinds)
+  }
+
+  const handleSave = () => {
+    updateWebhook.mutate(
+      { id: webhook.id, eventKinds: selectedKinds },
+      {
+        onSuccess: () => {
+          setOpen(false)
+          toast.success('Webhook events updated')
+        },
+        onError: (e) => toast.error(e.message),
+      },
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger render={<Button size="sm" variant="outline">Edit events</Button>} />
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Edit webhook events</DialogTitle>
+          <DialogDescription>Choose which activity events this webhook receives.</DialogDescription>
+        </DialogHeader>
+        <EventKindFields selectedKinds={selectedKinds} toggleKind={toggleKind} idPrefix={`webhook-${webhook.id}`} />
+        <DialogFooter>
+          <Button disabled={updateWebhook.isPending} onClick={handleSave}>
+            {updateWebhook.isPending && <Loader2 className="size-4 animate-spin" />}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -176,22 +228,7 @@ function CreateWebhookDialog() {
             onChange={(e) => setUrl(e.target.value)}
           />
         </div>
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Events (leave all unchecked to send every event)
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            {ACTIVITY_KINDS.map((kind) => (
-              <label key={kind} className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={selectedKinds.includes(kind)}
-                  onCheckedChange={() => toggleKind(kind)}
-                />
-                {ACTIVITY_KIND_LABELS[kind]}
-              </label>
-            ))}
-          </div>
-        </div>
+        <EventKindFields selectedKinds={selectedKinds} toggleKind={toggleKind} idPrefix="create-webhook" />
         <DialogFooter>
           <Button disabled={!url.trim() || createWebhook.isPending} onClick={handleCreate}>
             {createWebhook.isPending && <Loader2 className="size-4 animate-spin" />}
@@ -200,5 +237,33 @@ function CreateWebhookDialog() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function EventKindFields({
+  selectedKinds,
+  toggleKind,
+  idPrefix,
+}: {
+  selectedKinds: ActivityKind['kind'][]
+  toggleKind: (kind: ActivityKind['kind']) => void
+  idPrefix: string
+}) {
+  return (
+    <FieldSet>
+      <FieldLegend variant="label">Events</FieldLegend>
+      <FieldDescription>Leave all unchecked to send every event.</FieldDescription>
+      <FieldGroup className="grid gap-2 sm:grid-cols-2">
+        {ACTIVITY_KINDS.map((kind) => {
+          const id = `${idPrefix}-${kind}`
+          return (
+            <Field key={kind} orientation="horizontal">
+              <Checkbox id={id} checked={selectedKinds.includes(kind)} onCheckedChange={() => toggleKind(kind)} />
+              <FieldLabel htmlFor={id} className="font-normal">{ACTIVITY_KIND_LABELS[kind]}</FieldLabel>
+            </Field>
+          )
+        })}
+      </FieldGroup>
+    </FieldSet>
   )
 }

@@ -84,6 +84,16 @@ pub fn set_enabled(db: &Db, id: &str, enabled: bool) -> Result<()> {
     Ok(())
 }
 
+/// Replaces a webhook's activity kind filter, returning whether it existed.
+pub fn set_event_kinds(db: &Db, id: &str, event_kinds: &[String]) -> Result<bool> {
+    let kinds_json = serde_json::to_string(event_kinds)?;
+    let changed = db.conn().execute(
+        "UPDATE webhooks SET event_kinds = ?2 WHERE id = ?1",
+        params![id, kinds_json],
+    )?;
+    Ok(changed > 0)
+}
+
 fn row_to_webhook(row: &rusqlite::Row) -> rusqlite::Result<WebhookRow> {
     let kinds_json: String = row.get(3)?;
     Ok(WebhookRow {
@@ -153,6 +163,30 @@ mod tests {
         let disabled = get(&db, &created.id).unwrap().unwrap();
         assert!(!disabled.enabled);
         assert_eq!(disabled.url, created.url);
+    }
+
+    #[test]
+    fn set_event_kinds_replaces_filter_without_losing_config() {
+        let db = temp_db("update-filter");
+        let created = insert(
+            &db,
+            "https://discord.com/api/webhooks/1/abc",
+            &["instance_started".to_string()],
+        )
+        .unwrap();
+
+        assert!(set_event_kinds(&db, &created.id, &["backup_created".to_string()]).unwrap());
+
+        let updated = get(&db, &created.id).unwrap().unwrap();
+        assert_eq!(updated.event_kinds, vec!["backup_created"]);
+        assert_eq!(updated.url, created.url);
+        assert_eq!(updated.enabled, created.enabled);
+    }
+
+    #[test]
+    fn set_event_kinds_reports_missing_webhook() {
+        let db = temp_db("missing-filter");
+        assert!(!set_event_kinds(&db, "nope", &[]).unwrap());
     }
 
     #[test]

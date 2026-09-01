@@ -287,7 +287,6 @@ export interface BulkBepInExResult {
 
 export interface WebhookView {
   id: string
-  url: string
   enabled: boolean
   event_kinds: ActivityKind['kind'][]
   created_at: string

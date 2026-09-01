@@ -686,6 +686,15 @@ export function useDeleteWebhook() {
   })
 }
 
+export function useUpdateWebhook() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, eventKinds }: { id: string; eventKinds: string[] }) =>
+      api.put<void>(`/webhooks/${id}`, { event_kinds: eventKinds }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
+  })
+}
+
 export function useSetWebhookEnabled() {
   const queryClient = useQueryClient()
   return useMutation({

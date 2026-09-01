@@ -30,6 +30,13 @@ export interface InstallStatusView {
   update_available: boolean
 }
 
+export interface BepInExStatus {
+  installed: boolean
+  installed_version: string | null
+  latest_version: string | null
+  update_available: boolean
+}
+
 export interface InstalledMod {
   mod_id: string
   version: string
@@ -125,6 +132,7 @@ export type JobKindDescr =
   | { kind: 'mod_upload'; instance: string; name: string }
   | { kind: 'backup_create'; instance: string }
   | { kind: 'backup_restore'; instance: string; backup_id: string }
+  | { kind: 'bepinex_update'; instance: string; from_version: string | null; to_version: string }
 
 export interface GlobalModInstanceEntry {
   instance: string
@@ -210,7 +218,7 @@ export interface InstanceResources {
   memory_bytes: number
 }
 
-export type InstanceTransition = 'starting' | 'stopping' | 'restarting'
+export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'updating_bepinex'
 export type InstanceTransitions = Record<string, InstanceTransition>
 
 export interface ResourceSample {
@@ -250,6 +258,7 @@ export type ActivityKind =
   | { kind: 'mod_installed'; mod_id: string }
   | { kind: 'mod_removed'; mod_id: string }
   | { kind: 'mods_updated' }
+  | { kind: 'bepinex_updated'; from_version: string | null; to_version: string }
   | { kind: 'backup_created'; backup_id: string }
   | { kind: 'backup_restored'; backup_id: string }
   | { kind: 'backup_pruned'; backup_id: string }
@@ -266,6 +275,12 @@ export interface ActivityEvent {
 export interface BulkResult {
   name: string
   ok: boolean
+  error: string | null
+}
+
+export interface BulkBepInExResult {
+  name: string
+  job_id: string | null
   error: string | null
 }
 

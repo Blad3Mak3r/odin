@@ -1,5 +1,6 @@
 import { Download, Loader2 } from 'lucide-react'
-import { lazy, Suspense, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { JobProgress } from '@/components/JobProgress'
 import { ModIcon } from '@/components/ModIcon'
@@ -23,12 +24,14 @@ import { useJobSocket } from '@/hooks/useJobSocket'
 import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
 import {
   useAddMod,
+  useBepInExStatus,
   useMods,
   useRemoveMod,
   useSelectModVersion,
   useSetModEnabled,
   useSetModPinned,
   useUpdateMods,
+  useUpdateBepInEx,
 } from '@/lib/queries'
 import type { InstalledMod } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -46,6 +49,7 @@ export function ModsTab({ name, running }: { name: string; running: boolean }) {
       </TabsList>
       <TabsContent value="installed">
         <div className="flex flex-col gap-8">
+          <BepInExCard name={name} running={running} />
           <InstalledMods name={name} running={running} />
           <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
             <ModConfigFiles name={name} />
@@ -56,6 +60,90 @@ export function ModsTab({ name, running }: { name: string; running: boolean }) {
         <ModInstallSearch name={name} running={running} />
       </TabsContent>
     </Tabs>
+  )
+}
+
+function BepInExCard({ name, running }: { name: string; running: boolean }) {
+  const status = useBepInExStatus(name)
+  const update = useUpdateBepInEx()
+  const queryClient = useQueryClient()
+  const [jobId, setJobId] = useState<string | null>(null)
+  const job = useJobSocket(jobId)
+
+  useEffect(() => {
+    if (job.status?.status !== 'succeeded' && job.status?.status !== 'failed') return
+    queryClient.invalidateQueries({ queryKey: ['instances', name, 'bepinex-status'] })
+    queryClient.invalidateQueries({ queryKey: ['instances', name] })
+    queryClient.invalidateQueries({ queryKey: ['instances'] })
+    queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
+  }, [job.status?.status, name, queryClient])
+
+  const active = update.isPending || job.status?.status === 'queued' || job.status?.status === 'running'
+  const installed = status.data?.installed
+  const unknown = installed && !status.data?.installed_version
+  const canUpdate = unknown || status.data?.update_available
+
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="font-medium">BepInEx</h2>
+            {installed && !canUpdate && <Badge variant="secondary">Up to date</Badge>}
+            {status.isError && <Badge variant="destructive">Check failed</Badge>}
+          </div>
+          {!installed && !status.isLoading && !status.isError && (
+            <p className="text-sm text-muted-foreground">
+              Not installed. Odin installs BepInEx automatically when you add the first mod.
+            </p>
+          )}
+          {installed && (
+            <p className="text-sm text-muted-foreground">
+              Installed: {status.data?.installed_version ? `v${status.data.installed_version}` : 'unknown version'}
+              {status.data?.update_available && status.data.latest_version
+                ? ` · Latest: v${status.data.latest_version}`
+                : ''}
+            </p>
+          )}
+          {status.isError && (
+            <p className="text-sm text-destructive">
+              Could not check Thunderstore. Local version information is unchanged.
+            </p>
+          )}
+          {running && installed && canUpdate && (
+            <p className="text-xs text-muted-foreground">Stop '{name}' before updating BepInEx.</p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {status.isError && (
+            <Button size="sm" variant="outline" onClick={() => status.refetch()}>
+              Retry
+            </Button>
+          )}
+          {installed && canUpdate && !status.isError && (
+            <Button
+              size="sm"
+              disabled={running || active}
+              onClick={() =>
+                update.mutate(name, {
+                  onSuccess: (handle) => setJobId(handle.id),
+                  onError: (error) => toast.error(error.message),
+                })
+              }
+            >
+              {active && <Loader2 className="size-4 animate-spin" />}
+              {unknown ? 'Install latest' : 'Update BepInEx'}
+            </Button>
+          )}
+        </div>
+      </CardContent>
+      {jobId && (
+        <CardContent>
+          <JobProgress log={job.log} status={job.status} connected={job.connected} />
+        </CardContent>
+      )}
+    </Card>
   )
 }
 

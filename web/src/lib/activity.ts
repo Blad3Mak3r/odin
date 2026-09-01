@@ -40,6 +40,8 @@ export function describeActivity(kind: ActivityKind): string {
       return `Mod removed: ${kind.mod_id}`
     case 'mods_updated':
       return 'Mods updated'
+    case 'bepinex_updated':
+      return `BepInEx updated: ${kind.from_version ?? 'unknown'} → ${kind.to_version}`
     case 'backup_created':
       return `Backup created: ${kind.backup_id}`
     case 'backup_restored':
@@ -67,6 +69,7 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind['kind'], string> = {
   mod_installed: 'Mod installed',
   mod_removed: 'Mod removed',
   mods_updated: 'Mods updated',
+  bepinex_updated: 'BepInEx updated',
   backup_created: 'Backup created',
   backup_restored: 'Backup restored',
   backup_pruned: 'Old backup pruned',
@@ -85,6 +88,7 @@ export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   mod_installed: PackagePlus,
   mod_removed: PackageMinus,
   mods_updated: Package,
+  bepinex_updated: RefreshCcw,
   backup_created: Archive,
   backup_restored: ArchiveRestore,
   backup_pruned: ArchiveX,

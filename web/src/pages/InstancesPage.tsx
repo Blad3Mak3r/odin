@@ -25,6 +25,7 @@ import {
   useBulkRestartInstances,
   useBulkStartInstances,
   useBulkStopInstances,
+  useBulkUpdateBepInEx,
   useBulkUpdateMods,
   useCreateInstance,
   useInstanceResources,
@@ -160,7 +161,9 @@ function InstanceRow({
       <TableCell>
         <div className="flex items-center gap-2">
           <Badge variant={instance.running ? 'default' : 'secondary'}>
-            {transition ?? (instance.running ? 'running' : 'stopped')}
+            {transition === 'updating_bepinex'
+              ? 'updating BepInEx'
+              : (transition ?? (instance.running ? 'running' : 'stopped'))}
           </Badge>
           <PlayersBadge name={instance.name} running={instance.running} />
         </div>
@@ -200,6 +203,7 @@ function BulkActionBar({ selected, onDone }: { selected: string[]; onDone: () =>
   const bulkStop = useBulkStopInstances()
   const bulkRestart = useBulkRestartInstances()
   const bulkUpdateMods = useBulkUpdateMods()
+  const bulkUpdateBepInEx = useBulkUpdateBepInEx()
   const transitions = useInstanceTransitions()
 
   const busy =
@@ -207,6 +211,7 @@ function BulkActionBar({ selected, onDone }: { selected: string[]; onDone: () =>
     bulkStop.isPending ||
     bulkRestart.isPending ||
     bulkUpdateMods.isPending ||
+    bulkUpdateBepInEx.isPending ||
     selected.some((name) => name in transitions.data)
 
   return (
@@ -279,6 +284,30 @@ function BulkActionBar({ selected, onDone }: { selected: string[]; onDone: () =>
         >
           {bulkUpdateMods.isPending && <Loader2 className="size-4 animate-spin" />}
           Update mods
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            bulkUpdateBepInEx.mutate(selected, {
+              onSuccess: (results) => {
+                const queued = results.filter((result) => result.job_id)
+                const failed = results.filter((result) => result.error)
+                if (queued.length > 0) {
+                  toast.success(`Queued BepInEx updates for ${queued.length} instance${queued.length === 1 ? '' : 's'}`)
+                }
+                if (failed.length > 0) {
+                  toast.error(`BepInEx update rejected for: ${failed.map((result) => result.name).join(', ')}`)
+                }
+                onDone()
+              },
+              onError: (error) => toast.error(error.message),
+            })
+          }
+        >
+          {bulkUpdateBepInEx.isPending && <Loader2 className="size-4 animate-spin" />}
+          Update BepInEx
         </Button>
       </div>
     </div>

@@ -4,6 +4,17 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-09-01
+
+### What's Changed
+- Enlarge sidebar theme toggle by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/71
+- Stack installed mod card controls below the title by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/72
+- Fix checked checkbox contrast in dark mode by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/73
+- Ignore generated dashboard build output by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/74
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.10.1...v0.10.2
+
 ## [0.10.1] - 2026-09-01
 
 ### What's Changed

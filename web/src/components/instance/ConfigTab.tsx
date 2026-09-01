@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useConfig, useUpdateConfig } from '@/lib/queries'
+import type { ConfigView } from '@/lib/types'
 
 const MIN_PORT = 1
 const MAX_PORT = 65535
@@ -14,21 +15,6 @@ const MAX_PORT = 65535
 export function ConfigTab({ name }: { name: string }) {
   const config = useConfig(name)
   const updateConfig = useUpdateConfig(name)
-
-  const [world, setWorld] = useState('')
-  const [port, setPort] = useState('')
-  const [password, setPassword] = useState('')
-  const [isPublic, setIsPublic] = useState(true)
-  const [autoRestart, setAutoRestart] = useState(false)
-
-  useEffect(() => {
-    if (!config.data) return
-    setWorld(config.data.world_name)
-    setPort(String(config.data.port))
-    setPassword(config.data.password ?? '')
-    setIsPublic(config.data.public)
-    setAutoRestart(config.data.auto_restart)
-  }, [config.data])
 
   if (config.isError) {
     return <QueryError error={config.error} />
@@ -44,6 +30,25 @@ export function ConfigTab({ name }: { name: string }) {
       </div>
     )
   }
+
+  // Keyed by instance name so switching instances mounts a fresh form
+  // seeded from the newly loaded config, instead of syncing state in an
+  // effect every time `config.data` changes (e.g. on refetch).
+  return <ConfigForm key={name} initial={config.data} updateConfig={updateConfig} />
+}
+
+function ConfigForm({
+  initial,
+  updateConfig,
+}: {
+  initial: ConfigView
+  updateConfig: ReturnType<typeof useUpdateConfig>
+}) {
+  const [world, setWorld] = useState(initial.world_name)
+  const [port, setPort] = useState(String(initial.port))
+  const [password, setPassword] = useState(initial.password ?? '')
+  const [isPublic, setIsPublic] = useState(initial.public)
+  const [autoRestart, setAutoRestart] = useState(initial.auto_restart)
 
   const portNumber = Number(port)
   const portInvalid = port.trim() === '' || Number.isNaN(portNumber) || portNumber < MIN_PORT || portNumber > MAX_PORT

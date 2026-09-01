@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
@@ -327,10 +327,14 @@ function InstallOnInstancesDialog({
 
   // Reset checkboxes whenever the dialog opens for a (possibly different)
   // mod, rather than carrying over a stale selection from the last time it
-  // was open — this component instance is reused across mods.
-  useEffect(() => {
+  // was open — this component instance is reused across mods. Comparing
+  // against the previous `open` during render (instead of an effect) avoids
+  // an extra commit.
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (open !== prevOpen) {
+    setPrevOpen(open)
     if (open) setSelected([])
-  }, [open])
+  }
 
   const toggle = (name: string) =>
     setSelected((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]))

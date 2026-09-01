@@ -6,8 +6,15 @@ export function useLogSocket(instanceName: string) {
   const [lines, setLines] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
 
-  useEffect(() => {
+  // Reset when switching instances. Comparing against the previous name
+  // during render (instead of an effect) avoids an extra commit.
+  const [prevInstanceName, setPrevInstanceName] = useState(instanceName)
+  if (instanceName !== prevInstanceName) {
+    setPrevInstanceName(instanceName)
     setLines([])
+  }
+
+  useEffect(() => {
     const source = new EventSource(`/api/instances/${instanceName}/logs/sse`)
 
     source.onopen = () => setConnected(true)

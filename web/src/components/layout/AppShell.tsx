@@ -40,7 +40,24 @@ function SidebarNav({
       <div className="flex items-center gap-2 px-4 py-5">
         <img src="/logo.png" alt="" className="size-8 shrink-0" />
         <div>
-          <span className="text-lg font-semibold tracking-tight">Odin</span>
+          <div className="flex items-baseline gap-1 whitespace-nowrap">
+            <span className="text-lg font-semibold tracking-tight">Odin</span>
+            {import.meta.env.VITE_ODIN_VERSION && (
+              <NavLink
+                to="/changelog"
+                onClick={onNavigate}
+                aria-label={`View changelog for Odin v${import.meta.env.VITE_ODIN_VERSION}`}
+                className={({ isActive }) =>
+                  cn(
+                    'rounded-sm px-1 py-0.5 text-xs font-normal text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+                    isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
+                  )
+                }
+              >
+                v{import.meta.env.VITE_ODIN_VERSION}
+              </NavLink>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">Valheim server dashboard</p>
         </div>
       </div>
@@ -67,31 +84,14 @@ function SidebarNav({
       </nav>
       <div className="mt-auto flex items-center justify-between px-3 py-3">
         <ThemeToggle />
-        <div className="flex items-center gap-1">
-          {import.meta.env.VITE_ODIN_VERSION && (
-            <NavLink
-              to="/changelog"
-              onClick={onNavigate}
-              aria-label={`View changelog for Odin v${import.meta.env.VITE_ODIN_VERSION}`}
-              className={({ isActive }) =>
-                cn(
-                  'rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
-                  isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
-                )
-              }
-            >
-              v{import.meta.env.VITE_ODIN_VERSION}
-            </NavLink>
-          )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Open activity feed"
-            onClick={onOpenActivity}
-          >
-            <Bell className="size-4" />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Open activity feed"
+          onClick={onOpenActivity}
+        >
+          <Bell className="size-4" />
+        </Button>
       </div>
     </>
   )
@@ -108,7 +108,23 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="flex shrink-0 items-center justify-between border-b bg-sidebar px-3 py-2.5 text-sidebar-foreground md:hidden">
           <span className="flex items-center gap-2">
             <img src="/logo.png" alt="" className="size-6 shrink-0" />
-            <span className="text-base font-semibold tracking-tight">Odin</span>
+            <span className="flex items-baseline gap-1 whitespace-nowrap">
+              <span className="text-base font-semibold tracking-tight">Odin</span>
+              {import.meta.env.VITE_ODIN_VERSION && (
+                <NavLink
+                  to="/changelog"
+                  aria-label={`View changelog for Odin v${import.meta.env.VITE_ODIN_VERSION}`}
+                  className={({ isActive }) =>
+                    cn(
+                      'rounded-sm px-1 py-0.5 text-xs font-normal text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+                      isActive && 'bg-sidebar-accent text-sidebar-accent-foreground',
+                    )
+                  }
+                >
+                  v{import.meta.env.VITE_ODIN_VERSION}
+                </NavLink>
+              )}
+            </span>
           </span>
           <DialogPrimitive.Trigger
             render={<Button variant="ghost" size="icon-sm" aria-label="Open navigation" />}

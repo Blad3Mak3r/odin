@@ -503,8 +503,9 @@ small, fast binary: full LTO, a single codegen unit, symbol stripping, and
 `panic = "abort"`.
 
 A plain `cargo build`/`cargo run` (bypassing the Makefile) still compiles
-without Node.js — it embeds whatever is currently in `web/dist/` (a
-placeholder page until you run `make web-build` at least once).
+without Node.js — it embeds whatever is currently in `web/dist/`. If the
+frontend has not been built, dashboard requests return an explicit error;
+run `make build` to build and embed the dashboard.
 
 To iterate on the frontend without rebuilding the Rust binary on every
 change, run `odin serve` in one terminal and `make web-dev` in another; the

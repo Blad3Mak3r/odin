@@ -289,6 +289,14 @@ impl JobRegistry {
         jobs.get(id)
             .map(|r| (r.log.clone(), r.status.clone(), r.sender.subscribe()))
     }
+
+    /// Deletes persisted expired terminal jobs and removes them from live history.
+    pub fn purge_before(&self, before: DateTime<Utc>) -> Result<usize> {
+        let deleted_ids = db_jobs::delete_finished_before(&self.db, before)?;
+        let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        jobs.retain(|id, _| !deleted_ids.contains(id));
+        Ok(deleted_ids.len())
+    }
 }
 
 fn snapshot(id: &str, record: &JobRecord) -> JobSnapshot {
@@ -344,20 +352,23 @@ mod tests {
     use crate::paths::Paths;
 
     fn temp_registry(label: &str) -> JobRegistry {
+        JobRegistry::load(temp_db(label))
+    }
+
+    fn temp_db(label: &str) -> Arc<Db> {
         let dir = std::env::temp_dir().join(format!(
             "odin-jobs-test-{label}-{}-{}",
             std::process::id(),
             Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let db = Arc::new(
+        Arc::new(
             Db::open(&Paths {
                 data_dir: dir.clone(),
                 config_dir: dir,
             })
             .unwrap(),
-        );
-        JobRegistry::load(db)
+        )
     }
 
     #[tokio::test]
@@ -495,5 +506,46 @@ mod tests {
             JobStatus::Failed { message } => assert!(message.contains("restart")),
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn purge_before_removes_only_expired_terminal_jobs_from_memory() {
+        let db = temp_db("retention");
+        let cutoff = Utc::now();
+        db_jobs::insert(
+            &db,
+            "old-succeeded",
+            "steamcmd_install",
+            r#"{"kind":"steamcmd_install"}"#,
+            "succeeded",
+            r#"{"status":"succeeded"}"#,
+            cutoff - chrono::Duration::seconds(1),
+        )
+        .unwrap();
+        let registry = JobRegistry::load(db.clone());
+        let mut jobs = registry.jobs.lock().unwrap();
+        for (id, status) in [
+            ("old-queued", JobStatus::Queued),
+            ("old-running", JobStatus::Running),
+        ] {
+            let (sender, _receiver) = broadcast::channel(BROADCAST_CAPACITY);
+            jobs.insert(
+                id.to_string(),
+                JobRecord {
+                    kind: JobKindDescr::SteamcmdInstall,
+                    status,
+                    started_at: cutoff - chrono::Duration::seconds(1),
+                    log: Vec::new(),
+                    sender,
+                },
+            );
+        }
+        drop(jobs);
+
+        assert_eq!(registry.purge_before(cutoff).unwrap(), 1);
+        assert!(registry.get("old-succeeded").is_none());
+        assert!(registry.get("old-queued").is_some());
+        assert!(registry.get("old-running").is_some());
+        assert!(db_jobs::recent(&db, 10).unwrap().is_empty());
     }
 }

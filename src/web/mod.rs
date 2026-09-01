@@ -8,6 +8,7 @@ mod error;
 pub mod jobs;
 mod log_tail;
 mod players;
+mod retention;
 mod router;
 pub mod routes;
 mod runtime;
@@ -42,6 +43,8 @@ const STOP_INSTANCES_ON_SHUTDOWN_ENV: &str = "ODIN_STOP_INSTANCES_ON_SHUTDOWN";
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let db = Arc::new(Db::open(&paths).context("failed to open database")?);
     let state = AppState::new(paths, db);
+    retention::run_once(&state);
+    retention::spawn(state.clone());
     webhooks::spawn(state.clone());
     update_monitor::spawn(state.clone());
     spawn_telemetry(state.clone());

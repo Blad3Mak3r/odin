@@ -1,6 +1,7 @@
 //! Durable storage for the activity feed, backing `crate::activity::ActivityLog`.
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use super::Db;
@@ -47,6 +48,13 @@ pub fn recent(db: &Db, limit: usize) -> Result<Vec<ActivityEvent>> {
         });
     }
     Ok(events)
+}
+
+/// Deletes activity events older than `before` and returns how many rows were removed.
+pub fn delete_before(db: &Db, before: DateTime<Utc>) -> Result<usize> {
+    Ok(db
+        .conn()
+        .execute("DELETE FROM activity_events WHERE at < ?1", params![before])?)
 }
 
 fn encode_kind(kind: &ActivityKind) -> Result<(String, String)> {
@@ -123,5 +131,33 @@ mod tests {
         assert_eq!(events[0].id, "evt-2");
         assert_eq!(events[1].id, "evt-3");
         assert_eq!(events[2].id, "evt-4");
+    }
+
+    #[test]
+    fn delete_before_keeps_events_at_the_cutoff() {
+        let db = temp_db("retention");
+        let cutoff = chrono::Utc::now();
+        for (id, at) in [
+            ("old", cutoff - chrono::Duration::seconds(1)),
+            ("at-cutoff", cutoff),
+            ("new", cutoff + chrono::Duration::seconds(1)),
+        ] {
+            insert(
+                &db,
+                &ActivityEvent {
+                    id: id.to_string(),
+                    at,
+                    instance: None,
+                    kind: ActivityKind::InstanceCreated,
+                },
+            )
+            .unwrap();
+        }
+
+        assert_eq!(delete_before(&db, cutoff).unwrap(), 1);
+        let events = recent(&db, 10).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, "at-cutoff");
+        assert_eq!(events[1].id, "new");
     }
 }

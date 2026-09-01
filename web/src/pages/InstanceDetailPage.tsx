@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { AccessListsTab } from '@/components/instance/AccessListsTab'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { ConfigTab } from '@/components/instance/ConfigTab'
@@ -12,17 +12,29 @@ import { ResourcesTab } from '@/components/instance/ResourcesTab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useInstance } from '@/lib/queries'
 
-const TABS = ['logs', 'config', 'mods', 'lists', 'backups', 'resources', 'players'] as const
-type Tab = (typeof TABS)[number]
+const INSTANCE_TABS = ['logs', 'config', 'mods', 'lists', 'backups', 'resources', 'players'] as const
+type InstanceTab = (typeof INSTANCE_TABS)[number]
+
+function isInstanceTab(value: string | undefined): value is InstanceTab {
+  return INSTANCE_TABS.some((tab) => tab === value)
+}
 
 export function InstanceDetailPage() {
-  const { name } = useParams<{ name: string }>()
+  const { name, '*': tabPath } = useParams<{ name: string; '*': string }>()
   const navigate = useNavigate()
-  const [tab, setTab] = useState<Tab>('logs')
   const [deleteOpen, setDeleteOpen] = useState(false)
   const instance = useInstance(name ?? '')
 
   if (!name) return null
+
+  const basePath = `/instances/${name}`
+  const segments = tabPath?.split('/').filter(Boolean) ?? []
+  const [tab, ...nestedPath] = segments
+
+  if (!isInstanceTab(tab)) return <Navigate to={`${basePath}/logs`} replace />
+  if (tab !== 'mods' && tab !== 'lists' && nestedPath.length > 0) {
+    return <Navigate to={`${basePath}/logs`} replace />
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -38,7 +50,18 @@ export function InstanceDetailPage() {
         onDelete={() => setDeleteOpen(true)}
       />
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+      <Tabs
+        value={tab}
+        onValueChange={(value) =>
+          navigate(
+            value === 'mods'
+              ? `${basePath}/mods/installed`
+              : value === 'lists'
+                ? `${basePath}/lists/admin`
+                : `${basePath}/${value}`,
+          )
+        }
+      >
         <div className="overflow-x-auto">
           <TabsList className="w-max">
             <TabsTrigger value="logs">Logs</TabsTrigger>
@@ -50,27 +73,41 @@ export function InstanceDetailPage() {
             <TabsTrigger value="players">Players</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="logs">
-          <LogsTab name={name} />
-        </TabsContent>
-        <TabsContent value="config">
-          <ConfigTab name={name} />
-        </TabsContent>
-        <TabsContent value="mods">
-          <ModsTab name={name} running={instance.data?.running ?? false} />
-        </TabsContent>
-        <TabsContent value="lists">
-          <AccessListsTab name={name} />
-        </TabsContent>
-        <TabsContent value="backups">
-          <BackupsTab name={name} running={instance.data?.running ?? false} />
-        </TabsContent>
-        <TabsContent value="resources">
-          <ResourcesTab name={name} running={instance.data?.running ?? false} />
-        </TabsContent>
-        <TabsContent value="players">
-          <PlayersTab name={name} running={instance.data?.running ?? false} />
-        </TabsContent>
+        {tab === 'logs' && (
+          <TabsContent value="logs">
+            <LogsTab name={name} />
+          </TabsContent>
+        )}
+        {tab === 'config' && (
+          <TabsContent value="config">
+            <ConfigTab name={name} />
+          </TabsContent>
+        )}
+        {tab === 'mods' && (
+          <TabsContent value="mods">
+            <ModsTab name={name} running={instance.data?.running ?? false} path={nestedPath} />
+          </TabsContent>
+        )}
+        {tab === 'lists' && (
+          <TabsContent value="lists">
+            <AccessListsTab name={name} path={nestedPath} />
+          </TabsContent>
+        )}
+        {tab === 'backups' && (
+          <TabsContent value="backups">
+            <BackupsTab name={name} running={instance.data?.running ?? false} />
+          </TabsContent>
+        )}
+        {tab === 'resources' && (
+          <TabsContent value="resources">
+            <ResourcesTab name={name} running={instance.data?.running ?? false} />
+          </TabsContent>
+        )}
+        {tab === 'players' && (
+          <TabsContent value="players">
+            <PlayersTab name={name} running={instance.data?.running ?? false} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )

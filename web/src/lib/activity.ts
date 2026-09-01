@@ -3,6 +3,7 @@ import {
   ArchiveRestore,
   ArchiveX,
   CircleCheck,
+  Copy,
   Download,
   type LucideIcon,
   Package,
@@ -22,6 +23,8 @@ export function describeActivity(kind: ActivityKind): string {
   switch (kind.kind) {
     case 'instance_created':
       return 'Instance created'
+    case 'instance_cloned':
+      return `Instance cloned from ${kind.source}`
     case 'instance_deleted':
       return 'Instance deleted'
     case 'instance_started':
@@ -60,6 +63,7 @@ export function describeActivity(kind: ActivityKind): string {
 // specific event's fields (a mod id, a backup id, ...) to read sensibly.
 export const ACTIVITY_KIND_LABELS: Record<ActivityKind['kind'], string> = {
   instance_created: 'Instance created',
+  instance_cloned: 'Instance cloned',
   instance_deleted: 'Instance deleted',
   instance_started: 'Instance started',
   instance_stopped: 'Instance stopped',
@@ -79,6 +83,7 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind['kind'], string> = {
 
 export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   instance_created: Plus,
+  instance_cloned: Copy,
   instance_deleted: Trash2,
   instance_started: Play,
   instance_stopped: Square,

@@ -76,7 +76,9 @@ fn classify(err: &anyhow::Error) -> StatusCode {
     }
     match err.downcast_ref::<InstanceError>() {
         Some(InstanceError::NotFound(_)) => StatusCode::NOT_FOUND,
-        Some(InstanceError::InvalidName(_)) => StatusCode::BAD_REQUEST,
+        Some(InstanceError::InvalidName(_) | InstanceError::InvalidWorldName) => {
+            StatusCode::BAD_REQUEST
+        }
         Some(
             InstanceError::AlreadyRunning(_)
             | InstanceError::AlreadyExists(_)

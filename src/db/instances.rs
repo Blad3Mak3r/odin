@@ -18,6 +18,31 @@ pub fn save(db: &Db, state: &InstanceState) -> Result<()> {
     Ok(())
 }
 
+/// Creates an instance together with its access lists in one transaction.
+/// Used by configuration cloning so the new instance is never visible in the
+/// database with only part of its copied state.
+pub fn save_clone(
+    db: &Db,
+    state: &InstanceState,
+    access_lists: &[(&str, &[String])],
+) -> Result<()> {
+    let mut conn = db.conn();
+    let tx = conn
+        .transaction()
+        .context("failed to start clone transaction")?;
+    save_in_tx(&tx, state)?;
+    for (kind, ids) in access_lists {
+        for id in *ids {
+            tx.execute(
+                "INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES (?1, ?2, ?3)",
+                params![state.name, kind, id],
+            )?;
+        }
+    }
+    tx.commit().context("failed to commit clone transaction")?;
+    Ok(())
+}
+
 /// Same as [`save`], but against an already-open transaction — used by the
 /// bootstrap importer so several instances land atomically in one go.
 pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> {

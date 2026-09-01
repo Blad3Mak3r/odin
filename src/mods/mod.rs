@@ -932,6 +932,27 @@ fn link_into_instance(instance_dir: &Path, mod_id: &str, global_version_dir: &Pa
     })
 }
 
+/// Recreates the enabled plugin links for an already-resolved mod set without
+/// downloading or changing its exact versions.
+pub(crate) fn link_existing_mods(
+    paths: &Paths,
+    instance_dir: &Path,
+    installed_mods: &[InstalledMod],
+) -> Result<()> {
+    for installed in installed_mods.iter().filter(|installed| installed.enabled) {
+        let global_dir = paths.mod_version_dir(&installed.mod_id, &installed.version);
+        if !global_dir.is_dir() {
+            anyhow::bail!(
+                "mod '{}' version '{}' is missing from the shared store",
+                installed.mod_id,
+                installed.version
+            );
+        }
+        link_into_instance(instance_dir, &installed.mod_id, &global_dir)?;
+    }
+    Ok(())
+}
+
 pub fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir)?;
     let file = std::fs::File::open(zip_path)

@@ -187,6 +187,19 @@ export function useCreateInstance() {
   })
 }
 
+export function useCloneInstance(sourceName: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, worldName }: { name: string; worldName: string }) =>
+      api.post<InstanceView>(`/instances/${sourceName}/clone`, { name, world_name: worldName }),
+    onSuccess: (instance) => {
+      queryClient.invalidateQueries({ queryKey: ['instances'] })
+      queryClient.invalidateQueries({ queryKey: ['instances', instance.name] })
+      queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
+    },
+  })
+}
+
 function useInstanceAction(action: 'start' | 'stop' | 'restart') {
   const queryClient = useQueryClient()
   return useMutation({

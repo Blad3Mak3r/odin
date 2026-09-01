@@ -32,6 +32,7 @@ pub enum InstanceTransition {
     Starting,
     Stopping,
     Restarting,
+    Cloning,
     #[serde(rename = "updating_bepinex")]
     UpdatingBepInEx,
 }

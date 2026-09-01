@@ -218,7 +218,7 @@ export interface InstanceResources {
   memory_bytes: number
 }
 
-export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'updating_bepinex'
+export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'cloning' | 'updating_bepinex'
 export type InstanceTransitions = Record<string, InstanceTransition>
 
 export interface ResourceSample {
@@ -249,6 +249,7 @@ export interface ResourcesTick {
 
 export type ActivityKind =
   | { kind: 'instance_created' }
+  | { kind: 'instance_cloned'; source: string }
   | { kind: 'instance_deleted' }
   | { kind: 'instance_started' }
   | { kind: 'instance_stopped' }

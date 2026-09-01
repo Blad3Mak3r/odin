@@ -83,6 +83,9 @@ fn describe(event: &ActivityEvent) -> String {
     let instance = event.instance.as_deref().unwrap_or("?");
     match &event.kind {
         ActivityKind::InstanceCreated => format!("🆕 Instance created: **{instance}**"),
+        ActivityKind::InstanceCloned { source } => {
+            format!("🧬 **{instance}** cloned from **{source}**")
+        }
         ActivityKind::InstanceDeleted => format!("🗑️ Instance deleted: **{instance}**"),
         ActivityKind::InstanceStarted => format!("▶️ **{instance}** started"),
         ActivityKind::InstanceStopped => format!("⏹️ **{instance}** stopped"),

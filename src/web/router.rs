@@ -173,7 +173,10 @@ pub fn build_router(state: AppState) -> Router {
             "/webhooks",
             get(webhooks::list_webhooks).post(webhooks::create_webhook),
         )
-        .route("/webhooks/{id}", delete(webhooks::delete_webhook))
+        .route(
+            "/webhooks/{id}",
+            delete(webhooks::delete_webhook).put(webhooks::update_webhook),
+        )
         .route("/webhooks/{id}/enable", post(webhooks::enable_webhook))
         .route("/webhooks/{id}/disable", post(webhooks::disable_webhook))
         .route("/webhooks/{id}/test", post(webhooks::test_webhook))

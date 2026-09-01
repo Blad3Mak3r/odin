@@ -1,6 +1,7 @@
 import { Download, Loader2 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useState } from 'react'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { JobProgress } from '@/components/JobProgress'
 import { ModIcon } from '@/components/ModIcon'
@@ -41,25 +42,59 @@ const ModConfigFiles = lazy(() =>
   import('./ModConfigFiles').then((m) => ({ default: m.ModConfigFiles })),
 )
 
-export function ModsTab({ name, running }: { name: string; running: boolean }) {
+const MOD_TABS = ['installed', 'marketplace'] as const
+const MOD_SOURCES = ['thunderstore', 'nexus', 'upload'] as const
+type ModTab = (typeof MOD_TABS)[number]
+type ModSource = (typeof MOD_SOURCES)[number]
+
+function isModTab(value: string | undefined): value is ModTab {
+  return MOD_TABS.some((tab) => tab === value)
+}
+
+function isModSource(value: string | undefined): value is ModSource {
+  return MOD_SOURCES.some((source) => source === value)
+}
+
+export function ModsTab({ name, running, path }: { name: string; running: boolean; path: string[] }) {
+  const navigate = useNavigate()
+  const [tab, source, ...rest] = path
+  const basePath = `/instances/${name}/mods`
+  const activeSource = isModSource(source) ? source : null
+
+  if (!isModTab(tab) || rest.length > 0 || (tab === 'installed' && source)) {
+    return <Navigate to={`${basePath}/installed`} replace />
+  }
+  if (tab === 'marketplace' && activeSource === null) {
+    return <Navigate to={`${basePath}/marketplace/thunderstore`} replace />
+  }
+
   return (
-    <Tabs defaultValue="installed">
+    <Tabs
+      value={tab}
+      onValueChange={(value) =>
+        navigate(value === 'marketplace' ? `${basePath}/marketplace/thunderstore` : `${basePath}/installed`)
+      }
+    >
       <TabsList variant="line">
         <TabsTrigger value="installed">Installed</TabsTrigger>
         <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
       </TabsList>
-      <TabsContent value="installed">
-        <div className="flex flex-col gap-8">
-          <BepInExCard name={name} running={running} />
-          <InstalledMods name={name} running={running} />
-          <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
-            <ModConfigFiles name={name} />
-          </Suspense>
-        </div>
-      </TabsContent>
-      <TabsContent value="marketplace">
-        <ModInstallSearch name={name} running={running} />
-      </TabsContent>
+      {tab === 'installed' && (
+        <TabsContent value="installed">
+          <div className="flex flex-col gap-8">
+            <BepInExCard name={name} running={running} />
+            <InstalledMods name={name} running={running} />
+            <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
+              <ModConfigFiles name={name} />
+            </Suspense>
+          </div>
+        </TabsContent>
+      )}
+      {tab === 'marketplace' && (
+        <TabsContent value="marketplace">
+          <ModInstallSearch name={name} running={running} source={activeSource ?? 'thunderstore'} />
+        </TabsContent>
+      )}
     </Tabs>
   )
 }
@@ -341,8 +376,9 @@ function VersionDialog({
   )
 }
 
-function ModInstallSearch({ name, running }: { name: string; running: boolean }) {
+function ModInstallSearch({ name, running, source }: { name: string; running: boolean; source: ModSource }) {
   const addMod = useAddMod()
+  const navigate = useNavigate()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
 
@@ -357,24 +393,33 @@ function ModInstallSearch({ name, running }: { name: string; running: boolean })
 
   return (
     <div className="flex flex-col gap-3">
-      <Tabs defaultValue="thunderstore">
+      <Tabs
+        value={source}
+        onValueChange={(value) => navigate(`/instances/${name}/mods/marketplace/${value}`)}
+      >
         <TabsList variant="line">
           <TabsTrigger value="thunderstore">Thunderstore</TabsTrigger>
           <TabsTrigger value="nexus">Nexus Mods</TabsTrigger>
           <TabsTrigger value="upload">Upload</TabsTrigger>
         </TabsList>
-        <TabsContent value="thunderstore">
-          <ModSearch selectDisabled={() => running || addMod.isPending} onSelect={handleSelect} />
-        </TabsContent>
-        <TabsContent value="nexus">
-          <NexusModSearch
-            selectDisabled={() => running || addMod.isPending}
-            onSelect={handleSelect}
-          />
-        </TabsContent>
-        <TabsContent value="upload">
-          <UploadModForm name={name} running={running} />
-        </TabsContent>
+        {source === 'thunderstore' && (
+          <TabsContent value="thunderstore">
+            <ModSearch selectDisabled={() => running || addMod.isPending} onSelect={handleSelect} />
+          </TabsContent>
+        )}
+        {source === 'nexus' && (
+          <TabsContent value="nexus">
+            <NexusModSearch
+              selectDisabled={() => running || addMod.isPending}
+              onSelect={handleSelect}
+            />
+          </TabsContent>
+        )}
+        {source === 'upload' && (
+          <TabsContent value="upload">
+            <UploadModForm name={name} running={running} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}

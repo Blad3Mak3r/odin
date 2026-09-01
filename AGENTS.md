@@ -117,6 +117,10 @@ sudo env ODIN_DATA_DIR=/path/to/a/scratch/dir \
   (`noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`); the
   `@/*` path alias maps to `web/src/*`; UI components follow shadcn/ui's
   `base-nova` style (see `web/components.json`).
+- Dashboard tabs that select navigable content must be controlled by React
+  Router, not component state. Give every tab a canonical, hierarchical URL;
+  redirect an incomplete or invalid tab path to the default valid tab at the
+  closest level.
 - New capabilities target the web API (`src/web/routes/`) and dashboard
   (`web/src/`) only — see [Project direction](#project-direction). The CLI
   (`src/commands/`) is legacy: it doesn't need to grow alongside the web

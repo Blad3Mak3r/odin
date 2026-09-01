@@ -41,8 +41,8 @@ function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/instances" element={<InstancesPage />} />
-          <Route path="/instances/:name" element={<InstanceDetailPage />} />
-          <Route path="/mods" element={<GlobalModsPage />} />
+          <Route path="/instances/:name/*" element={<InstanceDetailPage />} />
+          <Route path="/mods/*" element={<GlobalModsPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/webhooks" element={<WebhooksPage />} />
           <Route path="/settings" element={<SettingsPage />} />

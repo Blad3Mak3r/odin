@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ModIcon } from '@/components/ModIcon'
 import { ModSearch } from '@/components/ModSearch'
@@ -35,9 +36,33 @@ import {
 } from '@/lib/queries'
 import type { GlobalMod } from '@/lib/types'
 
+const MOD_TABS = ['installed', 'marketplace'] as const
+const MOD_SOURCES = ['thunderstore', 'nexus', 'upload'] as const
+type ModTab = (typeof MOD_TABS)[number]
+type ModSource = (typeof MOD_SOURCES)[number]
+
+function isModTab(value: string | undefined): value is ModTab {
+  return MOD_TABS.some((tab) => tab === value)
+}
+
+function isModSource(value: string | undefined): value is ModSource {
+  return MOD_SOURCES.some((source) => source === value)
+}
+
 export function GlobalModsPage() {
   const instances = useInstances()
+  const navigate = useNavigate()
+  const { '*': tabPath } = useParams<{ '*': string }>()
   const instanceNames = useMemo(() => instances.data?.map((i) => i.name) ?? [], [instances.data])
+  const [tab, source, ...rest] = tabPath?.split('/').filter(Boolean) ?? []
+  const activeSource = isModSource(source) ? source : null
+
+  if (!isModTab(tab) || rest.length > 0 || (tab === 'installed' && source)) {
+    return <Navigate to="/mods/installed" replace />
+  }
+  if (tab === 'marketplace' && activeSource === null) {
+    return <Navigate to="/mods/marketplace/thunderstore" replace />
+  }
 
   return (
     <div className="flex flex-col gap-8">
@@ -48,17 +73,26 @@ export function GlobalModsPage() {
 
       {instances.isError && <QueryError error={instances.error} />}
 
-      <Tabs defaultValue="installed">
+      <Tabs
+        value={tab}
+        onValueChange={(value) =>
+          navigate(value === 'marketplace' ? '/mods/marketplace/thunderstore' : '/mods/installed')
+        }
+      >
         <TabsList>
           <TabsTrigger value="installed">Installed</TabsTrigger>
           <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
         </TabsList>
-        <TabsContent value="installed">
-          <InstalledMods instanceNames={instanceNames} />
-        </TabsContent>
-        <TabsContent value="marketplace">
-          <ModSearchSection instanceNames={instanceNames} />
-        </TabsContent>
+        {tab === 'installed' && (
+          <TabsContent value="installed">
+            <InstalledMods instanceNames={instanceNames} />
+          </TabsContent>
+        )}
+        {tab === 'marketplace' && (
+          <TabsContent value="marketplace">
+            <ModSearchSection instanceNames={instanceNames} source={activeSource ?? 'thunderstore'} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )
@@ -244,26 +278,33 @@ function GlobalModCard({ mod, instanceNames }: { mod: GlobalMod; instanceNames: 
   )
 }
 
-function ModSearchSection({ instanceNames }: { instanceNames: string[] }) {
+function ModSearchSection({ instanceNames, source }: { instanceNames: string[]; source: ModSource }) {
   const [dialogModId, setDialogModId] = useState<string | null>(null)
+  const navigate = useNavigate()
 
   return (
     <div className="flex flex-col gap-3">
-      <Tabs defaultValue="thunderstore">
+      <Tabs value={source} onValueChange={(value) => navigate(`/mods/marketplace/${value}`)}>
         <TabsList variant="line">
           <TabsTrigger value="thunderstore">Thunderstore</TabsTrigger>
           <TabsTrigger value="nexus">Nexus Mods</TabsTrigger>
           <TabsTrigger value="upload">Upload</TabsTrigger>
         </TabsList>
-        <TabsContent value="thunderstore">
-          <ModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
-        </TabsContent>
-        <TabsContent value="nexus">
-          <NexusModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
-        </TabsContent>
-        <TabsContent value="upload">
-          <UploadSection instanceNames={instanceNames} />
-        </TabsContent>
+        {source === 'thunderstore' && (
+          <TabsContent value="thunderstore">
+            <ModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
+          </TabsContent>
+        )}
+        {source === 'nexus' && (
+          <TabsContent value="nexus">
+            <NexusModSearch onSelect={(mod) => setDialogModId(mod.mod_id)} />
+          </TabsContent>
+        )}
+        {source === 'upload' && (
+          <TabsContent value="upload">
+            <UploadSection instanceNames={instanceNames} />
+          </TabsContent>
+        )}
       </Tabs>
 
       <InstallOnInstancesDialog

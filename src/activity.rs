@@ -23,6 +23,9 @@ const BROADCAST_CAPACITY: usize = 256;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActivityKind {
     InstanceCreated,
+    InstanceCloned {
+        source: String,
+    },
     InstanceDeleted,
     InstanceStarted,
     InstanceStopped,

@@ -79,6 +79,49 @@ pub async fn create_instance(
     Ok(Json(instance_view))
 }
 
+#[derive(Deserialize)]
+pub struct CloneInstanceRequest {
+    pub name: String,
+    pub world_name: String,
+}
+
+pub async fn clone_instance(
+    State(state): State<AppState>,
+    Path(source_name): Path<String>,
+    Json(req): Json<CloneInstanceRequest>,
+) -> ApiResult<Json<InstanceView>> {
+    // The transition guard serializes cloning with lifecycle and BepInEx
+    // changes for the source, so its copied filesystem configuration is stable.
+    let _transition = state
+        .runtime
+        .begin_transition(&source_name, InstanceTransition::Cloning)?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let target_name = req.name.clone();
+    let source_for_activity = source_name.clone();
+    let activity = state.activity.clone();
+    let cloned = run_blocking(move || {
+        let cloned = instance::clone_configuration(
+            &paths,
+            &db,
+            &source_name,
+            &target_name,
+            &req.world_name,
+        )?;
+        activity.record(
+            ActivityKind::InstanceCloned {
+                source: source_for_activity,
+            },
+            Some(cloned.state.name.clone()),
+        );
+        Ok(cloned)
+    })
+    .await?;
+    let paths = state.paths.clone();
+    let instance_view = run_blocking(move || view(&paths, cloned)).await?;
+    Ok(Json(instance_view))
+}
+
 pub async fn get_instance(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -273,6 +316,83 @@ pub struct LogsQuery {
 
 fn default_log_lines() -> usize {
     200
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn clone_route_creates_a_stopped_instance() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-clone-route-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        Instance::create(&paths, &db, "source").unwrap();
+        let app = crate::web::router::build_router(AppState::new(paths.clone(), db.clone()));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/instances/source/clone")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"name":"target","world_name":"target-world"}"#,
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let target = Instance::load(&paths, &db, "target").unwrap().unwrap();
+        assert_eq!(target.state.world_name, "target-world");
+        assert!(!lifecycle::is_running(&target).unwrap());
+    }
+
+    #[tokio::test]
+    async fn clone_route_rejects_a_source_in_transition() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-clone-transition-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        Instance::create(&paths, &db, "source").unwrap();
+        let state = AppState::new(paths, db);
+        let _transition = state
+            .runtime
+            .begin_transition("source", InstanceTransition::Starting)
+            .unwrap();
+        let app = crate::web::router::build_router(state);
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/instances/source/clone")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"name":"target","world_name":"target-world"}"#,
+            ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 }
 
 #[derive(Serialize)]

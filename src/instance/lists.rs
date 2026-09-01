@@ -88,7 +88,7 @@ pub fn write(db: &Db, instance: &Instance, kind: ListKind, ids: &[String]) -> Re
     write_file(&instance.dir, kind, ids)
 }
 
-fn write_file(instance_dir: &Path, kind: ListKind, ids: &[String]) -> Result<()> {
+pub(crate) fn write_file(instance_dir: &Path, kind: ListKind, ids: &[String]) -> Result<()> {
     let path = list_path(instance_dir, kind);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

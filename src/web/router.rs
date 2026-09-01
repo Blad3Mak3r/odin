@@ -38,6 +38,7 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{name}",
             get(instances::get_instance).delete(instances::delete_instance),
         )
+        .route("/instances/{name}/clone", post(instances::clone_instance))
         .route("/instances/{name}/start", post(instances::start_instance))
         .route("/instances/{name}/stop", post(instances::stop_instance))
         .route(

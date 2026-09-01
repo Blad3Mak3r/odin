@@ -1,4 +1,4 @@
-import { ArrowLeft, Eye, EyeOff, Loader2, Pencil, Trash2 } from 'lucide-react'
+import { ArrowLeft, Copy, Eye, EyeOff, Loader2, Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -11,12 +11,15 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import {
   useInstanceResources,
   useInstanceTransition,
+  useCloneInstance,
   useRenameInstance,
   useRestartInstance,
   useStartInstance,
@@ -110,6 +113,9 @@ export function InstanceHeader({
               Start
             </Button>
           )}
+          {instance && !instance.running && (
+            <CloneInstanceDialog name={instance.name} disabled={busy} />
+          )}
           <Button
             variant="destructive"
             size="icon"
@@ -131,6 +137,87 @@ export function InstanceHeader({
         </div>
       )}
     </div>
+  )
+}
+
+function CloneInstanceDialog({ name, disabled }: { name: string; disabled: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [targetName, setTargetName] = useState('')
+  const [worldName, setWorldName] = useState('')
+  const navigate = useNavigate()
+  const cloneInstance = useCloneInstance(name)
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next)
+    if (next) {
+      setTargetName('')
+      setWorldName('')
+    }
+  }
+
+  const handleClone = () => {
+    const target = targetName.trim()
+    const world = worldName.trim()
+    if (!target || !world) return
+    cloneInstance.mutate(
+      { name: target, worldName: world },
+      {
+        onSuccess: (instance) => {
+          setOpen(false)
+          toast.success(`Configuration cloned to '${instance.name}'`)
+          navigate(`/instances/${instance.name}`)
+        },
+        onError: (error) => toast.error(error.message),
+      },
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger render={<Button variant="outline" disabled={disabled} />}>
+        <Copy data-icon="inline-start" />
+        Clone configuration
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Clone configuration from {name}</DialogTitle>
+        </DialogHeader>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="clone-instance-name">New instance name</FieldLabel>
+            <Input
+              id="clone-instance-name"
+              placeholder="season-two"
+              value={targetName}
+              onChange={(event) => setTargetName(event.target.value)}
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="clone-world-name">New world name</FieldLabel>
+            <Input
+              id="clone-world-name"
+              placeholder="season-two-world"
+              value={worldName}
+              onChange={(event) => setWorldName(event.target.value)}
+              onKeyDown={(event) => event.key === 'Enter' && handleClone()}
+            />
+            <FieldDescription>
+              Mods, BepInEx settings, and access lists are copied. The new instance gets an empty
+              world and a new password; backups remain unconfigured.
+            </FieldDescription>
+          </Field>
+        </FieldGroup>
+        <DialogFooter>
+          <Button
+            disabled={!targetName.trim() || !worldName.trim() || cloneInstance.isPending}
+            onClick={handleClone}
+          >
+            {cloneInstance.isPending && <Loader2 className="size-4 animate-spin" />}
+            Clone configuration
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

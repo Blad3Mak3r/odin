@@ -1,12 +1,11 @@
 /target
 /dist
 
-# Dashboard frontend build artifacts. web/dist/index.html is intentionally
-# tracked as a placeholder so a bare `cargo build` still compiles (rust-embed
-# needs web/dist/ to exist) before `make web-build` has ever been run.
+# Dashboard frontend build artifacts. Keep only the sentinel that lets
+# rust-embed find web/dist/ before the frontend has been built.
 /web/node_modules
 /web/dist/*
-!/web/dist/index.html
+!/web/dist/.gitkeep
 
 # Impeccable design-skill machine-local overrides (e.g. hook consent);
 # .impeccable/design.json (the design-system sidecar) is tracked.

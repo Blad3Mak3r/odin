@@ -31,11 +31,30 @@ const MAX_LOADED_JOBS: usize = 200;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobKindDescr {
     SteamcmdInstall,
-    ModAdd { instance: String, mod_id: String },
-    ModUpdate { instance: String },
-    ModUpload { instance: String, name: String },
-    BackupCreate { instance: String },
-    BackupRestore { instance: String, backup_id: String },
+    ModAdd {
+        instance: String,
+        mod_id: String,
+    },
+    ModUpdate {
+        instance: String,
+    },
+    ModUpload {
+        instance: String,
+        name: String,
+    },
+    BackupCreate {
+        instance: String,
+    },
+    BackupRestore {
+        instance: String,
+        backup_id: String,
+    },
+    #[serde(rename = "bepinex_update")]
+    BepInExUpdate {
+        instance: String,
+        from_version: Option<String>,
+        to_version: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

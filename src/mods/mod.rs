@@ -223,8 +223,9 @@ fn ensure_bepinex(db: &Db, instance: &mut Instance) -> Result<()> {
             instance = instance.state.name,
             "BepInEx not installed yet; bootstrapping"
         );
-        bepinex::bootstrap(db, &instance.dir)?;
+        let version = bepinex::bootstrap(db, &instance.dir)?;
         instance.state.bepinex_installed = true;
+        instance.state.bepinex_version = Some(version);
         instance.save(db)?;
     }
     Ok(())

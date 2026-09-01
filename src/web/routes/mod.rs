@@ -1,4 +1,5 @@
 pub mod backups;
+pub mod bepinex;
 pub mod bulk;
 pub mod changelog;
 pub mod config_files;

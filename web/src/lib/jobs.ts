@@ -12,6 +12,8 @@ export function describeJobKind(kind: JobKindDescr): string {
       return `Back up ${kind.instance}`
     case 'backup_restore':
       return `Restore ${kind.instance} from backup ${kind.backup_id}`
+    case 'bepinex_update':
+      return `Update BepInEx on ${kind.instance}: ${kind.from_version ?? 'unknown'} → ${kind.to_version}`
     default:
       return (kind as { kind: string }).kind
   }

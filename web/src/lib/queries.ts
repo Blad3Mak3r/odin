@@ -6,6 +6,8 @@ import type {
   BackupScheduleView,
   BackupStorageRequest,
   BackupStorageView,
+  BepInExStatus,
+  BulkBepInExResult,
   BulkResult,
   ChangelogRelease,
   CheckResult,
@@ -222,6 +224,30 @@ export function useBulkUpdateMods() {
   return useMutation({
     mutationFn: (names: string[]) =>
       api.post<JobHandle[]>('/instances/bulk/mods/update', { names }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+  })
+}
+
+export function useBepInExStatus(name: string) {
+  return useQuery({
+    queryKey: ['instances', name, 'bepinex-status'],
+    queryFn: () => api.get<BepInExStatus>(`/instances/${name}/bepinex/status`),
+  })
+}
+
+export function useUpdateBepInEx() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.post<JobHandle>(`/instances/${name}/bepinex/update`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+  })
+}
+
+export function useBulkUpdateBepInEx() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (names: string[]) =>
+      api.post<BulkBepInExResult[]>('/instances/bulk/bepinex/update', { names }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   })
 }

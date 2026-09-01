@@ -32,6 +32,8 @@ pub enum InstanceTransition {
     Starting,
     Stopping,
     Restarting,
+    #[serde(rename = "updating_bepinex")]
+    UpdatingBepInEx,
 }
 
 pub type InstanceTransitions = HashMap<String, InstanceTransition>;

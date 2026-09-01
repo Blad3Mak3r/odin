@@ -56,6 +56,9 @@ all from a browser, on one host or several.
   once per version into a shared global store and get symlinked into every
   instance that wants them. Each instance can use and pin its own exact
   version without duplicating downloads or changing another server.
+  The dashboard also detects newer BepInEx releases per instance and can
+  update one stopped server or a selected group while preserving local
+  plugin and configuration files.
 - **Ready-to-share connect info.** The dashboard (and `odin status`) shows
   each instance's public address and password alongside its live state, so
   getting a friend into your world doesn't mean a round-trip through raw
@@ -367,7 +370,8 @@ odin serve --bind 0.0.0.0 --port 8080  # or pick your own address/port
 
 It covers dependency status, instance
 create/start/stop/restart/rename/delete, per-instance config, mod
-search/install/enable via Thunderstore, a live console and log tail, and
+search/install/enable via Thunderstore, per-instance and bulk BepInEx update
+checks, a live console and log tail, and
 editing `adminlist.txt`/`bannedlist.txt`/`permittedlist.txt` — plus live
 host and per-instance CPU/RAM usage that isn't exposed by the CLI at all.
 Each instance's Backups tab also configures automatic backups and optional

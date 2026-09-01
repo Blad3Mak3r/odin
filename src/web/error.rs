@@ -22,7 +22,7 @@ use crate::mods::nexus::NexusError;
 #[error("{0}")]
 pub struct BadRequest(pub String);
 
-pub struct ApiError(anyhow::Error);
+pub struct ApiError(pub(crate) anyhow::Error);
 
 pub type ApiResult<T> = Result<T, ApiError>;
 

@@ -218,7 +218,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
       <div className="grid gap-2 xl:grid-cols-2 2xl:grid-cols-3">
         {mods.data?.map((m) => (
           <Card key={m.mod_id} size="sm">
-            <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <CardContent className="flex flex-col gap-2">
               <div className="flex items-center gap-3">
                 <ModIcon src={m.icon} />
                 <div>

@@ -40,7 +40,7 @@ pub struct CreateGameInstanceRequest {
 
 pub async fn list_games() -> Json<Vec<GameView>> {
     Json(
-        game::drivers()
+        game::modules()
             .into_iter()
             .map(|driver| GameView {
                 id: driver.id(),
@@ -108,7 +108,7 @@ pub async fn install_game(
                     }
                 }
             }
-            let driver = game::driver(game);
+            let driver = game::module(game);
             let install_dir = paths.game_install_dir(game);
             let log_file = paths
                 .data_dir
@@ -283,15 +283,18 @@ pub async fn list_backups(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
-    if game != GameId::Rust {
-        return Err(BadRequest("use the legacy Valheim backup route".to_string()).into());
-    }
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let backups = run_blocking(move || {
-        let instance =
-            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
-        game::rust::list_backups(&paths, &instance)
+    let backups = run_blocking(move || match game {
+        GameId::Valheim => {
+            let instance = Instance::load_existing(&paths, &db, &name)?;
+            crate::backup::list(&db, &instance.state.name)
+        }
+        GameId::Rust => {
+            let instance =
+                game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+            game::rust::list_backups(&paths, &instance)
+        }
     })
     .await?;
     Ok(Json(backups))
@@ -301,15 +304,18 @@ pub async fn create_backup(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<crate::backup::BackupEntry>> {
-    if game != GameId::Rust {
-        return Err(BadRequest("use the legacy Valheim backup route".to_string()).into());
-    }
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let backup = run_blocking(move || {
-        let instance =
-            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
-        game::rust::create_backup(&paths, &instance)
+    let backup = run_blocking(move || match game {
+        GameId::Valheim => {
+            let instance = Instance::load_existing(&paths, &db, &name)?;
+            crate::backup::create(&instance, &db)
+        }
+        GameId::Rust => {
+            let instance =
+                game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+            game::rust::create_backup(&paths, &instance)
+        }
     })
     .await?;
     Ok(Json(backup))
@@ -319,15 +325,18 @@ pub async fn restore_backup(
     State(state): State<AppState>,
     Path((game, name, backup_id)): Path<(GameId, String, String)>,
 ) -> ApiResult<StatusCode> {
-    if game != GameId::Rust {
-        return Err(BadRequest("use the legacy Valheim backup route".to_string()).into());
-    }
     let paths = state.paths.clone();
     let db = state.db.clone();
-    run_blocking(move || {
-        let instance =
-            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
-        game::rust::restore_backup(&paths, &instance, &backup_id)
+    run_blocking(move || match game {
+        GameId::Valheim => {
+            let instance = Instance::load_existing(&paths, &db, &name)?;
+            crate::backup::restore(&instance, &db, &backup_id)
+        }
+        GameId::Rust => {
+            let instance =
+                game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+            game::rust::restore_backup(&paths, &instance, &backup_id)
+        }
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -367,7 +376,7 @@ fn valheim_view(
     Ok(ManagedInstanceView {
         identity,
         running: lifecycle::is_running(&instance)?,
-        capabilities: game::driver(GameId::Valheim).capabilities(),
+        capabilities: game::module(GameId::Valheim).capabilities(),
         config: serde_json::json!({
             "world_name": instance.state.world_name,
             "port": instance.state.port,
@@ -390,7 +399,7 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
     ManagedInstanceView {
         identity: instance.identity,
         running,
-        capabilities: game::driver(GameId::Rust).capabilities(),
+        capabilities: game::module(GameId::Rust).capabilities(),
         config: serde_json::json!({
             "port": instance.config.port,
             "query_port": instance.config.query_port,

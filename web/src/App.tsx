@@ -44,6 +44,7 @@ function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/instances" element={<MultiGameInstancesPage />} />
+          <Route path="/instances/valheim/:name/*" element={<InstanceDetailPage />} />
           <Route path="/instances/:game/:name" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/:name/*" element={<InstanceDetailPage />} />
           <Route path="/mods/*" element={<GlobalModsPage />} />

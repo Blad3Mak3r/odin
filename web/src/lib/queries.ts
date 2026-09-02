@@ -208,6 +208,33 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   })
 }
 
+export function useManagedBackups(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['managed-instances', game, name, 'backups'],
+    queryFn: () => api.get<BackupEntry[]>(`/games/${game}/instances/${name}/backups`),
+  })
+}
+
+export function useCreateManagedBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
+      api.post<BackupEntry>(`/games/${game}/instances/${name}/backups`),
+    onSuccess: (_backup, { game, name }) =>
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'backups'] }),
+  })
+}
+
+export function useRestoreManagedBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name, backupId }: { game: GameId; name: string; backupId: string }) =>
+      api.post<void>(`/games/${game}/instances/${name}/backups/${backupId}/restore`),
+    onSuccess: (_result, { game, name }) =>
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'backups'] }),
+  })
+}
+
 export function useInstance(name: string) {
   return useQuery({
     queryKey: ['instances', name],

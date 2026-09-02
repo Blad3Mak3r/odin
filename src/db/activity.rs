@@ -11,9 +11,17 @@ use crate::activity::{ActivityEvent, ActivityKind};
 pub fn insert(db: &Db, event: &ActivityEvent) -> Result<()> {
     let (kind, payload) = encode_kind(&event.kind)?;
     db.conn().execute(
-        "INSERT INTO activity_events (id, at, instance, instance_id, kind, payload) \
-         VALUES (?1, ?2, ?3, (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?3), ?4, ?5)",
-        params![event.id, event.at, event.instance, kind, payload],
+        "INSERT INTO activity_events (id, at, instance, instance_id, game, kind, payload) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            event.id,
+            event.at,
+            event.instance,
+            event.instance_id,
+            event.game.as_str(),
+            kind,
+            payload
+        ],
     )?;
     Ok(())
 }
@@ -23,28 +31,35 @@ pub fn insert(db: &Db, event: &ActivityEvent) -> Result<()> {
 pub fn recent(db: &Db, limit: usize) -> Result<Vec<ActivityEvent>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, at, instance, payload FROM \
-         (SELECT rowid, id, at, instance, payload FROM activity_events ORDER BY rowid DESC LIMIT ?1) \
+        "SELECT id, at, instance, instance_id, game, payload FROM \
+         (SELECT rowid, id, at, instance, instance_id, game, payload FROM activity_events ORDER BY rowid DESC LIMIT ?1) \
          ORDER BY rowid ASC",
     )?;
     let rows = stmt.query_map(params![limit as i64], |row| {
-        let payload: String = row.get(3)?;
+        let payload: String = row.get(5)?;
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, chrono::DateTime<chrono::Utc>>(1)?,
             row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
             payload,
         ))
     })?;
 
     let mut events = Vec::new();
     for row in rows {
-        let (id, at, instance, payload) = row?;
+        let (id, at, instance, instance_id, game, payload) = row?;
         let kind = decode_kind(&payload)?;
         events.push(ActivityEvent {
             id,
             at,
+            game: game
+                .unwrap_or_else(|| "valheim".to_string())
+                .parse()
+                .map_err(anyhow::Error::msg)?,
             instance,
+            instance_id,
             kind,
         });
     }
@@ -75,6 +90,7 @@ fn decode_kind(payload: &str) -> Result<ActivityKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::GameId;
     use crate::paths::Paths;
 
     fn temp_db(label: &str) -> Db {
@@ -97,7 +113,9 @@ mod tests {
         let event = ActivityEvent {
             id: "evt-1".to_string(),
             at: chrono::Utc::now(),
+            game: GameId::Valheim,
             instance: Some("my-server".to_string()),
+            instance_id: None,
             kind: ActivityKind::ModInstalled {
                 mod_id: "owner-mod".to_string(),
             },
@@ -107,6 +125,7 @@ mod tests {
         let events = recent(&db, 200).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, "evt-1");
+        assert_eq!(events[0].game, GameId::Valheim);
         assert_eq!(events[0].instance.as_deref(), Some("my-server"));
         assert!(matches!(events[0].kind, ActivityKind::ModInstalled { .. }));
     }
@@ -120,7 +139,9 @@ mod tests {
                 &ActivityEvent {
                     id: format!("evt-{i}"),
                     at: chrono::Utc::now(),
+                    game: GameId::Valheim,
                     instance: None,
+                    instance_id: None,
                     kind: ActivityKind::InstanceCreated,
                 },
             )
@@ -148,7 +169,9 @@ mod tests {
                 &ActivityEvent {
                     id: id.to_string(),
                     at,
+                    game: GameId::Valheim,
                     instance: None,
+                    instance_id: None,
                     kind: ActivityKind::InstanceCreated,
                 },
             )

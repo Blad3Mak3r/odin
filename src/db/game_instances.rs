@@ -50,22 +50,29 @@ impl RustInstance {
     }
 }
 
-pub fn valheim_identity(db: &crate::db::Db, name: &str) -> Result<GameInstanceIdentity> {
+pub fn identity(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+) -> Result<Option<GameInstanceIdentity>> {
     let conn = db.conn();
     let identity = conn
         .query_row(
-            "SELECT id, created_at FROM game_instances WHERE game = 'valheim' AND name = ?1",
-            params![name],
+            "SELECT id, created_at FROM game_instances WHERE game = ?1 AND name = ?2",
+            params![game.as_str(), name],
             |row| Ok((row.get::<_, String>(0)?, row.get(1)?)),
         )
         .optional()?;
-    let (id, created_at) = identity.context("Valheim instance is missing its game identity")?;
-    Ok(GameInstanceIdentity {
+    Ok(identity.map(|(id, created_at)| GameInstanceIdentity {
         id,
-        game: GameId::Valheim,
+        game,
         name: name.to_string(),
         created_at,
-    })
+    }))
+}
+
+pub fn valheim_identity(db: &crate::db::Db, name: &str) -> Result<GameInstanceIdentity> {
+    identity(db, GameId::Valheim, name)?.context("Valheim instance is missing its game identity")
 }
 
 pub fn ensure_valheim_identity(

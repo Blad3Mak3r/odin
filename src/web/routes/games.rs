@@ -81,6 +81,7 @@ pub async fn install_game(
 ) -> Json<JobHandle> {
     let paths = state.paths.clone();
     let db = state.db.clone();
+    let activity = state.activity.clone();
     let id = state
         .jobs
         .spawn(JobKindDescr::SteamcmdInstall, move |logger| {
@@ -121,6 +122,7 @@ pub async fn install_game(
                 install_dir.join(driver.server_binary()),
                 |line| logger.line(line),
             )?;
+            activity.record_for(game, crate::activity::ActivityKind::ServerInstalled, None);
             logger.line("done");
             Ok(())
         });
@@ -163,6 +165,7 @@ pub async fn create_instance(
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
+    let name = request.name.clone();
     let view = run_blocking(move || match game {
         GameId::Valheim => {
             let instance = Instance::create(&paths, &db, &request.name)?;
@@ -174,6 +177,11 @@ pub async fn create_instance(
         }
     })
     .await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceCreated,
+        Some(name),
+    );
     Ok(Json(view))
 }
 
@@ -233,6 +241,11 @@ pub async fn start_instance(
             rust_view(started)
         }
     };
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStarted,
+        Some(name),
+    );
     Ok(Json(view))
 }
 
@@ -251,6 +264,11 @@ pub async fn stop_instance(
             game::rust::stop(&state.paths, &state.db, &instance).await?;
         }
     }
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStopped,
+        Some(name),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -276,6 +294,16 @@ pub async fn restart_instance(
             rust_view(game::rust::restart(&paths, &db, &instance).await?)
         }
     };
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStopped,
+        Some(name.clone()),
+    );
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStarted,
+        Some(name),
+    );
     Ok(Json(view))
 }
 
@@ -306,6 +334,7 @@ pub async fn create_backup(
 ) -> ApiResult<Json<crate::backup::BackupEntry>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
+    let instance_name = name.clone();
     let backup = run_blocking(move || match game {
         GameId::Valheim => {
             let instance = Instance::load_existing(&paths, &db, &name)?;
@@ -318,6 +347,13 @@ pub async fn create_backup(
         }
     })
     .await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::BackupCreated {
+            backup_id: backup.id.clone(),
+        },
+        Some(instance_name),
+    );
     Ok(Json(backup))
 }
 
@@ -327,6 +363,8 @@ pub async fn restore_backup(
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
     let db = state.db.clone();
+    let instance_name = name.clone();
+    let restored_backup_id = backup_id.clone();
     run_blocking(move || match game {
         GameId::Valheim => {
             let instance = Instance::load_existing(&paths, &db, &name)?;
@@ -339,6 +377,13 @@ pub async fn restore_backup(
         }
     })
     .await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::BackupRestored {
+            backup_id: restored_backup_id,
+        },
+        Some(instance_name),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

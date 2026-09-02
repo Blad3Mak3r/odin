@@ -148,7 +148,9 @@ mod tests {
         let event = ActivityEvent {
             id: "evt-1".to_string(),
             at: Utc::now(),
+            game: crate::game::GameId::Valheim,
             instance: Some("my-server".to_string()),
+            instance_id: None,
             kind: ActivityKind::InstanceStopped,
         };
         assert!(describe(&event).contains("my-server"));

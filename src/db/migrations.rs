@@ -263,6 +263,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(missing, 0);
+        let game: String = conn
+            .query_row(
+                "SELECT game FROM activity_events WHERE id = 'event'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(game, "valheim");
     }
 
     #[test]

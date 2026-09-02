@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { QueryError } from '@/components/QueryError'
 import {
   useCreateManagedBackup,
@@ -34,6 +35,7 @@ type RustConfig = {
   seed: number
   worldSize: number
   maxPlayers: number
+  autoRestart: boolean
 }
 
 function asRustConfig(config: Record<string, unknown>): RustConfig | null {
@@ -44,12 +46,13 @@ function asRustConfig(config: Record<string, unknown>): RustConfig | null {
   const seed = config.seed
   const worldSize = config.world_size
   const maxPlayers = config.max_players
+  const autoRestart = config.auto_restart
   if (
     typeof port !== 'number' || typeof queryPort !== 'number' || typeof hostname !== 'string' ||
     typeof level !== 'string' || typeof seed !== 'number' || typeof worldSize !== 'number' ||
-    typeof maxPlayers !== 'number'
+    typeof maxPlayers !== 'number' || typeof autoRestart !== 'boolean'
   ) return null
-  return { port, queryPort, hostname, level, seed, worldSize, maxPlayers }
+  return { port, queryPort, hostname, level, seed, worldSize, maxPlayers, autoRestart }
 }
 
 function RustConfigForm({ name, config, running }: { name: string; config: RustConfig; running: boolean }) {
@@ -59,6 +62,7 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
   const [seed, setSeed] = useState(config.seed)
   const [worldSize, setWorldSize] = useState(config.worldSize)
   const [maxPlayers, setMaxPlayers] = useState(config.maxPlayers)
+  const [autoRestart, setAutoRestart] = useState(config.autoRestart)
 
   const save = () => update.mutate(
     {
@@ -69,6 +73,7 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
         seed,
         world_size: worldSize,
         max_players: maxPlayers,
+        auto_restart: autoRestart,
       },
     },
     {
@@ -92,6 +97,13 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
         <ConfigInput id="rust-seed" label="Seed" type="number" value={seed} disabled={running} onChange={(value) => setSeed(Number(value))} />
         <ConfigInput id="rust-world-size" label="World size" type="number" min={1} value={worldSize} disabled={running} onChange={(value) => setWorldSize(Number(value))} />
         <ConfigInput id="rust-max-players" label="Max players" type="number" min={1} value={maxPlayers} disabled={running} onChange={(value) => setMaxPlayers(Number(value))} />
+      </div>
+      <div className="flex items-center justify-between rounded-xl border p-3">
+        <div>
+          <Label htmlFor="rust-auto-restart">Restart automatically</Label>
+          <p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p>
+        </div>
+        <Switch id="rust-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} />
       </div>
       <p className="text-sm text-muted-foreground">Ports are allocated by Odin: game {config.port}, query {config.queryPort}.</p>
       <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save configuration</Button>

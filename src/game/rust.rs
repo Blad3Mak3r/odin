@@ -199,5 +199,6 @@ pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
         seed: rand::random(),
         world_size: 3000,
         max_players: 50,
+        auto_restart: false,
     }
 }

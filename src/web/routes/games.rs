@@ -47,6 +47,7 @@ pub struct RustConfigUpdateRequest {
     pub seed: Option<u32>,
     pub world_size: Option<u32>,
     pub max_players: Option<u16>,
+    pub auto_restart: Option<bool>,
 }
 
 pub async fn list_games() -> Json<Vec<GameView>> {
@@ -230,6 +231,9 @@ pub async fn update_rust_config(
         }
         if let Some(max_players) = request.max_players {
             config.max_players = max_players;
+        }
+        if let Some(auto_restart) = request.auto_restart {
+            config.auto_restart = auto_restart;
         }
         game_instances::update_rust_config(&db, &name, &config).map(rust_view)
     })
@@ -507,6 +511,7 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
             "seed": instance.config.seed,
             "world_size": instance.config.world_size,
             "max_players": instance.config.max_players,
+            "auto_restart": instance.config.auto_restart,
         }),
     }
 }

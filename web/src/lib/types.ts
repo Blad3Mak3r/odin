@@ -38,6 +38,7 @@ export interface RustConfigUpdateRequest {
   seed?: number
   world_size?: number
   max_players?: number
+  auto_restart?: boolean
 }
 
 export interface ChangelogSection {

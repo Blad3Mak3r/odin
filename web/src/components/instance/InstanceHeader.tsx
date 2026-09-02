@@ -1,5 +1,5 @@
 import { ArrowLeft, Copy, Eye, EyeOff, Loader2, Pencil, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { PlayersBadge } from '@/components/PlayersBadge'
@@ -26,6 +26,7 @@ import {
   useStopInstance,
 } from '@/lib/queries'
 import type { InstanceView } from '@/lib/types'
+import { formatUptime } from '@/lib/utils'
 
 export function InstanceHeader({
   instance,
@@ -134,10 +135,24 @@ export function InstanceHeader({
           <span>Port: {instance.port}</span>
           <PasswordField password={instance.password} />
           <span>Visibility: {instance.public ? 'public' : 'private'}</span>
+          {instance.running && instance.last_started_at && (
+            <Uptime startedAt={instance.last_started_at} />
+          )}
         </div>
       )}
     </div>
   )
+}
+
+function Uptime({ startedAt }: { startedAt: string }) {
+  const [now, setNow] = useState(Date.now)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  return <span className="tabular-nums">Uptime: {formatUptime(startedAt, now)}</span>
 }
 
 function CloneInstanceDialog({ name, disabled }: { name: string; disabled: boolean }) {

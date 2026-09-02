@@ -41,8 +41,9 @@ pub fn upsert(
     enabled: bool,
 ) -> Result<()> {
     db.conn().execute(
-        "INSERT INTO backup_schedules (instance_name, interval_hours, retain_count, enabled) \
-         VALUES (?1, ?2, ?3, ?4) \
+        "INSERT INTO backup_schedules (instance_name, instance_id, interval_hours, retain_count, enabled) \
+         SELECT ?1, id, ?2, ?3, ?4 FROM game_instances \
+         WHERE game = 'valheim' AND name = ?1 \
          ON CONFLICT(instance_name) DO UPDATE SET \
              interval_hours = excluded.interval_hours, \
              retain_count = excluded.retain_count, \
@@ -98,6 +99,7 @@ fn row_to_schedule(row: &rusqlite::Row) -> rusqlite::Result<BackupScheduleRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instance::state::InstanceState;
     use crate::paths::Paths;
 
     fn temp_db(label: &str) -> Db {
@@ -112,15 +114,7 @@ mod tests {
             config_dir: dir,
         })
         .unwrap();
-        // backup_schedules has a FOREIGN KEY on instances(name); tests insert
-        // a bare instance row rather than going through the full Instance API.
-        db.conn()
-            .execute(
-                "INSERT INTO instances (name, port, world_name, public, created_at) \
-                 VALUES ('my-server', 2456, 'my-server', 1, '2024-01-01T00:00:00Z')",
-                [],
-            )
-            .unwrap();
+        crate::db::instances::save(&db, &InstanceState::new("my-server", 2456)).unwrap();
         db
     }
 

@@ -11,7 +11,8 @@ use crate::activity::{ActivityEvent, ActivityKind};
 pub fn insert(db: &Db, event: &ActivityEvent) -> Result<()> {
     let (kind, payload) = encode_kind(&event.kind)?;
     db.conn().execute(
-        "INSERT INTO activity_events (id, at, instance, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO activity_events (id, at, instance, instance_id, kind, payload) \
+         VALUES (?1, ?2, ?3, (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?3), ?4, ?5)",
         params![event.id, event.at, event.instance, kind, payload],
     )?;
     Ok(())

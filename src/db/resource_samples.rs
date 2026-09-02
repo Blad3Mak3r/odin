@@ -28,11 +28,23 @@ pub fn insert(
     cpu_percent: f32,
     memory_bytes: u64,
 ) -> Result<()> {
-    db.conn().execute(
-        "INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes) \
-         VALUES (?1, ?2, ?3, ?4)",
-        params![instance_name, at, cpu_percent, memory_bytes],
-    )?;
+    match instance_name {
+        Some(name) => {
+            db.conn().execute(
+                "INSERT INTO resource_samples (instance_name, instance_id, at, cpu_percent, memory_bytes) \
+                 SELECT ?1, id, ?2, ?3, ?4 FROM game_instances \
+                 WHERE game = 'valheim' AND name = ?1",
+                params![name, at, cpu_percent, memory_bytes],
+            )?;
+        }
+        None => {
+            db.conn().execute(
+                "INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes) \
+                 VALUES (NULL, ?1, ?2, ?3)",
+                params![at, cpu_percent, memory_bytes],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -70,6 +82,7 @@ pub fn prune_older_than(db: &Db, before: DateTime<Utc>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instance::state::InstanceState;
     use crate::paths::Paths;
 
     fn temp_db(label: &str) -> Db {
@@ -89,13 +102,7 @@ mod tests {
     #[test]
     fn host_and_instance_series_are_independent() {
         let db = temp_db("series");
-        db.conn()
-            .execute(
-                "INSERT INTO instances (name, port, world_name, public, created_at) \
-                 VALUES ('my-server', 2456, 'my-server', 1, '2024-01-01T00:00:00Z')",
-                [],
-            )
-            .unwrap();
+        crate::db::instances::save(&db, &InstanceState::new("my-server", 2456)).unwrap();
         let now = Utc::now();
 
         insert(&db, None, now, 10.0, 1000).unwrap();

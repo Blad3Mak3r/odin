@@ -60,9 +60,10 @@ pub fn upsert(db: &Db, instance_name: &str, config: &BackupStorageConfig) -> Res
     db.conn()
         .execute(
             "INSERT INTO backup_storage_configs \
-                (instance_name, provider, endpoint, region, bucket, prefix, access_key_id, \
+                (instance_name, instance_id, provider, endpoint, region, bucket, prefix, access_key_id, \
                  secret_access_key, enabled) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+             SELECT ?1, id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 FROM game_instances \
+             WHERE game = 'valheim' AND name = ?1 \
              ON CONFLICT(instance_name) DO UPDATE SET \
                 provider = excluded.provider, \
                 endpoint = excluded.endpoint, \

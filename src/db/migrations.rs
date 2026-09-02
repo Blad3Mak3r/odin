@@ -219,6 +219,53 @@ mod tests {
     }
 
     #[test]
+    fn valheim_references_gain_the_generic_identity() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 12 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO instances (name, port, world_name, public, created_at) VALUES ('legacy', 2456, 'legacy', 1, '2024-01-01T00:00:00Z');
+             INSERT INTO installed_mods (instance_name, mod_id, version, installed_at, enabled) VALUES ('legacy', 'owner-mod', '1.0.0', '2024-01-01T00:00:00Z', 1);
+             INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES ('legacy', 'admin', '76561197960287930');
+             INSERT INTO backups (id, instance_name, created_at, size_bytes) VALUES ('backup', 'legacy', '2024-01-01T00:00:00Z', 1);
+             INSERT INTO backup_schedules (instance_name, interval_hours, retain_count, enabled) VALUES ('legacy', 24, 7, 1);
+             INSERT INTO backup_storage_configs (instance_name, provider, endpoint, region, bucket, access_key_id, secret_access_key) VALUES ('legacy', 'aws_s3', 'endpoint', 'region', 'bucket', 'key', 'secret');
+             INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes) VALUES ('legacy', '2024-01-01T00:00:00Z', 1, 1);
+             INSERT INTO activity_events (id, at, instance, kind) VALUES ('event', '2024-01-01T00:00:00Z', 'legacy', 'instance_started');",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let missing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (
+                    SELECT instance_id FROM installed_mods
+                    UNION ALL SELECT instance_id FROM access_list_entries
+                    UNION ALL SELECT instance_id FROM backups
+                    UNION ALL SELECT instance_id FROM backup_schedules
+                    UNION ALL SELECT instance_id FROM backup_storage_configs
+                    UNION ALL SELECT instance_id FROM resource_samples
+                    UNION ALL SELECT instance_id FROM activity_events
+                 ) WHERE instance_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(missing, 0);
+    }
+
+    #[test]
     fn v10_preserves_the_payload_version_instances_actually_used() {
         let mut conn = Connection::open_in_memory().unwrap();
         let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();

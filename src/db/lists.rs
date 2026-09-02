@@ -31,7 +31,9 @@ pub fn replace(db: &Db, instance_name: &str, kind: &str, ids: &[String]) -> Resu
     )?;
     for id in ids {
         tx.execute(
-            "INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES (?1, ?2, ?3)",
+            "INSERT INTO access_list_entries (instance_name, instance_id, kind, steam_id) \
+             SELECT ?1, id, ?2, ?3 FROM game_instances \
+             WHERE game = 'valheim' AND name = ?1",
             params![instance_name, kind, id],
         )?;
     }
@@ -44,7 +46,9 @@ pub fn replace(db: &Db, instance_name: &str, kind: &str, ids: &[String]) -> Resu
 pub(super) fn insert(db: &Db, instance_name: &str, kind: &str, id: &str) -> Result<()> {
     db.conn()
         .execute(
-            "INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES (?1, ?2, ?3)",
+            "INSERT INTO access_list_entries (instance_name, instance_id, kind, steam_id) \
+             SELECT ?1, id, ?2, ?3 FROM game_instances \
+             WHERE game = 'valheim' AND name = ?1",
             params![instance_name, kind, id],
         )
         .with_context(|| format!("failed to import list entry for '{instance_name}'"))?;

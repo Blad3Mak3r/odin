@@ -13,7 +13,9 @@ use crate::backup_storage::{RemoteObject, StorageProvider};
 pub fn insert(db: &Db, instance_name: &str, entry: &BackupEntry) -> Result<()> {
     db.conn()
         .execute(
-            "INSERT INTO backups (id, instance_name, created_at, size_bytes) VALUES (?1, ?2, ?3, ?4) \
+            "INSERT INTO backups (id, instance_name, instance_id, created_at, size_bytes) \
+             SELECT ?1, ?2, id, ?3, ?4 FROM game_instances \
+             WHERE game = 'valheim' AND name = ?2 \
              ON CONFLICT(instance_name, id) DO UPDATE SET \
                 created_at = excluded.created_at, \
                 size_bytes = excluded.size_bytes, \
@@ -22,9 +24,19 @@ pub fn insert(db: &Db, instance_name: &str, entry: &BackupEntry) -> Result<()> {
                 remote_region = NULL, \
                 remote_bucket = NULL, \
                 remote_key = NULL",
-            params![entry.id, instance_name, entry.created_at, entry.size_bytes as i64],
+            params![
+                entry.id,
+                instance_name,
+                entry.created_at,
+                entry.size_bytes as i64
+            ],
         )
-        .with_context(|| format!("failed to record backup '{}' for '{instance_name}'", entry.id))?;
+        .with_context(|| {
+            format!(
+                "failed to record backup '{}' for '{instance_name}'",
+                entry.id
+            )
+        })?;
     Ok(())
 }
 

@@ -34,7 +34,9 @@ pub fn save_clone(
     for (kind, ids) in access_lists {
         for id in *ids {
             tx.execute(
-                "INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES (?1, ?2, ?3)",
+                "INSERT INTO access_list_entries (instance_name, instance_id, kind, steam_id) \
+                 SELECT ?1, id, ?2, ?3 FROM game_instances \
+                 WHERE game = 'valheim' AND name = ?1",
                 params![state.name, kind, id],
             )?;
         }
@@ -103,8 +105,9 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
     .with_context(|| format!("failed to clear installed mods for '{}'", state.name))?;
     for m in &state.installed_mods {
         tx.execute(
-            "INSERT INTO installed_mods (instance_name, mod_id, version, installed_at, enabled, pinned) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO installed_mods (instance_name, instance_id, mod_id, version, installed_at, enabled, pinned) \
+             SELECT ?1, id, ?2, ?3, ?4, ?5, ?6 FROM game_instances \
+             WHERE game = 'valheim' AND name = ?1",
             params![
                 state.name,
                 m.mod_id,

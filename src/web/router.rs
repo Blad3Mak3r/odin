@@ -4,7 +4,7 @@ use axum::routing::{delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, install,
+    backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
     instances, jobs, lists, mods, nexus, players, resources, settings, version, webhooks,
 };
 use crate::web::state::AppState;
@@ -22,6 +22,39 @@ pub fn build_router(state: AppState) -> Router {
         .route("/doctor", get(doctor::get_doctor))
         .route("/install", post(install::install_server))
         .route("/install/status", get(install::get_install_status))
+        .route("/games", get(games::list_games))
+        .route("/games/instances", get(games::list_all_instances))
+        .route("/games/{game}/install", post(games::install_game))
+        .route(
+            "/games/{game}/install/status",
+            get(games::get_install_status),
+        )
+        .route(
+            "/games/{game}/instances",
+            get(games::list_instances).post(games::create_instance),
+        )
+        .route("/games/{game}/instances/{name}", get(games::get_instance))
+        .route("/games/{game}/instances/{name}/logs", get(games::get_logs))
+        .route(
+            "/games/{game}/instances/{name}/start",
+            post(games::start_instance),
+        )
+        .route(
+            "/games/{game}/instances/{name}/stop",
+            post(games::stop_instance),
+        )
+        .route(
+            "/games/{game}/instances/{name}/restart",
+            post(games::restart_instance),
+        )
+        .route(
+            "/games/{game}/instances/{name}/backups",
+            get(games::list_backups).post(games::create_backup),
+        )
+        .route(
+            "/games/{game}/instances/{name}/backups/{id}/restore",
+            post(games::restore_backup),
+        )
         .route(
             "/instances",
             get(instances::list_instances).post(instances::create_instance),

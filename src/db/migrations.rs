@@ -4,12 +4,36 @@
 //! few embedded `.sql` files is simpler than a new dependency.
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use std::path::Path;
+
+use rusqlite::{Connection, params};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "src/db/migrations"]
 struct Migrations;
+
+/// Takes one consistent SQLite snapshot immediately before the first
+/// multi-game migration. `VACUUM INTO` includes WAL content, unlike copying
+/// the main database file while another Odin process is active.
+pub fn backup_before_game_instances(conn: &Connection, db_path: &Path) -> Result<()> {
+    const GAME_INSTANCES_VERSION: i64 = 12;
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current == 0 || current >= GAME_INSTANCES_VERSION {
+        return Ok(());
+    }
+
+    let backup_path = db_path.with_file_name("odin.pre-game-instances.db");
+    if backup_path.exists() {
+        return Ok(());
+    }
+    conn.execute(
+        "VACUUM INTO ?1",
+        params![backup_path.to_string_lossy().as_ref()],
+    )
+    .context("failed to create pre-multi-game database backup")?;
+    Ok(())
+}
 
 /// Applies every embedded migration newer than the DB's current
 /// `user_version`, in filename order, each inside its own transaction.

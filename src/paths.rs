@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 
+use crate::game::GameId;
+
 /// Presence of `<SYSTEM_CONFIG_DIR>/config.toml` (shipped as a conffile by
 /// the .deb/.rpm package) is what flips `Paths::resolve` into system mode.
 pub const SYSTEM_CONFIG_DIR: &str = "/etc/odin";
@@ -66,6 +68,31 @@ impl Paths {
 
     pub fn shared_install_dir(&self) -> PathBuf {
         self.data_dir.join("install").join("valheim")
+    }
+
+    /// New games use a namespaced layout. Valheim deliberately keeps its
+    /// legacy locations so upgrades never move player data.
+    pub fn game_install_dir(&self, game: GameId) -> PathBuf {
+        match game {
+            GameId::Valheim => self.shared_install_dir(),
+            GameId::Rust => self
+                .data_dir
+                .join("games")
+                .join(game.as_str())
+                .join("install"),
+        }
+    }
+
+    pub fn game_instance_dir(&self, game: GameId, name: &str) -> PathBuf {
+        match game {
+            GameId::Valheim => self.instance_dir(name),
+            GameId::Rust => self
+                .data_dir
+                .join("games")
+                .join(game.as_str())
+                .join("instances")
+                .join(name),
+        }
     }
 
     pub fn servers_dir(&self) -> PathBuf {

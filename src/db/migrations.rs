@@ -184,6 +184,41 @@ mod tests {
     }
 
     #[test]
+    fn valheim_config_moves_under_the_generic_identity() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 12 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO instances (name, port, world_name, public, created_at) VALUES ('legacy', 2456, 'legacy-world', 1, '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let config: (String, u16, String) = conn
+            .query_row(
+                "SELECT g.id, v.port, v.world_name FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id WHERE g.game = 'valheim' AND g.name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(!config.0.is_empty());
+        assert_eq!(config.1, 2456);
+        assert_eq!(config.2, "legacy-world");
+    }
+
+    #[test]
     fn v10_preserves_the_payload_version_instances_actually_used() {
         let mut conn = Connection::open_in_memory().unwrap();
         let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();

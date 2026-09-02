@@ -34,7 +34,7 @@ export function ManagedInstanceDetailPage() {
           {logs.isError ? <QueryError error={logs.error} /> : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{logs.data?.lines.join('\n') || 'No logs yet.'}</pre>}
         </CardContent>
       </Card>
-      {detail.game === 'valheim' && <Link className="text-sm underline" to={`/instances/${detail.name}/logs`}>Open the full Valheim dashboard</Link>}
+      {detail.game === 'valheim' && <Link className="text-sm underline" to={`/instances/valheim/${detail.name}/logs`}>Open the full Valheim dashboard</Link>}
       <Badge className="w-fit" variant={detail.running ? 'default' : 'secondary'}>{detail.running ? 'running' : 'stopped'}</Badge>
     </div>
   )

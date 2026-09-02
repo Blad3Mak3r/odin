@@ -190,7 +190,7 @@ export function DashboardPage() {
                 return (
                   <div key={event.id} className="flex items-center gap-2 text-sm">
                     <Icon className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">{describeActivity(event.kind)}</span>
+                    <span className="min-w-0 flex-1 truncate">{describeActivity(event.kind, event.game)}</span>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {formatRelativeTime(event.at)}
                     </span>

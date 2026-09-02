@@ -296,7 +296,9 @@ export type ActivityKind =
 export interface ActivityEvent {
   id: string
   at: string
+  game: GameId
   instance: string | null
+  instance_id?: string
   kind: ActivityKind
 }
 

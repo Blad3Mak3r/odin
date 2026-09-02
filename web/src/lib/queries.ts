@@ -207,6 +207,15 @@ export function useManagedInstanceLogs(game: GameId, name: string) {
   })
 }
 
+export function useManagedRustResources(name: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', 'rust', name, 'resources'],
+    queryFn: () => api.get<InstanceResources>(`/games/rust/instances/${name}/resources`),
+    refetchInterval: 5_000,
+    enabled,
+  })
+}
+
 export function useCreateManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({

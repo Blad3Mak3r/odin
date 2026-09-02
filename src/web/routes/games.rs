@@ -6,6 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sysinfo::Pid;
 
 use crate::db::game_instances::{self, GameInstanceIdentity, RustInstance};
 use crate::game::{self, GameId};
@@ -14,6 +15,7 @@ use crate::paths::Paths;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
+use crate::web::runtime::InstanceSnapshot;
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -233,6 +235,18 @@ pub async fn update_rust_config(
     })
     .await?;
     Ok(Json(view))
+}
+
+pub async fn get_rust_resources(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<InstanceSnapshot>> {
+    let db = state.db.clone();
+    let instance = run_blocking(move || {
+        game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")
+    })
+    .await?;
+    Ok(Json(rust_resources(&state, &instance)))
 }
 
 pub async fn get_logs(
@@ -494,6 +508,29 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
             "world_size": instance.config.world_size,
             "max_players": instance.config.max_players,
         }),
+    }
+}
+
+fn rust_resources(state: &AppState, instance: &RustInstance) -> InstanceSnapshot {
+    if !instance.is_running() {
+        return InstanceSnapshot::default();
+    }
+
+    let root_pids: Vec<u32> = instance.pid.into_iter().collect();
+    let system = state.resources.lock().expect("resources lock poisoned");
+    let mut cpu_percent = 0.0;
+    let mut memory_bytes = 0;
+    for pid in crate::instance::process::descendant_pids(&system, &root_pids) {
+        if let Some(process) = system.process(Pid::from_u32(pid)) {
+            cpu_percent += process.cpu_usage();
+            memory_bytes += process.memory();
+        }
+    }
+    InstanceSnapshot {
+        running: true,
+        ready: false,
+        cpu_percent,
+        memory_bytes,
     }
 }
 

@@ -15,6 +15,7 @@ import {
   useManagedInstance,
   useManagedInstanceAction,
   useManagedInstanceLogs,
+  useManagedRustResources,
   useRestoreManagedBackup,
   useUpdateRustConfig,
 } from '@/lib/queries'
@@ -120,6 +121,7 @@ export function ManagedInstanceDetailPage() {
   const gameId = isGameId(game) ? game : 'valheim'
   const instance = useManagedInstance(gameId, name ?? '')
   const logs = useManagedInstanceLogs(gameId, name ?? '')
+  const resources = useManagedRustResources(name ?? '', gameId === 'rust')
   const backups = useManagedBackups(gameId, name ?? '')
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
@@ -174,6 +176,19 @@ export function ManagedInstanceDetailPage() {
             : Object.entries(detail.config).map(([key, value]) => <div key={key} className="flex justify-between gap-4 text-sm"><span className="text-muted-foreground">{key}</span><span>{String(value ?? '—')}</span></div>)}
         </CardContent>
       </Card>
+      {detail.game === 'rust' && (
+        <Card>
+          <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Current CPU and memory use for this Rust server.</CardDescription></CardHeader>
+          <CardContent>
+            {resources.isError ? <QueryError error={resources.error} /> : (
+              <div className="flex gap-8 text-sm">
+                <span><span className="text-muted-foreground">CPU </span>{resources.data?.cpu_percent.toFixed(1) ?? '0.0'}%</span>
+                <span><span className="text-muted-foreground">Memory </span>{formatBytes(resources.data?.memory_bytes ?? 0)}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
       {detail.capabilities.backups && (
         <Card>
           <CardHeader>

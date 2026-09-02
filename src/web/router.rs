@@ -38,6 +38,10 @@ pub fn build_router(state: AppState) -> Router {
             "/games/rust/instances/{name}/config",
             put(games::update_rust_config),
         )
+        .route(
+            "/games/rust/instances/{name}/resources",
+            get(games::get_rust_resources),
+        )
         .route("/games/{game}/instances/{name}/logs", get(games::get_logs))
         .route(
             "/games/{game}/instances/{name}/start",
@@ -416,6 +420,31 @@ mod tests {
             .body(Body::from(
                 r#"{"hostname":"Rusty Server","max_players":50}"#,
             ))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn rust_resources_route_returns_a_snapshot() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-rust-resources-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let app = build_router(AppState::new(paths, db));
+        let request = Request::builder()
+            .uri("/api/games/rust/instances/rusty/resources")
+            .body(Body::empty())
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();

@@ -3,6 +3,7 @@ use axum::extract::State;
 use serde::Serialize;
 
 use crate::activity::ActivityKind;
+use crate::game::GameId;
 use crate::instance;
 use crate::steamcmd::{SteamCmd, VALHEIM_DEDICATED_SERVER_APP_ID};
 use crate::valheim_update;
@@ -41,9 +42,11 @@ pub async fn install_server(State(state): State<AppState>) -> Json<JobHandle> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let activity = state.activity.clone();
-    let id = state
-        .jobs
-        .spawn(JobKindDescr::SteamcmdInstall, move |logger| {
+    let id = state.jobs.spawn(
+        JobKindDescr::SteamcmdInstall {
+            game: GameId::Valheim,
+        },
+        move |logger| {
             let running = instance::running_instance_names(&paths, &db)?;
             if !running.is_empty() {
                 anyhow::bail!(
@@ -68,6 +71,7 @@ pub async fn install_server(State(state): State<AppState>) -> Json<JobHandle> {
             logger.line("done");
             activity.record(ActivityKind::ServerInstalled, None);
             Ok(())
-        });
+        },
+    );
     Json(JobHandle { id })
 }

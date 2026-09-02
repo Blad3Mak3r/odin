@@ -84,7 +84,7 @@ pub async fn install_game(
     let activity = state.activity.clone();
     let id = state
         .jobs
-        .spawn(JobKindDescr::SteamcmdInstall, move |logger| {
+        .spawn(JobKindDescr::SteamcmdInstall { game }, move |logger| {
             match game {
                 GameId::Valheim => {
                     let running = instance::running_instance_names(&paths, &db)?;

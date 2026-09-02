@@ -92,12 +92,18 @@ fn describe(event: &ActivityEvent) -> String {
         ActivityKind::InstanceAutoRestarted => {
             format!("♻️ **{instance}** crashed and was restarted automatically")
         }
-        ActivityKind::ServerInstalled => "⬇️ Valheim server files installed/updated".to_string(),
+        ActivityKind::ServerInstalled => {
+            format!(
+                "⬇️ {} server files installed/updated",
+                game_name(event.game)
+            )
+        }
         ActivityKind::ServerUpdateAvailable {
             installed_build_id,
             latest_build_id,
         } => format!(
-            "⬆️ Valheim server update available: build {installed_build_id} → {latest_build_id}"
+            "⬆️ {} server update available: build {installed_build_id} → {latest_build_id}",
+            game_name(event.game)
         ),
         ActivityKind::ModInstalled { mod_id } => {
             format!("📦 Mod installed on **{instance}**: {mod_id}")
@@ -124,6 +130,13 @@ fn describe(event: &ActivityEvent) -> String {
         }
         ActivityKind::PlayerJoined { name } => format!("👋 {name} joined **{instance}**"),
         ActivityKind::PlayerLeft { name } => format!("👋 {name} left **{instance}**"),
+    }
+}
+
+fn game_name(game: crate::game::GameId) -> &'static str {
+    match game {
+        crate::game::GameId::Valheim => "Valheim",
+        crate::game::GameId::Rust => "Rust",
     }
 }
 
@@ -154,5 +167,18 @@ mod tests {
             kind: ActivityKind::InstanceStopped,
         };
         assert!(describe(&event).contains("my-server"));
+    }
+
+    #[test]
+    fn describe_uses_the_event_game_for_server_installations() {
+        let event = ActivityEvent {
+            id: "evt-1".to_string(),
+            at: Utc::now(),
+            game: crate::game::GameId::Rust,
+            instance: None,
+            instance_id: None,
+            kind: ActivityKind::ServerInstalled,
+        };
+        assert!(describe(&event).contains("Rust"));
     }
 }

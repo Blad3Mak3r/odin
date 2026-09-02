@@ -5,6 +5,33 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
+export type GameId = 'valheim' | 'rust'
+
+export interface GameCapabilities {
+  backups: boolean
+  players: boolean
+  mods: boolean
+  access_lists: boolean
+  readiness: boolean
+}
+
+export interface GameView {
+  id: GameId
+  name: string
+  steam_app_id: string
+  capabilities: GameCapabilities
+}
+
+export interface ManagedInstanceView {
+  id: string
+  game: GameId
+  name: string
+  created_at: string
+  running: boolean
+  capabilities: GameCapabilities
+  config: Record<string, unknown>
+}
+
 export interface ChangelogSection {
   title: string
   changes: string[]

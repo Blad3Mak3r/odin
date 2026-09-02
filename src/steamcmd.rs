@@ -84,6 +84,26 @@ impl SteamCmd {
         app_id: &str,
         install_dir: &Path,
         log_file: &Path,
+        on_line: impl FnMut(&str),
+    ) -> Result<()> {
+        self.update_app_expect_file(
+            app_id,
+            install_dir,
+            log_file,
+            install_dir.join("valheim_server.x86_64"),
+            on_line,
+        )
+    }
+
+    /// Generic variant of [`Self::update_app`] for another game's known
+    /// executable. SteamCMD succeeding alone is not enough: a missing binary
+    /// normally means an incompatible depot or incomplete install.
+    pub fn update_app_expect_file(
+        &self,
+        app_id: &str,
+        install_dir: &Path,
+        log_file: &Path,
+        expected_file: PathBuf,
         mut on_line: impl FnMut(&str),
     ) -> Result<()> {
         self.ensure_installed()?;
@@ -133,10 +153,9 @@ impl SteamCmd {
             )));
         }
 
-        let server_binary = install_dir.join("valheim_server.x86_64");
-        if !server_binary.is_file() {
+        if !expected_file.is_file() {
             bail!(SteamCmdError::BinaryMissingAfterUpdate(
-                server_binary.display().to_string()
+                expected_file.display().to_string()
             ));
         }
 

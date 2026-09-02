@@ -16,12 +16,15 @@ import type {
   ConfigUpdateRequest,
   ConfigView,
   GlobalMod,
+  GameId,
+  GameView,
   HostResources,
   InstallStatusView,
   InstanceResources,
   InstanceTransition,
   InstanceTransitions,
   InstanceView,
+  ManagedInstanceView,
   JobHandle,
   JobSummary,
   LastExitInfo,
@@ -149,6 +152,59 @@ export function useInstances() {
     queryKey: ['instances'],
     queryFn: () => api.get<InstanceView[]>('/instances'),
     refetchInterval: LIVE_FALLBACK_INTERVAL,
+  })
+}
+
+export function useGames() {
+  return useQuery({
+    queryKey: ['games'],
+    queryFn: () => api.get<GameView[]>('/games'),
+    staleTime: Infinity,
+  })
+}
+
+export function useManagedInstances() {
+  return useQuery({
+    queryKey: ['managed-instances'],
+    queryFn: () => api.get<ManagedInstanceView[]>('/games/instances'),
+    refetchInterval: LIVE_FALLBACK_INTERVAL,
+  })
+}
+
+export function useManagedInstance(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['managed-instances', game, name],
+    queryFn: () => api.get<ManagedInstanceView>(`/games/${game}/instances/${name}`),
+    refetchInterval: 5_000,
+  })
+}
+
+export function useManagedInstanceLogs(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['managed-instances', game, name, 'logs'],
+    queryFn: () => api.get<LogsView>(`/games/${game}/instances/${name}/logs`),
+    refetchInterval: 5_000,
+  })
+}
+
+export function useCreateManagedInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
+      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances'] }),
+  })
+}
+
+export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
+      api.post<ManagedInstanceView>(`/games/${game}/instances/${name}/${action}`),
+    onSuccess: (_instance, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
+    },
   })
 }
 

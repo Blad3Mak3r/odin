@@ -204,7 +204,7 @@ pub fn delete(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
     crate::db::backups::delete(db, &instance.state.name, backup_id)
 }
 
-fn zip_directory(source_dir: &Path, dest_zip: &Path) -> Result<()> {
+pub(crate) fn zip_directory(source_dir: &Path, dest_zip: &Path) -> Result<()> {
     std::fs::create_dir_all(source_dir).ok();
     let file = std::fs::File::create(dest_zip)
         .with_context(|| format!("failed to create {}", dest_zip.display()))?;

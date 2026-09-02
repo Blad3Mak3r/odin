@@ -16,6 +16,7 @@ pub mod backup_schedules;
 pub mod backup_storage;
 pub mod backups;
 pub mod cache;
+pub mod game_instances;
 pub mod global_mods;
 mod import;
 pub mod instances;
@@ -52,6 +53,7 @@ impl Db {
         let mut conn = Connection::open(db_path)
             .with_context(|| format!("failed to open database {}", db_path.display()))?;
         apply_pragmas(&conn)?;
+        migrations::backup_before_game_instances(&conn, db_path)?;
         migrations::run(&mut conn)?;
 
         let db = Self {

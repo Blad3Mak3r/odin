@@ -38,6 +38,15 @@ pub struct CreateGameInstanceRequest {
     pub name: String,
 }
 
+#[derive(Deserialize)]
+pub struct RustConfigUpdateRequest {
+    pub hostname: Option<String>,
+    pub level: Option<String>,
+    pub seed: Option<u32>,
+    pub world_size: Option<u32>,
+    pub max_players: Option<u16>,
+}
+
 pub async fn list_games() -> Json<Vec<GameView>> {
     Json(
         game::modules()
@@ -192,6 +201,37 @@ pub async fn get_instance(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = run_blocking(move || load_view(&paths, &db, game, &name)).await?;
+    Ok(Json(view))
+}
+
+pub async fn update_rust_config(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(request): Json<RustConfigUpdateRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        let instance =
+            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+        let mut config = instance.config;
+        if let Some(hostname) = request.hostname {
+            config.hostname = hostname;
+        }
+        if let Some(level) = request.level {
+            config.level = level;
+        }
+        if let Some(seed) = request.seed {
+            config.seed = seed;
+        }
+        if let Some(world_size) = request.world_size {
+            config.world_size = world_size;
+        }
+        if let Some(max_players) = request.max_players {
+            config.max_players = max_players;
+        }
+        game_instances::update_rust_config(&db, &name, &config).map(rust_view)
+    })
+    .await?;
     Ok(Json(view))
 }
 

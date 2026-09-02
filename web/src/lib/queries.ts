@@ -34,6 +34,7 @@ import type {
   ModSearchResult,
   PlayerInfo,
   ResourceSample,
+  RustConfigUpdateRequest,
   SettingsView,
   VersionView,
   WebhookView,
@@ -204,6 +205,18 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
     onSuccess: (_instance, variables) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
+    },
+  })
+}
+
+export function useUpdateRustConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, request }: { name: string; request: RustConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/games/rust/instances/${name}/config`, request),
+    onSuccess: (_instance, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
     },
   })
 }

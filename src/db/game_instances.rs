@@ -141,6 +141,30 @@ pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Rust
     load_rust(db, name)?.context("failed to load newly-created Rust instance")
 }
 
+pub fn update_rust_config(
+    db: &crate::db::Db,
+    name: &str,
+    config: &RustInstanceConfig,
+) -> Result<RustInstance> {
+    let instance = load_rust(db, name)?.context("Rust instance not found")?;
+    if instance.is_running() {
+        bail!("stop Rust instance '{name}' before changing its configuration");
+    }
+    if config.hostname.trim().is_empty() || config.level.trim().is_empty() {
+        bail!("Rust hostname and level cannot be empty");
+    }
+    if config.world_size == 0 || config.max_players == 0 {
+        bail!("Rust world size and max players must be greater than zero");
+    }
+
+    db.conn().execute(
+        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6 \
+         WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
+        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players],
+    )?;
+    load_rust(db, name)?.context("Rust instance disappeared while updating configuration")
+}
+
 pub fn set_rust_pid(
     db: &crate::db::Db,
     name: &str,
@@ -198,4 +222,35 @@ fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
         last_started_at: row.get(12)?,
         last_stopped_at: row.get(13)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_rust_config_persists_game_specific_settings() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-rust-config-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = crate::db::Db::open(&paths).unwrap();
+        let instance = create_rust(&paths, &db, "rust-server").unwrap();
+        let config = RustInstanceConfig {
+            hostname: "Rust Server".to_string(),
+            level: "Barren".to_string(),
+            seed: 42,
+            world_size: 4000,
+            max_players: 100,
+            ..instance.config
+        };
+
+        let updated = update_rust_config(&db, "rust-server", &config).unwrap();
+
+        assert_eq!(updated.config.hostname, "Rust Server");
+        assert_eq!(updated.config.max_players, 100);
+    }
 }

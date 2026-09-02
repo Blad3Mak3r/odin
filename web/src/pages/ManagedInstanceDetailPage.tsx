@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
@@ -5,6 +6,8 @@ import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { QueryError } from '@/components/QueryError'
 import {
   useCreateManagedBackup,
@@ -13,12 +16,103 @@ import {
   useManagedInstanceAction,
   useManagedInstanceLogs,
   useRestoreManagedBackup,
+  useUpdateRustConfig,
 } from '@/lib/queries'
 import type { GameId } from '@/lib/types'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 
 function isGameId(value: string | undefined): value is GameId {
   return value === 'valheim' || value === 'rust'
+}
+
+type RustConfig = {
+  port: number
+  queryPort: number
+  hostname: string
+  level: string
+  seed: number
+  worldSize: number
+  maxPlayers: number
+}
+
+function asRustConfig(config: Record<string, unknown>): RustConfig | null {
+  const port = config.port
+  const queryPort = config.query_port
+  const hostname = config.hostname
+  const level = config.level
+  const seed = config.seed
+  const worldSize = config.world_size
+  const maxPlayers = config.max_players
+  if (
+    typeof port !== 'number' || typeof queryPort !== 'number' || typeof hostname !== 'string' ||
+    typeof level !== 'string' || typeof seed !== 'number' || typeof worldSize !== 'number' ||
+    typeof maxPlayers !== 'number'
+  ) return null
+  return { port, queryPort, hostname, level, seed, worldSize, maxPlayers }
+}
+
+function RustConfigForm({ name, config, running }: { name: string; config: RustConfig; running: boolean }) {
+  const update = useUpdateRustConfig()
+  const [hostname, setHostname] = useState(config.hostname)
+  const [level, setLevel] = useState(config.level)
+  const [seed, setSeed] = useState(config.seed)
+  const [worldSize, setWorldSize] = useState(config.worldSize)
+  const [maxPlayers, setMaxPlayers] = useState(config.maxPlayers)
+
+  const save = () => update.mutate(
+    {
+      name,
+      request: {
+        hostname,
+        level,
+        seed,
+        world_size: worldSize,
+        max_players: maxPlayers,
+      },
+    },
+    {
+      onSuccess: () => toast.success('Rust configuration saved'),
+      onError: (error) => toast.error(error.message),
+    },
+  )
+
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(event) => {
+        event.preventDefault()
+        save()
+      }}
+    >
+      {running && <p className="text-sm text-muted-foreground">Stop this Rust server before changing its configuration.</p>}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <ConfigInput id="rust-hostname" label="Hostname" value={hostname} disabled={running} onChange={setHostname} />
+        <ConfigInput id="rust-level" label="Map" value={level} disabled={running} onChange={setLevel} />
+        <ConfigInput id="rust-seed" label="Seed" type="number" value={seed} disabled={running} onChange={(value) => setSeed(Number(value))} />
+        <ConfigInput id="rust-world-size" label="World size" type="number" min={1} value={worldSize} disabled={running} onChange={(value) => setWorldSize(Number(value))} />
+        <ConfigInput id="rust-max-players" label="Max players" type="number" min={1} value={maxPlayers} disabled={running} onChange={(value) => setMaxPlayers(Number(value))} />
+      </div>
+      <p className="text-sm text-muted-foreground">Ports are allocated by Odin: game {config.port}, query {config.queryPort}.</p>
+      <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save configuration</Button>
+    </form>
+  )
+}
+
+function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min }: {
+  id: string
+  label: string
+  type?: 'text' | 'number'
+  value: string | number
+  disabled: boolean
+  onChange: (value: string) => void
+  min?: number
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input id={id} type={type} min={min} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+    </div>
+  )
 }
 
 export function ManagedInstanceDetailPage() {
@@ -37,6 +131,7 @@ export function ManagedInstanceDetailPage() {
   if (instance.isError) return <QueryError error={instance.error} />
   if (!instance.data) return null
   const detail = instance.data
+  const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
   const target = { game: detail.game, name: detail.name }
   const busy = start.isPending || stop.isPending || restart.isPending
   const backupsRequireStop = detail.game === 'rust' && detail.running
@@ -74,7 +169,9 @@ export function ManagedInstanceDetailPage() {
       <Card>
         <CardHeader><CardTitle>Configuration</CardTitle><CardDescription>Game-specific settings managed by Odin.</CardDescription></CardHeader>
         <CardContent className="flex flex-col gap-2">
-          {Object.entries(detail.config).map(([key, value]) => <div key={key} className="flex justify-between gap-4 text-sm"><span className="text-muted-foreground">{key}</span><span>{String(value ?? '—')}</span></div>)}
+          {rustConfig
+            ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
+            : Object.entries(detail.config).map(([key, value]) => <div key={key} className="flex justify-between gap-4 text-sm"><span className="text-muted-foreground">{key}</span><span>{String(value ?? '—')}</span></div>)}
         </CardContent>
       </Card>
       {detail.capabilities.backups && (

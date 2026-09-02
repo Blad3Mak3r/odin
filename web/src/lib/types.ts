@@ -32,6 +32,14 @@ export interface ManagedInstanceView {
   config: Record<string, unknown>
 }
 
+export interface RustConfigUpdateRequest {
+  hostname?: string
+  level?: string
+  seed?: number
+  world_size?: number
+  max_players?: number
+}
+
 export interface ChangelogSection {
   title: string
   changes: string[]

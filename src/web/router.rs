@@ -34,6 +34,10 @@ pub fn build_router(state: AppState) -> Router {
             get(games::list_instances).post(games::create_instance),
         )
         .route("/games/{game}/instances/{name}", get(games::get_instance))
+        .route(
+            "/games/rust/instances/{name}/config",
+            put(games::update_rust_config),
+        )
         .route("/games/{game}/instances/{name}/logs", get(games::get_logs))
         .route(
             "/games/{game}/instances/{name}/start",
@@ -383,6 +387,35 @@ mod tests {
         let request = Request::builder()
             .uri("/api/games/valheim/instances/meadows/config")
             .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn rust_config_route_updates_rust_specific_configuration() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-rust-config-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let app = build_router(AppState::new(paths, db));
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/api/games/rust/instances/rusty/config")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"hostname":"Rusty Server","max_players":50}"#,
+            ))
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();

@@ -164,6 +164,25 @@ export function useGames() {
   })
 }
 
+export function useGameInstallStatus(game: GameId) {
+  return useQuery({
+    queryKey: ['game-install-status', game],
+    queryFn: () => api.get<InstallStatusView>(`/games/${game}/install/status`),
+    refetchInterval: LIVE_FALLBACK_INTERVAL,
+  })
+}
+
+export function useInstallGame() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (game: GameId) => api.post<JobHandle>(`/games/${game}/install`),
+    onSuccess: (_job, game) => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['game-install-status', game] })
+    },
+  })
+}
+
 export function useManagedInstances() {
   return useQuery({
     queryKey: ['managed-instances'],

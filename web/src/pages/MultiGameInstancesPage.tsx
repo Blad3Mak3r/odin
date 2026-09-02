@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -11,13 +13,14 @@ import { QueryError } from '@/components/QueryError'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useCreateManagedInstance, useManagedInstanceAction, useManagedInstances } from '@/lib/queries'
-import type { GameId, ManagedInstanceView } from '@/lib/types'
+import { useCreateManagedInstance, useGameInstallStatus, useGames, useInstallGame, useJobs, useManagedInstanceAction, useManagedInstances } from '@/lib/queries'
+import type { GameId, GameView, ManagedInstanceView } from '@/lib/types'
 
 type Filter = 'all' | GameId
 
 export function MultiGameInstancesPage() {
   const instances = useManagedInstances()
+  const games = useGames()
   const [filter, setFilter] = useState<Filter>('all')
   const visible = instances.data?.filter((instance) => filter === 'all' || instance.game === filter) ?? []
 
@@ -33,6 +36,12 @@ export function MultiGameInstancesPage() {
         <ToggleGroupItem value="valheim">Valheim</ToggleGroupItem>
         <ToggleGroupItem value="rust">Rust</ToggleGroupItem>
       </ToggleGroup>
+      {games.isError && <QueryError error={games.error} />}
+      {games.data && (
+        <section className="grid gap-4 md:grid-cols-2">
+          {games.data.map((game) => <GameInstallCard key={game.id} game={game} />)}
+        </section>
+      )}
       <Table>
         <TableHeader>
           <TableRow>
@@ -53,6 +62,50 @@ export function MultiGameInstancesPage() {
         </TableBody>
       </Table>
     </div>
+  )
+}
+
+function GameInstallCard({ game }: { game: GameView }) {
+  const status = useGameInstallStatus(game.id)
+  const install = useInstallGame()
+  const jobs = useJobs()
+  const wasRunning = useRef(false)
+  const runningJob = jobs.data?.find(
+    (job) => job.kind.kind === 'steamcmd_install' && job.kind.game === game.id &&
+      (job.status.status === 'queued' || job.status.status === 'running'),
+  )
+
+  useEffect(() => {
+    if (wasRunning.current && !runningJob) status.refetch()
+    wasRunning.current = Boolean(runningJob)
+  }, [runningJob, status])
+
+  const label = !status.data?.installed
+    ? 'Not installed'
+    : status.data.update_available
+      ? `Update available: ${status.data.installed_build_id} → ${status.data.latest_build_id}`
+      : `Up to date (build ${status.data.installed_build_id})`
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <div>
+          <CardTitle className="text-base">{game.name}</CardTitle>
+          <CardDescription>Steam App ID {game.steam_app_id}</CardDescription>
+        </div>
+        <Button
+          size="sm"
+          disabled={install.isPending || Boolean(runningJob)}
+          onClick={() => install.mutate(game.id, { onError: (error) => toast.error(error.message) })}
+        >
+          {(install.isPending || runningJob) && <Loader2 className="size-4 animate-spin" />}
+          Install / update
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {status.isError ? <QueryError error={status.error} /> : <Badge variant={status.data?.update_available ? 'secondary' : 'outline'}>{label}</Badge>}
+      </CardContent>
+    </Card>
   )
 }
 

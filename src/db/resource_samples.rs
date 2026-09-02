@@ -56,18 +56,34 @@ pub fn range(
     since: DateTime<Utc>,
 ) -> Result<Vec<ResourceSampleRow>> {
     let conn = db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT at, cpu_percent, memory_bytes FROM resource_samples \
-         WHERE instance_name IS ?1 AND at >= ?2 ORDER BY at ASC",
-    )?;
-    let rows = stmt.query_map(params![instance_name, since], |row| {
-        Ok(ResourceSampleRow {
-            at: row.get(0)?,
-            cpu_percent: row.get(1)?,
-            memory_bytes: row.get(2)?,
-        })
-    })?;
-    rows.map(|r| r.map_err(Into::into)).collect()
+    let samples = match instance_name {
+        Some(name) => {
+            let mut stmt = conn.prepare(
+                "SELECT at, cpu_percent, memory_bytes FROM resource_samples \
+                 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1) \
+                 AND at >= ?2 ORDER BY at ASC",
+            )?;
+            stmt.query_map(params![name, since], row_to_sample)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT at, cpu_percent, memory_bytes FROM resource_samples \
+                 WHERE instance_id IS NULL AND instance_name IS NULL AND at >= ?1 ORDER BY at ASC",
+            )?;
+            stmt.query_map(params![since], row_to_sample)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        }
+    };
+    Ok(samples)
+}
+
+fn row_to_sample(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResourceSampleRow> {
+    Ok(ResourceSampleRow {
+        at: row.get(0)?,
+        cpu_percent: row.get(1)?,
+        memory_bytes: row.get(2)?,
+    })
 }
 
 /// Deletes every sample older than `before`, across every series.

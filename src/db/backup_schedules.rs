@@ -22,7 +22,7 @@ pub fn get(db: &Db, instance_name: &str) -> Result<Option<BackupScheduleRow>> {
     db.conn()
         .query_row(
             "SELECT instance_name, interval_hours, retain_count, enabled, last_run_at \
-             FROM backup_schedules WHERE instance_name = ?1",
+             FROM backup_schedules WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![instance_name],
             row_to_schedule,
         )
@@ -45,6 +45,7 @@ pub fn upsert(
          SELECT ?1, id, ?2, ?3, ?4 FROM game_instances \
          WHERE game = 'valheim' AND name = ?1 \
          ON CONFLICT(instance_name) DO UPDATE SET \
+             instance_id = excluded.instance_id, \
              interval_hours = excluded.interval_hours, \
              retain_count = excluded.retain_count, \
              enabled = excluded.enabled",
@@ -58,8 +59,9 @@ pub fn upsert(
 pub fn due(db: &Db, now: DateTime<Utc>) -> Result<Vec<BackupScheduleRow>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT instance_name, interval_hours, retain_count, enabled, last_run_at \
-         FROM backup_schedules WHERE enabled = 1",
+        "SELECT g.name, s.interval_hours, s.retain_count, s.enabled, s.last_run_at \
+         FROM backup_schedules s JOIN game_instances g ON g.id = s.instance_id \
+         WHERE g.game = 'valheim' AND s.enabled = 1",
     )?;
     let rows = stmt.query_map([], row_to_schedule)?;
     let mut due = Vec::new();
@@ -80,7 +82,8 @@ pub fn due(db: &Db, now: DateTime<Utc>) -> Result<Vec<BackupScheduleRow>> {
 /// another full interval has passed.
 pub fn mark_run(db: &Db, instance_name: &str, at: DateTime<Utc>) -> Result<()> {
     db.conn().execute(
-        "UPDATE backup_schedules SET last_run_at = ?2 WHERE instance_name = ?1",
+        "UPDATE backup_schedules SET last_run_at = ?2 \
+         WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
         params![instance_name, at],
     )?;
     Ok(())

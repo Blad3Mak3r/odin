@@ -10,8 +10,9 @@ use super::Db;
 pub fn read(db: &Db, instance_name: &str, kind: &str) -> Result<Vec<String>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT steam_id FROM access_list_entries \
-         WHERE instance_name = ?1 AND kind = ?2 ORDER BY steam_id",
+        "SELECT l.steam_id FROM access_list_entries l \
+         JOIN game_instances g ON g.id = l.instance_id \
+         WHERE g.game = 'valheim' AND g.name = ?1 AND l.kind = ?2 ORDER BY l.steam_id",
     )?;
     let ids = stmt
         .query_map(params![instance_name, kind], |row| row.get(0))?

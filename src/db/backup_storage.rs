@@ -10,7 +10,7 @@ pub fn get(db: &Db, instance_name: &str) -> Result<Option<BackupStorageConfig>> 
         .query_row(
             "SELECT provider, endpoint, region, bucket, prefix, access_key_id, \
                     secret_access_key, enabled \
-             FROM backup_storage_configs WHERE instance_name = ?1",
+             FROM backup_storage_configs WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![instance_name],
             |row| {
                 Ok((
@@ -65,6 +65,7 @@ pub fn upsert(db: &Db, instance_name: &str, config: &BackupStorageConfig) -> Res
              SELECT ?1, id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 FROM game_instances \
              WHERE game = 'valheim' AND name = ?1 \
              ON CONFLICT(instance_name) DO UPDATE SET \
+                instance_id = excluded.instance_id, \
                 provider = excluded.provider, \
                 endpoint = excluded.endpoint, \
                 region = excluded.region, \

@@ -245,8 +245,9 @@ pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
 
 fn load_installed_mods(conn: &Connection, instance_name: &str) -> Result<Vec<InstalledMod>> {
     let mut stmt = conn.prepare(
-        "SELECT mod_id, version, installed_at, enabled, pinned FROM installed_mods \
-         WHERE instance_name = ?1 ORDER BY mod_id",
+        "SELECT m.mod_id, m.version, m.installed_at, m.enabled, m.pinned FROM installed_mods m \
+         JOIN game_instances g ON g.id = m.instance_id \
+         WHERE g.game = 'valheim' AND g.name = ?1 ORDER BY m.mod_id",
     )?;
     let mods = stmt
         .query_map(params![instance_name], |row| {

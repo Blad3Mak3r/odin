@@ -17,6 +17,7 @@ pub fn insert(db: &Db, instance_name: &str, entry: &BackupEntry) -> Result<()> {
              SELECT ?1, ?2, id, ?3, ?4 FROM game_instances \
              WHERE game = 'valheim' AND name = ?2 \
              ON CONFLICT(instance_name, id) DO UPDATE SET \
+                instance_id = excluded.instance_id, \
                 created_at = excluded.created_at, \
                 size_bytes = excluded.size_bytes, \
                 remote_provider = NULL, \
@@ -44,9 +45,10 @@ pub fn insert(db: &Db, instance_name: &str, entry: &BackupEntry) -> Result<()> {
 pub fn list(db: &Db, instance_name: &str) -> Result<Vec<BackupEntry>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, created_at, size_bytes, remote_provider, remote_endpoint, remote_region, \
-                remote_bucket, remote_key FROM backups \
-         WHERE instance_name = ?1 ORDER BY created_at DESC",
+        "SELECT b.id, b.created_at, b.size_bytes, b.remote_provider, b.remote_endpoint, b.remote_region, \
+                b.remote_bucket, b.remote_key FROM backups b \
+         JOIN game_instances g ON g.id = b.instance_id \
+         WHERE g.game = 'valheim' AND g.name = ?1 ORDER BY b.created_at DESC",
     )?;
     let rows = stmt
         .query_map(params![instance_name], stored_row)?
@@ -61,9 +63,10 @@ pub(crate) fn get(db: &Db, instance_name: &str, id: &str) -> Result<Option<Backu
     let row = db
         .conn()
         .query_row(
-            "SELECT id, created_at, size_bytes, remote_provider, remote_endpoint, remote_region, \
-                    remote_bucket, remote_key FROM backups \
-             WHERE instance_name = ?1 AND id = ?2",
+            "SELECT b.id, b.created_at, b.size_bytes, b.remote_provider, b.remote_endpoint, b.remote_region, \
+                    b.remote_bucket, b.remote_key FROM backups b \
+             JOIN game_instances g ON g.id = b.instance_id \
+             WHERE g.game = 'valheim' AND g.name = ?1 AND b.id = ?2",
             params![instance_name, id],
             stored_row,
         )
@@ -81,7 +84,7 @@ pub(crate) fn mark_remote(
         .execute(
             "UPDATE backups SET remote_provider = ?3, remote_endpoint = ?4, remote_region = ?5, \
                     remote_bucket = ?6, remote_key = ?7 \
-             WHERE instance_name = ?1 AND id = ?2",
+             WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1) AND id = ?2",
             params![
                 instance_name,
                 id,
@@ -101,7 +104,7 @@ pub(crate) fn mark_remote(
 pub fn delete(db: &Db, instance_name: &str, id: &str) -> Result<()> {
     db.conn()
         .execute(
-            "DELETE FROM backups WHERE instance_name = ?1 AND id = ?2",
+            "DELETE FROM backups WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1) AND id = ?2",
             params![instance_name, id],
         )
         .with_context(|| format!("failed to delete backup '{id}' for '{instance_name}'"))?;

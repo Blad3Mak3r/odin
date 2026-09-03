@@ -12,6 +12,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::db::Db;
+use crate::game::GameId;
 use crate::instance::InstanceError;
 use crate::web::players::PlayerInfo;
 
@@ -88,6 +89,7 @@ pub struct InstanceSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstanceResourceEntry {
+    pub game: GameId,
     pub name: String,
     pub running: bool,
     pub ready: bool,
@@ -117,14 +119,29 @@ struct InstanceState {
     history: VecDeque<ResourceSample>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct GameInstanceKey {
+    game: GameId,
+    name: String,
+}
+
+impl GameInstanceKey {
+    fn new(game: GameId, name: &str) -> Self {
+        Self {
+            game,
+            name: name.to_string(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeRegistry {
     host: Arc<Mutex<HostState>>,
-    instances: Arc<Mutex<HashMap<String, InstanceState>>>,
+    instances: Arc<Mutex<HashMap<GameInstanceKey, InstanceState>>>,
     ticks: broadcast::Sender<ResourcesTick>,
     transitions: Arc<Mutex<InstanceTransitions>>,
     transition_events: broadcast::Sender<InstanceTransitions>,
-    auto_restart_attempts: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
+    auto_restart_attempts: Arc<Mutex<HashMap<GameInstanceKey, DateTime<Utc>>>>,
     db: Arc<Db>,
     last_persisted_at: Arc<Mutex<Option<DateTime<Utc>>>>,
 }
@@ -224,15 +241,21 @@ impl RuntimeRegistry {
             .collect()
     }
 
-    /// Updates an instance's cached snapshot; returns `true` if `running`
-    /// flipped since the previous sample, so the telemetry tick can emit an
-    /// activity event only on that transition rather than every tick.
-    pub fn push_instance_sample(&self, name: &str, snapshot: InstanceSnapshot) -> bool {
+    /// Updates one game instance's cached snapshot; returns `true` if
+    /// `running` flipped since the previous sample.
+    pub fn push_game_instance_sample(
+        &self,
+        game: GameId,
+        name: &str,
+        snapshot: InstanceSnapshot,
+    ) -> bool {
         let mut instances = self
             .instances
             .lock()
             .expect("runtime instances lock poisoned");
-        let entry = instances.entry(name.to_string()).or_default();
+        let entry = instances
+            .entry(GameInstanceKey::new(game, name))
+            .or_default();
         let running_changed = entry.current.running != snapshot.running;
         if snapshot.running {
             push_capped(
@@ -249,19 +272,27 @@ impl RuntimeRegistry {
     }
 
     pub fn instance_snapshot(&self, name: &str) -> InstanceSnapshot {
+        self.game_instance_snapshot(GameId::Valheim, name)
+    }
+
+    pub fn game_instance_snapshot(&self, game: GameId, name: &str) -> InstanceSnapshot {
         self.instances
             .lock()
             .expect("runtime instances lock poisoned")
-            .get(name)
+            .get(&GameInstanceKey::new(game, name))
             .map(|s| s.current)
             .unwrap_or_default()
     }
 
     pub fn instance_history(&self, name: &str) -> Vec<ResourceSample> {
+        self.game_instance_history(GameId::Valheim, name)
+    }
+
+    pub fn game_instance_history(&self, game: GameId, name: &str) -> Vec<ResourceSample> {
         self.instances
             .lock()
             .expect("runtime instances lock poisoned")
-            .get(name)
+            .get(&GameInstanceKey::new(game, name))
             .map(|s| s.history.iter().copied().collect())
             .unwrap_or_default()
     }
@@ -269,10 +300,14 @@ impl RuntimeRegistry {
     /// Drops cached state for an instance that no longer exists, so a
     /// deleted-then-recreated instance doesn't briefly show stale history.
     pub fn remove_instance(&self, name: &str) {
+        self.remove_game_instance(GameId::Valheim, name);
+    }
+
+    pub fn remove_game_instance(&self, game: GameId, name: &str) {
         self.instances
             .lock()
             .expect("runtime instances lock poisoned")
-            .remove(name);
+            .remove(&GameInstanceKey::new(game, name));
     }
 
     /// Gates automatic crash-restart attempts: returns `true` (and records
@@ -281,15 +316,25 @@ impl RuntimeRegistry {
     /// immediately on every start (a broken mod, say) would get a fresh
     /// restart attempt on every ~3s telemetry tick forever.
     pub fn should_attempt_auto_restart(&self, name: &str, cooldown: chrono::Duration) -> bool {
+        self.should_attempt_game_auto_restart(GameId::Valheim, name, cooldown)
+    }
+
+    pub fn should_attempt_game_auto_restart(
+        &self,
+        game: GameId,
+        name: &str,
+        cooldown: chrono::Duration,
+    ) -> bool {
         let now = Utc::now();
         let mut attempts = self
             .auto_restart_attempts
             .lock()
             .expect("runtime auto-restart lock poisoned");
-        match attempts.get(name) {
+        let key = GameInstanceKey::new(game, name);
+        match attempts.get(&key) {
             Some(last) if now - *last < cooldown => false,
             _ => {
-                attempts.insert(name.to_string(), now);
+                attempts.insert(key, now);
                 true
             }
         }
@@ -333,6 +378,26 @@ impl RuntimeRegistry {
             memory_bytes,
         ) {
             tracing::warn!(error = %e, "failed to persist resource sample");
+        }
+    }
+
+    pub fn persist_game_instance_sample(
+        &self,
+        game: GameId,
+        name: &str,
+        at: DateTime<Utc>,
+        cpu_percent: f32,
+        memory_bytes: u64,
+    ) {
+        if let Err(e) = crate::db::resource_samples::insert_for_instance(
+            &self.db,
+            game,
+            name,
+            at,
+            cpu_percent,
+            memory_bytes,
+        ) {
+            tracing::warn!(error = %e, game = %game, instance = name, "failed to persist resource sample");
         }
     }
 
@@ -485,5 +550,52 @@ mod tests {
             "only the stale sample should have been pruned"
         );
         assert_eq!(remaining[0].cpu_percent, 12.5);
+    }
+
+    #[test]
+    fn game_instances_with_the_same_name_keep_separate_samples() {
+        let registry = temp_registry("game-instance-key");
+        registry.push_game_instance_sample(
+            GameId::Valheim,
+            "shared",
+            InstanceSnapshot {
+                running: true,
+                cpu_percent: 1.0,
+                ..Default::default()
+            },
+        );
+        registry.push_game_instance_sample(
+            GameId::Rust,
+            "shared",
+            InstanceSnapshot {
+                running: true,
+                cpu_percent: 2.0,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            registry
+                .game_instance_snapshot(GameId::Rust, "shared")
+                .cpu_percent,
+            2.0
+        );
+    }
+
+    #[test]
+    fn game_instances_with_the_same_name_have_independent_restart_cooldowns() {
+        let registry = temp_registry("game-restart-key");
+
+        registry.should_attempt_game_auto_restart(
+            GameId::Valheim,
+            "shared",
+            chrono::Duration::minutes(1),
+        );
+
+        assert!(registry.should_attempt_game_auto_restart(
+            GameId::Rust,
+            "shared",
+            chrono::Duration::minutes(1),
+        ));
     }
 }

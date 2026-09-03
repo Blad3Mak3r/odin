@@ -7,6 +7,7 @@ import type {
   InstanceResources,
   InstanceTransitions,
   InstanceView,
+  ManagedInstanceView,
   PlayerInfo,
   ResourceSample,
   ResourcesTick,
@@ -101,7 +102,8 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
     ),
   )
 
-  const runningByName = new Map(tick.instances.map((entry) => [entry.name, entry.running]))
+  const valheimEntries = tick.instances.filter((entry) => entry.game === 'valheim')
+  const runningByName = new Map(valheimEntries.map((entry) => [entry.name, entry.running]))
   // Only allocate a new array/objects for instances whose `running` flag
   // actually flipped, and bail out entirely if none did — otherwise every
   // row subscribed to `['instances']` (the whole instances table) re-renders
@@ -125,6 +127,24 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
       cpu_percent: entry.cpu_percent,
       memory_bytes: entry.memory_bytes,
     }
+    if (entry.game === 'rust') {
+      queryClient.setQueryData<ManagedInstanceView[]>(['managed-instances'], (prev) => {
+        if (!prev) return prev
+        let changed = false
+        const next = prev.map((instance) => {
+          if (instance.game !== entry.game || instance.name !== entry.name || instance.running === entry.running) return instance
+          changed = true
+          return { ...instance, running: entry.running }
+        })
+        return changed ? next : prev
+      })
+      queryClient.setQueryData<ManagedInstanceView>(['managed-instances', entry.game, entry.name], (prev) =>
+        prev && prev.running !== entry.running ? { ...prev, running: entry.running } : prev,
+      )
+      queryClient.setQueryData(['managed-instances', 'rust', entry.name, 'resources'], resources)
+      continue
+    }
+
     queryClient.setQueryData(['resources', 'instance', entry.name], resources)
     // Same idea for the player list: keep the previous reference when the
     // set of connected players hasn't changed, so `PlayersBadge` (rendered

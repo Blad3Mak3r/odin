@@ -278,20 +278,26 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
             };
             let name = &inst.state.name;
             if persist_now && snapshot.running {
-                state.runtime.persist_sample(
-                    Some(name),
+                state.runtime.persist_game_instance_sample(
+                    GameId::Valheim,
+                    name,
                     now,
                     snapshot.cpu_percent,
                     snapshot.memory_bytes,
                 );
             }
-            if state.runtime.push_instance_sample(name, snapshot) {
+            if state
+                .runtime
+                .push_game_instance_sample(GameId::Valheim, name, snapshot)
+            {
                 let kind = if snapshot.running {
                     ActivityKind::InstanceStarted
                 } else {
                     ActivityKind::InstanceStopped
                 };
-                state.activity.record(kind, Some(name.clone()));
+                state
+                    .activity
+                    .record_for(GameId::Valheim, kind, Some(name.clone()));
             }
             if snapshot.running {
                 running_names.push(name.clone());
@@ -323,6 +329,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 }
             }
             entries.push(InstanceResourceEntry {
+                game: GameId::Valheim,
                 name: name.clone(),
                 running: snapshot.running,
                 ready: snapshot.ready,
@@ -336,18 +343,52 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
 
     if let Ok(rust_instances) = game_instances::list_rust(&state.db) {
         for rust_instance in rust_instances {
-            if rust_instance.is_running() || rust_instance.pid.is_none() {
-                continue;
+            let name = rust_instance.name();
+            let snapshot = routes::games::rust_resource_snapshot(state, &rust_instance);
+            if persist_now && snapshot.running {
+                state.runtime.persist_game_instance_sample(
+                    GameId::Rust,
+                    name,
+                    now,
+                    snapshot.cpu_percent,
+                    snapshot.memory_bytes,
+                );
             }
-            let name = rust_instance.name().to_string();
-            let _ = game_instances::clear_rust_pid(&state.db, &name, chrono::Utc::now());
-            if rust_instance.config.auto_restart
-                && state
-                    .runtime
-                    .should_attempt_auto_restart(&format!("rust:{name}"), AUTO_RESTART_COOLDOWN)
+            if state
+                .runtime
+                .push_game_instance_sample(GameId::Rust, name, snapshot)
             {
-                crashed_rust_with_auto_restart.push(name);
+                let kind = if snapshot.running {
+                    ActivityKind::InstanceStarted
+                } else {
+                    ActivityKind::InstanceStopped
+                };
+                state
+                    .activity
+                    .record_for(GameId::Rust, kind, Some(name.to_string()));
             }
+            if !snapshot.running && rust_instance.pid.is_some() {
+                let _ = game_instances::clear_rust_pid(&state.db, name, chrono::Utc::now());
+                if rust_instance.config.auto_restart
+                    && state.runtime.should_attempt_game_auto_restart(
+                        GameId::Rust,
+                        name,
+                        AUTO_RESTART_COOLDOWN,
+                    )
+                {
+                    crashed_rust_with_auto_restart.push(name.to_string());
+                }
+            }
+            entries.push(InstanceResourceEntry {
+                game: GameId::Rust,
+                name: name.to_string(),
+                running: snapshot.running,
+                ready: false,
+                cpu_percent: snapshot.cpu_percent,
+                memory_bytes: snapshot.memory_bytes,
+                players: Vec::new(),
+                last_saved_at: None,
+            });
         }
     }
 

@@ -250,7 +250,7 @@ pub async fn get_rust_resources(
         game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")
     })
     .await?;
-    Ok(Json(rust_resources(&state, &instance)))
+    Ok(Json(rust_resource_snapshot(&state, &instance)))
 }
 
 pub async fn get_logs(
@@ -516,7 +516,10 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
     }
 }
 
-fn rust_resources(state: &AppState, instance: &RustInstance) -> InstanceSnapshot {
+pub(crate) fn rust_resource_snapshot(
+    state: &AppState,
+    instance: &RustInstance,
+) -> InstanceSnapshot {
     if !instance.is_running() {
         return InstanceSnapshot::default();
     }

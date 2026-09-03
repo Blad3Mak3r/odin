@@ -269,6 +269,7 @@ export interface PlayerInfo {
 }
 
 export interface InstanceResourceEntry {
+  game: GameId
   name: string
   running: boolean
   ready: boolean

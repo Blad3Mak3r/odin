@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use super::Db;
+use crate::game::GameId;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceSampleRow {
@@ -30,12 +31,7 @@ pub fn insert(
 ) -> Result<()> {
     match instance_name {
         Some(name) => {
-            db.conn().execute(
-                "INSERT INTO resource_samples (instance_name, instance_id, at, cpu_percent, memory_bytes) \
-                 SELECT ?1, id, ?2, ?3, ?4 FROM game_instances \
-                 WHERE game = 'valheim' AND name = ?1",
-                params![name, at, cpu_percent, memory_bytes],
-            )?;
+            insert_for_instance(db, GameId::Valheim, name, at, cpu_percent, memory_bytes)?
         }
         None => {
             db.conn().execute(
@@ -45,6 +41,24 @@ pub fn insert(
             )?;
         }
     }
+    Ok(())
+}
+
+/// Records one downsampled sample for a specific game instance.
+pub fn insert_for_instance(
+    db: &Db,
+    game: GameId,
+    name: &str,
+    at: DateTime<Utc>,
+    cpu_percent: f32,
+    memory_bytes: u64,
+) -> Result<()> {
+    db.conn().execute(
+        "INSERT INTO resource_samples (instance_name, instance_id, at, cpu_percent, memory_bytes) \
+         SELECT CASE WHEN ?1 = 'valheim' THEN ?2 END, id, ?3, ?4, ?5 \
+         FROM game_instances WHERE game = ?1 AND name = ?2",
+        params![game.as_str(), name, at, cpu_percent, memory_bytes],
+    )?;
     Ok(())
 }
 
@@ -143,6 +157,48 @@ mod tests {
         let recent = range(&db, None, now - chrono::Duration::hours(1)).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].cpu_percent, 2.0);
+    }
+
+    #[test]
+    fn game_instances_with_the_same_name_keep_separate_samples() {
+        let db = temp_db("same-name");
+        crate::db::instances::save(&db, &InstanceState::new("shared", 2456)).unwrap();
+        db.conn()
+            .execute_batch(
+                "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                 ('rust-shared', 'rust', 'shared', '2024-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        let now = Utc::now();
+
+        insert_for_instance(&db, GameId::Valheim, "shared", now, 10.0, 1000).unwrap();
+        insert_for_instance(&db, GameId::Rust, "shared", now, 20.0, 2000).unwrap();
+
+        let rust_cpu: f32 = db
+            .conn()
+            .query_row(
+                "SELECT cpu_percent FROM resource_samples WHERE instance_id = 'rust-shared'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rust_cpu, 20.0);
+    }
+
+    #[test]
+    fn rust_samples_do_not_require_a_valheim_instance() {
+        let db = temp_db("rust-only");
+        db.conn()
+            .execute(
+                "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                 ('rust-only', 'rust', 'rust-only', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+
+        let result = insert_for_instance(&db, GameId::Rust, "rust-only", Utc::now(), 1.0, 1);
+
+        assert!(result.is_ok());
     }
 
     #[test]

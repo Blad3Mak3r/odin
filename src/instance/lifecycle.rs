@@ -8,6 +8,7 @@ use sysinfo::Signal;
 use super::{Instance, InstanceError, process};
 use crate::cli::validate_instance_name;
 use crate::db::Db;
+use crate::game::GameId;
 use crate::paths::{self, Paths};
 use crate::supervisor;
 
@@ -18,17 +19,24 @@ const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(10);
 /// empty lock file is intentionally persistent; the OS releases the lock
 /// automatically if the owning request/process exits unexpectedly.
 #[derive(Debug)]
-struct LifecycleLock {
+pub(crate) struct LifecycleLock {
     _file: File,
 }
 
 impl LifecycleLock {
-    fn acquire(paths: &Paths, name: &str) -> Result<Self> {
+    pub(crate) fn acquire(paths: &Paths, game: GameId, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
         let lock_dir = paths.data_dir.join("locks");
         std::fs::create_dir_all(&lock_dir)
             .with_context(|| format!("failed to create {}", lock_dir.display()))?;
-        let path = lock_dir.join(format!("{name}.lifecycle.lock"));
+        // Keep Valheim's historical lock name so an in-flight operation from
+        // an older Odin process still excludes a newly upgraded one. New
+        // games are namespaced to allow same-named instances to coexist.
+        let filename = match game {
+            GameId::Valheim => format!("{name}.lifecycle.lock"),
+            _ => format!("{}-{name}.lifecycle.lock", game.as_str()),
+        };
+        let path = lock_dir.join(filename);
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -92,7 +100,7 @@ pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 /// pid_started_at)` in the database itself once it spawns the process, so
 /// this just reloads the instance afterwards to pick that up.
 pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let _lock = LifecycleLock::acquire(paths, name)?;
+    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
     start_unlocked(paths, db, name).await
 }
 
@@ -118,7 +126,7 @@ async fn start_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<Instance> 
 /// process is actually gone (or `STOP_TIMEOUT` has been given a full
 /// chance, supervisor-side escalation included).
 pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let _lock = LifecycleLock::acquire(paths, name)?;
+    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
     stop_unlocked(paths, db, name).await
 }
 
@@ -179,7 +187,7 @@ async fn stop_via_pid_signal(db: &Db, name: &str, pid: u32, pid_started_at: i64)
 /// Stops the instance if it's running, then starts it again. Requires the
 /// instance to already exist (unlike `start`, which creates it on demand).
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let _lock = LifecycleLock::acquire(paths, name)?;
+    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
     let instance = Instance::load_existing(paths, db, name)?;
     if is_running(&instance)? {
         stop_unlocked(paths, db, name).await?;
@@ -322,15 +330,23 @@ mod tests {
     #[test]
     fn lifecycle_lock_is_exclusive_per_instance_and_released_on_drop() {
         let paths = temp_paths("lock");
-        let first = LifecycleLock::acquire(&paths, "alpha").unwrap();
-        let error = LifecycleLock::acquire(&paths, "alpha").unwrap_err();
+        let first = LifecycleLock::acquire(&paths, GameId::Valheim, "alpha").unwrap();
+        let error = LifecycleLock::acquire(&paths, GameId::Valheim, "alpha").unwrap_err();
         assert!(matches!(
             error.downcast_ref::<InstanceError>(),
             Some(InstanceError::TransitionInProgress(name)) if name == "alpha"
         ));
 
-        LifecycleLock::acquire(&paths, "bravo").unwrap();
+        LifecycleLock::acquire(&paths, GameId::Valheim, "bravo").unwrap();
         drop(first);
-        LifecycleLock::acquire(&paths, "alpha").unwrap();
+        LifecycleLock::acquire(&paths, GameId::Valheim, "alpha").unwrap();
+    }
+
+    #[test]
+    fn same_name_in_different_games_uses_independent_lifecycle_locks() {
+        let paths = temp_paths("game-locks");
+        let _valheim = LifecycleLock::acquire(&paths, GameId::Valheim, "shared").unwrap();
+
+        LifecycleLock::acquire(&paths, GameId::Rust, "shared").unwrap();
     }
 }

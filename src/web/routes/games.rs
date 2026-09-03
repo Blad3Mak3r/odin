@@ -6,14 +6,16 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sysinfo::Pid;
 
 use crate::db::game_instances::{self, GameInstanceIdentity, RustInstance};
-use crate::game::{self, GameId};
+use crate::game::{self, GameId, instances as game_instances_ops};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
-use crate::web::error::{ApiResult, BadRequest, run_blocking};
+use crate::web::error::{ApiResult, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
+use crate::web::runtime::{InstanceSnapshot, InstanceTransition, ResourceSample};
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -36,6 +38,16 @@ pub struct ManagedInstanceView {
 #[derive(Deserialize)]
 pub struct CreateGameInstanceRequest {
     pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct RustConfigUpdateRequest {
+    pub hostname: Option<String>,
+    pub level: Option<String>,
+    pub seed: Option<u32>,
+    pub world_size: Option<u32>,
+    pub max_players: Option<u16>,
+    pub auto_restart: Option<bool>,
 }
 
 pub async fn list_games() -> Json<Vec<GameView>> {
@@ -81,9 +93,10 @@ pub async fn install_game(
 ) -> Json<JobHandle> {
     let paths = state.paths.clone();
     let db = state.db.clone();
+    let activity = state.activity.clone();
     let id = state
         .jobs
-        .spawn(JobKindDescr::SteamcmdInstall, move |logger| {
+        .spawn(JobKindDescr::SteamcmdInstall { game }, move |logger| {
             match game {
                 GameId::Valheim => {
                     let running = instance::running_instance_names(&paths, &db)?;
@@ -121,6 +134,7 @@ pub async fn install_game(
                 install_dir.join(driver.server_binary()),
                 |line| logger.line(line),
             )?;
+            activity.record_for(game, crate::activity::ActivityKind::ServerInstalled, None);
             logger.line("done");
             Ok(())
         });
@@ -163,17 +177,17 @@ pub async fn create_instance(
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let view = run_blocking(move || match game {
-        GameId::Valheim => {
-            let instance = Instance::create(&paths, &db, &request.name)?;
-            valheim_view(&paths, &db, instance)
-        }
-        GameId::Rust => {
-            let instance = game_instances::create_rust(&paths, &db, &request.name)?;
-            Ok(rust_view(instance))
-        }
+    let name = request.name.clone();
+    let view = run_blocking(move || {
+        game_instances_ops::create(&paths, &db, game, &request.name)
+            .and_then(|instance| game_instance_view(&paths, &db, instance))
     })
     .await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceCreated,
+        Some(name),
+    );
     Ok(Json(view))
 }
 
@@ -185,6 +199,80 @@ pub async fn get_instance(
     let db = state.db.clone();
     let view = run_blocking(move || load_view(&paths, &db, game, &name)).await?;
     Ok(Json(view))
+}
+
+pub async fn update_rust_config(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(request): Json<RustConfigUpdateRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        let instance =
+            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+        let mut config = instance.config;
+        if let Some(hostname) = request.hostname {
+            config.hostname = hostname;
+        }
+        if let Some(level) = request.level {
+            config.level = level;
+        }
+        if let Some(seed) = request.seed {
+            config.seed = seed;
+        }
+        if let Some(world_size) = request.world_size {
+            config.world_size = world_size;
+        }
+        if let Some(max_players) = request.max_players {
+            config.max_players = max_players;
+        }
+        if let Some(auto_restart) = request.auto_restart {
+            config.auto_restart = auto_restart;
+        }
+        game_instances::update_rust_config(&db, &name, &config).map(rust_view)
+    })
+    .await?;
+    Ok(Json(view))
+}
+
+pub async fn get_rust_resources(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<InstanceSnapshot>> {
+    let db = state.db.clone();
+    let instance = run_blocking(move || {
+        game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")
+    })
+    .await?;
+    Ok(Json(rust_resource_snapshot(&state, &instance)))
+}
+
+pub async fn get_rust_resource_history(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    let db = state.db.clone();
+    let load_name = name.clone();
+    run_blocking(move || {
+        game_instances::load_rust(&db, &load_name)?.context("Rust instance does not exist")
+    })
+    .await?;
+
+    match query.hours {
+        Some(hours) => {
+            let db = state.db.clone();
+            let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+            let rows = run_blocking(move || {
+                crate::db::resource_samples::range_for_instance(&db, GameId::Rust, &name, since)
+            })
+            .await?;
+            Ok(Json(rows.into_iter().map(Into::into).collect()))
+        }
+        None => Ok(Json(
+            state.runtime.game_instance_history(GameId::Rust, &name),
+        )),
+    }
 }
 
 pub async fn get_logs(
@@ -214,25 +302,19 @@ pub async fn start_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
+    let _transition =
+        state
+            .runtime
+            .begin_game_transition(game, &name, InstanceTransition::Starting)?;
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let view = match game {
-        GameId::Valheim => {
-            let instance = lifecycle::start(&paths, &db, &name).await?;
-            run_blocking(move || valheim_view(&paths, &db, instance)).await?
-        }
-        GameId::Rust => {
-            let instance = run_blocking({
-                let db = db.clone();
-                let name = name.clone();
-                move || game_instances::load_rust(&db, &name)
-            })
-            .await?
-            .ok_or_else(|| BadRequest(format!("Rust instance '{name}' does not exist")))?;
-            let started = game::rust::start(&paths, &db, &instance).await?;
-            rust_view(started)
-        }
-    };
+    let started = game_instances_ops::start(&paths, &db, game, &name).await?;
+    let view = run_blocking(move || game_instance_view(&paths, &db, started)).await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStarted,
+        Some(name),
+    );
     Ok(Json(view))
 }
 
@@ -240,17 +322,16 @@ pub async fn stop_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<StatusCode> {
-    match game {
-        GameId::Valheim => lifecycle::stop(&state.paths, &state.db, &name).await?,
-        GameId::Rust => {
-            let db = state.db.clone();
-            let load_name = name.clone();
-            let instance = run_blocking(move || game_instances::load_rust(&db, &load_name))
-                .await?
-                .ok_or_else(|| BadRequest(format!("Rust instance '{name}' does not exist")))?;
-            game::rust::stop(&state.paths, &state.db, &instance).await?;
-        }
-    }
+    let _transition =
+        state
+            .runtime
+            .begin_game_transition(game, &name, InstanceTransition::Stopping)?;
+    game_instances_ops::stop(&state.paths, &state.db, game, &name).await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStopped,
+        Some(name),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -258,24 +339,24 @@ pub async fn restart_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
+    let _transition =
+        state
+            .runtime
+            .begin_game_transition(game, &name, InstanceTransition::Restarting)?;
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let view = match game {
-        GameId::Valheim => {
-            let instance = lifecycle::restart(&paths, &db, &name).await?;
-            run_blocking(move || valheim_view(&paths, &db, instance)).await?
-        }
-        GameId::Rust => {
-            let load_name = name.clone();
-            let instance = run_blocking({
-                let db = db.clone();
-                move || game_instances::load_rust(&db, &load_name)
-            })
-            .await?
-            .ok_or_else(|| BadRequest(format!("Rust instance '{name}' does not exist")))?;
-            rust_view(game::rust::restart(&paths, &db, &instance).await?)
-        }
-    };
+    let restarted = game_instances_ops::restart(&paths, &db, game, &name).await?;
+    let view = run_blocking(move || game_instance_view(&paths, &db, restarted)).await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStopped,
+        Some(name.clone()),
+    );
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceStarted,
+        Some(name),
+    );
     Ok(Json(view))
 }
 
@@ -283,17 +364,10 @@ pub async fn list_backups(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
-    if game != GameId::Rust {
-        return Err(BadRequest("use the legacy Valheim backup route".to_string()).into());
-    }
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let backups = run_blocking(move || {
-        let instance =
-            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
-        game::rust::list_backups(&paths, &instance)
-    })
-    .await?;
+    let backups =
+        run_blocking(move || game_instances_ops::list_backups(&paths, &db, game, &name)).await?;
     Ok(Json(backups))
 }
 
@@ -301,17 +375,18 @@ pub async fn create_backup(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<crate::backup::BackupEntry>> {
-    if game != GameId::Rust {
-        return Err(BadRequest("use the legacy Valheim backup route".to_string()).into());
-    }
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let backup = run_blocking(move || {
-        let instance =
-            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
-        game::rust::create_backup(&paths, &instance)
-    })
-    .await?;
+    let instance_name = name.clone();
+    let backup =
+        run_blocking(move || game_instances_ops::create_backup(&paths, &db, game, &name)).await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::BackupCreated {
+            backup_id: backup.id.clone(),
+        },
+        Some(instance_name),
+    );
     Ok(Json(backup))
 }
 
@@ -319,17 +394,19 @@ pub async fn restore_backup(
     State(state): State<AppState>,
     Path((game, name, backup_id)): Path<(GameId, String, String)>,
 ) -> ApiResult<StatusCode> {
-    if game != GameId::Rust {
-        return Err(BadRequest("use the legacy Valheim backup route".to_string()).into());
-    }
     let paths = state.paths.clone();
     let db = state.db.clone();
-    run_blocking(move || {
-        let instance =
-            game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
-        game::rust::restore_backup(&paths, &instance, &backup_id)
-    })
-    .await?;
+    let instance_name = name.clone();
+    let restored_backup_id = backup_id.clone();
+    run_blocking(move || game_instances_ops::restore_backup(&paths, &db, game, &name, &backup_id))
+        .await?;
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::BackupRestored {
+            backup_id: restored_backup_id,
+        },
+        Some(instance_name),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -339,11 +416,18 @@ fn load_view(
     game: GameId,
     name: &str,
 ) -> anyhow::Result<ManagedInstanceView> {
-    match game {
-        GameId::Valheim => valheim_view(paths, db, Instance::load_existing(paths, db, name)?),
-        GameId::Rust => game_instances::load_rust(db, name)?
-            .map(rust_view)
-            .ok_or_else(|| anyhow::anyhow!("Rust instance '{name}' does not exist")),
+    game_instances_ops::load(paths, db, game, name)
+        .and_then(|instance| game_instance_view(paths, db, instance))
+}
+
+fn game_instance_view(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: game_instances_ops::GameInstance,
+) -> anyhow::Result<ManagedInstanceView> {
+    match instance {
+        game_instances_ops::GameInstance::Valheim(instance) => valheim_view(paths, db, instance),
+        game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(instance)),
     }
 }
 
@@ -399,7 +483,34 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
             "seed": instance.config.seed,
             "world_size": instance.config.world_size,
             "max_players": instance.config.max_players,
+            "auto_restart": instance.config.auto_restart,
         }),
+    }
+}
+
+pub(crate) fn rust_resource_snapshot(
+    state: &AppState,
+    instance: &RustInstance,
+) -> InstanceSnapshot {
+    if !instance.is_running() {
+        return InstanceSnapshot::default();
+    }
+
+    let root_pids: Vec<u32> = instance.pid.into_iter().collect();
+    let system = state.resources.lock().expect("resources lock poisoned");
+    let mut cpu_percent = 0.0;
+    let mut memory_bytes = 0;
+    for pid in crate::instance::process::descendant_pids(&system, &root_pids) {
+        if let Some(process) = system.process(Pid::from_u32(pid)) {
+            cpu_percent += process.cpu_usage();
+            memory_bytes += process.memory();
+        }
+    }
+    InstanceSnapshot {
+        running: true,
+        ready: false,
+        cpu_percent,
+        memory_bytes,
     }
 }
 

@@ -15,6 +15,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::db::Db;
+use crate::game::GameId;
 
 const MAX_BUFFERED_EVENTS: usize = 200;
 const BROADCAST_CAPACITY: usize = 256;
@@ -68,7 +69,10 @@ pub enum ActivityKind {
 pub struct ActivityEvent {
     pub id: String,
     pub at: DateTime<Utc>,
+    pub game: GameId,
     pub instance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
     pub kind: ActivityKind,
 }
 
@@ -109,10 +113,26 @@ impl ActivityLog {
     /// broadcasts it to any live subscribers. Does blocking I/O — call from
     /// a blocking context.
     pub fn record(&self, kind: ActivityKind, instance: Option<String>) {
+        self.record_for(GameId::Valheim, kind, instance);
+    }
+
+    /// Records an event for a statically supported game.
+    pub fn record_for(&self, game: GameId, kind: ActivityKind, instance: Option<String>) {
+        let instance_id = instance.as_deref().and_then(|name| {
+            match crate::db::game_instances::identity(&self.inner.db, game, name) {
+                Ok(identity) => identity.map(|identity| identity.id),
+                Err(error) => {
+                    tracing::warn!(%error, %game, %name, "failed to resolve activity instance identity");
+                    None
+                }
+            }
+        });
         let event = ActivityEvent {
             id: Uuid::new_v4().to_string(),
             at: Utc::now(),
+            game,
             instance,
+            instance_id,
             kind,
         };
 
@@ -201,6 +221,27 @@ mod tests {
     }
 
     #[test]
+    fn record_for_includes_the_game_and_instance_identity() {
+        let db = temp_db();
+        crate::db::instances::save(
+            &db,
+            &crate::instance::state::InstanceState::new("my-server", 2456),
+        )
+        .unwrap();
+        let log = ActivityLog::load(db);
+
+        log.record_for(
+            GameId::Valheim,
+            ActivityKind::InstanceCreated,
+            Some("my-server".to_string()),
+        );
+
+        let (history, _rx) = log.subscribe();
+        assert_eq!(history[0].game, GameId::Valheim);
+        assert!(history[0].instance_id.is_some());
+    }
+
+    #[test]
     fn reloading_the_log_replays_persisted_events() {
         let db = temp_db();
         {
@@ -235,7 +276,9 @@ mod tests {
                 &ActivityEvent {
                     id: id.to_string(),
                     at,
+                    game: GameId::Valheim,
                     instance: None,
+                    instance_id: None,
                     kind: ActivityKind::InstanceCreated,
                 },
             )

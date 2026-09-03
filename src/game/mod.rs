@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+pub mod instances;
 pub mod rust;
 pub mod update;
 
@@ -52,6 +53,8 @@ pub struct GameCapabilities {
     pub readiness: bool,
 }
 
+/// A statically compiled game module. Runtime-installed modules are
+/// intentionally out of scope: both supported games ship with Odin.
 pub trait GameDriver: Sync {
     fn id(&self) -> GameId;
     fn display_name(&self) -> &'static str;

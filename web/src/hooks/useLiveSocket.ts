@@ -3,10 +3,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type {
   ActivityEvent,
+  GameInstanceTransitions,
   HostResources,
   InstanceResources,
   InstanceTransitions,
   InstanceView,
+  ManagedInstanceView,
   PlayerInfo,
   ResourceSample,
   ResourcesTick,
@@ -19,6 +21,7 @@ type WireEvent =
   | { type: 'activity'; event: ActivityEvent }
   | { type: 'resources'; tick: ResourcesTick }
   | { type: 'transitions'; transitions: InstanceTransitions }
+  | { type: 'game_transitions'; transitions: GameInstanceTransitions }
   | { type: 'lagged'; skipped: number }
 
 /// Keeps a single global SSE connection open for the lifetime of the app
@@ -85,6 +88,20 @@ function applyWireEvent(queryClient: QueryClient, event: WireEvent) {
     }
     return
   }
+  if (event.type === 'game_transitions') {
+    const previous = queryClient.getQueryData<GameInstanceTransitions>(['game-instance-transitions']) ?? []
+    queryClient.setQueryData(['game-instance-transitions'], event.transitions)
+
+    const transitionCompleted = previous.some(
+      (previousTransition) => !event.transitions.some(
+        (transition) => transition.game === previousTransition.game && transition.name === previousTransition.name,
+      ),
+    )
+    if (transitionCompleted) {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+    }
+    return
+  }
 
   applyResourcesTick(queryClient, event.tick)
 }
@@ -101,7 +118,8 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
     ),
   )
 
-  const runningByName = new Map(tick.instances.map((entry) => [entry.name, entry.running]))
+  const valheimEntries = tick.instances.filter((entry) => entry.game === 'valheim')
+  const runningByName = new Map(valheimEntries.map((entry) => [entry.name, entry.running]))
   // Only allocate a new array/objects for instances whose `running` flag
   // actually flipped, and bail out entirely if none did — otherwise every
   // row subscribed to `['instances']` (the whole instances table) re-renders
@@ -125,6 +143,34 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
       cpu_percent: entry.cpu_percent,
       memory_bytes: entry.memory_bytes,
     }
+    if (entry.game === 'rust') {
+      queryClient.setQueryData<ManagedInstanceView[]>(['managed-instances'], (prev) => {
+        if (!prev) return prev
+        let changed = false
+        const next = prev.map((instance) => {
+          if (instance.game !== entry.game || instance.name !== entry.name || instance.running === entry.running) return instance
+          changed = true
+          return { ...instance, running: entry.running }
+        })
+        return changed ? next : prev
+      })
+      queryClient.setQueryData<ManagedInstanceView>(['managed-instances', entry.game, entry.name], (prev) =>
+        prev && prev.running !== entry.running ? { ...prev, running: entry.running } : prev,
+      )
+      queryClient.setQueryData(['managed-instances', 'rust', entry.name, 'resources'], resources)
+      if (entry.running) {
+        queryClient.setQueryData<ResourceSample[]>(
+          ['managed-instances', 'rust', entry.name, 'resource-history'],
+          (prev) => appendCapped(
+            prev,
+            { at, cpu_percent: entry.cpu_percent, memory_bytes: entry.memory_bytes },
+            HISTORY_CAP,
+          ),
+        )
+      }
+      continue
+    }
+
     queryClient.setQueryData(['resources', 'instance', entry.name], resources)
     // Same idea for the player list: keep the previous reference when the
     // set of connected players hasn't changed, so `PlayersBadge` (rendered

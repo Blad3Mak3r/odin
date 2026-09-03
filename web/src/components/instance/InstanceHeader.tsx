@@ -1,6 +1,6 @@
 import { ArrowLeft, Copy, Eye, EyeOff, Loader2, Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { PlayersBadge } from '@/components/PlayersBadge'
 import { Badge } from '@/components/ui/badge'
@@ -145,6 +145,7 @@ function CloneInstanceDialog({ name, disabled }: { name: string; disabled: boole
   const [targetName, setTargetName] = useState('')
   const [worldName, setWorldName] = useState('')
   const navigate = useNavigate()
+  const { game } = useParams<{ game?: string }>()
   const cloneInstance = useCloneInstance(name)
 
   const handleOpenChange = (next: boolean) => {
@@ -165,7 +166,7 @@ function CloneInstanceDialog({ name, disabled }: { name: string; disabled: boole
         onSuccess: (instance) => {
           setOpen(false)
           toast.success(`Configuration cloned to '${instance.name}'`)
-          navigate(`/instances/${instance.name}`)
+          navigate(game === 'valheim' ? `/instances/valheim/${instance.name}` : `/instances/${instance.name}`)
         },
         onError: (error) => toast.error(error.message),
       },
@@ -225,6 +226,7 @@ function RenameInstanceDialog({ name }: { name: string }) {
   const [open, setOpen] = useState(false)
   const [newName, setNewName] = useState(name)
   const navigate = useNavigate()
+  const { game } = useParams<{ game?: string }>()
   const renameInstance = useRenameInstance()
 
   const handleOpenChange = (next: boolean) => {
@@ -241,7 +243,7 @@ function RenameInstanceDialog({ name }: { name: string }) {
         onSuccess: () => {
           setOpen(false)
           toast.success(`Instance renamed to '${trimmed}'`)
-          navigate(`/instances/${trimmed}`)
+          navigate(game === 'valheim' ? `/instances/valheim/${trimmed}` : `/instances/${trimmed}`)
         },
         onError: (e) => toast.error(e.message),
       },

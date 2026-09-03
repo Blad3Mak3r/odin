@@ -20,14 +20,14 @@ function isInstanceTab(value: string | undefined): value is InstanceTab {
 }
 
 export function InstanceDetailPage() {
-  const { name, '*': tabPath } = useParams<{ name: string; '*': string }>()
+  const { game, name, '*': tabPath } = useParams<{ game?: string; name: string; '*': string }>()
   const navigate = useNavigate()
   const [deleteOpen, setDeleteOpen] = useState(false)
   const instance = useInstance(name ?? '')
 
   if (!name) return null
 
-  const basePath = `/instances/${name}`
+  const basePath = game === 'valheim' ? `/instances/valheim/${name}` : `/instances/${name}`
   const segments = tabPath?.split('/').filter(Boolean) ?? []
   const [tab, ...nestedPath] = segments
 

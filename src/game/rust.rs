@@ -10,7 +10,7 @@ use sysinfo::Signal;
 use tokio::process::Command;
 
 use crate::db::game_instances::{RustInstance, RustInstanceConfig};
-use crate::instance::process;
+use crate::instance::{lifecycle::LifecycleLock, process};
 use crate::paths::Paths;
 
 pub const DEDICATED_SERVER_APP_ID: &str = "258550";
@@ -24,6 +24,15 @@ pub fn is_running(instance: &RustInstance) -> bool {
 }
 
 pub async fn start(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: &RustInstance,
+) -> Result<RustInstance> {
+    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
+    start_unlocked(paths, db, instance).await
+}
+
+async fn start_unlocked(
     paths: &Paths,
     db: &crate::db::Db,
     instance: &RustInstance,
@@ -97,7 +106,12 @@ pub async fn start(
     )
 }
 
-pub async fn stop(_paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
+pub async fn stop(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
+    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
+    stop_unlocked(db, instance).await
+}
+
+async fn stop_unlocked(db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
     let (Some(pid), Some(started_at)) = (instance.pid, instance.pid_started_at) else {
         bail!("instance '{}' is not running", instance.name());
     };
@@ -120,12 +134,13 @@ pub async fn restart(
     db: &crate::db::Db,
     instance: &RustInstance,
 ) -> Result<RustInstance> {
+    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     if is_running(instance) {
-        stop(paths, db, instance).await?;
+        stop_unlocked(db, instance).await?;
     }
     let refreshed = crate::db::game_instances::load_rust(db, instance.name())?
         .context("Rust instance disappeared while restarting")?;
-    start(paths, db, &refreshed).await
+    start_unlocked(paths, db, &refreshed).await
 }
 
 pub fn backup_source(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
@@ -199,5 +214,6 @@ pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
         seed: rand::random(),
         world_size: 3000,
         max_players: 50,
+        auto_restart: false,
     }
 }

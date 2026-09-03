@@ -17,6 +17,7 @@ import type {
   ConfigView,
   GlobalMod,
   GameId,
+  GameInstanceTransitions,
   GameView,
   HostResources,
   InstallStatusView,
@@ -34,6 +35,7 @@ import type {
   ModSearchResult,
   PlayerInfo,
   ResourceSample,
+  RustConfigUpdateRequest,
   SettingsView,
   VersionView,
   WebhookView,
@@ -163,6 +165,25 @@ export function useGames() {
   })
 }
 
+export function useGameInstallStatus(game: GameId) {
+  return useQuery({
+    queryKey: ['game-install-status', game],
+    queryFn: () => api.get<InstallStatusView>(`/games/${game}/install/status`),
+    refetchInterval: LIVE_FALLBACK_INTERVAL,
+  })
+}
+
+export function useInstallGame() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (game: GameId) => api.post<JobHandle>(`/games/${game}/install`),
+    onSuccess: (_job, game) => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['game-install-status', game] })
+    },
+  })
+}
+
 export function useManagedInstances() {
   return useQuery({
     queryKey: ['managed-instances'],
@@ -179,11 +200,40 @@ export function useManagedInstance(game: GameId, name: string) {
   })
 }
 
+export function useManagedInstanceTransition(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['game-instance-transitions'],
+    queryFn: () => Promise.resolve<GameInstanceTransitions>([]),
+    initialData: [] as GameInstanceTransitions,
+    staleTime: Infinity,
+    select: (transitions): InstanceTransition | null => (
+      transitions.find((transition) => transition.game === game && transition.name === name)?.transition ?? null
+    ),
+  })
+}
+
 export function useManagedInstanceLogs(game: GameId, name: string) {
   return useQuery({
     queryKey: ['managed-instances', game, name, 'logs'],
     queryFn: () => api.get<LogsView>(`/games/${game}/instances/${name}/logs`),
     refetchInterval: 5_000,
+  })
+}
+
+export function useManagedRustResources(name: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', 'rust', name, 'resources'],
+    queryFn: () => api.get<InstanceResources>(`/games/rust/instances/${name}/resources`),
+    refetchInterval: 5_000,
+    enabled,
+  })
+}
+
+export function useManagedRustResourceHistory(name: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', 'rust', name, 'resource-history'],
+    queryFn: () => api.get<ResourceSample[]>(`/games/rust/instances/${name}/resources/history`),
+    enabled,
   })
 }
 
@@ -205,6 +255,45 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
     },
+  })
+}
+
+export function useUpdateRustConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, request }: { name: string; request: RustConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/games/rust/instances/${name}/config`, request),
+    onSuccess: (_instance, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+    },
+  })
+}
+
+export function useManagedBackups(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['managed-instances', game, name, 'backups'],
+    queryFn: () => api.get<BackupEntry[]>(`/games/${game}/instances/${name}/backups`),
+  })
+}
+
+export function useCreateManagedBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
+      api.post<BackupEntry>(`/games/${game}/instances/${name}/backups`),
+    onSuccess: (_backup, { game, name }) =>
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'backups'] }),
+  })
+}
+
+export function useRestoreManagedBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name, backupId }: { game: GameId; name: string; backupId: string }) =>
+      api.post<void>(`/games/${game}/instances/${name}/backups/${backupId}/restore`),
+    onSuccess: (_result, { game, name }) =>
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'backups'] }),
   })
 }
 

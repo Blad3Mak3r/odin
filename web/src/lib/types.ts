@@ -32,6 +32,15 @@ export interface ManagedInstanceView {
   config: Record<string, unknown>
 }
 
+export interface RustConfigUpdateRequest {
+  hostname?: string
+  level?: string
+  seed?: number
+  world_size?: number
+  max_players?: number
+  auto_restart?: boolean
+}
+
 export interface ChangelogSection {
   title: string
   changes: string[]
@@ -153,7 +162,7 @@ export interface JobSummary {
 }
 
 export type JobKindDescr =
-  | { kind: 'steamcmd_install' }
+  | { kind: 'steamcmd_install'; game: GameId }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }
@@ -248,6 +257,14 @@ export interface InstanceResources {
 export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'cloning' | 'updating_bepinex'
 export type InstanceTransitions = Record<string, InstanceTransition>
 
+export interface GameInstanceTransition {
+  game: GameId
+  name: string
+  transition: InstanceTransition
+}
+
+export type GameInstanceTransitions = GameInstanceTransition[]
+
 export interface ResourceSample {
   at: string
   cpu_percent: number
@@ -260,6 +277,7 @@ export interface PlayerInfo {
 }
 
 export interface InstanceResourceEntry {
+  game: GameId
   name: string
   running: boolean
   ready: boolean
@@ -296,7 +314,9 @@ export type ActivityKind =
 export interface ActivityEvent {
   id: string
   at: string
+  game: GameId
   instance: string | null
+  instance_id?: string
   kind: ActivityKind
 }
 

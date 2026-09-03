@@ -26,6 +26,7 @@ pub struct RustInstanceConfig {
     pub seed: u32,
     pub world_size: u32,
     pub max_players: u16,
+    pub auto_restart: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,22 +51,29 @@ impl RustInstance {
     }
 }
 
-pub fn valheim_identity(db: &crate::db::Db, name: &str) -> Result<GameInstanceIdentity> {
+pub fn identity(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+) -> Result<Option<GameInstanceIdentity>> {
     let conn = db.conn();
     let identity = conn
         .query_row(
-            "SELECT id, created_at FROM game_instances WHERE game = 'valheim' AND name = ?1",
-            params![name],
+            "SELECT id, created_at FROM game_instances WHERE game = ?1 AND name = ?2",
+            params![game.as_str(), name],
             |row| Ok((row.get::<_, String>(0)?, row.get(1)?)),
         )
         .optional()?;
-    let (id, created_at) = identity.context("Valheim instance is missing its game identity")?;
-    Ok(GameInstanceIdentity {
+    Ok(identity.map(|(id, created_at)| GameInstanceIdentity {
         id,
-        game: GameId::Valheim,
+        game,
         name: name.to_string(),
         created_at,
-    })
+    }))
+}
+
+pub fn valheim_identity(db: &crate::db::Db, name: &str) -> Result<GameInstanceIdentity> {
+    identity(db, GameId::Valheim, name)?.context("Valheim instance is missing its game identity")
 }
 
 pub fn ensure_valheim_identity(
@@ -86,7 +94,7 @@ pub fn ensure_valheim_identity(
 pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
     let conn = db.conn();
     let mut statement = conn.prepare(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' ORDER BY g.name",
     )?;
@@ -99,7 +107,7 @@ pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
 pub fn load_rust(db: &crate::db::Db, name: &str) -> Result<Option<RustInstance>> {
     let conn = db.conn();
     conn.query_row(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' AND g.name = ?1",
         params![name],
@@ -126,12 +134,36 @@ pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Rust
         params![id, name, created_at],
     )?;
     tx.execute(
-        "INSERT INTO rust_instance_configs (instance_id, port, query_port, hostname, level, seed, world_size, max_players) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, config.port, config.query_port, config.hostname, config.level, config.seed, config.world_size, config.max_players],
+        "INSERT INTO rust_instance_configs (instance_id, port, query_port, hostname, level, seed, world_size, max_players, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![id, config.port, config.query_port, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
     )?;
     tx.commit()?;
     drop(conn);
     load_rust(db, name)?.context("failed to load newly-created Rust instance")
+}
+
+pub fn update_rust_config(
+    db: &crate::db::Db,
+    name: &str,
+    config: &RustInstanceConfig,
+) -> Result<RustInstance> {
+    let instance = load_rust(db, name)?.context("Rust instance not found")?;
+    if instance.is_running() {
+        bail!("stop Rust instance '{name}' before changing its configuration");
+    }
+    if config.hostname.trim().is_empty() || config.level.trim().is_empty() {
+        bail!("Rust hostname and level cannot be empty");
+    }
+    if config.world_size == 0 || config.max_players == 0 {
+        bail!("Rust world size and max players must be greater than zero");
+    }
+
+    db.conn().execute(
+        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6, auto_restart = ?7 \
+         WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
+        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
+    )?;
+    load_rust(db, name)?.context("Rust instance disappeared while updating configuration")
 }
 
 pub fn set_rust_pid(
@@ -185,10 +217,45 @@ fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
             seed: row.get(7)?,
             world_size: row.get(8)?,
             max_players: row.get(9)?,
+            auto_restart: row.get(10)?,
         },
-        pid: row.get(10)?,
-        pid_started_at: row.get(11)?,
-        last_started_at: row.get(12)?,
-        last_stopped_at: row.get(13)?,
+        pid: row.get(11)?,
+        pid_started_at: row.get(12)?,
+        last_started_at: row.get(13)?,
+        last_stopped_at: row.get(14)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_rust_config_persists_game_specific_settings() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-rust-config-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = crate::db::Db::open(&paths).unwrap();
+        let instance = create_rust(&paths, &db, "rust-server").unwrap();
+        assert!(!instance.config.auto_restart);
+        let config = RustInstanceConfig {
+            hostname: "Rust Server".to_string(),
+            level: "Barren".to_string(),
+            seed: 42,
+            world_size: 4000,
+            max_players: 100,
+            auto_restart: true,
+            ..instance.config
+        };
+
+        let updated = update_rust_config(&db, "rust-server", &config).unwrap();
+
+        assert_eq!(updated.config.hostname, "Rust Server");
+        assert_eq!(updated.config.max_players, 100);
+        assert!(updated.config.auto_restart);
+    }
 }

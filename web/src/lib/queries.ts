@@ -216,6 +216,14 @@ export function useManagedRustResources(name: string, enabled = true) {
   })
 }
 
+export function useManagedRustResourceHistory(name: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', 'rust', name, 'resource-history'],
+    queryFn: () => api.get<ResourceSample[]>(`/games/rust/instances/${name}/resources/history`),
+    enabled,
+  })
+}
+
 export function useCreateManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({

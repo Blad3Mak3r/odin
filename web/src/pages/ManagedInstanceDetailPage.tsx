@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { PageHeader } from '@/components/PageHeader'
+import { ResourceMetric } from '@/components/ResourceMetric'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -17,6 +18,7 @@ import {
   useManagedInstanceAction,
   useManagedInstanceLogs,
   useManagedRustResources,
+  useManagedRustResourceHistory,
   useRestoreManagedBackup,
   useUpdateRustConfig,
 } from '@/lib/queries'
@@ -134,6 +136,7 @@ export function ManagedInstanceDetailPage() {
   const instance = useManagedInstance(gameId, name ?? '')
   const logs = useManagedInstanceLogs(gameId, name ?? '')
   const resources = useManagedRustResources(name ?? '', gameId === 'rust')
+  const resourceHistory = useManagedRustResourceHistory(name ?? '', gameId === 'rust')
   const backups = useManagedBackups(gameId, name ?? '')
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
@@ -190,13 +193,26 @@ export function ManagedInstanceDetailPage() {
       </Card>
       {detail.game === 'rust' && (
         <Card>
-          <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Current CPU and memory use for this Rust server.</CardDescription></CardHeader>
-          <CardContent>
+          <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Live CPU and memory use for this Rust server.</CardDescription></CardHeader>
+          <CardContent className="flex flex-col gap-4">
             {resources.isError ? <QueryError error={resources.error} /> : (
-              <div className="flex gap-8 text-sm">
-                <span><span className="text-muted-foreground">CPU </span>{resources.data?.cpu_percent.toFixed(1) ?? '0.0'}%</span>
-                <span><span className="text-muted-foreground">Memory </span>{formatBytes(resources.data?.memory_bytes ?? 0)}</span>
-              </div>
+              <>
+                {resourceHistory.isError && <QueryError error={resourceHistory.error} />}
+                <ResourceMetric
+                  label="CPU"
+                  value={`${resources.data?.cpu_percent.toFixed(1) ?? '0.0'}%`}
+                  history={resourceHistory.data ?? []}
+                  dataKey="cpu_percent"
+                  formatValue={(value) => `${value.toFixed(1)}%`}
+                />
+                <ResourceMetric
+                  label="Memory"
+                  value={formatBytes(resources.data?.memory_bytes ?? 0)}
+                  history={resourceHistory.data ?? []}
+                  dataKey="memory_bytes"
+                  formatValue={formatBytes}
+                />
+              </>
             )}
           </CardContent>
         </Card>

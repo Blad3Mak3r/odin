@@ -15,7 +15,7 @@ use crate::paths::Paths;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
-use crate::web::runtime::InstanceSnapshot;
+use crate::web::runtime::{InstanceSnapshot, ResourceSample};
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -251,6 +251,34 @@ pub async fn get_rust_resources(
     })
     .await?;
     Ok(Json(rust_resource_snapshot(&state, &instance)))
+}
+
+pub async fn get_rust_resource_history(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    let db = state.db.clone();
+    let load_name = name.clone();
+    run_blocking(move || {
+        game_instances::load_rust(&db, &load_name)?.context("Rust instance does not exist")
+    })
+    .await?;
+
+    match query.hours {
+        Some(hours) => {
+            let db = state.db.clone();
+            let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+            let rows = run_blocking(move || {
+                crate::db::resource_samples::range_for_instance(&db, GameId::Rust, &name, since)
+            })
+            .await?;
+            Ok(Json(rows.into_iter().map(Into::into).collect()))
+        }
+        None => Ok(Json(
+            state.runtime.game_instance_history(GameId::Rust, &name),
+        )),
+    }
 }
 
 pub async fn get_logs(

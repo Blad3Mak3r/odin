@@ -92,6 +92,24 @@ pub fn range(
     Ok(samples)
 }
 
+/// Returns samples for one game instance at or after `since`, oldest first.
+pub fn range_for_instance(
+    db: &Db,
+    game: GameId,
+    name: &str,
+    since: DateTime<Utc>,
+) -> Result<Vec<ResourceSampleRow>> {
+    let conn = db.conn();
+    let mut stmt = conn.prepare(
+        "SELECT at, cpu_percent, memory_bytes FROM resource_samples \
+         WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2) \
+         AND at >= ?3 ORDER BY at ASC",
+    )?;
+    stmt.query_map(params![game.as_str(), name, since], row_to_sample)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 fn row_to_sample(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResourceSampleRow> {
     Ok(ResourceSampleRow {
         at: row.get(0)?,

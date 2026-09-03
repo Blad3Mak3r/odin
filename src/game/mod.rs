@@ -55,7 +55,7 @@ pub struct GameCapabilities {
 
 /// A statically compiled game module. Runtime-installed modules are
 /// intentionally out of scope: both supported games ship with Odin.
-pub trait GameModule: Sync {
+pub trait GameDriver: Sync {
     fn id(&self) -> GameId;
     fn display_name(&self) -> &'static str;
     fn steam_app_id(&self) -> &'static str;
@@ -66,7 +66,7 @@ pub trait GameModule: Sync {
 struct ValheimDriver;
 struct RustDriver;
 
-impl GameModule for ValheimDriver {
+impl GameDriver for ValheimDriver {
     fn id(&self) -> GameId {
         GameId::Valheim
     }
@@ -94,7 +94,7 @@ impl GameModule for ValheimDriver {
     }
 }
 
-impl GameModule for RustDriver {
+impl GameDriver for RustDriver {
     fn id(&self) -> GameId {
         GameId::Rust
     }
@@ -125,14 +125,14 @@ impl GameModule for RustDriver {
 static VALHEIM: ValheimDriver = ValheimDriver;
 static RUST: RustDriver = RustDriver;
 
-pub fn module(game: GameId) -> &'static dyn GameModule {
+pub fn driver(game: GameId) -> &'static dyn GameDriver {
     match game {
         GameId::Valheim => &VALHEIM,
         GameId::Rust => &RUST,
     }
 }
 
-pub fn modules() -> [&'static dyn GameModule; 2] {
+pub fn drivers() -> [&'static dyn GameDriver; 2] {
     [&VALHEIM, &RUST]
 }
 
@@ -142,6 +142,6 @@ mod tests {
 
     #[test]
     fn rust_driver_has_the_dedicated_server_app_id() {
-        assert_eq!(module(GameId::Rust).steam_app_id(), "258550");
+        assert_eq!(driver(GameId::Rust).steam_app_id(), "258550");
     }
 }

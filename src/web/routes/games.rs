@@ -52,7 +52,7 @@ pub struct RustConfigUpdateRequest {
 
 pub async fn list_games() -> Json<Vec<GameView>> {
     Json(
-        game::modules()
+        game::drivers()
             .into_iter()
             .map(|driver| GameView {
                 id: driver.id(),
@@ -121,7 +121,7 @@ pub async fn install_game(
                     }
                 }
             }
-            let driver = game::module(game);
+            let driver = game::driver(game);
             let install_dir = paths.game_install_dir(game);
             let log_file = paths
                 .data_dir
@@ -451,7 +451,7 @@ fn valheim_view(
     Ok(ManagedInstanceView {
         identity,
         running: lifecycle::is_running(&instance)?,
-        capabilities: game::module(GameId::Valheim).capabilities(),
+        capabilities: game::driver(GameId::Valheim).capabilities(),
         config: serde_json::json!({
             "world_name": instance.state.world_name,
             "port": instance.state.port,
@@ -474,7 +474,7 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
     ManagedInstanceView {
         identity: instance.identity,
         running,
-        capabilities: game::module(GameId::Rust).capabilities(),
+        capabilities: game::driver(GameId::Rust).capabilities(),
         config: serde_json::json!({
             "port": instance.config.port,
             "query_port": instance.config.query_port,

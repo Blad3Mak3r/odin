@@ -25,7 +25,7 @@ pub fn spawn(state: AppState) {
 }
 
 fn run_tick(state: &AppState) -> Result<()> {
-    for driver in game::modules() {
+    for driver in game::drivers() {
         let game = driver.id();
         let status = update::check(&state.paths, &state.db, game)?;
         record_update_if_new(&state.db, &state.activity, game, &status)?;

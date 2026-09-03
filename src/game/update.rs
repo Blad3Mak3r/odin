@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::time::Duration;
 
 use crate::db::Db;
-use crate::game::{GameId, GameModule, module};
+use crate::game::{GameDriver, GameId, driver};
 use crate::paths::Paths;
 use crate::steamcmd::{self, SteamCmd};
 
@@ -19,7 +19,7 @@ pub struct InstallStatus {
 }
 
 pub fn check(paths: &Paths, db: &Db, game: GameId) -> Result<InstallStatus> {
-    let driver = module(game);
+    let driver = driver(game);
     let installed_build_id =
         steamcmd::installed_build_id(&paths.game_install_dir(game), driver.steam_app_id());
     let latest_build_id = latest_build_id(paths, db, driver)?;
@@ -30,7 +30,7 @@ pub fn check(paths: &Paths, db: &Db, game: GameId) -> Result<InstallStatus> {
     })
 }
 
-fn latest_build_id(paths: &Paths, db: &Db, driver: &dyn GameModule) -> Result<Option<u64>> {
+fn latest_build_id(paths: &Paths, db: &Db, driver: &dyn GameDriver) -> Result<Option<u64>> {
     let key = format!("{}_latest_build_id", driver.id());
     if let Some(entry) = crate::db::cache::get(db, &key)?
         && let Ok(age) = (chrono::Utc::now() - entry.fetched_at).to_std()

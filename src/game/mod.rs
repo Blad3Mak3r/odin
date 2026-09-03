@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+pub mod instances;
 pub mod rust;
 pub mod update;
 

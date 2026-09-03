@@ -1,6 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { lazy, Suspense } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
 
 const DashboardPage = lazy(() =>
@@ -37,6 +37,15 @@ function RouteFallback() {
   )
 }
 
+function LegacyValheimInstanceRedirect() {
+  const params = useParams()
+  const name = params.name
+  const rest = params['*']
+  if (!name) return <Navigate replace to="/instances" />
+  const suffix = rest ? `/${rest}` : ''
+  return <Navigate replace to={`/instances/valheim/${name}${suffix}`} />
+}
+
 function App() {
   return (
     <AppShell>
@@ -46,7 +55,7 @@ function App() {
           <Route path="/instances" element={<MultiGameInstancesPage />} />
           <Route path="/instances/valheim/:name/*" element={<InstanceDetailPage />} />
           <Route path="/instances/:game/:name" element={<ManagedInstanceDetailPage />} />
-          <Route path="/instances/:name/*" element={<InstanceDetailPage />} />
+          <Route path="/instances/:name/*" element={<LegacyValheimInstanceRedirect />} />
           <Route path="/mods/*" element={<GlobalModsPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/webhooks" element={<WebhooksPage />} />

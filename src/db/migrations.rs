@@ -263,6 +263,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(missing, 0);
+        let config: (String, u16) = conn
+            .query_row(
+                "SELECT world_name, port FROM valheim_instance_configs v \
+                 JOIN game_instances g ON g.id = v.instance_id \
+                 WHERE g.game = 'valheim' AND g.name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(config, ("legacy".to_string(), 2456));
+        let mod_version: String = conn
+            .query_row(
+                "SELECT version FROM installed_mods WHERE mod_id = 'owner-mod'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mod_version, "1.0.0");
+        let access_id: String = conn
+            .query_row(
+                "SELECT steam_id FROM access_list_entries WHERE kind = 'admin'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(access_id, "76561197960287930");
+        let backup_size: u64 = conn
+            .query_row(
+                "SELECT size_bytes FROM backups WHERE id = 'backup'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backup_size, 1);
+        let schedule: (u32, u32, bool) = conn
+            .query_row(
+                "SELECT interval_hours, retain_count, enabled FROM backup_schedules WHERE instance_name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(schedule, (24, 7, true));
+        let credentials: (String, String) = conn
+            .query_row(
+                "SELECT access_key_id, secret_access_key FROM backup_storage_configs WHERE instance_name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(credentials, ("key".to_string(), "secret".to_string()));
+        let telemetry: (f32, u64) = conn
+            .query_row(
+                "SELECT cpu_percent, memory_bytes FROM resource_samples WHERE instance_name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(telemetry, (1.0, 1));
         let game: String = conn
             .query_row(
                 "SELECT game FROM activity_events WHERE id = 'event'",

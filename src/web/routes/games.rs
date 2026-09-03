@@ -15,7 +15,7 @@ use crate::paths::Paths;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
-use crate::web::runtime::{InstanceSnapshot, ResourceSample};
+use crate::web::runtime::{InstanceSnapshot, InstanceTransition, ResourceSample};
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -308,6 +308,10 @@ pub async fn start_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
+    let _transition =
+        state
+            .runtime
+            .begin_game_transition(game, &name, InstanceTransition::Starting)?;
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = match game {
@@ -339,6 +343,10 @@ pub async fn stop_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<StatusCode> {
+    let _transition =
+        state
+            .runtime
+            .begin_game_transition(game, &name, InstanceTransition::Stopping)?;
     match game {
         GameId::Valheim => lifecycle::stop(&state.paths, &state.db, &name).await?,
         GameId::Rust => {
@@ -362,6 +370,10 @@ pub async fn restart_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
+    let _transition =
+        state
+            .runtime
+            .begin_game_transition(game, &name, InstanceTransition::Restarting)?;
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = match game {

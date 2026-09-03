@@ -186,6 +186,17 @@ fn spawn_telemetry(state: AppState) {
 
 async fn attempt_rust_auto_restart(state: &AppState, name: String) {
     tracing::warn!(instance = %name, game = "rust", "instance found dead; attempting automatic restart");
+    let _transition = match state.runtime.begin_game_transition(
+        GameId::Rust,
+        &name,
+        InstanceTransition::Starting,
+    ) {
+        Ok(transition) => transition,
+        Err(error) => {
+            tracing::debug!(instance = %name, game = "rust", %error, "automatic restart skipped");
+            return;
+        }
+    };
     let instance = match game_instances::load_rust(&state.db, &name) {
         Ok(Some(instance)) => instance,
         Ok(None) => return,

@@ -257,6 +257,14 @@ export interface InstanceResources {
 export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'cloning' | 'updating_bepinex'
 export type InstanceTransitions = Record<string, InstanceTransition>
 
+export interface GameInstanceTransition {
+  game: GameId
+  name: string
+  transition: InstanceTransition
+}
+
+export type GameInstanceTransitions = GameInstanceTransition[]
+
 export interface ResourceSample {
   at: string
   cpu_percent: number

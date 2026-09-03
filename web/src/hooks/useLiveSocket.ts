@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import type {
   ActivityEvent,
+  GameInstanceTransitions,
   HostResources,
   InstanceResources,
   InstanceTransitions,
@@ -20,6 +21,7 @@ type WireEvent =
   | { type: 'activity'; event: ActivityEvent }
   | { type: 'resources'; tick: ResourcesTick }
   | { type: 'transitions'; transitions: InstanceTransitions }
+  | { type: 'game_transitions'; transitions: GameInstanceTransitions }
   | { type: 'lagged'; skipped: number }
 
 /// Keeps a single global SSE connection open for the lifetime of the app
@@ -83,6 +85,20 @@ function applyWireEvent(queryClient: QueryClient, event: WireEvent) {
     if (transitionCompleted) {
       queryClient.invalidateQueries({ queryKey: ['instances'] })
       queryClient.invalidateQueries({ queryKey: ['version'] })
+    }
+    return
+  }
+  if (event.type === 'game_transitions') {
+    const previous = queryClient.getQueryData<GameInstanceTransitions>(['game-instance-transitions']) ?? []
+    queryClient.setQueryData(['game-instance-transitions'], event.transitions)
+
+    const transitionCompleted = previous.some(
+      (previousTransition) => !event.transitions.some(
+        (transition) => transition.game === previousTransition.game && transition.name === previousTransition.name,
+      ),
+    )
+    if (transitionCompleted) {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
     }
     return
   }

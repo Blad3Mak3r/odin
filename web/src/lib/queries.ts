@@ -17,6 +17,7 @@ import type {
   ConfigView,
   GlobalMod,
   GameId,
+  GameInstanceTransitions,
   GameView,
   HostResources,
   InstallStatusView,
@@ -196,6 +197,18 @@ export function useManagedInstance(game: GameId, name: string) {
     queryKey: ['managed-instances', game, name],
     queryFn: () => api.get<ManagedInstanceView>(`/games/${game}/instances/${name}`),
     refetchInterval: 5_000,
+  })
+}
+
+export function useManagedInstanceTransition(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['game-instance-transitions'],
+    queryFn: () => Promise.resolve<GameInstanceTransitions>([]),
+    initialData: [] as GameInstanceTransitions,
+    staleTime: Infinity,
+    select: (transitions): InstanceTransition | null => (
+      transitions.find((transition) => transition.game === game && transition.name === name)?.transition ?? null
+    ),
   })
 }
 

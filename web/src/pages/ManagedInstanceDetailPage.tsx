@@ -17,6 +17,7 @@ import {
   useManagedInstance,
   useManagedInstanceAction,
   useManagedInstanceLogs,
+  useManagedInstanceTransition,
   useManagedRustResources,
   useManagedRustResourceHistory,
   useRestoreManagedBackup,
@@ -141,6 +142,7 @@ export function ManagedInstanceDetailPage() {
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
+  const transition = useManagedInstanceTransition(gameId, name ?? '')
   const createBackup = useCreateManagedBackup()
   const restoreBackup = useRestoreManagedBackup()
   const { confirm, dialog } = useConfirmDialog()
@@ -150,7 +152,7 @@ export function ManagedInstanceDetailPage() {
   const detail = instance.data
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
   const target = { game: detail.game, name: detail.name }
-  const busy = start.isPending || stop.isPending || restart.isPending
+  const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
   const backupsRequireStop = detail.game === 'rust' && detail.running
 
   const restore = async (backupId: string) => {

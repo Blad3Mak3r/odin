@@ -13,7 +13,7 @@ import { QueryError } from '@/components/QueryError'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useCreateManagedInstance, useGameInstallStatus, useGames, useInstallGame, useJobs, useManagedInstanceAction, useManagedInstances } from '@/lib/queries'
+import { useCreateManagedInstance, useGameInstallStatus, useGames, useInstallGame, useJobs, useManagedInstanceAction, useManagedInstanceTransition, useManagedInstances } from '@/lib/queries'
 import type { GameId, GameView, ManagedInstanceView } from '@/lib/types'
 
 type Filter = 'all' | GameId
@@ -119,7 +119,8 @@ function ManagedInstanceRow({ instance }: { instance: ManagedInstanceView }) {
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
-  const busy = start.isPending || stop.isPending || restart.isPending
+  const transition = useManagedInstanceTransition(instance.game, instance.name)
+  const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
   const port = typeof instance.config.port === 'number' ? instance.config.port : '—'
   const action = { game: instance.game, name: instance.name }
 

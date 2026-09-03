@@ -40,6 +40,19 @@ pub enum InstanceTransition {
 
 pub type InstanceTransitions = HashMap<String, InstanceTransition>;
 
+/// A lifecycle transition scoped to a concrete game instance. The legacy
+/// `InstanceTransitions` shape is kept for Valheim's compatibility routes,
+/// while this representation prevents identically named game instances from
+/// blocking each other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GameInstanceTransition {
+    pub game: GameId,
+    pub name: String,
+    pub transition: InstanceTransition,
+}
+
+pub type GameInstanceTransitions = Vec<GameInstanceTransition>;
+
 /// How often a downsampled sample gets written to `resource_samples` for
 /// long-range history — the in-memory buffer above already covers the
 /// short term at full resolution, so this only needs to be coarse.
@@ -139,8 +152,8 @@ pub struct RuntimeRegistry {
     host: Arc<Mutex<HostState>>,
     instances: Arc<Mutex<HashMap<GameInstanceKey, InstanceState>>>,
     ticks: broadcast::Sender<ResourcesTick>,
-    transitions: Arc<Mutex<InstanceTransitions>>,
-    transition_events: broadcast::Sender<InstanceTransitions>,
+    transitions: Arc<Mutex<HashMap<GameInstanceKey, InstanceTransition>>>,
+    transition_events: broadcast::Sender<GameInstanceTransitions>,
     auto_restart_attempts: Arc<Mutex<HashMap<GameInstanceKey, DateTime<Utc>>>>,
     db: Arc<Db>,
     last_persisted_at: Arc<Mutex<Option<DateTime<Utc>>>>,
@@ -180,17 +193,32 @@ impl RuntimeRegistry {
         name: &str,
         transition: InstanceTransition,
     ) -> Result<InstanceTransitionGuard, InstanceError> {
+        self.begin_game_transition(GameId::Valheim, name, transition)
+    }
+
+    /// Marks a game instance as transitioning. The game is part of the lock
+    /// identity, so a Valheim and Rust instance may safely share a name.
+    pub fn begin_game_transition(
+        &self,
+        game: GameId,
+        name: &str,
+        transition: InstanceTransition,
+    ) -> Result<InstanceTransitionGuard, InstanceError> {
         let mut transitions = self
             .transitions
             .lock()
             .expect("runtime transitions lock poisoned");
-        if transitions.contains_key(name) {
+        let key = GameInstanceKey::new(game, name);
+        if transitions.contains_key(&key) {
             return Err(InstanceError::TransitionInProgress(name.to_string()));
         }
-        transitions.insert(name.to_string(), transition);
-        let _ = self.transition_events.send(transitions.clone());
+        transitions.insert(key, transition);
+        let _ = self
+            .transition_events
+            .send(game_transition_snapshot(&transitions));
         Ok(InstanceTransitionGuard {
             runtime: self.clone(),
+            game,
             name: name.to_string(),
         })
     }
@@ -198,17 +226,20 @@ impl RuntimeRegistry {
     /// Returns one atomic current snapshot plus a receiver for later full
     /// snapshots. Full replacement lets a client recover even if it lagged
     /// over an earlier transition event.
-    pub fn subscribe_transitions(
+    pub fn subscribe_game_transitions(
         &self,
     ) -> (
-        InstanceTransitions,
-        broadcast::Receiver<InstanceTransitions>,
+        GameInstanceTransitions,
+        broadcast::Receiver<GameInstanceTransitions>,
     ) {
         let transitions = self
             .transitions
             .lock()
             .expect("runtime transitions lock poisoned");
-        (transitions.clone(), self.transition_events.subscribe())
+        (
+            game_transition_snapshot(&transitions),
+            self.transition_events.subscribe(),
+        )
     }
 
     pub fn push_host_sample(&self, snapshot: HostSnapshot) {
@@ -415,6 +446,7 @@ impl RuntimeRegistry {
 
 pub struct InstanceTransitionGuard {
     runtime: RuntimeRegistry,
+    game: GameId,
     name: String,
 }
 
@@ -425,9 +457,32 @@ impl Drop for InstanceTransitionGuard {
             .transitions
             .lock()
             .expect("runtime transitions lock poisoned");
-        transitions.remove(&self.name);
-        let _ = self.runtime.transition_events.send(transitions.clone());
+        transitions.remove(&GameInstanceKey::new(self.game, &self.name));
+        let _ = self
+            .runtime
+            .transition_events
+            .send(game_transition_snapshot(&transitions));
     }
+}
+
+fn game_transition_snapshot(
+    transitions: &HashMap<GameInstanceKey, InstanceTransition>,
+) -> GameInstanceTransitions {
+    let mut snapshot: GameInstanceTransitions = transitions
+        .iter()
+        .map(|(key, transition)| GameInstanceTransition {
+            game: key.game,
+            name: key.name.clone(),
+            transition: *transition,
+        })
+        .collect();
+    snapshot.sort_by(|left, right| {
+        left.game
+            .to_string()
+            .cmp(&right.game.to_string())
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    snapshot
 }
 
 fn push_capped(buf: &mut VecDeque<ResourceSample>, sample: ResourceSample) {
@@ -501,17 +556,17 @@ mod tests {
     #[test]
     fn transition_guard_broadcasts_full_snapshots_and_clears_on_drop() {
         let registry = temp_registry("transitions");
-        let (initial, mut receiver) = registry.subscribe_transitions();
+        let (initial, mut receiver) = registry.subscribe_game_transitions();
         assert!(initial.is_empty());
 
         let guard = registry
             .begin_transition("my-server", InstanceTransition::Restarting)
             .unwrap();
         let active = receiver.try_recv().unwrap();
-        assert_eq!(
-            active.get("my-server"),
-            Some(&InstanceTransition::Restarting)
-        );
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].game, GameId::Valheim);
+        assert_eq!(active[0].name, "my-server");
+        assert_eq!(active[0].transition, InstanceTransition::Restarting);
         assert!(matches!(
             registry.begin_transition("my-server", InstanceTransition::Stopping),
             Err(InstanceError::TransitionInProgress(name)) if name == "my-server"
@@ -519,6 +574,25 @@ mod tests {
 
         drop(guard);
         assert!(receiver.try_recv().unwrap().is_empty());
+    }
+
+    #[test]
+    fn game_instances_with_the_same_name_have_independent_transitions() {
+        let registry = temp_registry("game-transitions");
+        let valheim = registry
+            .begin_game_transition(GameId::Valheim, "shared", InstanceTransition::Starting)
+            .unwrap();
+        let rust = registry
+            .begin_game_transition(GameId::Rust, "shared", InstanceTransition::Starting)
+            .unwrap();
+
+        assert!(matches!(
+            registry.begin_game_transition(GameId::Rust, "shared", InstanceTransition::Stopping),
+            Err(InstanceError::TransitionInProgress(name)) if name == "shared"
+        ));
+
+        drop(valheim);
+        drop(rust);
     }
 
     #[test]

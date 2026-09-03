@@ -18,7 +18,6 @@ mod readiness_events;
 mod save_events;
 mod steamcmd;
 mod supervisor;
-mod valheim_update;
 mod web;
 
 use std::process::ExitCode;

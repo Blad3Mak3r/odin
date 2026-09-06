@@ -40,6 +40,12 @@ async fn start_unlocked(
     if is_running(instance) {
         bail!("instance '{}' is already running", instance.name());
     }
+    crate::game::ports::ensure_available(
+        db,
+        crate::game::GameId::Rust,
+        instance.name(),
+        [instance.config.port, instance.config.query_port],
+    )?;
 
     let command = build_command(paths, instance)?;
     let child = process::spawn(command)

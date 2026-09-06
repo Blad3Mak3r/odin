@@ -87,7 +87,7 @@ pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
         );
     }
 
-    check_port_available(paths, db, &instance)?;
+    check_port_available(db, &instance)?;
     prepare_instance_layout(paths, &instance)?;
 
     Ok(instance)
@@ -268,20 +268,13 @@ pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
     Ok(())
 }
 
-fn check_port_available(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-    for other in super::list_all(paths, db)? {
-        if other.state.name == instance.state.name {
-            continue;
-        }
-        if other.state.port == instance.state.port && is_running(&other)? {
-            bail!(
-                "port {} is already in use by running instance '{}'",
-                instance.state.port,
-                other.state.name
-            );
-        }
-    }
-    Ok(())
+fn check_port_available(db: &Db, instance: &Instance) -> Result<()> {
+    crate::game::ports::ensure_available(
+        db,
+        GameId::Valheim,
+        &instance.state.name,
+        crate::game::ports::block(GameId::Valheim, instance.state.port)?,
+    )
 }
 
 fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {

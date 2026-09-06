@@ -22,7 +22,7 @@ const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Spawns `odin run --instance <name>` detached: its own process group
-/// (same mechanism `instance::process::build_command` already uses for the
+/// (same mechanism Valheim's command builder already uses for the
 /// Valheim child itself), stdin discarded. stdout/stderr are appended to
 /// `<instance_dir>/logs/supervisor.log` rather than discarded — anything the
 /// supervisor prints before it manages to bind its own sockets (a startup

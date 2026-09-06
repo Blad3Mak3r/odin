@@ -51,6 +51,10 @@ const LIVE_FALLBACK_INTERVAL = 30_000
 // newly published release without needing a manual reload.
 const VERSION_CHECK_INTERVAL = 30 * 60_000
 
+function valheimInstancePath(name: string, suffix = '') {
+  return `/games/valheim/instances/${name}${suffix}`
+}
+
 export function useVersion() {
   return useQuery({
     queryKey: ['version'],
@@ -95,7 +99,7 @@ export function useHostResourceHistory() {
 export function useInstanceResources(name: string, enabled = true) {
   return useQuery({
     queryKey: ['resources', 'instance', name],
-    queryFn: () => api.get<InstanceResources>(`/instances/${name}/resources`),
+    queryFn: () => api.get<InstanceResources>(valheimInstancePath(name, '/resources')),
     refetchInterval: LIVE_FALLBACK_INTERVAL,
     enabled,
   })
@@ -113,7 +117,7 @@ export function useInstanceResourceHistory(name: string, hours?: number, enabled
       : ['resource-history', 'instance', name],
     queryFn: () =>
       api.get<ResourceSample[]>(
-        `/instances/${name}/resources/history${hours ? `?hours=${hours}` : ''}`,
+        valheimInstancePath(name, `/resources/history${hours ? `?hours=${hours}` : ''}`),
       ),
     staleTime: hours ? 60_000 : Infinity,
     enabled,
@@ -123,7 +127,7 @@ export function useInstanceResourceHistory(name: string, hours?: number, enabled
 export function usePlayers(name: string, enabled = true) {
   return useQuery({
     queryKey: ['players', name],
-    queryFn: () => api.get<PlayerInfo[]>(`/instances/${name}/players`),
+    queryFn: () => api.get<PlayerInfo[]>(valheimInstancePath(name, '/players')),
     staleTime: Infinity,
     enabled,
   })
@@ -312,7 +316,7 @@ export function useRestoreManagedBackup() {
 export function useInstance(name: string) {
   return useQuery({
     queryKey: ['instances', name],
-    queryFn: () => api.get<InstanceView>(`/instances/${name}`),
+    queryFn: () => api.get<InstanceView>(valheimInstancePath(name, '/status')),
     refetchInterval: 5_000,
   })
 }
@@ -348,7 +352,7 @@ export function useCloneInstance(sourceName: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, worldName }: { name: string; worldName: string }) =>
-      api.post<InstanceView>(`/instances/${sourceName}/clone`, { name, world_name: worldName }),
+      api.post<InstanceView>(valheimInstancePath(sourceName, '/clone'), { name, world_name: worldName }),
     onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['instances'] })
       queryClient.invalidateQueries({ queryKey: ['instances', instance.name] })
@@ -360,7 +364,7 @@ export function useCloneInstance(sourceName: string) {
 function useInstanceAction(action: 'start' | 'stop' | 'restart') {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<InstanceView>(`/instances/${name}/${action}`),
+    mutationFn: (name: string) => api.post<void>(valheimInstancePath(name, `/${action}`)),
     onSuccess: (_data, name) => {
       queryClient.invalidateQueries({ queryKey: ['instances'] })
       queryClient.invalidateQueries({ queryKey: ['instances', name] })
@@ -401,14 +405,14 @@ export function useBulkUpdateMods() {
 export function useBepInExStatus(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'bepinex-status'],
-    queryFn: () => api.get<BepInExStatus>(`/instances/${name}/bepinex/status`),
+    queryFn: () => api.get<BepInExStatus>(valheimInstancePath(name, '/bepinex/status')),
   })
 }
 
 export function useUpdateBepInEx() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<JobHandle>(`/instances/${name}/bepinex/update`),
+    mutationFn: (name: string) => api.post<JobHandle>(valheimInstancePath(name, '/bepinex/update')),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   })
 }
@@ -426,7 +430,7 @@ export function useRenameInstance() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, newName }: { name: string; newName: string }) =>
-      api.post<InstanceView>(`/instances/${name}/rename`, { new_name: newName }),
+      api.post<InstanceView>(valheimInstancePath(name, '/rename'), { new_name: newName }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances'] }),
   })
 }
@@ -435,7 +439,7 @@ export function useDeleteInstance() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, keepBackups }: { name: string; keepBackups: boolean }) =>
-      api.delete<void>(`/instances/${name}?keep_backups=${keepBackups}`),
+      api.delete<void>(valheimInstancePath(name, `?keep_backups=${keepBackups}`)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances'] }),
   })
 }
@@ -443,14 +447,14 @@ export function useDeleteInstance() {
 export function useConfig(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'config'],
-    queryFn: () => api.get<ConfigView>(`/instances/${name}/config`),
+    queryFn: () => api.get<ConfigView>(valheimInstancePath(name, '/config')),
   })
 }
 
 export function useUpdateConfig(name: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (req: ConfigUpdateRequest) => api.put<ConfigView>(`/instances/${name}/config`, req),
+    mutationFn: (req: ConfigUpdateRequest) => api.put<ConfigView>(valheimInstancePath(name, '/config'), req),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'config'] })
       queryClient.invalidateQueries({ queryKey: ['instances', name] })
@@ -461,7 +465,7 @@ export function useUpdateConfig(name: string) {
 export function useLogs(name: string, lines = 200) {
   return useQuery({
     queryKey: ['instances', name, 'logs', lines],
-    queryFn: () => api.get<LogsView>(`/instances/${name}/logs?lines=${lines}`),
+    queryFn: () => api.get<LogsView>(valheimInstancePath(name, `/logs?lines=${lines}`)),
   })
 }
 
@@ -470,14 +474,14 @@ export function useLogs(name: string, lines = 200) {
 export function useLastExit(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'last-exit'],
-    queryFn: () => api.get<LastExitInfo | null>(`/instances/${name}/last-exit`),
+    queryFn: () => api.get<LastExitInfo | null>(valheimInstancePath(name, '/last-exit')),
   })
 }
 
 export function useMods(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'mods'],
-    queryFn: () => api.get(`/instances/${name}/mods`) as Promise<InstanceView['installed_mods']>,
+    queryFn: () => api.get(valheimInstancePath(name, '/mods')) as Promise<InstanceView['installed_mods']>,
   })
 }
 
@@ -496,7 +500,7 @@ export function useAddMod() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, modId }: { name: string; modId: string }) =>
-      api.post<JobHandle>(`/instances/${name}/mods`, { mod_id: modId }),
+      api.post<JobHandle>(valheimInstancePath(name, '/mods'), { mod_id: modId }),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
@@ -509,7 +513,7 @@ export function useRemoveMod() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, modId }: { name: string; modId: string }) =>
-      api.delete<void>(`/instances/${name}/mods/${encodeURIComponent(modId)}`),
+      api.delete<void>(valheimInstancePath(name, `/mods/${encodeURIComponent(modId)}`)),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
@@ -522,7 +526,7 @@ export function useSetModEnabled() {
   return useMutation({
     mutationFn: ({ name, modId, enabled }: { name: string; modId: string; enabled: boolean }) =>
       api.post<void>(
-        `/instances/${name}/mods/${encodeURIComponent(modId)}/${enabled ? 'enable' : 'disable'}`,
+        valheimInstancePath(name, `/mods/${encodeURIComponent(modId)}/${enabled ? 'enable' : 'disable'}`),
       ),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
@@ -535,7 +539,7 @@ export function useSelectModVersion() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, modId, version }: { name: string; modId: string; version: string }) =>
-      api.put<void>(`/instances/${name}/mods/${encodeURIComponent(modId)}/version`, { version }),
+      api.put<void>(valheimInstancePath(name, `/mods/${encodeURIComponent(modId)}/version`), { version }),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
@@ -547,7 +551,7 @@ export function useSetModPinned() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, modId, pinned }: { name: string; modId: string; pinned: boolean }) =>
-      api.put<void>(`/instances/${name}/mods/${encodeURIComponent(modId)}/pinned`, { pinned }),
+      api.put<void>(valheimInstancePath(name, `/mods/${encodeURIComponent(modId)}/pinned`), { pinned }),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
@@ -558,7 +562,7 @@ export function useSetModPinned() {
 export function useUpdateMods() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<JobHandle>(`/instances/${name}/mods/update`),
+    mutationFn: (name: string) => api.post<JobHandle>(valheimInstancePath(name, '/mods/update')),
     onSuccess: (_data, name) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
@@ -570,14 +574,14 @@ export function useUpdateMods() {
 export function useBackups(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'backups'],
-    queryFn: () => api.get<BackupEntry[]>(`/instances/${name}/backups`),
+    queryFn: () => api.get<BackupEntry[]>(valheimInstancePath(name, '/backups')),
   })
 }
 
 export function useCreateBackup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<JobHandle>(`/instances/${name}/backups`),
+    mutationFn: (name: string) => api.post<JobHandle>(valheimInstancePath(name, '/backups/jobs')),
     onSuccess: (_data, name) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
@@ -589,7 +593,7 @@ export function useRestoreBackup() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
-      api.post<JobHandle>(`/instances/${name}/backups/${backupId}/restore`),
+      api.post<JobHandle>(valheimInstancePath(name, `/backups/${backupId}/restore/job`)),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
@@ -601,7 +605,7 @@ export function useDeleteBackup() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
-      api.delete<void>(`/instances/${name}/backups/${backupId}`),
+      api.delete<void>(valheimInstancePath(name, `/backups/${backupId}`)),
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
     },
@@ -611,7 +615,7 @@ export function useDeleteBackup() {
 export function useBackupSchedule(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'backup-schedule'],
-    queryFn: () => api.get<BackupScheduleView>(`/instances/${name}/backup-schedule`),
+    queryFn: () => api.get<BackupScheduleView>(valheimInstancePath(name, '/backup-schedule')),
   })
 }
 
@@ -619,7 +623,7 @@ export function useSetBackupSchedule(name: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (req: Omit<BackupScheduleView, 'last_run_at'>) =>
-      api.put<BackupScheduleView>(`/instances/${name}/backup-schedule`, req),
+      api.put<BackupScheduleView>(valheimInstancePath(name, '/backup-schedule'), req),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-schedule'] })
     },
@@ -629,7 +633,7 @@ export function useSetBackupSchedule(name: string) {
 export function useBackupStorage(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'backup-storage'],
-    queryFn: () => api.get<BackupStorageView>(`/instances/${name}/backup-storage`),
+    queryFn: () => api.get<BackupStorageView>(valheimInstancePath(name, '/backup-storage')),
   })
 }
 
@@ -637,7 +641,7 @@ export function useSetBackupStorage(name: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (req: BackupStorageRequest) =>
-      api.put<BackupStorageView>(`/instances/${name}/backup-storage`, req),
+      api.put<BackupStorageView>(valheimInstancePath(name, '/backup-storage'), req),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-storage'] })
     },
@@ -707,7 +711,7 @@ export function useUploadMod() {
       formData.set('name', modName)
       if (version.trim()) formData.set('version', version)
       formData.set('file', file)
-      return api.upload<JobHandle>(`/instances/${name}/mods/upload`, formData)
+      return api.upload<JobHandle>(valheimInstancePath(name, '/mods/upload'), formData)
     },
     onSuccess: (_data, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
@@ -743,14 +747,14 @@ export function useClearNexusApiKey() {
 export function useList(name: string, kind: ListKind) {
   return useQuery({
     queryKey: ['instances', name, 'lists', kind],
-    queryFn: () => api.get<ListView>(`/instances/${name}/lists/${kind}`),
+    queryFn: () => api.get<ListView>(valheimInstancePath(name, `/lists/${kind}`)),
   })
 }
 
 export function useAddListEntry(name: string, kind: ListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post<void>(`/instances/${name}/lists/${kind}`, { id }),
+    mutationFn: (id: string) => api.post<void>(valheimInstancePath(name, `/lists/${kind}`), { id }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
   })
 }
@@ -759,7 +763,7 @@ export function useRemoveListEntry(name: string, kind: ListKind) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) =>
-      api.delete<void>(`/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
+      api.delete<void>(valheimInstancePath(name, `/lists/${kind}/${encodeURIComponent(id)}`)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
   })
 }
@@ -767,7 +771,7 @@ export function useRemoveListEntry(name: string, kind: ListKind) {
 export function useConfigFiles(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'bepinex-config'],
-    queryFn: () => api.get<ConfigFileEntry[]>(`/instances/${name}/bepinex/config`),
+    queryFn: () => api.get<ConfigFileEntry[]>(valheimInstancePath(name, '/bepinex/config')),
   })
 }
 
@@ -775,7 +779,7 @@ export function useConfigFileContent(name: string, filename: string | null) {
   return useQuery({
     queryKey: ['instances', name, 'bepinex-config', filename],
     queryFn: () =>
-      api.get<ConfigFileView>(`/instances/${name}/bepinex/config/${encodeURIComponent(filename!)}`),
+      api.get<ConfigFileView>(valheimInstancePath(name, `/bepinex/config/${encodeURIComponent(filename!)}`)),
     enabled: filename !== null,
   })
 }
@@ -784,7 +788,7 @@ export function useSetConfigFileContent(name: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ filename, content }: { filename: string; content: string }) =>
-      api.put<void>(`/instances/${name}/bepinex/config/${encodeURIComponent(filename)}`, { content }),
+      api.put<void>(valheimInstancePath(name, `/bepinex/config/${encodeURIComponent(filename)}`), { content }),
     onSuccess: (_data, { filename }) => {
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'bepinex-config', filename] })
       queryClient.invalidateQueries({ queryKey: ['instances', name, 'bepinex-config'] })

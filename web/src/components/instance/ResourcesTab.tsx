@@ -61,7 +61,7 @@ export function ResourcesTab({ name, running }: { name: string; running: boolean
           ))}
         </div>
         <a
-          href={`/api/instances/${name}/resources/history/export${hours ? `?hours=${hours}` : ''}`}
+          href={`/api/games/valheim/instances/${name}/resources/history/export${hours ? `?hours=${hours}` : ''}`}
           download
           className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
         >

@@ -78,6 +78,10 @@ pub fn build_router(state: AppState) -> Router {
             post(instances::clone_instance),
         )
         .route(
+            "/games/valheim/instances/{name}/status",
+            get(instances::get_instance),
+        )
+        .route(
             "/games/valheim/instances/{name}/rename",
             post(instances::rename_instance),
         )
@@ -144,6 +148,21 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/valheim/instances/{name}/backup-storage",
             get(backups::get_backup_storage).put(backups::set_backup_storage),
+        )
+        // Valheim backups already expose job progress in the dashboard. Keep
+        // that richer contract under the canonical namespace while the
+        // generic backup route remains the synchronous driver operation.
+        .route(
+            "/games/valheim/instances/{name}/backups/jobs",
+            post(backups::create_backup),
+        )
+        .route(
+            "/games/valheim/instances/{name}/backups/{id}/restore/job",
+            post(backups::restore_backup),
+        )
+        .route(
+            "/games/valheim/instances/{name}/backups/{id}",
+            delete(backups::delete_backup),
         )
         .route(
             "/games/valheim/instances/{name}/bepinex/config",

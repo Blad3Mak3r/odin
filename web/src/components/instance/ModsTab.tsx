@@ -214,7 +214,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
         </h2>
         <div className="flex items-center gap-2">
           <a
-            href={`/api/instances/${name}/mods/modpack`}
+            href={`/api/games/valheim/instances/${name}/mods/modpack`}
             download
             className={cn(
               buttonVariants({ variant: 'outline', size: 'sm' }),

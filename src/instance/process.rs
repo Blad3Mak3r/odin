@@ -129,7 +129,7 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
     Ok(cmd)
 }
 
-/// Spawns `cmd`, detached at the OS level from the moment it starts:
+/// Spawns a game-server command, detached at the OS level from the moment it starts:
 /// `kill_on_drop` is left at its tokio default of `false`, so if `odin
 /// serve` exits or is restarted while holding this `Child`, dropping it
 /// does NOT kill the process — it simply reparents to PID 1 (which reaps
@@ -138,7 +138,7 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
 /// instances survive `systemctl restart odin`; never call `.kill()` on a
 /// `Child` obtained this way except as part of an explicit `stop()`.
 pub async fn spawn(mut cmd: Command) -> Result<Child> {
-    cmd.spawn().context("failed to spawn valheim_server.x86_64")
+    cmd.spawn().context("failed to spawn game server process")
 }
 
 /// The process's own kernel start time — the liveness fingerprint for a

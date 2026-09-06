@@ -41,6 +41,28 @@ async fn start_unlocked(
         bail!("instance '{}' is already running", instance.name());
     }
 
+    let command = build_command(paths, instance)?;
+    let child = process::spawn(command)
+        .await
+        .context("failed to start RustDedicated")?;
+    let pid = child.id().context("spawned RustDedicated has no pid")?;
+    let pid_started_at = process::start_time_of(pid)?;
+    // Dropping Tokio's Child leaves the dedicated server running. Its PID
+    // fingerprint is persisted and is the authority for later stop/restart.
+    drop(child);
+    crate::db::game_instances::set_rust_pid(
+        db,
+        instance.name(),
+        pid,
+        pid_started_at,
+        chrono::Utc::now(),
+    )
+}
+
+/// Builds Rust Dedicated's process command using Odin's game-isolated
+/// instance layout. Spawning itself is shared with Valheim through
+/// [`process::spawn`].
+pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> {
     let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
     let binary = install_dir.join("RustDedicated");
     if !binary.is_file() {
@@ -49,7 +71,6 @@ async fn start_unlocked(
             binary.display()
         );
     }
-
     let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
     let log_dir = instance_dir.join("logs");
     std::fs::create_dir_all(&log_dir)
@@ -91,19 +112,7 @@ async fn start_unlocked(
         .stderr(Stdio::from(stderr))
         .process_group(0);
 
-    let child = command.spawn().context("failed to start RustDedicated")?;
-    let pid = child.id().context("spawned RustDedicated has no pid")?;
-    let pid_started_at = process::start_time_of(pid)?;
-    // Dropping Tokio's Child leaves the dedicated server running. Its PID
-    // fingerprint is persisted and is the authority for later stop/restart.
-    drop(child);
-    crate::db::game_instances::set_rust_pid(
-        db,
-        instance.name(),
-        pid,
-        pid_started_at,
-        chrono::Utc::now(),
-    )
+    Ok(command)
 }
 
 pub async fn stop(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {

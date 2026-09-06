@@ -1,5 +1,7 @@
 //! Game-neutral identity records plus Rust's v1 configuration.
 
+use std::collections::HashSet;
+
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
@@ -190,15 +192,39 @@ pub fn clear_rust_pid(db: &crate::db::Db, name: &str, stopped_at: DateTime<Utc>)
 
 fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
     let conn = db.conn();
-    let mut statement = conn.prepare("SELECT port FROM rust_instance_configs")?;
-    let ports = statement
+    let mut reserved_ports = HashSet::new();
+
+    // Valheim occupies a three-port block starting at its configured port.
+    // Rust owns both its game and query ports, which may not be consecutive
+    // after future configuration changes, so reserve their recorded values.
+    let mut valheim_ports = conn.prepare("SELECT port FROM instances")?;
+    for port in valheim_ports
         .query_map([], |row| row.get::<_, u16>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    {
+        for offset in 0..=2 {
+            if let Some(port) = port.checked_add(offset) {
+                reserved_ports.insert(port);
+            }
+        }
+    }
+    let mut rust_ports = conn.prepare("SELECT port, query_port FROM rust_instance_configs")?;
+    for (port, query_port) in rust_ports
+        .query_map([], |row| Ok((row.get::<_, u16>(0)?, row.get::<_, u16>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    {
+        reserved_ports.insert(port);
+        reserved_ports.insert(query_port);
+    }
+
     let mut port = 28015u16;
-    while ports.contains(&port) {
+    loop {
+        let query_port = port.checked_add(1).context("no Rust port block remains")?;
+        if !reserved_ports.contains(&port) && !reserved_ports.contains(&query_port) {
+            return Ok(port);
+        }
         port = port.checked_add(2).context("no Rust port block remains")?;
     }
-    Ok(port)
 }
 
 fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
@@ -230,16 +256,23 @@ fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn update_rust_config_persists_game_specific_settings() {
-        let dir =
-            std::env::temp_dir().join(format!("odin-rust-config-test-{}", uuid::Uuid::new_v4()));
+    fn temp_context(label: &str) -> (Paths, crate::db::Db) {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-rust-config-test-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths {
             data_dir: dir.clone(),
             config_dir: dir,
         };
         let db = crate::db::Db::open(&paths).unwrap();
+        (paths, db)
+    }
+
+    #[test]
+    fn update_rust_config_persists_game_specific_settings() {
+        let (paths, db) = temp_context("settings");
         let instance = create_rust(&paths, &db, "rust-server").unwrap();
         assert!(!instance.config.auto_restart);
         let config = RustInstanceConfig {
@@ -257,5 +290,22 @@ mod tests {
         assert_eq!(updated.config.hostname, "Rust Server");
         assert_eq!(updated.config.max_players, 100);
         assert!(updated.config.auto_restart);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn rust_port_allocation_skips_valheim_port_blocks() {
+        let (paths, db) = temp_context("ports");
+        let mut valheim = crate::instance::Instance::create(&paths, &db, "valheim-server").unwrap();
+        valheim.state.port = 28016;
+        valheim.save(&db).unwrap();
+
+        let rust = create_rust(&paths, &db, "rust-server").unwrap();
+
+        assert_eq!(rust.config.port, 28019);
+        assert_eq!(rust.config.query_port, 28020);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

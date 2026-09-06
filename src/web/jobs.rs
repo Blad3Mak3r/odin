@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 use crate::db::jobs as db_jobs;
+use crate::game::GameId;
 
 pub type JobId = String;
 
@@ -30,7 +31,10 @@ const MAX_LOADED_JOBS: usize = 200;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobKindDescr {
-    SteamcmdInstall,
+    SteamcmdInstall {
+        #[serde(default = "valheim_game")]
+        game: GameId,
+    },
     ModAdd {
         instance: String,
         mod_id: String,
@@ -55,6 +59,10 @@ pub enum JobKindDescr {
         from_version: Option<String>,
         to_version: String,
     },
+}
+
+const fn valheim_game() -> GameId {
+    GameId::Valheim
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -374,10 +382,15 @@ mod tests {
     #[tokio::test]
     async fn successful_job_ends_succeeded() {
         let registry = temp_registry("success");
-        let id = registry.spawn(JobKindDescr::SteamcmdInstall, |logger| {
-            logger.line("working");
-            Ok(())
-        });
+        let id = registry.spawn(
+            JobKindDescr::SteamcmdInstall {
+                game: GameId::Valheim,
+            },
+            |logger| {
+                logger.line("working");
+                Ok(())
+            },
+        );
 
         for _ in 0..100 {
             if matches!(registry.get(&id).unwrap().status, JobStatus::Succeeded) {
@@ -394,9 +407,12 @@ mod tests {
     #[tokio::test]
     async fn failed_job_carries_message() {
         let registry = temp_registry("failure");
-        let id = registry.spawn(JobKindDescr::SteamcmdInstall, |_logger| {
-            anyhow::bail!("boom")
-        });
+        let id = registry.spawn(
+            JobKindDescr::SteamcmdInstall {
+                game: GameId::Valheim,
+            },
+            |_logger| anyhow::bail!("boom"),
+        );
 
         for _ in 0..100 {
             if !matches!(
@@ -417,11 +433,16 @@ mod tests {
     #[tokio::test]
     async fn late_subscriber_gets_buffered_log() {
         let registry = temp_registry("late-subscriber");
-        let id = registry.spawn(JobKindDescr::SteamcmdInstall, |logger| {
-            logger.line("first");
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            Ok(())
-        });
+        let id = registry.spawn(
+            JobKindDescr::SteamcmdInstall {
+                game: GameId::Valheim,
+            },
+            |logger| {
+                logger.line("first");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                Ok(())
+            },
+        );
 
         let mut log = Vec::new();
         for _ in 0..100 {
@@ -453,10 +474,15 @@ mod tests {
 
         let id = {
             let registry = JobRegistry::load(db.clone());
-            let id = registry.spawn(JobKindDescr::SteamcmdInstall, |logger| {
-                logger.line("done");
-                Ok(())
-            });
+            let id = registry.spawn(
+                JobKindDescr::SteamcmdInstall {
+                    game: GameId::Valheim,
+                },
+                |logger| {
+                    logger.line("done");
+                    Ok(())
+                },
+            );
             for _ in 0..100 {
                 if matches!(registry.get(&id).unwrap().status, JobStatus::Succeeded) {
                     break;
@@ -487,7 +513,10 @@ mod tests {
             })
             .unwrap(),
         );
-        let (kind_tag, kind_payload) = encode_kind(&JobKindDescr::SteamcmdInstall).unwrap();
+        let (kind_tag, kind_payload) = encode_kind(&JobKindDescr::SteamcmdInstall {
+            game: GameId::Valheim,
+        })
+        .unwrap();
         let (status_tag, status_payload) = encode_status(&JobStatus::Running).unwrap();
         db_jobs::insert(
             &db,
@@ -532,7 +561,9 @@ mod tests {
             jobs.insert(
                 id.to_string(),
                 JobRecord {
-                    kind: JobKindDescr::SteamcmdInstall,
+                    kind: JobKindDescr::SteamcmdInstall {
+                        game: GameId::Valheim,
+                    },
                     status,
                     started_at: cutoff - chrono::Duration::seconds(1),
                     log: Vec::new(),
@@ -547,5 +578,16 @@ mod tests {
         assert!(registry.get("old-queued").is_some());
         assert!(registry.get("old-running").is_some());
         assert!(db_jobs::recent(&db, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn legacy_steamcmd_jobs_default_to_valheim() {
+        let kind = decode_kind(r#"{"kind":"steamcmd_install"}"#).unwrap();
+        assert!(matches!(
+            kind,
+            JobKindDescr::SteamcmdInstall {
+                game: GameId::Valheim
+            }
+        ));
     }
 }

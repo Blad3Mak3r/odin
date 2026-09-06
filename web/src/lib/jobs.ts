@@ -3,7 +3,7 @@ import type { JobKindDescr, JobStatus } from './types'
 export function describeJobKind(kind: JobKindDescr): string {
   switch (kind.kind) {
     case 'steamcmd_install':
-      return 'Install/update server files'
+      return `Install/update ${kind.game === 'rust' ? 'Rust' : 'Valheim'} server files`
     case 'mod_add':
       return `Install mod ${kind.mod_id} on ${kind.instance}`
     case 'mod_update':

@@ -15,7 +15,7 @@ export function useLogSocket(instanceName: string) {
   }
 
   useEffect(() => {
-    const source = new EventSource(`/api/instances/${instanceName}/logs/sse`)
+    const source = new EventSource(`/api/games/valheim/instances/${instanceName}/logs/sse`)
 
     source.onopen = () => setConnected(true)
     source.onerror = () => setConnected(false)

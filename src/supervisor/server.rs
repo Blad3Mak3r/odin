@@ -122,7 +122,7 @@ async fn spawn_child(
     paths: &Paths,
     instance_name: &str,
 ) -> Result<SpawnedChild> {
-    let cmd = process::build_command(instance, paths)?;
+    let cmd = crate::game::valheim::build_command(instance, paths)?;
     let child = process::spawn(cmd)
         .await
         .with_context(|| format!("failed to start instance '{instance_name}'"))?;

@@ -1,17 +1,16 @@
-//! Odin's conmon-style per-instance supervisor: `odin run --instance <name>`
-//! is a hidden CLI subcommand that owns a single Valheim server process for
-//! its entire life and exposes a small Unix-socket RPC surface so `odin
-//! serve` (or a one-off CLI invocation) can control it without holding a
-//! live `tokio::process::Child` or relying solely on OS-level pid
-//! fingerprinting.
+//! Odin's conmon-style Valheim supervisor: `odin run --instance <name>` is a
+//! hidden CLI subcommand that owns one Valheim server process for its entire
+//! life and exposes a small Unix-socket RPC surface so `odin serve` (or a
+//! one-off CLI invocation) can control it without holding a live
+//! `tokio::process::Child` or relying solely on OS-level pid fingerprinting.
 //!
 //! `server` is the `odin run` side (the conmon role); `client` is the `odin
 //! serve` side (the podman role). `protocol` defines the newline-delimited
 //! JSON messages exchanged between them.
 //!
-//! Not yet wired into `instance::lifecycle` or `odin serve` — see the
-//! phased rollout in the project's supervisor design plan. `odin run
-//! --instance <name>` is manually invocable today but nothing spawns it yet.
+//! Valheim's lifecycle uses this supervisor today. Rust v1 uses the shared
+//! process primitives directly because it has no event parser or readiness
+//! contract yet.
 
 pub mod client;
 pub mod protocol;

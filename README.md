@@ -1,12 +1,13 @@
 # Odin
 
-**Odin** is a self-hosted web service for orchestrating [Valheim](https://www.valheimgame.com/)
-dedicated servers on Linux. In Norse mythology, Odin is the All-Father who
-watches over the nine realms; this Odin watches over your Valheim realms —
-installing and updating the game server, running and supervising multiple
-server instances, managing their mods, config, backups, and access lists —
-all from one binary and one web dashboard, so you don't have to babysit
-background processes and SteamCMD invocations by hand.
+**Odin** is a self-hosted web service for orchestrating dedicated game
+servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/)
+and Rust, from one binary and one web dashboard. In Norse mythology, Odin is
+the All-Father who watches over the nine realms; this Odin watches over your
+game servers — installing and updating them, running and supervising named
+instances, and managing each game's configuration, backups, and supported
+features without making you babysit background processes and SteamCMD
+invocations by hand.
 
 Odin ships as a single binary with an embedded web dashboard
 (`odin serve`) — that dashboard is the primary, actively developed way to
@@ -16,17 +17,14 @@ but new capabilities land in the web API and dashboard, not the CLI. See
 
 ## Why Odin exists
 
-Running a Valheim dedicated server on Linux usually means stitching together
-several separate tools yourself: SteamCMD to install and update the server,
-some way to keep it running after you log out, manual `BepInEx`/Thunderstore
-downloads if you want mods, and a pile of shell scripts or ad-hoc notes to
-remember port numbers, world names, and passwords across restarts — and it
-only gets messier once you're running more than one server. Odin folds all
-of that into one small binary that runs as a background service and exposes
-a single web dashboard for orchestrating a whole fleet of servers side by
-side: creating and controlling instances, installing mods, editing config
-and access lists, watching live consoles and logs, and taking backups —
-all from a browser, on one host or several.
+Running dedicated servers on Linux usually means stitching together several
+separate tools: SteamCMD to install and update a server, something to keep it
+running after logout, and scripts or notes to track ports and configuration.
+Valheim adds `BepInEx`/Thunderstore when you want mods. Odin folds that into
+one background service and dashboard for creating and controlling servers,
+watching logs, editing game-specific configuration, and taking backups. Game
+capabilities appear only where they apply: Valheim includes mods, access
+lists, player state, and readiness; Rust v1 focuses on core operation.
 
 ## Features
 
@@ -40,16 +38,16 @@ all from a browser, on one host or several.
 - **One binary, no runtime dependencies** beyond (transparently managed)
   SteamCMD and a handful of OS shared libraries — no Python, no Docker, no
   terminal multiplexer required.
-- **Multiple named instances.** Orchestrate several independent Valheim
-  servers on one host, each with its own world, port, password,
-  visibility, and mod set, sharing a single downloaded copy of the game
-  binaries.
+- **Multiple games and named instances.** Orchestrate Valheim and Rust side
+  by side on one host. Each game keeps its own installation and instances;
+  an instance name may be reused by another game without sharing data or
+  ports. Valheim's existing data layout remains unchanged for upgrades.
 - **Detached by default, and restart-proof.** Every instance runs as its
   own directly-supervised background process, so it keeps running after you
   disconnect — and after `odin serve` itself is restarted or upgraded.
   Watch it live from the dashboard's console view, or with `odin logs
   --follow` via the legacy CLI.
-- **Mod support out of the box.** Bootstraps
+- **Valheim mod support out of the box.** Bootstraps
   [BepInEx](https://github.com/BepInEx/BepInEx) automatically and installs
   mods straight from the [Thunderstore](https://thunderstore.io/c/valheim)
   API by name — no manual unzipping into the right folder. Mods download
@@ -59,16 +57,15 @@ all from a browser, on one host or several.
   The dashboard also detects newer BepInEx releases per instance and can
   update one stopped server or a selected group while preserving local
   plugin and configuration files.
-- **Ready-to-share connect info.** The dashboard (and `odin status`) shows
+- **Ready-to-share Valheim connect info.** The dashboard (and `odin status`) shows
   each instance's public address and password alongside its live state, so
   getting a friend into your world doesn't mean a round-trip through raw
   config and "what's my IP".
-- **Backups with a safety net.** Snapshot a world's save files to a zip
-  archive at any time; restoring always takes a fresh snapshot of the
-  current state first, so a restore is never a one-way, unrecoverable
-  action. Per-instance remote storage can send new backups to AWS S3 or
-  Cloudflare R2; Odin removes the temporary local zip only after the upload
-  succeeds and keeps it locally if the upload fails.
+- **Backups with a safety net.** Snapshot server data to a zip archive and
+  restore from it only after Odin first snapshots the current data. Rust v1
+  requires its server to be stopped for create and restore operations.
+  Valheim also supports per-instance remote storage through AWS S3 or
+  Cloudflare R2.
 - **State you can trust.** An instance's "running" status is always derived
   live from the OS process itself (its pid, cross-checked against its own
   start time so a reused pid never lies to you), never from a flag that can
@@ -95,9 +92,9 @@ legacy — don't expect new features to show up there first.
 
 ## Requirements
 
-- **Linux only** (x86_64). Odin spawns the Valheim dedicated server
-  directly and shells out to SteamCMD's Linux distribution; there is no
-  Windows or macOS support.
+- **Linux only** (x86_64). Odin spawns dedicated game servers directly and
+  shells out to SteamCMD's Linux distribution; there is no Windows or macOS
+  support.
 - **SteamCMD is handled for you.** Odin downloads and installs it
   automatically on first `odin install`; you don't need to have it set up
   beforehand.
@@ -246,13 +243,14 @@ help`](#development) for every available target.
 odin serve
 ```
 
-Then open `http://127.0.0.1:7331` in a browser: install/update the game
-server, create and start named instances, search and install mods, edit
-config and access lists, watch a live console, and take backups — all from
-the dashboard. See [Web dashboard](#web-dashboard) for details.
+Then open `http://127.0.0.1:7331` in a browser: install/update Valheim or
+Rust, create and start named instances, edit game-specific configuration,
+watch logs, and take backups. Valheim additionally offers mods, access lists,
+live player state, and readiness. See [Web dashboard](#web-dashboard) for
+details.
 
-For scripting or quick one-off changes, the legacy CLI covers the same
-ground:
+For scripting or quick one-off Valheim changes, the legacy CLI remains
+available:
 
 ```sh
 # Install SteamCMD and the Valheim dedicated server (safe to re-run to update later)
@@ -441,13 +439,17 @@ In both modes, the data dir is resolved in this order:
     logs/console.log              # captured console output, tailed by `odin logs`
     console.in                    # named pipe carrying console input (`odin exec`/dashboard)
     BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>/<version>  # exact enabled version
+  games/rust/
+    install/                     # Rust Dedicated Server binaries
+    instances/<name>/            # Rust configuration, identity, logs, and backups
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
 
-Each instance's game binaries are a symlink into one shared, SteamCMD-managed
-install — so every instance always runs the same game version, and updating
-is a single `odin install` rather than one download per server. Mods work
-the same way, but versioned: `odin mods add` downloads each `(mod, version)`
+Each Valheim instance's game binaries are a symlink into one shared,
+SteamCMD-managed install — so every Valheim instance always runs the same
+game version, and updating is a single `odin install` rather than one
+download per server. Rust uses its own isolated install under `games/rust/`.
+Valheim mods are versioned: `odin mods add` downloads each `(mod, version)`
 once into the shared `mods/` store, and every enabled instance symlinks to
 its exact version. Updating one instance creates or reuses the newer payload
 and only repoints that instance; pinned instances remain unchanged. The

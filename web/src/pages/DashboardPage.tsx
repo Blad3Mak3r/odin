@@ -17,8 +17,8 @@ import {
   useDoctor,
   useHostResourceHistory,
   useHostResources,
-  useInstallServer,
-  useInstallStatus,
+  useGameInstallStatus,
+  useInstallGame,
   useJobs,
 } from '@/lib/queries'
 import type { CheckResult } from '@/lib/types'
@@ -42,15 +42,15 @@ export function DashboardPage() {
   const doctor = useDoctor()
   const resources = useHostResources()
   const history = useHostResourceHistory()
-  const installServer = useInstallServer()
-  const installStatus = useInstallStatus()
+  const installServer = useInstallGame()
+  const installStatus = useGameInstallStatus('valheim')
   const jobs = useJobs()
   const activity = useActivityFeed()
   const queryClient = useQueryClient()
 
   const runningInstallJob = jobs.data?.find(
     (j) =>
-      j.kind.kind === 'steamcmd_install' &&
+      j.kind.kind === 'steamcmd_install' && j.kind.game === 'valheim' &&
       (j.status.status === 'queued' || j.status.status === 'running'),
   )
 
@@ -59,7 +59,7 @@ export function DashboardPage() {
   const wasRunningInstallJob = useRef(false)
   useEffect(() => {
     if (wasRunningInstallJob.current && !runningInstallJob) {
-      queryClient.invalidateQueries({ queryKey: ['install-status'] })
+      queryClient.invalidateQueries({ queryKey: ['game-install-status', 'valheim'] })
       queryClient.invalidateQueries({ queryKey: ['doctor'] })
     }
     wasRunningInstallJob.current = Boolean(runningInstallJob)
@@ -80,7 +80,7 @@ export function DashboardPage() {
                 size="sm"
                 disabled={installServer.isPending || Boolean(runningInstallJob)}
                 onClick={() =>
-                  installServer.mutate(undefined, {
+                  installServer.mutate('valheim', {
                     onError: (e) => toast.error(e.message),
                   })
                 }
@@ -190,7 +190,7 @@ export function DashboardPage() {
                 return (
                   <div key={event.id} className="flex items-center gap-2 text-sm">
                     <Icon className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">{describeActivity(event.kind)}</span>
+                    <span className="min-w-0 flex-1 truncate">{describeActivity(event.kind, event.game)}</span>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {formatRelativeTime(event.at)}
                     </span>

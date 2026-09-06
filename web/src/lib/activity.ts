@@ -17,9 +17,9 @@ import {
   UserMinus,
   UserPlus,
 } from 'lucide-react'
-import type { ActivityKind } from './types'
+import type { ActivityKind, GameId } from './types'
 
-export function describeActivity(kind: ActivityKind): string {
+export function describeActivity(kind: ActivityKind, game: GameId): string {
   switch (kind.kind) {
     case 'instance_created':
       return 'Instance created'
@@ -36,7 +36,7 @@ export function describeActivity(kind: ActivityKind): string {
     case 'server_installed':
       return 'Server files installed/updated'
     case 'server_update_available':
-      return `Valheim server update available: build ${kind.installed_build_id} → ${kind.latest_build_id}`
+      return `${game === 'rust' ? 'Rust' : 'Valheim'} server update available: build ${kind.installed_build_id} → ${kind.latest_build_id}`
     case 'mod_installed':
       return `Mod installed: ${kind.mod_id}`
     case 'mod_removed':

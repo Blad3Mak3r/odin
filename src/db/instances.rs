@@ -34,7 +34,9 @@ pub fn save_clone(
     for (kind, ids) in access_lists {
         for id in *ids {
             tx.execute(
-                "INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES (?1, ?2, ?3)",
+                "INSERT INTO access_list_entries (instance_name, instance_id, kind, steam_id) \
+                 SELECT ?1, id, ?2, ?3 FROM game_instances \
+                 WHERE game = 'valheim' AND name = ?1",
                 params![state.name, kind, id],
             )?;
         }
@@ -82,14 +84,30 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
     .with_context(|| format!("failed to upsert instance '{}'", state.name))?;
 
     tx.execute(
+        "INSERT OR IGNORE INTO game_instances (id, game, name, created_at) VALUES (lower(hex(randomblob(16))), 'valheim', ?1, ?2)",
+        params![state.name, state.created_at],
+    )?;
+    tx.execute(
+        "INSERT INTO valheim_instance_configs \
+            (instance_id, port, world_name, password, public, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version) \
+         SELECT id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12 FROM game_instances WHERE game = 'valheim' AND name = ?1 \
+         ON CONFLICT(instance_id) DO UPDATE SET \
+            port = excluded.port, world_name = excluded.world_name, password = excluded.password, public = excluded.public, \
+            last_started_at = excluded.last_started_at, last_stopped_at = excluded.last_stopped_at, pid = excluded.pid, pid_started_at = excluded.pid_started_at, \
+            bepinex_installed = excluded.bepinex_installed, auto_restart = excluded.auto_restart, bepinex_version = excluded.bepinex_version",
+        params![state.name, state.port, state.world_name, state.password, state.public, state.last_started_at, state.last_stopped_at, state.pid, state.pid_started_at, state.bepinex_installed, state.auto_restart, state.bepinex_version],
+    )?;
+
+    tx.execute(
         "DELETE FROM installed_mods WHERE instance_name = ?1",
         params![state.name],
     )
     .with_context(|| format!("failed to clear installed mods for '{}'", state.name))?;
     for m in &state.installed_mods {
         tx.execute(
-            "INSERT INTO installed_mods (instance_name, mod_id, version, installed_at, enabled, pinned) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO installed_mods (instance_name, instance_id, mod_id, version, installed_at, enabled, pinned) \
+             SELECT ?1, id, ?2, ?3, ?4, ?5, ?6 FROM game_instances \
+             WHERE game = 'valheim' AND name = ?1",
             params![
                 state.name,
                 m.mod_id,
@@ -142,18 +160,26 @@ pub fn list_all(db: &Db) -> Result<Vec<InstanceState>> {
 /// Deletes an instance's row; `installed_mods` cascades via the schema's
 /// `ON DELETE CASCADE`. A no-op if the instance doesn't exist.
 pub fn delete(db: &Db, name: &str) -> Result<()> {
-    db.conn()
-        .execute("DELETE FROM instances WHERE name = ?1", params![name])
+    let conn = db.conn();
+    conn.execute("DELETE FROM instances WHERE name = ?1", params![name])
+        .and_then(|_| {
+            conn.execute(
+                "DELETE FROM game_instances WHERE game = 'valheim' AND name = ?1",
+                params![name],
+            )
+        })
         .with_context(|| format!("failed to delete instance '{name}'"))?;
     Ok(())
 }
 
-const SELECT_INSTANCE: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version \
-     FROM instances WHERE name = ?1";
-const SELECT_ALL_INSTANCES: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version \
-     FROM instances ORDER BY name";
+const SELECT_INSTANCE: &str = "SELECT g.name, v.port, v.world_name, v.password, v.public, g.created_at, \
+     v.last_started_at, v.last_stopped_at, v.pid, v.pid_started_at, v.bepinex_installed, v.auto_restart, v.bepinex_version \
+     FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id \
+     WHERE g.game = 'valheim' AND g.name = ?1";
+const SELECT_ALL_INSTANCES: &str = "SELECT g.name, v.port, v.world_name, v.password, v.public, g.created_at, \
+     v.last_started_at, v.last_stopped_at, v.pid, v.pid_started_at, v.bepinex_installed, v.auto_restart, v.bepinex_version \
+     FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id \
+     WHERE g.game = 'valheim' ORDER BY g.name";
 
 fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
     Ok(InstanceState {
@@ -178,7 +204,7 @@ fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
 pub fn set_bepinex(db: &Db, name: &str, installed: bool, version: Option<&str>) -> Result<()> {
     db.conn()
         .execute(
-            "UPDATE instances SET bepinex_installed = ?2, bepinex_version = ?3 WHERE name = ?1",
+            "UPDATE valheim_instance_configs SET bepinex_installed = ?2, bepinex_version = ?3 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![name, installed, version],
         )
         .with_context(|| format!("failed to update BepInEx state for '{name}'"))?;
@@ -197,7 +223,7 @@ pub fn set_pid(
 ) -> Result<()> {
     db.conn()
         .execute(
-            "UPDATE instances SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE name = ?1",
+            "UPDATE valheim_instance_configs SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![name, pid, pid_started_at, started_at],
         )
         .with_context(|| format!("failed to record pid for instance '{name}'"))?;
@@ -210,7 +236,7 @@ pub fn set_pid(
 pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
     db.conn()
         .execute(
-            "UPDATE instances SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE name = ?1",
+            "UPDATE valheim_instance_configs SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![name, stopped_at],
         )
         .with_context(|| format!("failed to clear pid for instance '{name}'"))?;
@@ -219,8 +245,9 @@ pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
 
 fn load_installed_mods(conn: &Connection, instance_name: &str) -> Result<Vec<InstalledMod>> {
     let mut stmt = conn.prepare(
-        "SELECT mod_id, version, installed_at, enabled, pinned FROM installed_mods \
-         WHERE instance_name = ?1 ORDER BY mod_id",
+        "SELECT m.mod_id, m.version, m.installed_at, m.enabled, m.pinned FROM installed_mods m \
+         JOIN game_instances g ON g.id = m.instance_id \
+         WHERE g.game = 'valheim' AND g.name = ?1 ORDER BY m.mod_id",
     )?;
     let mods = stmt
         .query_map(params![instance_name], |row| {

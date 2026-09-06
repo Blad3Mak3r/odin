@@ -2,8 +2,8 @@
 //! Spawns `odin run --instance <name>` detached and talks to its
 //! control/events sockets. `spawn_detached`/`ping`/`ping_with_retry`/`stop`
 //! are wired into `instance::lifecycle`; `subscribe_events` (the
-//! `LogTailRegistry` event bridge) lands in a follow-up phase — see that
-//! function's doc comment.
+//! `LogTailRegistry` event bridge are wired into Valheim's lifecycle. Rust
+//! v1 does not expose this Valheim-specific socket/event contract.
 
 use std::time::Duration;
 

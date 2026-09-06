@@ -194,7 +194,7 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
     let conn = db.conn();
     let mut reserved_ports = HashSet::new();
 
-    // Valheim occupies a three-port block starting at its configured port.
+    // Valheim occupies the block declared by its compiled driver.
     // Rust owns both its game and query ports, which may not be consecutive
     // after future configuration changes, so reserve their recorded values.
     let mut valheim_ports = conn.prepare("SELECT port FROM instances")?;
@@ -202,11 +202,7 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
         .query_map([], |row| row.get::<_, u16>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?
     {
-        for offset in 0..=2 {
-            if let Some(port) = port.checked_add(offset) {
-                reserved_ports.insert(port);
-            }
-        }
+        reserved_ports.extend(crate::game::ports::block(GameId::Valheim, port)?);
     }
     let mut rust_ports = conn.prepare("SELECT port, query_port FROM rust_instance_configs")?;
     for (port, query_port) in rust_ports
@@ -219,8 +215,8 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
 
     let mut port = 28015u16;
     loop {
-        let query_port = port.checked_add(1).context("no Rust port block remains")?;
-        if !reserved_ports.contains(&port) && !reserved_ports.contains(&query_port) {
+        let candidate = crate::game::ports::block(GameId::Rust, port)?;
+        if candidate.iter().all(|port| !reserved_ports.contains(port)) {
             return Ok(port);
         }
         port = port.checked_add(2).context("no Rust port block remains")?;

@@ -50,8 +50,12 @@ pub(crate) struct BackupRecord {
     pub remote: Option<RemoteObject>,
 }
 
-fn backup_id_now() -> String {
-    Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
+pub(crate) fn backup_id_now() -> String {
+    format!(
+        "{}-{}",
+        Utc::now().format("%Y%m%dT%H%M%SZ"),
+        uuid::Uuid::new_v4()
+    )
 }
 
 /// Zips the instance's `saves/` directory into `<instance_dir>/backups/<id>.zip`

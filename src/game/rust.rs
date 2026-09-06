@@ -163,7 +163,7 @@ pub fn create_backup(paths: &Paths, instance: &RustInstance) -> Result<crate::ba
         .game_instance_dir(crate::game::GameId::Rust, instance.name())
         .join("backups");
     std::fs::create_dir_all(&backups_dir)?;
-    let id = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let id = crate::backup::backup_id_now();
     let path = backups_dir.join(format!("{id}.zip"));
     crate::backup::zip_directory(&backup_source(paths, instance), &path)?;
     Ok(crate::backup::BackupEntry {
@@ -215,5 +215,88 @@ pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
         world_size: 3000,
         max_players: 50,
         auto_restart: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+    use crate::db::Db;
+    use crate::db::game_instances;
+
+    fn temp_context(label: &str) -> (Paths, Db, RustInstance) {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-rust-driver-test-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Db::open(&paths).unwrap();
+        let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        (paths, db, instance)
+    }
+
+    fn install_fake_server(paths: &Paths) {
+        let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let binary = install_dir.join("RustDedicated");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\necho fake Rust server started\nexec sleep 1000\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn fake_server_start_and_stop_persist_the_process_lifecycle() {
+        let (paths, db, instance) = temp_context("lifecycle");
+        install_fake_server(&paths);
+
+        let started = start(&paths, &db, &instance).await.unwrap();
+        assert!(is_running(&started));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let log = paths
+            .game_instance_dir(crate::game::GameId::Rust, started.name())
+            .join("logs/console.log");
+        assert!(
+            std::fs::read_to_string(log)
+                .unwrap()
+                .contains("fake Rust server started")
+        );
+
+        stop(&paths, &db, &started).await.unwrap();
+        let stopped = game_instances::load_rust(&db, started.name())
+            .unwrap()
+            .unwrap();
+        assert!(!is_running(&stopped));
+        assert!(stopped.pid.is_none());
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn restore_uses_the_selected_backup_even_when_creating_a_safety_snapshot() {
+        let (paths, _db, instance) = temp_context("backup");
+        let source = backup_source(&paths, &instance);
+        std::fs::create_dir_all(&source).unwrap();
+        let save = source.join("world.sav");
+        std::fs::write(&save, "before").unwrap();
+
+        let backup = create_backup(&paths, &instance).unwrap();
+        std::fs::write(&save, "after").unwrap();
+        restore_backup(&paths, &instance, &backup.id).unwrap();
+
+        assert_eq!(std::fs::read_to_string(save).unwrap(), "before");
+        assert_eq!(list_backups(&paths, &instance).unwrap().len(), 2);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

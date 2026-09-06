@@ -190,6 +190,16 @@ pub fn clear_rust_pid(db: &crate::db::Db, name: &str, stopped_at: DateTime<Utc>)
     Ok(())
 }
 
+pub fn delete_rust(db: &crate::db::Db, name: &str) -> Result<()> {
+    db.conn()
+        .execute(
+            "DELETE FROM game_instances WHERE game = 'rust' AND name = ?1",
+            params![name],
+        )
+        .with_context(|| format!("failed to delete Rust instance '{name}'"))?;
+    Ok(())
+}
+
 fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
     let conn = db.conn();
     let mut reserved_ports = HashSet::new();

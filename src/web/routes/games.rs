@@ -41,6 +41,12 @@ pub struct CreateGameInstanceRequest {
 }
 
 #[derive(Deserialize)]
+pub struct DeleteGameInstanceQuery {
+    #[serde(default)]
+    pub keep_backups: bool,
+}
+
+#[derive(Deserialize)]
 pub struct RustConfigUpdateRequest {
     pub hostname: Option<String>,
     pub level: Option<String>,
@@ -199,6 +205,25 @@ pub async fn get_instance(
     let db = state.db.clone();
     let view = run_blocking(move || load_view(&paths, &db, game, &name)).await?;
     Ok(Json(view))
+}
+
+pub async fn delete_instance(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+    Query(query): Query<DeleteGameInstanceQuery>,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let instance_name = name.clone();
+    run_blocking(move || game_instances_ops::delete(&paths, &db, game, &name, query.keep_backups))
+        .await?;
+    state.runtime.remove_game_instance(game, &instance_name);
+    state.activity.record_for(
+        game,
+        crate::activity::ActivityKind::InstanceDeleted,
+        Some(instance_name),
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn update_rust_config(

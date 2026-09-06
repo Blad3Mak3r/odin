@@ -33,7 +33,10 @@ pub fn build_router(state: AppState) -> Router {
             "/games/{game}/instances",
             get(games::list_instances).post(games::create_instance),
         )
-        .route("/games/{game}/instances/{name}", get(games::get_instance))
+        .route(
+            "/games/{game}/instances/{name}",
+            get(games::get_instance).delete(games::delete_instance),
+        )
         .route(
             "/games/rust/instances/{name}/config",
             put(games::update_rust_config),
@@ -429,6 +432,40 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn canonical_delete_removes_only_the_selected_game_instance() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-game-delete-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        Instance::create(&paths, &db, "shared").unwrap();
+        crate::db::game_instances::create_rust(&paths, &db, "shared").unwrap();
+        let app = build_router(AppState::new(paths.clone(), db.clone()));
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/api/games/rust/instances/shared")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(Instance::load(&paths, &db, "shared").unwrap().is_some());
+        assert!(
+            crate::db::game_instances::load_rust(&db, "shared")
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[tokio::test]

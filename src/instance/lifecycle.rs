@@ -242,10 +242,22 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
 /// `commands::delete::run` and `web::routes::instances::delete_instance`,
 /// which differ only in how they gate/confirm the call, not in what it does.
 pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
+    delete_instance_dir(&instance.dir, keep_backups)?;
+    crate::db::instances::delete(db, &instance.state.name)?;
+    Ok(())
+}
+
+/// Deletes an instance directory while optionally retaining its backups.
+/// Shared by game drivers because all current layouts place backups directly
+/// under the instance root.
+pub(crate) fn delete_instance_dir(
+    instance_dir: &std::path::Path,
+    keep_backups: bool,
+) -> Result<()> {
     if keep_backups {
-        let backups_dir = paths::instance_backups_dir(&instance.dir);
-        for entry in std::fs::read_dir(&instance.dir)
-            .with_context(|| format!("failed to read instance dir {}", instance.dir.display()))?
+        let backups_dir = paths::instance_backups_dir(instance_dir);
+        for entry in std::fs::read_dir(instance_dir)
+            .with_context(|| format!("failed to read instance dir {}", instance_dir.display()))?
         {
             let entry = entry?;
             if entry.path() == backups_dir {
@@ -260,11 +272,9 @@ pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
             .with_context(|| format!("failed to remove {}", path.display()))?;
         }
     } else {
-        std::fs::remove_dir_all(&instance.dir)
-            .with_context(|| format!("failed to remove instance dir {}", instance.dir.display()))?;
+        std::fs::remove_dir_all(instance_dir)
+            .with_context(|| format!("failed to remove instance dir {}", instance_dir.display()))?;
     }
-
-    crate::db::instances::delete(db, &instance.state.name)?;
     Ok(())
 }
 

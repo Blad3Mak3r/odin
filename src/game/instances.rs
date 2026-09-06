@@ -82,6 +82,13 @@ pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
     }
 }
 
+pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bool) -> Result<()> {
+    match load(paths, db, game, name)? {
+        GameInstance::Valheim(instance) => lifecycle::delete(db, &instance, keep_backups),
+        GameInstance::Rust(instance) => rust::delete(paths, db, &instance, keep_backups),
+    }
+}
+
 pub fn list_backups(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<Vec<BackupEntry>> {
     match load(paths, db, game, name)? {
         GameInstance::Valheim(instance) => crate::backup::list(db, &instance.state.name),
@@ -135,5 +142,28 @@ mod tests {
             load(&paths, &db, GameId::Rust, "shared").unwrap(),
             GameInstance::Rust(_)
         ));
+    }
+
+    #[test]
+    fn deleting_rust_keeps_a_same_named_valheim_instance() {
+        let dir = std::env::temp_dir().join(format!("odin-game-delete-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Db::open(&paths).unwrap();
+        create(&paths, &db, GameId::Valheim, "shared").unwrap();
+        create(&paths, &db, GameId::Rust, "shared").unwrap();
+
+        delete(&paths, &db, GameId::Rust, "shared", false).unwrap();
+
+        assert!(load(&paths, &db, GameId::Valheim, "shared").is_ok());
+        assert!(
+            crate::db::game_instances::load_rust(&db, "shared")
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

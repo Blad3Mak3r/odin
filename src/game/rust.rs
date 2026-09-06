@@ -158,6 +158,23 @@ pub async fn restart(
     start_unlocked(paths, db, &refreshed).await
 }
 
+pub fn delete(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: &RustInstance,
+    keep_backups: bool,
+) -> Result<()> {
+    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
+    if is_running(instance) {
+        anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
+            instance.name().to_string()
+        ));
+    }
+    let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
+    crate::instance::lifecycle::delete_instance_dir(&instance_dir, keep_backups)?;
+    crate::db::game_instances::delete_rust(db, instance.name())
+}
+
 pub fn backup_source(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
     // Rust itself stores an identity under its shared install tree.  Using the
     // immutable Odin id prevents collisions even when games share a name.

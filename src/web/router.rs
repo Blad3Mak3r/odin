@@ -425,6 +425,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canonical_valheim_status_route_keeps_the_full_dashboard_view() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-valheim-status-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        Instance::create(&paths, &db, "meadows").unwrap();
+        let app = build_router(AppState::new(paths, db));
+        let request = Request::builder()
+            .uri("/api/games/valheim/instances/meadows/status")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn rust_config_route_updates_rust_specific_configuration() {
         let dir = std::env::temp_dir().join(format!(
             "odin-router-rust-config-test-{}-{}",

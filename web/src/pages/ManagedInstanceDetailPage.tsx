@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { PageHeader } from '@/components/PageHeader'
@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { QueryError } from '@/components/QueryError'
 import {
   useCreateManagedBackup,
@@ -133,7 +134,7 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min 
 }
 
 export function ManagedInstanceDetailPage() {
-  const { game, name } = useParams<{ game: string; name: string }>()
+  const { game, name, '*': tabPath } = useParams<{ game: string; name: string; '*': string }>()
   const navigate = useNavigate()
   const gameId = isGameId(game) ? game : 'valheim'
   const instance = useManagedInstance(gameId, name ?? '')
@@ -155,6 +156,15 @@ export function ManagedInstanceDetailPage() {
   const detail = instance.data
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
   const target = { game: detail.game, name: detail.name }
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
+    { id: 'logs', label: 'Logs' },
+  ]
+  const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
+  if (!tab || nestedPath.length > 0 || !tabs.some((candidate) => candidate.id === tab)) {
+    return <Navigate replace to={`/instances/${detail.game}/${detail.name}/overview`} />
+  }
   const busy = start.isPending || stop.isPending || restart.isPending || deleteInstance.isPending || transition.data !== null
   const backupsRequireStop = detail.game === 'rust' && detail.running
 
@@ -209,75 +219,64 @@ export function ManagedInstanceDetailPage() {
           </div>
         }
       />
-      <Card>
-        <CardHeader><CardTitle>Configuration</CardTitle><CardDescription>Game-specific settings managed by Odin.</CardDescription></CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          {rustConfig
-            ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
-            : Object.entries(detail.config).map(([key, value]) => <div key={key} className="flex justify-between gap-4 text-sm"><span className="text-muted-foreground">{key}</span><span>{String(value ?? '—')}</span></div>)}
-        </CardContent>
-      </Card>
-      {detail.game === 'rust' && (
-        <Card>
-          <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Live CPU and memory use for this Rust server.</CardDescription></CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {resources.isError ? <QueryError error={resources.error} /> : (
-              <>
-                {resourceHistory.isError && <QueryError error={resourceHistory.error} />}
-                <ResourceMetric
-                  label="CPU"
-                  value={`${resources.data?.cpu_percent.toFixed(1) ?? '0.0'}%`}
-                  history={resourceHistory.data ?? []}
-                  dataKey="cpu_percent"
-                  formatValue={(value) => `${value.toFixed(1)}%`}
-                />
-                <ResourceMetric
-                  label="Memory"
-                  value={formatBytes(resources.data?.memory_bytes ?? 0)}
-                  history={resourceHistory.data ?? []}
-                  dataKey="memory_bytes"
-                  formatValue={formatBytes}
-                />
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-      {detail.capabilities.backups && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Backups</CardTitle>
-            <CardDescription>{backupsRequireStop ? 'Stop this Rust server before creating or restoring a backup.' : 'Create or restore local server data backups.'}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div>
-              <Button
-                variant="outline"
-                disabled={backupsRequireStop || createBackup.isPending}
-                onClick={() => createBackup.mutate(target, { onSuccess: () => toast.success('Backup created'), onError: (error) => toast.error(error.message) })}
-              >
-                Create backup
-              </Button>
-            </div>
-            {backups.isError && <QueryError error={backups.error} />}
-            {backups.data?.length === 0 && <p className="text-sm text-muted-foreground">No backups yet.</p>}
-            {backups.data?.map((backup) => (
-              <div key={backup.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-sm">
-                <span>{formatRelativeTime(backup.created_at)} · {formatBytes(backup.size_bytes)}</span>
-                <Button size="sm" variant="outline" disabled={backupsRequireStop || restoreBackup.isPending} onClick={() => restore(backup.id)}>Restore</Button>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-      <Card>
-        <CardHeader><CardTitle>Logs</CardTitle><CardDescription>Last 200 server log lines.</CardDescription></CardHeader>
-        <CardContent>
-          {logs.isError ? <QueryError error={logs.error} /> : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{logs.data?.lines.join('\n') || 'No logs yet.'}</pre>}
-        </CardContent>
-      </Card>
-      {detail.game === 'valheim' && <Link className="text-sm underline" to={`/instances/valheim/${detail.name}/logs`}>Open the full Valheim dashboard</Link>}
-      <Badge className="w-fit" variant={detail.running ? 'default' : 'secondary'}>{detail.running ? 'running' : 'stopped'}</Badge>
+      <Tabs value={tab} onValueChange={(value) => navigate(`/instances/${detail.game}/${detail.name}/${value}`)}>
+        <TabsList>
+          {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
+        </TabsList>
+        <TabsContent value="overview" className="flex flex-col gap-6">
+          <Card>
+            <CardHeader><CardTitle>Configuration</CardTitle><CardDescription>Game-specific settings managed by Odin.</CardDescription></CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              {rustConfig
+                ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
+                : Object.entries(detail.config).map(([key, value]) => <div key={key} className="flex justify-between gap-4 text-sm"><span className="text-muted-foreground">{key}</span><span>{String(value ?? '—')}</span></div>)}
+            </CardContent>
+          </Card>
+          {detail.game === 'rust' && (
+            <Card>
+              <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Live CPU and memory use for this Rust server.</CardDescription></CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                {resources.isError ? <QueryError error={resources.error} /> : (
+                  <>
+                    {resourceHistory.isError && <QueryError error={resourceHistory.error} />}
+                    <ResourceMetric label="CPU" value={`${resources.data?.cpu_percent.toFixed(1) ?? '0.0'}%`} history={resourceHistory.data ?? []} dataKey="cpu_percent" formatValue={(value) => `${value.toFixed(1)}%`} />
+                    <ResourceMetric label="Memory" value={formatBytes(resources.data?.memory_bytes ?? 0)} history={resourceHistory.data ?? []} dataKey="memory_bytes" formatValue={formatBytes} />
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
+          {detail.game === 'valheim' && <Link className="text-sm underline" to={`/instances/valheim/${detail.name}/logs`}>Open the full Valheim dashboard</Link>}
+          <Badge className="w-fit" variant={detail.running ? 'default' : 'secondary'}>{detail.running ? 'running' : 'stopped'}</Badge>
+        </TabsContent>
+        {detail.capabilities.backups && (
+          <TabsContent value="backups">
+            <Card>
+              <CardHeader>
+                <CardTitle>Backups</CardTitle>
+                <CardDescription>{backupsRequireStop ? 'Stop this Rust server before creating or restoring a backup.' : 'Create or restore local server data backups.'}</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <div><Button variant="outline" disabled={backupsRequireStop || createBackup.isPending} onClick={() => createBackup.mutate(target, { onSuccess: () => toast.success('Backup created'), onError: (error) => toast.error(error.message) })}>Create backup</Button></div>
+                {backups.isError && <QueryError error={backups.error} />}
+                {backups.data?.length === 0 && <p className="text-sm text-muted-foreground">No backups yet.</p>}
+                {backups.data?.map((backup) => (
+                  <div key={backup.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-sm">
+                    <span>{formatRelativeTime(backup.created_at)} · {formatBytes(backup.size_bytes)}</span>
+                    <Button size="sm" variant="outline" disabled={backupsRequireStop || restoreBackup.isPending} onClick={() => restore(backup.id)}>Restore</Button>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+        <TabsContent value="logs">
+          <Card>
+            <CardHeader><CardTitle>Logs</CardTitle><CardDescription>Last 200 server log lines.</CardDescription></CardHeader>
+            <CardContent>{logs.isError ? <QueryError error={logs.error} /> : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{logs.data?.lines.join('\n') || 'No logs yet.'}</pre>}</CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

@@ -258,6 +258,18 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   })
 }
 
+export function useDeleteManagedInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name, keepBackups }: { game: GameId; name: string; keepBackups?: boolean }) =>
+      api.delete<void>(`/games/${game}/instances/${name}${keepBackups ? '?keep_backups=true' : ''}`),
+    onSuccess: (_result, { game, name }) => {
+      queryClient.removeQueries({ queryKey: ['managed-instances', game, name] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+    },
+  })
+}
+
 export function useUpdateRustConfig() {
   const queryClient = useQueryClient()
   return useMutation({

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { PageHeader } from '@/components/PageHeader'
@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch'
 import { QueryError } from '@/components/QueryError'
 import {
   useCreateManagedBackup,
+  useDeleteManagedInstance,
   useManagedBackups,
   useManagedInstance,
   useManagedInstanceAction,
@@ -133,6 +134,7 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min 
 
 export function ManagedInstanceDetailPage() {
   const { game, name } = useParams<{ game: string; name: string }>()
+  const navigate = useNavigate()
   const gameId = isGameId(game) ? game : 'valheim'
   const instance = useManagedInstance(gameId, name ?? '')
   const logs = useManagedInstanceLogs(gameId, name ?? '')
@@ -142,6 +144,7 @@ export function ManagedInstanceDetailPage() {
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
+  const deleteInstance = useDeleteManagedInstance()
   const transition = useManagedInstanceTransition(gameId, name ?? '')
   const createBackup = useCreateManagedBackup()
   const restoreBackup = useRestoreManagedBackup()
@@ -152,7 +155,7 @@ export function ManagedInstanceDetailPage() {
   const detail = instance.data
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
   const target = { game: detail.game, name: detail.name }
-  const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
+  const busy = start.isPending || stop.isPending || restart.isPending || deleteInstance.isPending || transition.data !== null
   const backupsRequireStop = detail.game === 'rust' && detail.running
 
   const restore = async (backupId: string) => {
@@ -168,6 +171,22 @@ export function ManagedInstanceDetailPage() {
     )
   }
 
+  const remove = async () => {
+    const confirmed = await confirm({
+      title: `Delete '${detail.name}'?`,
+      description: 'This permanently removes the server data, configuration, and local backups.',
+      confirmLabel: 'Delete server',
+    })
+    if (!confirmed) return
+    deleteInstance.mutate(target, {
+      onSuccess: () => {
+        toast.success(`Server '${detail.name}' deleted`)
+        navigate('/instances')
+      },
+      onError: (error) => toast.error(error.message),
+    })
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {dialog}
@@ -181,7 +200,12 @@ export function ManagedInstanceDetailPage() {
                 <Button variant="outline" disabled={busy} onClick={() => restart.mutate(target, { onError: (error) => toast.error(error.message) })}>Restart</Button>
                 <Button variant="outline" disabled={busy} onClick={() => stop.mutate(target, { onError: (error) => toast.error(error.message) })}>Stop</Button>
               </>
-            ) : <Button disabled={busy} onClick={() => start.mutate(target, { onError: (error) => toast.error(error.message) })}>Start</Button>}
+            ) : (
+              <>
+                <Button disabled={busy} onClick={() => start.mutate(target, { onError: (error) => toast.error(error.message) })}>Start</Button>
+                <Button variant="destructive" disabled={busy} onClick={remove}>Delete</Button>
+              </>
+            )}
           </div>
         }
       />

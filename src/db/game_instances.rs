@@ -268,64 +268,6 @@ fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_context(label: &str) -> (Paths, crate::db::Db) {
-        let dir = std::env::temp_dir().join(format!(
-            "odin-rust-config-test-{label}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir,
-        };
-        let db = crate::db::Db::open(&paths).unwrap();
-        (paths, db)
-    }
-
-    #[test]
-    fn update_rust_config_persists_game_specific_settings() {
-        let (paths, db) = temp_context("settings");
-        let instance = create_rust(&paths, &db, "rust-server").unwrap();
-        assert!(!instance.config.auto_restart);
-        let config = RustInstanceConfig {
-            hostname: "Rust Server".to_string(),
-            level: "Barren".to_string(),
-            seed: 42,
-            world_size: 4000,
-            max_players: 100,
-            auto_restart: true,
-            ..instance.config
-        };
-
-        let updated = update_rust_config(&db, "rust-server", &config).unwrap();
-
-        assert_eq!(updated.config.hostname, "Rust Server");
-        assert_eq!(updated.config.max_players, 100);
-        assert!(updated.config.auto_restart);
-
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn rust_port_allocation_skips_valheim_port_blocks() {
-        let (paths, db) = temp_context("ports");
-        let mut valheim = crate::instance::Instance::create(&paths, &db, "valheim-server").unwrap();
-        valheim.state.port = 28016;
-        valheim.save(&db).unwrap();
-
-        let rust = create_rust(&paths, &db, "rust-server").unwrap();
-
-        assert_eq!(rust.config.port, 28019);
-        assert_eq!(rust.config.query_port, 28020);
-
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-}
-
 pub fn set_tags(db: &crate::db::Db, game: GameId, name: &str, tags: &[String]) -> Result<()> {
     anyhow::ensure!(
         tags.len() <= 20
@@ -388,4 +330,62 @@ pub fn rename(db: &crate::db::Db, game: GameId, old: &str, new: &str) -> Result<
     }
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_context(label: &str) -> (Paths, crate::db::Db) {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-rust-config-test-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = crate::db::Db::open(&paths).unwrap();
+        (paths, db)
+    }
+
+    #[test]
+    fn update_rust_config_persists_game_specific_settings() {
+        let (paths, db) = temp_context("settings");
+        let instance = create_rust(&paths, &db, "rust-server").unwrap();
+        assert!(!instance.config.auto_restart);
+        let config = RustInstanceConfig {
+            hostname: "Rust Server".to_string(),
+            level: "Barren".to_string(),
+            seed: 42,
+            world_size: 4000,
+            max_players: 100,
+            auto_restart: true,
+            ..instance.config
+        };
+
+        let updated = update_rust_config(&db, "rust-server", &config).unwrap();
+
+        assert_eq!(updated.config.hostname, "Rust Server");
+        assert_eq!(updated.config.max_players, 100);
+        assert!(updated.config.auto_restart);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn rust_port_allocation_skips_valheim_port_blocks() {
+        let (paths, db) = temp_context("ports");
+        let mut valheim = crate::instance::Instance::create(&paths, &db, "valheim-server").unwrap();
+        valheim.state.port = 28016;
+        valheim.save(&db).unwrap();
+
+        let rust = create_rust(&paths, &db, "rust-server").unwrap();
+
+        assert_eq!(rust.config.port, 28019);
+        assert_eq!(rust.config.query_port, 28020);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
 }

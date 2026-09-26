@@ -8,7 +8,6 @@ use thiserror::Error;
 use crate::backup_storage::{self, RemoteObject, StorageProvider};
 use crate::db::Db;
 use crate::instance::{Instance, InstanceError, lifecycle};
-use crate::mods;
 use crate::paths;
 
 /// Failures a caller (e.g. the web API) may want to distinguish from other,
@@ -177,10 +176,7 @@ pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
     let result = (|| {
         create(instance, db).context("failed to snapshot current saves before restoring")?;
         let saves_dir = paths::instance_saves_dir(&instance.dir);
-        std::fs::remove_dir_all(&saves_dir).ok();
-        std::fs::create_dir_all(&saves_dir)?;
-        mods::extract_zip_to_dir(&backup_path, &saves_dir)
-            .with_context(|| format!("failed to restore backup '{backup_id}'"))
+        replace_from_archive(&backup_path, &saves_dir)
     })();
     if remove_after {
         std::fs::remove_file(&backup_path).ok();
@@ -242,4 +238,51 @@ fn add_dir_to_zip(
         }
     }
     Ok(())
+}
+
+/// IDs are file names, never paths supplied by a caller.
+pub(crate) fn validate_backup_id(id: &str) -> Result<()> {
+    anyhow::ensure!(
+        !id.is_empty()
+            && id.len() <= 200
+            && id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
+        "invalid backup id"
+    );
+    Ok(())
+}
+
+/// Extract before touching live data; keep the previous tree until the swap succeeds.
+pub(crate) fn replace_from_archive(archive: &Path, destination: &Path) -> Result<()> {
+    let parent = destination
+        .parent()
+        .context("save directory has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let staging = parent.join(format!(".restore-{}", uuid::Uuid::new_v4()));
+    let previous = parent.join(format!(".previous-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&staging)?;
+    let result = (|| {
+        crate::mods::extract_zip_to_dir(archive, &staging)?;
+        let had_previous = destination.exists();
+        if had_previous {
+            std::fs::rename(destination, &previous)?;
+        }
+        if let Err(error) = std::fs::rename(&staging, destination) {
+            if had_previous {
+                std::fs::rename(&previous, destination)
+                    .context("failed to recover previous saves after restore failure")?;
+            }
+            return Err(error.into());
+        }
+        if had_previous {
+            std::fs::remove_dir_all(&previous)
+                .context("restored saves, but could not remove previous save directory")?;
+        }
+        Ok(())
+    })();
+    if staging.exists() {
+        std::fs::remove_dir_all(staging).ok();
+    }
+    result
 }

@@ -29,7 +29,8 @@ pub async fn start(
     instance: &RustInstance,
 ) -> Result<RustInstance> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
-    start_unlocked(paths, db, instance).await
+    let instance = refresh(db, instance)?;
+    start_unlocked(paths, db, &instance).await
 }
 
 async fn start_unlocked(
@@ -123,7 +124,8 @@ pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> 
 
 pub async fn stop(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
-    stop_unlocked(db, instance).await
+    let instance = refresh(db, instance)?;
+    stop_unlocked(db, &instance).await
 }
 
 async fn stop_unlocked(db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
@@ -150,8 +152,9 @@ pub async fn restart(
     instance: &RustInstance,
 ) -> Result<RustInstance> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
-    if is_running(instance) {
-        stop_unlocked(db, instance).await?;
+    let instance = refresh(db, instance)?;
+    if is_running(&instance) {
+        stop_unlocked(db, &instance).await?;
     }
     let refreshed = crate::db::game_instances::load_rust(db, instance.name())?
         .context("Rust instance disappeared while restarting")?;
@@ -165,12 +168,17 @@ pub fn delete(
     keep_backups: bool,
 ) -> Result<()> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
-    if is_running(instance) {
+    let instance = refresh(db, instance)?;
+    if is_running(&instance) {
         anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
             instance.name().to_string()
         ));
     }
     let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
+    let source = backup_source(paths, &instance);
+    if source.exists() {
+        std::fs::remove_dir_all(&source).context("failed to delete Rust world data")?;
+    }
     crate::instance::lifecycle::delete_instance_dir(&instance_dir, keep_backups)?;
     crate::db::game_instances::delete_rust(db, instance.name())
 }
@@ -184,7 +192,30 @@ pub fn backup_source(paths: &Paths, instance: &RustInstance) -> std::path::PathB
         .join(&instance.identity.id)
 }
 
-pub fn create_backup(paths: &Paths, instance: &RustInstance) -> Result<crate::backup::BackupEntry> {
+fn refresh(db: &crate::db::Db, instance: &RustInstance) -> Result<RustInstance> {
+    let current = crate::db::game_instances::load_rust(db, instance.name())?
+        .context("Rust instance no longer exists")?;
+    anyhow::ensure!(
+        current.identity.id == instance.identity.id,
+        "Rust instance was replaced"
+    );
+    Ok(current)
+}
+
+pub fn create_backup(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: &RustInstance,
+) -> Result<crate::backup::BackupEntry> {
+    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
+    let instance = refresh(db, instance)?;
+    create_backup_unlocked(paths, &instance)
+}
+
+fn create_backup_unlocked(
+    paths: &Paths,
+    instance: &RustInstance,
+) -> Result<crate::backup::BackupEntry> {
     if is_running(instance) {
         bail!(
             "stop Rust instance '{}' before creating a backup",
@@ -215,8 +246,16 @@ pub fn list_backups(
     )
 }
 
-pub fn restore_backup(paths: &Paths, instance: &RustInstance, backup_id: &str) -> Result<()> {
-    if is_running(instance) {
+pub fn restore_backup(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: &RustInstance,
+    backup_id: &str,
+) -> Result<()> {
+    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
+    let instance = refresh(db, instance)?;
+    crate::backup::validate_backup_id(backup_id)?;
+    if is_running(&instance) {
         bail!(
             "stop Rust instance '{}' before restoring a backup",
             instance.name()
@@ -229,12 +268,9 @@ pub fn restore_backup(paths: &Paths, instance: &RustInstance, backup_id: &str) -
     if !archive.is_file() {
         bail!("backup '{backup_id}' not found");
     }
-    create_backup(paths, instance).context("failed to snapshot Rust data before restore")?;
-    let source = backup_source(paths, instance);
-    std::fs::remove_dir_all(&source).ok();
-    std::fs::create_dir_all(&source)?;
-    crate::mods::extract_zip_to_dir(&archive, &source)
-        .with_context(|| format!("failed to restore backup '{backup_id}'"))
+    create_backup_unlocked(paths, &instance)
+        .context("failed to snapshot Rust data before restore")?;
+    crate::backup::replace_from_archive(&archive, &backup_source(paths, &instance))
 }
 
 pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
@@ -286,6 +322,61 @@ mod tests {
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    #[test]
+    fn delete_removes_world_data_and_preserves_requested_backups() {
+        let (paths, db, instance) = temp_context("delete-world");
+        let source = backup_source(&paths, &instance);
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("world.sav"), "world").unwrap();
+        let backup = create_backup(&paths, &db, &instance).unwrap();
+        delete(&paths, &db, &instance, true).unwrap();
+        assert!(!source.exists());
+        assert!(
+            paths
+                .game_instance_dir(crate::game::GameId::Rust, instance.name())
+                .join("backups")
+                .join(format!("{}.zip", backup.id))
+                .is_file()
+        );
+        assert!(
+            game_instances::load_rust(&db, instance.name())
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[test]
+    fn backups_cannot_overlap_lifecycle_changes() {
+        let (paths, db, instance) = temp_context("backup-lock");
+        let _lock =
+            LifecycleLock::acquire(&paths, crate::game::GameId::Rust, instance.name()).unwrap();
+        assert!(create_backup(&paths, &db, &instance).is_err());
+        assert!(restore_backup(&paths, &db, &instance, "backup").is_err());
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_restore_preserves_current_world() {
+        let (paths, db, instance) = temp_context("invalid-restore");
+        let source = backup_source(&paths, &instance);
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("world.sav"), "current").unwrap();
+        let backup = create_backup(&paths, &db, &instance).unwrap();
+        let archive = paths
+            .game_instance_dir(crate::game::GameId::Rust, instance.name())
+            .join("backups")
+            .join(format!("{}.zip", backup.id));
+        std::fs::write(archive, "not a zip").unwrap();
+        assert!(restore_backup(&paths, &db, &instance, &backup.id).is_err());
+        assert_eq!(
+            std::fs::read_to_string(source.join("world.sav")).unwrap(),
+            "current"
+        );
+        assert!(restore_backup(&paths, &db, &instance, "../escape").is_err());
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
     #[tokio::test]
     async fn fake_server_start_and_stop_persist_the_process_lifecycle() {
         let (paths, db, instance) = temp_context("lifecycle");
@@ -316,15 +407,15 @@ mod tests {
 
     #[test]
     fn restore_uses_the_selected_backup_even_when_creating_a_safety_snapshot() {
-        let (paths, _db, instance) = temp_context("backup");
+        let (paths, db, instance) = temp_context("backup");
         let source = backup_source(&paths, &instance);
         std::fs::create_dir_all(&source).unwrap();
         let save = source.join("world.sav");
         std::fs::write(&save, "before").unwrap();
 
-        let backup = create_backup(&paths, &instance).unwrap();
+        let backup = create_backup(&paths, &db, &instance).unwrap();
         std::fs::write(&save, "after").unwrap();
-        restore_backup(&paths, &instance, &backup.id).unwrap();
+        restore_backup(&paths, &db, &instance, &backup.id).unwrap();
 
         assert_eq!(std::fs::read_to_string(save).unwrap(), "before");
         assert_eq!(list_backups(&paths, &instance).unwrap().len(), 2);

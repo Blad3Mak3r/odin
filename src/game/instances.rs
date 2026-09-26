@@ -99,7 +99,7 @@ pub fn list_backups(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<
 pub fn create_backup(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<BackupEntry> {
     match load(paths, db, game, name)? {
         GameInstance::Valheim(instance) => crate::backup::create(&instance, db),
-        GameInstance::Rust(instance) => rust::create_backup(paths, &instance),
+        GameInstance::Rust(instance) => rust::create_backup(paths, db, &instance),
     }
 }
 
@@ -112,7 +112,7 @@ pub fn restore_backup(
 ) -> Result<()> {
     match load(paths, db, game, name)? {
         GameInstance::Valheim(instance) => crate::backup::restore(&instance, db, backup_id),
-        GameInstance::Rust(instance) => rust::restore_backup(paths, &instance, backup_id),
+        GameInstance::Rust(instance) => rust::restore_backup(paths, db, &instance, backup_id),
     }
 }
 

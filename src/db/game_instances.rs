@@ -13,6 +13,7 @@ use crate::paths::Paths;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GameInstanceIdentity {
+    pub tags: Vec<String>,
     pub id: String,
     pub game: GameId,
     pub name: String,
@@ -61,12 +62,19 @@ pub fn identity(
     let conn = db.conn();
     let identity = conn
         .query_row(
-            "SELECT id, created_at FROM game_instances WHERE game = ?1 AND name = ?2",
+            "SELECT id, created_at, tags FROM game_instances WHERE game = ?1 AND name = ?2",
             params![game.as_str(), name],
-            |row| Ok((row.get::<_, String>(0)?, row.get(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()?;
-    Ok(identity.map(|(id, created_at)| GameInstanceIdentity {
+    Ok(identity.map(|(id, created_at, tags)| GameInstanceIdentity {
+        tags: serde_json::from_str(&tags).unwrap_or_default(),
         id,
         game,
         name: name.to_string(),
@@ -96,7 +104,7 @@ pub fn ensure_valheim_identity(
 pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
     let conn = db.conn();
     let mut statement = conn.prepare(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' ORDER BY g.name",
     )?;
@@ -109,7 +117,7 @@ pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
 pub fn load_rust(db: &crate::db::Db, name: &str) -> Result<Option<RustInstance>> {
     let conn = db.conn();
     conn.query_row(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' AND g.name = ?1",
         params![name],
@@ -236,6 +244,8 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
 fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
     Ok(RustInstance {
         identity: GameInstanceIdentity {
+            tags: serde_json::from_str(&row.get::<_, String>(15)?)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
             id: row.get(0)?,
             game: GameId::Rust,
             name: row.get(1)?,
@@ -314,4 +324,68 @@ mod tests {
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
+}
+
+pub fn set_tags(db: &crate::db::Db, game: GameId, name: &str, tags: &[String]) -> Result<()> {
+    anyhow::ensure!(
+        tags.len() <= 20
+            && tags.iter().all(|tag| !tag.is_empty()
+                && tag.len() <= 32
+                && tag.chars().all(|c| c.is_alphanumeric() || "-_".contains(c))),
+        crate::instance::InstanceError::InvalidName(
+            "Use at most 20 tags of 1–32 letters, digits, hyphens or underscores".into()
+        )
+    );
+    let mut tags = tags.to_vec();
+    tags.sort();
+    tags.dedup();
+    let count = db.conn().execute(
+        "UPDATE game_instances SET tags = ?3 WHERE game = ?1 AND name = ?2",
+        params![game.as_str(), name, serde_json::to_string(&tags)?],
+    )?;
+    anyhow::ensure!(
+        count == 1,
+        crate::instance::InstanceError::NotFound(name.into())
+    );
+    Ok(())
+}
+
+pub fn rename(db: &crate::db::Db, game: GameId, old: &str, new: &str) -> Result<()> {
+    let mut conn = db.conn();
+    let tx = conn.transaction()?;
+    tx.pragma_update(None, "defer_foreign_keys", true)?;
+    let id: String = tx.query_row(
+        "SELECT id FROM game_instances WHERE game = ?1 AND name = ?2",
+        params![game.as_str(), old],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "UPDATE game_instances SET name = ?2 WHERE id = ?1",
+        params![id, new],
+    )?;
+    if game == GameId::Valheim {
+        tx.execute(
+            "UPDATE instances SET name = ?2 WHERE name = ?1",
+            params![old, new],
+        )?;
+        for table in ["installed_mods", "access_list_entries"] {
+            tx.execute(
+                &format!("UPDATE {table} SET instance_name = ?2 WHERE instance_id = ?1"),
+                params![id, new],
+            )?;
+        }
+    }
+    for table in [
+        "backups",
+        "backup_schedules",
+        "backup_storage_configs",
+        "resource_samples",
+    ] {
+        tx.execute(
+            &format!("UPDATE {table} SET instance_name = ?2 WHERE instance_id = ?1"),
+            params![id, new],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }

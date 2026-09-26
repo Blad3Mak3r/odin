@@ -565,3 +565,55 @@ mod tests {
         Ok(views)
     }
 }
+
+#[derive(Deserialize)]
+pub struct TagsRequest {
+    pub tags: Vec<String>,
+}
+
+pub async fn set_tags(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+    Json(req): Json<TagsRequest>,
+) -> ApiResult<StatusCode> {
+    run_blocking(move || game_instances::set_tags(&state.db, game, &name, &req.tags)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn rename_instance(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+    Json(req): Json<super::instances::RenameRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let old = name.clone();
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        let instance = game_instances_ops::rename(&paths, &db, game, &name, &req.new_name)?;
+        game_instance_view(&paths, &db, instance)
+    })
+    .await?;
+    state.runtime.remove_game_instance(game, &old);
+    Ok(Json(view))
+}
+
+pub async fn clone_rust_instance(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<CreateGameInstanceRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let activity = state.activity.clone();
+    let view = run_blocking(move || {
+        let instance = game_instances_ops::clone_rust(&paths, &db, &name, &req.name)?;
+        activity.record_for(
+            GameId::Rust,
+            crate::activity::ActivityKind::InstanceCloned { source: name },
+            Some(req.name),
+        );
+        Ok(rust_view(instance))
+    })
+    .await?;
+    Ok(Json(view))
+}

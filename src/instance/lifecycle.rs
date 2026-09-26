@@ -199,42 +199,10 @@ pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 /// and no instance already exists under `new_name`. The world name (and thus
 /// its save files) is left untouched — only the instance's own identity moves.
 pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<Instance> {
-    validate_instance_name(new_name).map_err(InstanceError::InvalidName)?;
-
-    if old_name == new_name {
-        bail!("new name is the same as the current name");
+    match crate::game::instances::rename(paths, db, GameId::Valheim, old_name, new_name)? {
+        crate::game::instances::GameInstance::Valheim(instance) => Ok(instance),
+        _ => unreachable!("Valheim rename returned a different game"),
     }
-
-    let mut instance = Instance::load_existing(paths, db, old_name)?;
-
-    if is_running(&instance)? {
-        bail!(
-            "instance '{old_name}' is currently running; run `odin stop {old_name}` before renaming it"
-        );
-    }
-
-    if Instance::load(paths, db, new_name)?.is_some() {
-        bail!(InstanceError::AlreadyExists(new_name.to_string()));
-    }
-
-    let new_dir = paths.instance_dir(new_name);
-    std::fs::rename(&instance.dir, &new_dir).with_context(|| {
-        format!(
-            "failed to move instance directory {} to {}",
-            instance.dir.display(),
-            new_dir.display()
-        )
-    })?;
-
-    instance.dir = new_dir;
-    instance.state.name = new_name.to_string();
-    // The instance row is keyed by name, so saving under the new name inserts
-    // a fresh row rather than updating the old one — the old row (and its
-    // installed_mods) must be deleted explicitly afterwards.
-    instance.save(db)?;
-    crate::db::instances::delete(db, old_name)?;
-
-    Ok(instance)
 }
 
 /// Removes an instance's on-disk directory — optionally preserving its

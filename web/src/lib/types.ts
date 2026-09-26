@@ -23,6 +23,7 @@ export interface GameView {
 }
 
 export interface ManagedInstanceView {
+  tags: string[]
   id: string
   game: GameId
   name: string

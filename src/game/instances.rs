@@ -137,6 +137,68 @@ mod tests {
     use crate::paths::Paths;
 
     #[test]
+    fn rename_preserves_identity_backups_and_other_games() {
+        let root = std::env::temp_dir().join(format!("odin-rename-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: root.clone(),
+            config_dir: root.clone(),
+        };
+        let db = Db::open(&paths).unwrap();
+        create(&paths, &db, GameId::Valheim, "source").unwrap();
+        create(&paths, &db, GameId::Rust, "source").unwrap();
+        for game in [GameId::Valheim, GameId::Rust] {
+            let id = game_instances::identity(&db, game, "source")
+                .unwrap()
+                .unwrap()
+                .id;
+            let backup = create_backup(&paths, &db, game, "source").unwrap();
+            crate::db::backup_schedules::upsert_for_game(&db, game, "source", 24, 7, true).unwrap();
+            rename(&paths, &db, game, "source", "target").unwrap();
+            assert_eq!(
+                game_instances::identity(&db, game, "target")
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                id
+            );
+            assert_eq!(
+                list_backups(&paths, &db, game, "target").unwrap()[0].id,
+                backup.id
+            );
+            assert!(
+                crate::db::backup_schedules::get_for_game(&db, game, "target")
+                    .unwrap()
+                    .unwrap()
+                    .enabled
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rust_clone_has_new_identity_and_ports_without_world_or_credentials() {
+        let root = std::env::temp_dir().join(format!("odin-clone-rust-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: root.clone(),
+            config_dir: root.clone(),
+        };
+        let db = Db::open(&paths).unwrap();
+        let original = game_instances::create_rust(&paths, &db, "source").unwrap();
+        let cloned = clone_rust(&paths, &db, "source", "target").unwrap();
+        assert_ne!(original.identity.id, cloned.identity.id);
+        assert_ne!(original.config.port, cloned.config.port);
+        assert_eq!(original.config.seed, cloned.config.seed);
+        assert!(cloned.pid.is_none());
+        assert!(!rust::backup_source(&paths, &cloned).exists());
+        assert!(
+            crate::db::backup_storage::get_for_game(&db, GameId::Rust, "target")
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn loading_same_name_keeps_each_games_typed_instance() {
         let dir =
             std::env::temp_dir().join(format!("odin-game-operations-{}", uuid::Uuid::new_v4()));
@@ -181,4 +243,55 @@ mod tests {
         );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
+}
+
+pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Result<GameInstance> {
+    crate::cli::validate_instance_name(new).map_err(crate::instance::InstanceError::InvalidName)?;
+    anyhow::ensure!(
+        old != new,
+        crate::instance::InstanceError::InvalidName("Choose a different name".into())
+    );
+    let _source_lock = lifecycle::LifecycleLock::acquire(paths, game, old)?;
+    let _target_lock = lifecycle::LifecycleLock::acquire(paths, game, new)?;
+    let instance = load(paths, db, game, old)?;
+    let running = match &instance {
+        GameInstance::Valheim(i) => lifecycle::is_running(i)?,
+        GameInstance::Rust(i) => i.is_running(),
+    };
+    anyhow::ensure!(
+        !running,
+        crate::instance::InstanceError::AlreadyRunning(old.into())
+    );
+    anyhow::ensure!(
+        game_instances::identity(db, game, new)?.is_none(),
+        crate::instance::InstanceError::AlreadyExists(new.into())
+    );
+    let source = paths.game_instance_dir(game, old);
+    let target = paths.game_instance_dir(game, new);
+    anyhow::ensure!(!target.exists(), "destination directory already exists");
+    std::fs::rename(&source, &target)?;
+    if let Err(error) = game_instances::rename(db, game, old, new) {
+        std::fs::rename(&target, &source)
+            .context("could not recover original directory after rename failure")?;
+        return Err(error);
+    }
+    load(paths, db, game, new)
+}
+
+pub fn clone_rust(paths: &Paths, db: &Db, source: &str, target: &str) -> Result<RustInstance> {
+    let _source_lock = lifecycle::LifecycleLock::acquire(paths, GameId::Rust, source)?;
+    let _target_lock = lifecycle::LifecycleLock::acquire(paths, GameId::Rust, target)?;
+    let original =
+        game_instances::load_rust(db, source)?.context("Rust instance does not exist")?;
+    let cloned = game_instances::create_rust(paths, db, target)?;
+    let mut config = original.config;
+    config.port = cloned.config.port;
+    config.query_port = cloned.config.query_port;
+    config.hostname = target.into();
+    if let Err(error) = game_instances::update_rust_config(db, target, &config) {
+        game_instances::delete_rust(db, target)?;
+        std::fs::remove_dir_all(paths.game_instance_dir(GameId::Rust, target))?;
+        return Err(error);
+    }
+    game_instances::load_rust(db, target)?.context("cloned Rust instance disappeared")
 }

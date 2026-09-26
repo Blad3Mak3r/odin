@@ -1,8 +1,8 @@
+import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { PageHeader } from '@/components/PageHeader'
 import { ResourceMetric } from '@/components/ResourceMetric'
 import { Badge } from '@/components/ui/badge'
@@ -14,7 +14,6 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { QueryError } from '@/components/QueryError'
 import {
-  useDeleteManagedInstance,
   useManagedInstance,
   useManagedInstanceAction,
   useManagedInstanceLogs,
@@ -142,9 +141,7 @@ export function ManagedInstanceDetailPage() {
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
-  const deleteInstance = useDeleteManagedInstance()
   const transition = useManagedInstanceTransition(gameId, name ?? '')
-  const { confirm, dialog } = useConfirmDialog()
   if (!isGameId(game) || !name) return null
   if (instance.isError) return <QueryError error={instance.error} />
   if (!instance.data) return null
@@ -160,32 +157,16 @@ export function ManagedInstanceDetailPage() {
   if (!tab || nestedPath.length > 0 || !tabs.some((candidate) => candidate.id === tab)) {
     return <Navigate replace to={`/instances/${detail.game}/${detail.name}/overview`} />
   }
-  const busy = start.isPending || stop.isPending || restart.isPending || deleteInstance.isPending || transition.data !== null
+  const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
 
-  const remove = async () => {
-    const confirmed = await confirm({
-      title: `Delete '${detail.name}'?`,
-      description: 'This permanently removes the server data, configuration, and local backups.',
-      confirmLabel: 'Delete server',
-    })
-    if (!confirmed) return
-    deleteInstance.mutate(target, {
-      onSuccess: () => {
-        toast.success(`Server '${detail.name}' deleted`)
-        navigate('/instances')
-      },
-      onError: (error) => toast.error(error.message),
-    })
-  }
 
   return (
     <div className="flex flex-col gap-6">
-      {dialog}
       <PageHeader
         title={detail.name}
         description={`${detail.game} server`}
         action={
-          <div className="flex gap-2">
+          <div className="flex gap-2"><ManageInstanceDialog instance={detail} onNavigate={navigate} />
             {detail.running ? (
               <>
                 <Button variant="outline" disabled={busy} onClick={() => restart.mutate(target, { onError: (error) => toast.error(error.message) })}>Restart</Button>
@@ -194,7 +175,6 @@ export function ManagedInstanceDetailPage() {
             ) : (
               <>
                 <Button disabled={busy} onClick={() => start.mutate(target, { onError: (error) => toast.error(error.message) })}>Start</Button>
-                <Button variant="destructive" disabled={busy} onClick={remove}>Delete</Button>
               </>
             )}
           </div>

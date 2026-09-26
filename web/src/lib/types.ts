@@ -274,7 +274,22 @@ export interface ResourceSample {
 
 export interface PlayerInfo {
   name: string
+  steam_id: string | null
   connected_at: string
+}
+
+export interface PlayerSession {
+  id: string
+  name: string
+  steam_id: string | null
+  joined_at: string
+  left_at: string | null
+}
+
+export interface SaveFileEntry {
+  path: string
+  size_bytes: number
+  modified_at: string | null
 }
 
 export interface InstanceResourceEntry {

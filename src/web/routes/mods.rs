@@ -254,11 +254,20 @@ pub(crate) fn spawn_mod_update_job(state: &AppState, name: String) -> String {
         move |logger| {
             logger.line(format!("updating mods for '{name}'"));
             let result = mods::update(&paths, &db, &name);
-            if result.is_ok() {
+            if let Ok(updates) = &result {
+                if updates.is_empty() {
+                    logger.line("all mods are already up to date");
+                }
+                for update in updates {
+                    logger.line(format!(
+                        "{}: {} -> {}",
+                        update.mod_id, update.from_version, update.to_version
+                    ));
+                }
                 logger.line("done");
                 activity.record(ActivityKind::ModsUpdated, Some(name.clone()));
             }
-            result
+            result.map(|_| ())
         },
     )
 }

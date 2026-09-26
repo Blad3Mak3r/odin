@@ -1,6 +1,7 @@
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
+import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/PageHeader'
@@ -23,7 +24,9 @@ import {
   useUpdateRustConfig,
 } from '@/lib/queries'
 import type { GameId } from '@/lib/types'
-import { formatBytes } from '@/lib/utils'
+import { cn, formatBytes } from '@/lib/utils'
+import { useLogSocket } from '@/hooks/useLogSocket'
+import { buttonVariants } from '@/components/ui/button-variants'
 
 function isGameId(value: string | undefined): value is GameId {
   return value === 'valheim' || value === 'rust'
@@ -136,8 +139,10 @@ export function ManagedInstanceDetailPage() {
   const gameId = isGameId(game) ? game : 'valheim'
   const instance = useManagedInstance(gameId, name ?? '')
   const logs = useManagedInstanceLogs(gameId, name ?? '')
+  const liveLogs = useLogSocket(name ?? '', gameId)
+  const [resourceHours, setResourceHours] = useState<number | undefined>()
   const resources = useManagedRustResources(name ?? '', gameId === 'rust')
-  const resourceHistory = useManagedRustResourceHistory(name ?? '', gameId === 'rust')
+  const resourceHistory = useManagedRustResourceHistory(name ?? '', resourceHours, gameId === 'rust')
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
@@ -151,6 +156,7 @@ export function ManagedInstanceDetailPage() {
   const tabs = [
     { id: 'overview', label: 'Overview' },
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
+    { id: 'saves', label: 'Save files' },
     { id: 'logs', label: 'Logs' },
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
@@ -197,6 +203,19 @@ export function ManagedInstanceDetailPage() {
             <Card>
               <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Live CPU and memory use for this Rust server.</CardDescription></CardHeader>
               <CardContent className="flex flex-col gap-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex gap-1">
+                    {[
+                      ['Live', undefined],
+                      ['1h', 1],
+                      ['24h', 24],
+                      ['7d', 168],
+                    ].map(([label, hours]) => (
+                      <Button key={label} size="sm" variant={resourceHours === hours ? 'default' : 'outline'} onClick={() => setResourceHours(hours as number | undefined)}>{label}</Button>
+                    ))}
+                  </div>
+                  <a className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))} download href={`/api/games/rust/instances/${detail.name}/resources/history/export${resourceHours ? `?hours=${resourceHours}` : ''}`}>Export CSV</a>
+                </div>
                 {resources.isError ? <QueryError error={resources.error} /> : (
                   <>
                     {resourceHistory.isError && <QueryError error={resourceHistory.error} />}
@@ -213,10 +232,11 @@ export function ManagedInstanceDetailPage() {
         {detail.capabilities.backups && (
           <TabsContent value="backups"><BackupsTab name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
         )}
+        <TabsContent value="saves"><SaveFilesTab game={detail.game} name={detail.name} /></TabsContent>
         <TabsContent value="logs">
           <Card>
-            <CardHeader><CardTitle>Logs</CardTitle><CardDescription>Last 200 server log lines.</CardDescription></CardHeader>
-            <CardContent>{logs.isError ? <QueryError error={logs.error} /> : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{logs.data?.lines.join('\n') || 'No logs yet.'}</pre>}</CardContent>
+            <CardHeader><CardTitle>Logs</CardTitle><CardDescription>{liveLogs.connected ? 'Live server log.' : 'Last 200 server log lines.'}</CardDescription></CardHeader>
+            <CardContent>{logs.isError ? <QueryError error={logs.error} /> : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{(liveLogs.lines.length > 0 ? liveLogs.lines : logs.data?.lines)?.join('\n') || 'No logs yet.'}</pre>}</CardContent>
           </Card>
         </TabsContent>
       </Tabs>

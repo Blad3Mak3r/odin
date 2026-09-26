@@ -75,8 +75,11 @@ impl Supervisor {
                     Event::LogLine { line } => {
                         let _ = sender.send(line);
                     }
-                    Event::PlayerJoined { name: player } => {
-                        if let Some(kind) = players.mark_joined(&name, player) {
+                    Event::PlayerJoined {
+                        name: player,
+                        steam_id,
+                    } => {
+                        if let Some(kind) = players.mark_joined(&name, player, steam_id) {
                             activity.record(kind, Some(name.clone()));
                         }
                     }

@@ -4,6 +4,7 @@ use anyhow::Context;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sysinfo::Pid;
@@ -298,6 +299,31 @@ pub async fn get_rust_resource_history(
             state.runtime.game_instance_history(GameId::Rust, &name),
         )),
     }
+}
+
+pub async fn export_rust_resource_history(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Response> {
+    let db = state.db.clone();
+    let load_name = name.clone();
+    run_blocking(move || {
+        game_instances::load_rust(&db, &load_name)?.context("Rust instance does not exist")
+    })
+    .await?;
+    let hours = query.hours.unwrap_or(24 * 7);
+    let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+    let db = state.db.clone();
+    let export_name = name.clone();
+    let rows = run_blocking(move || {
+        crate::db::resource_samples::range_for_instance(&db, GameId::Rust, &export_name, since)
+    })
+    .await?;
+    Ok(crate::web::routes::resources::csv_response(
+        &format!("rust-{name}-resources.csv"),
+        &rows,
+    ))
 }
 
 pub async fn get_logs(

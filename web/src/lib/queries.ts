@@ -34,8 +34,10 @@ import type {
   LogsView,
   ModSearchResult,
   PlayerInfo,
+  PlayerSession,
   ResourceSample,
   RustConfigUpdateRequest,
+  SaveFileEntry,
   SettingsView,
   VersionView,
   WebhookView,
@@ -130,6 +132,20 @@ export function usePlayers(name: string, enabled = true) {
     queryFn: () => api.get<PlayerInfo[]>(valheimInstancePath(name, '/players')),
     staleTime: Infinity,
     enabled,
+  })
+}
+
+export function usePlayerHistory(name: string) {
+  return useQuery({
+    queryKey: ['players', name, 'history'],
+    queryFn: () => api.get<PlayerSession[]>(valheimInstancePath(name, '/players/history')),
+  })
+}
+
+export function useSaveFiles(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['save-files', game, name],
+    queryFn: () => api.get<SaveFileEntry[]>(`/games/${game}/instances/${name}/saves`),
   })
 }
 
@@ -233,10 +249,10 @@ export function useManagedRustResources(name: string, enabled = true) {
   })
 }
 
-export function useManagedRustResourceHistory(name: string, enabled = true) {
+export function useManagedRustResourceHistory(name: string, hours?: number, enabled = true) {
   return useQuery({
-    queryKey: ['managed-instances', 'rust', name, 'resource-history'],
-    queryFn: () => api.get<ResourceSample[]>(`/games/rust/instances/${name}/resources/history`),
+    queryKey: ['managed-instances', 'rust', name, 'resource-history', hours],
+    queryFn: () => api.get<ResourceSample[]>(`/games/rust/instances/${name}/resources/history${hours ? `?hours=${hours}` : ''}`),
     enabled,
   })
 }

@@ -5,7 +5,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
-    instances, jobs, lists, mods, nexus, players, resources, settings, version, webhooks,
+    instances, jobs, lists, mods, nexus, players, resources, saves, settings, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -59,7 +59,23 @@ pub fn build_router(state: AppState) -> Router {
             "/games/rust/instances/{name}/resources/history",
             get(games::get_rust_resource_history),
         )
+        .route(
+            "/games/rust/instances/{name}/resources/history/export",
+            get(games::export_rust_resource_history),
+        )
         .route("/games/{game}/instances/{name}/logs", get(games::get_logs))
+        .route(
+            "/games/{game}/instances/{name}/logs/sse",
+            get(sse::game_logs_sse),
+        )
+        .route(
+            "/games/{game}/instances/{name}/saves",
+            get(saves::list_save_files),
+        )
+        .route(
+            "/games/{game}/instances/{name}/saves/{*path}",
+            get(saves::download_save_file),
+        )
         .route(
             "/games/{game}/instances/{name}/start",
             post(games::start_instance),
@@ -227,6 +243,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/valheim/instances/{name}/players",
             get(players::get_instance_players),
+        )
+        .route(
+            "/games/valheim/instances/{name}/players/history",
+            get(players::get_player_history),
         )
         .route(
             "/instances",

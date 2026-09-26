@@ -142,6 +142,8 @@ pub enum Event {
     /// whenever the supervisor's own parsing recognizes a join.
     PlayerJoined {
         name: String,
+        #[serde(default)]
+        steam_id: Option<String>,
     },
     /// The `PlayerJoined` counterpart, pushed on a recognized leave.
     PlayerLeft {
@@ -338,6 +340,7 @@ mod tests {
         let response = Response::Players {
             players: vec![PlayerInfo {
                 name: "Bjorn".to_string(),
+                steam_id: Some("76561198000000000".to_string()),
                 connected_at: Utc::now(),
             }],
         };
@@ -361,13 +364,14 @@ mod tests {
             &mut client,
             &Event::PlayerJoined {
                 name: "Bjorn".to_string(),
+                steam_id: Some("76561198000000000".to_string()),
             },
         )
         .await
         .unwrap();
         let mut reader = tokio::io::BufReader::new(&mut server);
         let received = read_frame::<Event, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Event::PlayerJoined { name }) if name == "Bjorn"));
+        assert!(matches!(received, Some(Event::PlayerJoined { name, .. }) if name == "Bjorn"));
     }
 
     #[tokio::test]

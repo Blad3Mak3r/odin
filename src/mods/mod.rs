@@ -268,7 +268,14 @@ fn link_and_record(
     instance.save(db)
 }
 
-pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModUpdate {
+    pub mod_id: String,
+    pub from_version: String,
+    pub to_version: String,
+}
+
+pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<ModUpdate>> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
 
     // Mod ids are collected up front (rather than cloning the whole
@@ -295,6 +302,7 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
     };
 
     let mut any_updated = false;
+    let mut updates = Vec::new();
     for mod_id in mod_ids {
         // Nothing to update a locally uploaded mod against — it has no
         // external source to check for a newer version.
@@ -345,6 +353,11 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
             to = latest_version,
             "updating mod"
         );
+        updates.push(ModUpdate {
+            mod_id: mod_id.clone(),
+            from_version: installed.version.clone(),
+            to_version: latest_version.clone(),
+        });
 
         let global_dir = ensure_global_mod(
             paths,
@@ -376,7 +389,7 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(updates)
 }
 
 /// Reads an instance's installed mods from its state — no network call.

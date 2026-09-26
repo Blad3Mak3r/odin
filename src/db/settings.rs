@@ -1,5 +1,5 @@
-//! Durable, user-entered global configuration (currently just the Nexus
-//! Mods API key) — kept in its own table rather than folded into `cache`:
+//! Durable, user-entered global configuration — kept in its own table
+//! rather than folded into `cache`:
 //! `cache` carries TTL/refresh semantics for re-fetchable data, while a
 //! setting is durable input that should never be silently evicted.
 
@@ -9,6 +9,29 @@ use rusqlite::{OptionalExtension, params};
 use super::Db;
 
 pub const NEXUS_API_KEY: &str = "nexus_api_key";
+const DEFAULT_AUTO_RESTART: &str = "default_auto_restart";
+const DEFAULT_BACKUP_ENABLED: &str = "default_backup_enabled";
+const DEFAULT_BACKUP_INTERVAL_HOURS: &str = "default_backup_interval_hours";
+const DEFAULT_BACKUP_RETAIN_COUNT: &str = "default_backup_retain_count";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InstanceDefaults {
+    pub auto_restart: bool,
+    pub backup_enabled: bool,
+    pub backup_interval_hours: u32,
+    pub backup_retain_count: u32,
+}
+
+impl Default for InstanceDefaults {
+    fn default() -> Self {
+        Self {
+            auto_restart: false,
+            backup_enabled: false,
+            backup_interval_hours: 24,
+            backup_retain_count: 7,
+        }
+    }
+}
 
 pub fn get(db: &Db, key: &str) -> Result<Option<String>> {
     db.conn()
@@ -37,6 +60,43 @@ pub fn delete(db: &Db, key: &str) -> Result<()> {
         .execute("DELETE FROM settings WHERE key = ?1", params![key])
         .with_context(|| format!("failed to clear setting '{key}'"))?;
     Ok(())
+}
+
+pub fn instance_defaults(db: &Db) -> Result<InstanceDefaults> {
+    let fallback = InstanceDefaults::default();
+    Ok(InstanceDefaults {
+        auto_restart: get(db, DEFAULT_AUTO_RESTART)?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(fallback.auto_restart),
+        backup_enabled: get(db, DEFAULT_BACKUP_ENABLED)?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(fallback.backup_enabled),
+        backup_interval_hours: get(db, DEFAULT_BACKUP_INTERVAL_HOURS)?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(fallback.backup_interval_hours),
+        backup_retain_count: get(db, DEFAULT_BACKUP_RETAIN_COUNT)?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(fallback.backup_retain_count),
+    })
+}
+
+pub fn set_instance_defaults(db: &Db, defaults: &InstanceDefaults) -> Result<()> {
+    set(db, DEFAULT_AUTO_RESTART, &defaults.auto_restart.to_string())?;
+    set(
+        db,
+        DEFAULT_BACKUP_ENABLED,
+        &defaults.backup_enabled.to_string(),
+    )?;
+    set(
+        db,
+        DEFAULT_BACKUP_INTERVAL_HOURS,
+        &defaults.backup_interval_hours.to_string(),
+    )?;
+    set(
+        db,
+        DEFAULT_BACKUP_RETAIN_COUNT,
+        &defaults.backup_retain_count.to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -85,5 +145,19 @@ mod tests {
         set(&db, NEXUS_API_KEY, "abc123").unwrap();
         delete(&db, NEXUS_API_KEY).unwrap();
         assert!(get(&db, NEXUS_API_KEY).unwrap().is_none());
+    }
+
+    #[test]
+    fn instance_defaults_round_trip() {
+        let db = temp_db("instance-defaults");
+        assert_eq!(instance_defaults(&db).unwrap(), InstanceDefaults::default());
+        let defaults = InstanceDefaults {
+            auto_restart: true,
+            backup_enabled: true,
+            backup_interval_hours: 6,
+            backup_retain_count: 12,
+        };
+        set_instance_defaults(&db, &defaults).unwrap();
+        assert_eq!(instance_defaults(&db).unwrap(), defaults);
     }
 }

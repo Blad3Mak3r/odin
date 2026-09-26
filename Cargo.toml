@@ -2,7 +2,7 @@
 name = "odin"
 version = "0.11.0"
 edition = "2024"
-description = "Odin manages the full lifecycle of Valheim dedicated game servers: install, update, mod, and run."
+description = "Self-hosted orchestration for Valheim and Rust dedicated game servers."
 license = "MIT"
 
 [[bin]]
@@ -54,7 +54,7 @@ tower = { version = "0.5", features = ["util"] }
 name = "odin-server"
 maintainer = "Blad3Mak3r <juanluiscarobenito@gmail.com>"
 copyright = "2026, Blad3Mak3r"
-extended-description = "Runs and maintains Valheim dedicated servers on Linux: installs/updates the server via SteamCMD, runs multiple independent named instances as directly-supervised background processes, manages per-instance config and access lists, takes backups, and installs BepInEx mods from Thunderstore."
+extended-description = "Runs and maintains Valheim and Rust dedicated servers on Linux: installs and updates game binaries through SteamCMD, supervises named instances, manages configuration and backups, and provides a built-in web dashboard."
 conflicts = "odin"
 depends = "lib32gcc-s1 | lib32gcc1, lib32stdc++6, libasound2 | libasound2t64, libpulse0"
 section = "utils"

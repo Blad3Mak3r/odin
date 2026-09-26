@@ -22,6 +22,7 @@ import type {
   HostResources,
   InstallStatusView,
   InstanceResources,
+  InstanceDefaults,
   InstanceTransition,
   InstanceTransitions,
   InstanceView,
@@ -749,6 +750,15 @@ export function useSetNexusApiKey() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (apiKey: string) => api.put<void>('/settings/nexus-api-key', { api_key: apiKey }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  })
+}
+
+export function useSetInstanceDefaults() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (defaults: InstanceDefaults) =>
+      api.put<InstanceDefaults>('/settings/instance-defaults', defaults),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   })
 }

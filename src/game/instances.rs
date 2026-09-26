@@ -20,10 +20,32 @@ pub enum GameInstance {
 }
 
 pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
-    match game {
+    let defaults = crate::db::settings::instance_defaults(db)?;
+    let instance = match game {
         GameId::Valheim => Instance::create(paths, db, name).map(GameInstance::Valheim),
         GameId::Rust => game_instances::create_rust(paths, db, name).map(GameInstance::Rust),
-    }
+    }?;
+    let instance = match instance {
+        GameInstance::Valheim(mut instance) => {
+            instance.state.auto_restart = defaults.auto_restart;
+            instance.save(db)?;
+            GameInstance::Valheim(instance)
+        }
+        GameInstance::Rust(instance) => {
+            let mut config = instance.config.clone();
+            config.auto_restart = defaults.auto_restart;
+            GameInstance::Rust(game_instances::update_rust_config(db, name, &config)?)
+        }
+    };
+    crate::db::backup_schedules::upsert_for_game(
+        db,
+        game,
+        name,
+        defaults.backup_interval_hours,
+        defaults.backup_retain_count,
+        defaults.backup_enabled,
+    )?;
+    Ok(instance)
 }
 
 pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
@@ -135,6 +157,43 @@ pub fn delete_backup(paths: &Paths, db: &Db, game: GameId, name: &str, id: &str)
 mod tests {
     use super::*;
     use crate::paths::Paths;
+
+    #[test]
+    fn create_applies_global_defaults_to_each_game() {
+        let root =
+            std::env::temp_dir().join(format!("odin-game-defaults-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: root.clone(),
+            config_dir: root.clone(),
+        };
+        let db = Db::open(&paths).unwrap();
+        crate::db::settings::set_instance_defaults(
+            &db,
+            &crate::db::settings::InstanceDefaults {
+                auto_restart: true,
+                backup_enabled: true,
+                backup_interval_hours: 8,
+                backup_retain_count: 5,
+            },
+        )
+        .unwrap();
+
+        for game in [GameId::Valheim, GameId::Rust] {
+            let instance = create(&paths, &db, game, game.as_str()).unwrap();
+            match instance {
+                GameInstance::Valheim(instance) => assert!(instance.state.auto_restart),
+                GameInstance::Rust(instance) => assert!(instance.config.auto_restart),
+            }
+            let schedule = crate::db::backup_schedules::get_for_game(&db, game, game.as_str())
+                .unwrap()
+                .unwrap();
+            assert!(schedule.enabled);
+            assert_eq!(schedule.interval_hours, 8);
+            assert_eq!(schedule.retain_count, 5);
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rename_preserves_identity_backups_and_other_games() {

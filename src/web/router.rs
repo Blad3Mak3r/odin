@@ -353,6 +353,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/settings", get(settings::get_settings))
         .route(
+            "/settings/instance-defaults",
+            put(settings::set_instance_defaults),
+        )
+        .route(
             "/settings/nexus-api-key",
             put(settings::set_nexus_api_key).delete(settings::clear_nexus_api_key),
         )

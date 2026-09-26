@@ -64,8 +64,8 @@ lists, player state, and readiness; Rust v1 focuses on core operation.
 - **Backups with a safety net.** Snapshot server data to a zip archive and
   restore from it only after Odin first snapshots the current data. Rust v1
   requires its server to be stopped for create and restore operations.
-  Valheim also supports per-instance remote storage through AWS S3 or
-  Cloudflare R2.
+  Both games support schedules, retention, and per-instance remote storage
+  through AWS S3 or Cloudflare R2.
 - **State you can trust.** An instance's "running" status is always derived
   live from the OS process itself (its pid, cross-checked against its own
   start time so a reused pid never lies to you), never from a flag that can
@@ -189,7 +189,7 @@ The container filesystem contract is intentionally small:
 
 | Path | Persistence | Purpose |
 |---|---|---|
-| `/var/lib/odin` | Required volume | Database, SteamCMD, shared Valheim install, worlds, backups, mods, and logs. |
+| `/var/lib/odin` | Required volume | Database, SteamCMD, game installs, worlds, backups, mods, and logs. |
 | `/etc/odin/config.toml` | Image default; optional read-only bind mount | Global configuration. Its default data directory is `/var/lib/odin`. |
 | `/run/odin` | Ephemeral `tmpfs` | Per-instance supervisor sockets and pidfiles. |
 
@@ -366,16 +366,18 @@ odin serve                            # binds 127.0.0.1:7331 by default
 odin serve --bind 0.0.0.0 --port 8080  # or pick your own address/port
 ```
 
-It covers dependency status, instance
-create/start/stop/restart/rename/delete, per-instance config, mod
-search/install/enable via Thunderstore, per-instance and bulk BepInEx update
-checks, a live console and log tail, and
-editing `adminlist.txt`/`bannedlist.txt`/`permittedlist.txt` — plus live
-host and per-instance CPU/RAM usage that isn't exposed by the CLI at all.
-Each instance's Backups tab also configures automatic backups and optional
-AWS S3 or Cloudflare R2 storage. Remote backups remain listed and can be
-restored or deleted from Odin; restores download a temporary zip and remove
-it again when the operation finishes.
+It covers dependency status, fleet search, tags, bulk lifecycle actions,
+instance create/start/stop/restart/rename/clone/delete, game-specific
+configuration, live logs, downloadable save files, scheduled backups, and
+live plus historical CPU/RAM usage with CSV export. Global settings define
+automatic restart and backup defaults for newly created Valheim and Rust
+servers.
+
+Valheim adds Thunderstore mod management, BepInEx update checks, access-list
+editing, live players, and recent player-session history. Every instance's
+Backups tab can use local storage, AWS S3, or Cloudflare R2. Remote backups
+remain listed and can be restored or deleted from Odin; restores download a
+temporary archive and remove it again when the operation finishes.
 
 **There is no authentication.** `odin serve` binds to `127.0.0.1` by
 default for exactly this reason; if you want to reach it from another

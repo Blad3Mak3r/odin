@@ -357,4 +357,12 @@ export interface WebhookView {
 
 export interface SettingsView {
   nexus_api_key_configured: boolean
+  instance_defaults: InstanceDefaults
+}
+
+export interface InstanceDefaults {
+  auto_restart: boolean
+  backup_enabled: boolean
+  backup_interval_hours: number
+  backup_retain_count: number
 }

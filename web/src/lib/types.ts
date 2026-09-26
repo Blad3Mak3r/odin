@@ -166,8 +166,8 @@ export type JobKindDescr =
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }
-  | { kind: 'backup_create'; instance: string }
-  | { kind: 'backup_restore'; instance: string; backup_id: string }
+  | { kind: 'backup_create'; game: GameId; instance: string }
+  | { kind: 'backup_restore'; game: GameId; instance: string; backup_id: string }
   | { kind: 'bepinex_update'; instance: string; from_version: string | null; to_version: string }
 
 export interface GlobalModInstanceEntry {

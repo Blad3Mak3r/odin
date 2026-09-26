@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { BackupsTab } from '@/components/instance/BackupsTab'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
@@ -13,20 +14,17 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { QueryError } from '@/components/QueryError'
 import {
-  useCreateManagedBackup,
   useDeleteManagedInstance,
-  useManagedBackups,
   useManagedInstance,
   useManagedInstanceAction,
   useManagedInstanceLogs,
   useManagedInstanceTransition,
   useManagedRustResources,
   useManagedRustResourceHistory,
-  useRestoreManagedBackup,
   useUpdateRustConfig,
 } from '@/lib/queries'
 import type { GameId } from '@/lib/types'
-import { formatBytes, formatRelativeTime } from '@/lib/utils'
+import { formatBytes } from '@/lib/utils'
 
 function isGameId(value: string | undefined): value is GameId {
   return value === 'valheim' || value === 'rust'
@@ -141,14 +139,11 @@ export function ManagedInstanceDetailPage() {
   const logs = useManagedInstanceLogs(gameId, name ?? '')
   const resources = useManagedRustResources(name ?? '', gameId === 'rust')
   const resourceHistory = useManagedRustResourceHistory(name ?? '', gameId === 'rust')
-  const backups = useManagedBackups(gameId, name ?? '')
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
   const deleteInstance = useDeleteManagedInstance()
   const transition = useManagedInstanceTransition(gameId, name ?? '')
-  const createBackup = useCreateManagedBackup()
-  const restoreBackup = useRestoreManagedBackup()
   const { confirm, dialog } = useConfirmDialog()
   if (!isGameId(game) || !name) return null
   if (instance.isError) return <QueryError error={instance.error} />
@@ -166,20 +161,6 @@ export function ManagedInstanceDetailPage() {
     return <Navigate replace to={`/instances/${detail.game}/${detail.name}/overview`} />
   }
   const busy = start.isPending || stop.isPending || restart.isPending || deleteInstance.isPending || transition.data !== null
-  const backupsRequireStop = detail.game === 'rust' && detail.running
-
-  const restore = async (backupId: string) => {
-    const confirmed = await confirm({
-      title: `Restore backup '${backupId}'?`,
-      description: `Restore '${detail.name}' from this backup? Odin snapshots the current data first.`,
-      confirmLabel: 'Restore',
-    })
-    if (!confirmed) return
-    restoreBackup.mutate(
-      { ...target, backupId },
-      { onSuccess: () => toast.success('Backup restored'), onError: (error) => toast.error(error.message) },
-    )
-  }
 
   const remove = async () => {
     const confirmed = await confirm({
@@ -250,25 +231,7 @@ export function ManagedInstanceDetailPage() {
           <Badge className="w-fit" variant={detail.running ? 'default' : 'secondary'}>{detail.running ? 'running' : 'stopped'}</Badge>
         </TabsContent>
         {detail.capabilities.backups && (
-          <TabsContent value="backups">
-            <Card>
-              <CardHeader>
-                <CardTitle>Backups</CardTitle>
-                <CardDescription>{backupsRequireStop ? 'Stop this Rust server before creating or restoring a backup.' : 'Create or restore local server data backups.'}</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                <div><Button variant="outline" disabled={backupsRequireStop || createBackup.isPending} onClick={() => createBackup.mutate(target, { onSuccess: () => toast.success('Backup created'), onError: (error) => toast.error(error.message) })}>Create backup</Button></div>
-                {backups.isError && <QueryError error={backups.error} />}
-                {backups.data?.length === 0 && <p className="text-sm text-muted-foreground">No backups yet.</p>}
-                {backups.data?.map((backup) => (
-                  <div key={backup.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-sm">
-                    <span>{formatRelativeTime(backup.created_at)} · {formatBytes(backup.size_bytes)}</span>
-                    <Button size="sm" variant="outline" disabled={backupsRequireStop || restoreBackup.isPending} onClick={() => restore(backup.id)}>Restore</Button>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          </TabsContent>
+          <TabsContent value="backups"><BackupsTab name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
         )}
         <TabsContent value="logs">
           <Card>

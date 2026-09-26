@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::backup_storage::{self, RemoteObject, StorageProvider};
 use crate::db::Db;
+use crate::game::GameId;
 use crate::instance::{Instance, InstanceError, lifecycle};
 use crate::paths;
 
@@ -62,13 +63,29 @@ pub(crate) fn backup_id_now() -> String {
 /// uploads the archive and removes the local file only after the upload and
 /// remote metadata have both been persisted successfully.
 pub fn create(instance: &Instance, db: &Db) -> Result<BackupEntry> {
-    let dir = paths::instance_backups_dir(&instance.dir);
+    create_at(
+        db,
+        GameId::Valheim,
+        &instance.state.name,
+        &instance.dir,
+        &paths::instance_saves_dir(&instance.dir),
+    )
+}
+
+pub(crate) fn create_at(
+    db: &Db,
+    game: GameId,
+    name: &str,
+    instance_dir: &Path,
+    source: &Path,
+) -> Result<BackupEntry> {
+    let dir = paths::instance_backups_dir(instance_dir);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create backups dir {}", dir.display()))?;
 
     let id = backup_id_now();
     let backup_path = dir.join(format!("{id}.zip"));
-    zip_directory(&paths::instance_saves_dir(&instance.dir), &backup_path)?;
+    zip_directory(source, &backup_path)?;
 
     let size_bytes = std::fs::metadata(&backup_path)?.len();
     let mut entry = BackupEntry {
@@ -77,14 +94,14 @@ pub fn create(instance: &Instance, db: &Db) -> Result<BackupEntry> {
         size_bytes,
         storage: BackupStorage::Local,
     };
-    crate::db::backups::insert(db, &instance.state.name, &entry)?;
+    crate::db::backups::insert_for_game(db, game, name, &entry)?;
 
-    if let Some(config) = crate::db::backup_storage::get(db, &instance.state.name)?
+    if let Some(config) = crate::db::backup_storage::get_for_game(db, game, name)?
         && config.enabled
     {
-        let object = config.object_for(&instance.state.name, &entry.id);
+        let object = config.object_for(&format!("{game}/{name}"), &entry.id);
         backup_storage::upload(&config, &object, &backup_path)?;
-        crate::db::backups::mark_remote(db, &instance.state.name, &entry.id, &object)?;
+        crate::db::backups::mark_remote_for_game(db, game, name, &entry.id, &object)?;
         std::fs::remove_file(&backup_path).with_context(|| {
             format!(
                 "backup was uploaded but the local file could not be removed: {}",
@@ -147,10 +164,28 @@ pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
     if lifecycle::is_running(instance)? {
         return Err(InstanceError::AlreadyRunning(instance.state.name.clone()).into());
     }
+    restore_at(
+        db,
+        GameId::Valheim,
+        &instance.state.name,
+        &instance.dir,
+        &paths::instance_saves_dir(&instance.dir),
+        backup_id,
+    )
+}
 
-    let record = crate::db::backups::get(db, &instance.state.name, backup_id)?
+pub(crate) fn restore_at(
+    db: &Db,
+    game: GameId,
+    name: &str,
+    instance_dir: &Path,
+    source: &Path,
+    backup_id: &str,
+) -> Result<()> {
+    validate_backup_id(backup_id)?;
+    let record = crate::db::backups::get_for_game(db, game, name, backup_id)?
         .ok_or_else(|| BackupError::NotFound(backup_id.to_string()))?;
-    let backups_dir = paths::instance_backups_dir(&instance.dir);
+    let backups_dir = paths::instance_backups_dir(instance_dir);
     let local_path = backups_dir.join(format!("{backup_id}.zip"));
     let (backup_path, remove_after) = match record.remote {
         None => {
@@ -163,7 +198,7 @@ pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
             std::fs::create_dir_all(&backups_dir)?;
             let temp_path =
                 backups_dir.join(format!(".restore-{backup_id}-{}.zip", uuid::Uuid::new_v4()));
-            let config = crate::db::backup_storage::get(db, &instance.state.name)?
+            let config = crate::db::backup_storage::get_for_game(db, game, name)?
                 .context("backup storage credentials are no longer configured")?;
             if let Err(error) = backup_storage::download(&config, &object, &temp_path) {
                 std::fs::remove_file(&temp_path).ok();
@@ -174,9 +209,9 @@ pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
     };
 
     let result = (|| {
-        create(instance, db).context("failed to snapshot current saves before restoring")?;
-        let saves_dir = paths::instance_saves_dir(&instance.dir);
-        replace_from_archive(&backup_path, &saves_dir)
+        create_at(db, game, name, instance_dir, source)
+            .context("failed to snapshot current saves before restoring")?;
+        replace_from_archive(&backup_path, source)
     })();
     if remove_after {
         std::fs::remove_file(&backup_path).ok();
@@ -185,23 +220,30 @@ pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
 }
 
 /// Deletes a backup's zip file and its database row.
-pub fn delete(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
-    let record = crate::db::backups::get(db, &instance.state.name, backup_id)?
+pub(crate) fn delete_at(
+    db: &Db,
+    game: GameId,
+    name: &str,
+    instance_dir: &Path,
+    backup_id: &str,
+) -> Result<()> {
+    validate_backup_id(backup_id)?;
+    let record = crate::db::backups::get_for_game(db, game, name, backup_id)?
         .ok_or_else(|| BackupError::NotFound(backup_id.to_string()))?;
     if let Some(object) = record.remote {
-        let config = crate::db::backup_storage::get(db, &instance.state.name)?
+        let config = crate::db::backup_storage::get_for_game(db, game, name)?
             .context("backup storage credentials are no longer configured")?;
         backup_storage::delete(&config, &object)?;
     } else {
         let backup_path =
-            paths::instance_backups_dir(&instance.dir).join(format!("{backup_id}.zip"));
+            paths::instance_backups_dir(instance_dir).join(format!("{backup_id}.zip"));
         if !backup_path.is_file() {
             return Err(BackupError::NotFound(backup_id.to_string()).into());
         }
         std::fs::remove_file(&backup_path)
             .with_context(|| format!("failed to remove {}", backup_path.display()))?;
     }
-    crate::db::backups::delete(db, &instance.state.name, backup_id)
+    crate::db::backups::delete_for_game(db, game, name, backup_id)
 }
 
 pub(crate) fn zip_directory(source_dir: &Path, dest_zip: &Path) -> Result<()> {

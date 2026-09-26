@@ -5,10 +5,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
-use crate::backup::{self, BackupEntry};
+use crate::backup::BackupEntry;
 use crate::backup_storage::{BackupStorageConfig, StorageProvider};
 use crate::db::backup_schedules;
-use crate::instance::Instance;
+use crate::game::{GameId, instances};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
@@ -18,11 +18,18 @@ pub async fn list_backups(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<Vec<BackupEntry>>> {
+    list_backups_for_game(State(state), Path((GameId::Valheim, name))).await
+}
+
+pub async fn list_backups_for_game(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+) -> ApiResult<Json<Vec<BackupEntry>>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let entries = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &name)?;
-        backup::list(&db, &instance.state.name)
+        instances::load(&paths, &db, game, &name)?;
+        instances::list_backups(&paths, &db, game, &name)
     })
     .await?;
     Ok(Json(entries))
@@ -34,20 +41,29 @@ pub async fn create_backup(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Json<JobHandle> {
+    create_backup_for_game(State(state), Path((GameId::Valheim, name))).await
+}
+
+pub async fn create_backup_for_game(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+) -> Json<JobHandle> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let activity = state.activity.clone();
     let id = state.jobs.spawn(
         JobKindDescr::BackupCreate {
+            game,
             instance: name.clone(),
         },
         move |logger| {
             logger.line(format!("backing up '{name}'"));
-            let instance = Instance::load_existing(&paths, &db, &name)?;
-            let result = backup::create(&instance, &db);
+            instances::load(&paths, &db, game, &name)?;
+            let result = instances::create_backup(&paths, &db, game, &name);
             if let Ok(entry) = &result {
                 logger.line(format!("done: {} ({:?})", entry.id, entry.storage));
-                activity.record(
+                activity.record_for(
+                    game,
                     ActivityKind::BackupCreated {
                         backup_id: entry.id.clone(),
                     },
@@ -106,11 +122,18 @@ pub async fn get_backup_storage(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<BackupStorageView>> {
+    get_backup_storage_for_game(State(state), Path((GameId::Valheim, name))).await
+}
+
+pub async fn get_backup_storage_for_game(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+) -> ApiResult<Json<BackupStorageView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = run_blocking(move || {
-        Instance::load_existing(&paths, &db, &name)?;
-        let config = crate::db::backup_storage::get(&db, &name)?;
+        instances::load(&paths, &db, game, &name)?;
+        let config = crate::db::backup_storage::get_for_game(&db, game, &name)?;
         Ok(BackupStorageView::from_config(config))
     })
     .await?;
@@ -134,11 +157,19 @@ pub async fn set_backup_storage(
     Path(name): Path<String>,
     Json(req): Json<SetBackupStorageRequest>,
 ) -> ApiResult<Json<BackupStorageView>> {
+    set_backup_storage_for_game(State(state), Path((GameId::Valheim, name)), Json(req)).await
+}
+
+pub async fn set_backup_storage_for_game(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+    Json(req): Json<SetBackupStorageRequest>,
+) -> ApiResult<Json<BackupStorageView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = run_blocking(move || {
-        Instance::load_existing(&paths, &db, &name)?;
-        let existing = crate::db::backup_storage::get(&db, &name)?;
+        instances::load(&paths, &db, game, &name)?;
+        let existing = crate::db::backup_storage::get_for_game(&db, game, &name)?;
         let access_key_id = req.access_key_id.trim().to_string();
         let secret_access_key = match req.secret_access_key.as_deref().map(str::trim) {
             Some(secret) if !secret.is_empty() => secret.to_string(),
@@ -184,7 +215,7 @@ pub async fn set_backup_storage(
             enabled: req.enabled,
         };
         config.validate().map_err(BadRequest)?;
-        crate::db::backup_storage::upsert(&db, &name, &config)?;
+        crate::db::backup_storage::upsert_for_game(&db, game, &name, &config)?;
         Ok(BackupStorageView::from_config(Some(config)))
     })
     .await?;
@@ -195,21 +226,30 @@ pub async fn restore_backup(
     State(state): State<AppState>,
     Path((name, backup_id)): Path<(String, String)>,
 ) -> Json<JobHandle> {
+    restore_backup_for_game(State(state), Path((GameId::Valheim, name, backup_id))).await
+}
+
+pub async fn restore_backup_for_game(
+    State(state): State<AppState>,
+    Path((game, name, backup_id)): Path<(GameId, String, String)>,
+) -> Json<JobHandle> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let activity = state.activity.clone();
     let id = state.jobs.spawn(
         JobKindDescr::BackupRestore {
+            game,
             instance: name.clone(),
             backup_id: backup_id.clone(),
         },
         move |logger| {
             logger.line(format!("restoring '{name}' from backup '{backup_id}'"));
-            let instance = Instance::load_existing(&paths, &db, &name)?;
-            let result = backup::restore(&instance, &db, &backup_id);
+            instances::load(&paths, &db, game, &name)?;
+            let result = instances::restore_backup(&paths, &db, game, &name, &backup_id);
             if result.is_ok() {
                 logger.line("done");
-                activity.record(
+                activity.record_for(
+                    game,
                     ActivityKind::BackupRestored {
                         backup_id: backup_id.clone(),
                     },
@@ -226,11 +266,18 @@ pub async fn delete_backup(
     State(state): State<AppState>,
     Path((name, backup_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
+    delete_backup_for_game(State(state), Path((GameId::Valheim, name, backup_id))).await
+}
+
+pub async fn delete_backup_for_game(
+    State(state): State<AppState>,
+    Path((game, name, backup_id)): Path<(GameId, String, String)>,
+) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &name)?;
-        backup::delete(&instance, &db, &backup_id)
+        instances::load(&paths, &db, game, &name)?;
+        instances::delete_backup(&paths, &db, game, &name, &backup_id)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -262,13 +309,20 @@ pub async fn get_backup_schedule(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<BackupScheduleView>> {
+    get_backup_schedule_for_game(State(state), Path((GameId::Valheim, name))).await
+}
+
+pub async fn get_backup_schedule_for_game(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+) -> ApiResult<Json<BackupScheduleView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = run_blocking(move || {
         // Loaded only to 404 on an unknown instance, matching every other
         // per-instance route.
-        Instance::load_existing(&paths, &db, &name)?;
-        let schedule = backup_schedules::get(&db, &name)?;
+        instances::load(&paths, &db, game, &name)?;
+        let schedule = backup_schedules::get_for_game(&db, game, &name)?;
         Ok(match schedule {
             Some(s) => BackupScheduleView {
                 interval_hours: s.interval_hours,
@@ -295,6 +349,14 @@ pub async fn set_backup_schedule(
     Path(name): Path<String>,
     Json(req): Json<SetBackupScheduleRequest>,
 ) -> ApiResult<Json<BackupScheduleView>> {
+    set_backup_schedule_for_game(State(state), Path((GameId::Valheim, name)), Json(req)).await
+}
+
+pub async fn set_backup_schedule_for_game(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+    Json(req): Json<SetBackupScheduleRequest>,
+) -> ApiResult<Json<BackupScheduleView>> {
     if req.interval_hours == 0 {
         return Err(BadRequest("interval_hours must be at least 1".to_string()).into());
     }
@@ -305,15 +367,17 @@ pub async fn set_backup_schedule(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = run_blocking(move || {
-        Instance::load_existing(&paths, &db, &name)?;
-        backup_schedules::upsert(
+        instances::load(&paths, &db, game, &name)?;
+        backup_schedules::upsert_for_game(
             &db,
+            game,
             &name,
             req.interval_hours,
             req.retain_count,
             req.enabled,
         )?;
-        let last_run_at = backup_schedules::get(&db, &name)?.and_then(|s| s.last_run_at);
+        let last_run_at =
+            backup_schedules::get_for_game(&db, game, &name)?.and_then(|s| s.last_run_at);
         Ok(BackupScheduleView {
             interval_hours: req.interval_hours,
             retain_count: req.retain_count,

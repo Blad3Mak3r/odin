@@ -47,9 +47,13 @@ pub enum JobKindDescr {
         name: String,
     },
     BackupCreate {
+        #[serde(default = "valheim_game")]
+        game: GameId,
         instance: String,
     },
     BackupRestore {
+        #[serde(default = "valheim_game")]
+        game: GameId,
         instance: String,
         backup_id: String,
     },

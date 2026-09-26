@@ -9,9 +9,9 @@ export function describeJobKind(kind: JobKindDescr): string {
     case 'mod_update':
       return `Update mods on ${kind.instance}`
     case 'backup_create':
-      return `Back up ${kind.instance}`
+      return `Back up ${kind.game} / ${kind.instance}`
     case 'backup_restore':
-      return `Restore ${kind.instance} from backup ${kind.backup_id}`
+      return `Restore ${kind.game} / ${kind.instance} from backup ${kind.backup_id}`
     case 'bepinex_update':
       return `Update BepInEx on ${kind.instance}: ${kind.from_version ?? 'unknown'} → ${kind.to_version}`
     default:

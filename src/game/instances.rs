@@ -92,13 +92,17 @@ pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bo
 pub fn list_backups(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<Vec<BackupEntry>> {
     match load(paths, db, game, name)? {
         GameInstance::Valheim(instance) => crate::backup::list(db, &instance.state.name),
-        GameInstance::Rust(instance) => rust::list_backups(paths, &instance),
+        GameInstance::Rust(instance) => rust::list_backups(paths, db, &instance),
     }
 }
 
 pub fn create_backup(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<BackupEntry> {
     match load(paths, db, game, name)? {
-        GameInstance::Valheim(instance) => crate::backup::create(&instance, db),
+        GameInstance::Valheim(_) => {
+            let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
+            let instance = Instance::load_existing(paths, db, name)?;
+            crate::backup::create(&instance, db)
+        }
         GameInstance::Rust(instance) => rust::create_backup(paths, db, &instance),
     }
 }
@@ -111,9 +115,20 @@ pub fn restore_backup(
     backup_id: &str,
 ) -> Result<()> {
     match load(paths, db, game, name)? {
-        GameInstance::Valheim(instance) => crate::backup::restore(&instance, db, backup_id),
+        GameInstance::Valheim(_) => {
+            let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
+            let instance = Instance::load_existing(paths, db, name)?;
+            crate::backup::restore(&instance, db, backup_id)
+        }
         GameInstance::Rust(instance) => rust::restore_backup(paths, db, &instance, backup_id),
     }
+}
+
+pub fn delete_backup(paths: &Paths, db: &Db, game: GameId, name: &str, id: &str) -> Result<()> {
+    let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
+    load(paths, db, game, name)?;
+    list_backups(paths, db, game, name)?;
+    crate::backup::delete_at(db, game, name, &paths.game_instance_dir(game, name), id)
 }
 
 #[cfg(test)]

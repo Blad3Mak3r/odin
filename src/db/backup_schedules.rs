@@ -6,9 +6,11 @@ use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
 use super::Db;
+use crate::game::GameId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackupScheduleRow {
+    pub game: GameId,
     pub instance_name: String,
     pub interval_hours: u32,
     pub retain_count: u32,
@@ -18,12 +20,16 @@ pub struct BackupScheduleRow {
 
 /// Returns the schedule configured for an instance, if any — a missing row
 /// just means scheduling was never turned on for it.
-pub fn get(db: &Db, instance_name: &str) -> Result<Option<BackupScheduleRow>> {
+pub fn get_for_game(
+    db: &Db,
+    game: GameId,
+    instance_name: &str,
+) -> Result<Option<BackupScheduleRow>> {
     db.conn()
         .query_row(
-            "SELECT instance_name, interval_hours, retain_count, enabled, last_run_at \
-             FROM backup_schedules WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
-            params![instance_name],
+            "SELECT instance_name, interval_hours, retain_count, enabled, last_run_at, ?1 \
+             FROM backup_schedules WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+            params![game.as_str(), instance_name],
             row_to_schedule,
         )
         .optional()
@@ -33,8 +39,9 @@ pub fn get(db: &Db, instance_name: &str) -> Result<Option<BackupScheduleRow>> {
 /// Creates or updates an instance's schedule, preserving `last_run_at` —
 /// that's operational bookkeeping the scheduler loop owns, not something a
 /// settings update should reset.
-pub fn upsert(
+pub fn upsert_for_game(
     db: &Db,
+    game: GameId,
     instance_name: &str,
     interval_hours: u32,
     retain_count: u32,
@@ -42,14 +49,14 @@ pub fn upsert(
 ) -> Result<()> {
     db.conn().execute(
         "INSERT INTO backup_schedules (instance_name, instance_id, interval_hours, retain_count, enabled) \
-         SELECT ?1, id, ?2, ?3, ?4 FROM game_instances \
-         WHERE game = 'valheim' AND name = ?1 \
-         ON CONFLICT(instance_name) DO UPDATE SET \
+         SELECT ?2, id, ?3, ?4, ?5 FROM game_instances \
+         WHERE game = ?1 AND name = ?2 \
+         ON CONFLICT(instance_id) DO UPDATE SET \
              instance_id = excluded.instance_id, \
              interval_hours = excluded.interval_hours, \
              retain_count = excluded.retain_count, \
              enabled = excluded.enabled",
-        params![instance_name, interval_hours, retain_count, enabled],
+        params![game.as_str(), instance_name, interval_hours, retain_count, enabled],
     )?;
     Ok(())
 }
@@ -59,9 +66,9 @@ pub fn upsert(
 pub fn due(db: &Db, now: DateTime<Utc>) -> Result<Vec<BackupScheduleRow>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT g.name, s.interval_hours, s.retain_count, s.enabled, s.last_run_at \
+        "SELECT g.name, s.interval_hours, s.retain_count, s.enabled, s.last_run_at, g.game \
          FROM backup_schedules s JOIN game_instances g ON g.id = s.instance_id \
-         WHERE g.game = 'valheim' AND s.enabled = 1",
+         WHERE s.enabled = 1",
     )?;
     let rows = stmt.query_map([], row_to_schedule)?;
     let mut due = Vec::new();
@@ -80,17 +87,26 @@ pub fn due(db: &Db, now: DateTime<Utc>) -> Result<Vec<BackupScheduleRow>> {
 
 /// Records that a schedule just ran, so `due` doesn't re-trigger it until
 /// another full interval has passed.
-pub fn mark_run(db: &Db, instance_name: &str, at: DateTime<Utc>) -> Result<()> {
+pub fn mark_run_for_game(
+    db: &Db,
+    game: GameId,
+    instance_name: &str,
+    at: DateTime<Utc>,
+) -> Result<()> {
     db.conn().execute(
-        "UPDATE backup_schedules SET last_run_at = ?2 \
-         WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
-        params![instance_name, at],
+        "UPDATE backup_schedules SET last_run_at = ?3 \
+         WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+        params![game.as_str(), instance_name, at],
     )?;
     Ok(())
 }
 
 fn row_to_schedule(row: &rusqlite::Row) -> rusqlite::Result<BackupScheduleRow> {
     Ok(BackupScheduleRow {
+        game: row
+            .get::<_, String>(5)?
+            .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
         instance_name: row.get(0)?,
         interval_hours: row.get(1)?,
         retain_count: row.get(2)?,
@@ -122,17 +138,54 @@ mod tests {
     }
 
     #[test]
+    fn same_named_games_keep_independent_schedules() {
+        let db = temp_db("game-schedules");
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let paths = crate::paths::Paths {
+            data_dir: root.clone(),
+            config_dir: root.clone(),
+        };
+        crate::db::game_instances::create_rust(&paths, &db, "my-server").unwrap();
+        upsert_for_game(&db, GameId::Valheim, "my-server", 12, 3, true).unwrap();
+        upsert_for_game(&db, GameId::Rust, "my-server", 24, 7, true).unwrap();
+        assert_eq!(
+            get_for_game(&db, GameId::Valheim, "my-server")
+                .unwrap()
+                .unwrap()
+                .retain_count,
+            3
+        );
+        assert_eq!(
+            get_for_game(&db, GameId::Rust, "my-server")
+                .unwrap()
+                .unwrap()
+                .retain_count,
+            7
+        );
+        assert_eq!(due(&db, Utc::now()).unwrap().len(), 2);
+        crate::db::game_instances::delete_rust(&db, "my-server").unwrap();
+        assert_eq!(due(&db, Utc::now()).unwrap().len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn missing_schedule_is_none() {
         let db = temp_db("missing");
-        assert!(get(&db, "my-server").unwrap().is_none());
+        assert!(
+            get_for_game(&db, GameId::Valheim, "my-server")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn upsert_then_get_round_trips() {
         let db = temp_db("roundtrip");
-        upsert(&db, "my-server", 24, 7, true).unwrap();
+        upsert_for_game(&db, GameId::Valheim, "my-server", 24, 7, true).unwrap();
 
-        let schedule = get(&db, "my-server").unwrap().unwrap();
+        let schedule = get_for_game(&db, GameId::Valheim, "my-server")
+            .unwrap()
+            .unwrap();
         assert_eq!(schedule.interval_hours, 24);
         assert_eq!(schedule.retain_count, 7);
         assert!(schedule.enabled);
@@ -142,13 +195,15 @@ mod tests {
     #[test]
     fn upsert_twice_preserves_last_run_at() {
         let db = temp_db("preserve");
-        upsert(&db, "my-server", 24, 7, true).unwrap();
+        upsert_for_game(&db, GameId::Valheim, "my-server", 24, 7, true).unwrap();
         let now = Utc::now();
-        mark_run(&db, "my-server", now).unwrap();
+        mark_run_for_game(&db, GameId::Valheim, "my-server", now).unwrap();
 
-        upsert(&db, "my-server", 12, 3, true).unwrap();
+        upsert_for_game(&db, GameId::Valheim, "my-server", 12, 3, true).unwrap();
 
-        let schedule = get(&db, "my-server").unwrap().unwrap();
+        let schedule = get_for_game(&db, GameId::Valheim, "my-server")
+            .unwrap()
+            .unwrap();
         assert_eq!(schedule.interval_hours, 12);
         assert_eq!(schedule.retain_count, 3);
         assert_eq!(schedule.last_run_at, Some(now));
@@ -159,14 +214,14 @@ mod tests {
         let db = temp_db("due");
         let now = Utc::now();
 
-        upsert(&db, "my-server", 24, 7, true).unwrap();
+        upsert_for_game(&db, GameId::Valheim, "my-server", 24, 7, true).unwrap();
         assert_eq!(
             due(&db, now).unwrap().len(),
             1,
             "never run: due immediately"
         );
 
-        mark_run(&db, "my-server", now).unwrap();
+        mark_run_for_game(&db, GameId::Valheim, "my-server", now).unwrap();
         assert!(
             due(&db, now).unwrap().is_empty(),
             "just ran: not due again yet"
@@ -179,7 +234,7 @@ mod tests {
             "interval elapsed: due again"
         );
 
-        upsert(&db, "my-server", 24, 7, false).unwrap();
+        upsert_for_game(&db, GameId::Valheim, "my-server", 24, 7, false).unwrap();
         assert!(due(&db, later).unwrap().is_empty(), "disabled: never due");
     }
 }

@@ -5,7 +5,6 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
 use sysinfo::Signal;
 use tokio::process::Command;
 
@@ -209,11 +208,12 @@ pub fn create_backup(
 ) -> Result<crate::backup::BackupEntry> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
-    create_backup_unlocked(paths, &instance)
+    create_backup_unlocked(paths, db, &instance)
 }
 
 fn create_backup_unlocked(
     paths: &Paths,
+    db: &crate::db::Db,
     instance: &RustInstance,
 ) -> Result<crate::backup::BackupEntry> {
     if is_running(instance) {
@@ -222,28 +222,41 @@ fn create_backup_unlocked(
             instance.name()
         );
     }
-    let backups_dir = paths
-        .game_instance_dir(crate::game::GameId::Rust, instance.name())
-        .join("backups");
-    std::fs::create_dir_all(&backups_dir)?;
-    let id = crate::backup::backup_id_now();
-    let path = backups_dir.join(format!("{id}.zip"));
-    crate::backup::zip_directory(&backup_source(paths, instance), &path)?;
-    Ok(crate::backup::BackupEntry {
-        id,
-        created_at: Utc::now(),
-        size_bytes: std::fs::metadata(path)?.len(),
-        storage: crate::backup::BackupStorage::Local,
-    })
+    crate::backup::create_at(
+        db,
+        crate::game::GameId::Rust,
+        instance.name(),
+        &paths.game_instance_dir(crate::game::GameId::Rust, instance.name()),
+        &backup_source(paths, instance),
+    )
 }
 
 pub fn list_backups(
     paths: &Paths,
+    db: &crate::db::Db,
     instance: &RustInstance,
 ) -> Result<Vec<crate::backup::BackupEntry>> {
-    crate::backup::list_from_disk(
+    // Import pre-registry Rust archives without overwriting remote metadata.
+    for entry in crate::backup::list_from_disk(
         &paths.game_instance_dir(crate::game::GameId::Rust, instance.name()),
-    )
+    )? {
+        if crate::db::backups::get_for_game(
+            db,
+            crate::game::GameId::Rust,
+            instance.name(),
+            &entry.id,
+        )?
+        .is_none()
+        {
+            crate::db::backups::insert_for_game(
+                db,
+                crate::game::GameId::Rust,
+                instance.name(),
+                &entry,
+            )?;
+        }
+    }
+    crate::db::backups::list_for_game(db, crate::game::GameId::Rust, instance.name())
 }
 
 pub fn restore_backup(
@@ -261,16 +274,15 @@ pub fn restore_backup(
             instance.name()
         );
     }
-    let backups_dir = paths
-        .game_instance_dir(crate::game::GameId::Rust, instance.name())
-        .join("backups");
-    let archive = backups_dir.join(format!("{backup_id}.zip"));
-    if !archive.is_file() {
-        bail!("backup '{backup_id}' not found");
-    }
-    create_backup_unlocked(paths, &instance)
-        .context("failed to snapshot Rust data before restore")?;
-    crate::backup::replace_from_archive(&archive, &backup_source(paths, &instance))
+    list_backups(paths, db, &instance)?;
+    crate::backup::restore_at(
+        db,
+        crate::game::GameId::Rust,
+        instance.name(),
+        &paths.game_instance_dir(crate::game::GameId::Rust, instance.name()),
+        &backup_source(paths, &instance),
+        backup_id,
+    )
 }
 
 pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
@@ -418,7 +430,7 @@ mod tests {
         restore_backup(&paths, &db, &instance, &backup.id).unwrap();
 
         assert_eq!(std::fs::read_to_string(save).unwrap(), "before");
-        assert_eq!(list_backups(&paths, &instance).unwrap().len(), 2);
+        assert_eq!(list_backups(&paths, &db, &instance).unwrap().len(), 2);
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

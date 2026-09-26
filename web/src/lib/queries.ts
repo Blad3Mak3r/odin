@@ -571,79 +571,80 @@ export function useUpdateMods() {
   })
 }
 
-export function useBackups(name: string) {
+export function useBackups(name: string, game: GameId = 'valheim') {
   return useQuery({
-    queryKey: ['instances', name, 'backups'],
-    queryFn: () => api.get<BackupEntry[]>(valheimInstancePath(name, '/backups')),
+    queryKey: ['game-backups', game, name, 'backups'],
+    refetchInterval: 5_000,
+    queryFn: () => api.get<BackupEntry[]>(`/games/${game}/instances/${name}/backups`),
   })
 }
 
-export function useCreateBackup() {
+export function useCreateBackup(game: GameId = 'valheim') {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<JobHandle>(valheimInstancePath(name, '/backups/jobs')),
+    mutationFn: (name: string) => api.post<JobHandle>(`/games/${game}/instances/${name}/backups/jobs`),
     onSuccess: (_data, name) => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
+      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backups'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
 }
 
-export function useRestoreBackup() {
+export function useRestoreBackup(game: GameId = 'valheim') {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
-      api.post<JobHandle>(valheimInstancePath(name, `/backups/${backupId}/restore/job`)),
+      api.post<JobHandle>(`/games/${game}/instances/${name}/backups/${backupId}/restore/job`),
     onSuccess: (_data, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
+      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backups'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
 }
 
-export function useDeleteBackup() {
+export function useDeleteBackup(game: GameId = 'valheim') {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
-      api.delete<void>(valheimInstancePath(name, `/backups/${backupId}`)),
+      api.delete<void>(`/games/${game}/instances/${name}/backups/${backupId}`),
     onSuccess: (_data, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backups'] })
+      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backups'] })
     },
   })
 }
 
-export function useBackupSchedule(name: string) {
+export function useBackupSchedule(name: string, game: GameId = 'valheim') {
   return useQuery({
-    queryKey: ['instances', name, 'backup-schedule'],
-    queryFn: () => api.get<BackupScheduleView>(valheimInstancePath(name, '/backup-schedule')),
+    queryKey: ['game-backups', game, name, 'backup-schedule'],
+    queryFn: () => api.get<BackupScheduleView>(`/games/${game}/instances/${name}/backup-schedule`),
   })
 }
 
-export function useSetBackupSchedule(name: string) {
+export function useSetBackupSchedule(name: string, game: GameId = 'valheim') {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (req: Omit<BackupScheduleView, 'last_run_at'>) =>
-      api.put<BackupScheduleView>(valheimInstancePath(name, '/backup-schedule'), req),
+      api.put<BackupScheduleView>(`/games/${game}/instances/${name}/backup-schedule`, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-schedule'] })
+      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backup-schedule'] })
     },
   })
 }
 
-export function useBackupStorage(name: string) {
+export function useBackupStorage(name: string, game: GameId = 'valheim') {
   return useQuery({
-    queryKey: ['instances', name, 'backup-storage'],
-    queryFn: () => api.get<BackupStorageView>(valheimInstancePath(name, '/backup-storage')),
+    queryKey: ['game-backups', game, name, 'backup-storage'],
+    queryFn: () => api.get<BackupStorageView>(`/games/${game}/instances/${name}/backup-storage`),
   })
 }
 
-export function useSetBackupStorage(name: string) {
+export function useSetBackupStorage(name: string, game: GameId = 'valheim') {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (req: BackupStorageRequest) =>
-      api.put<BackupStorageView>(valheimInstancePath(name, '/backup-storage'), req),
+      api.put<BackupStorageView>(`/games/${game}/instances/${name}/backup-storage`, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'backup-storage'] })
+      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backup-storage'] })
     },
   })
 }

@@ -3,15 +3,20 @@ use rusqlite::{OptionalExtension, params};
 
 use super::Db;
 use crate::backup_storage::{BackupStorageConfig, StorageProvider};
+use crate::game::GameId;
 
-pub fn get(db: &Db, instance_name: &str) -> Result<Option<BackupStorageConfig>> {
+pub fn get_for_game(
+    db: &Db,
+    game: GameId,
+    instance_name: &str,
+) -> Result<Option<BackupStorageConfig>> {
     let row = db
         .conn()
         .query_row(
             "SELECT provider, endpoint, region, bucket, prefix, access_key_id, \
                     secret_access_key, enabled \
-             FROM backup_storage_configs WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
-            params![instance_name],
+             FROM backup_storage_configs WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+            params![game.as_str(), instance_name],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -56,15 +61,20 @@ pub fn get(db: &Db, instance_name: &str) -> Result<Option<BackupStorageConfig>> 
     }))
 }
 
-pub fn upsert(db: &Db, instance_name: &str, config: &BackupStorageConfig) -> Result<()> {
+pub fn upsert_for_game(
+    db: &Db,
+    game: GameId,
+    instance_name: &str,
+    config: &BackupStorageConfig,
+) -> Result<()> {
     db.conn()
         .execute(
             "INSERT INTO backup_storage_configs \
                 (instance_name, instance_id, provider, endpoint, region, bucket, prefix, access_key_id, \
                  secret_access_key, enabled) \
-             SELECT ?1, id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 FROM game_instances \
-             WHERE game = 'valheim' AND name = ?1 \
-             ON CONFLICT(instance_name) DO UPDATE SET \
+             SELECT ?2, id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 FROM game_instances \
+             WHERE game = ?1 AND name = ?2 \
+             ON CONFLICT(instance_id) DO UPDATE SET \
                 instance_id = excluded.instance_id, \
                 provider = excluded.provider, \
                 endpoint = excluded.endpoint, \
@@ -74,7 +84,7 @@ pub fn upsert(db: &Db, instance_name: &str, config: &BackupStorageConfig) -> Res
                 access_key_id = excluded.access_key_id, \
                 secret_access_key = excluded.secret_access_key, \
                 enabled = excluded.enabled",
-            params![
+            params![game.as_str(),
                 instance_name,
                 config.provider.as_db(),
                 config.endpoint,
@@ -126,8 +136,11 @@ mod tests {
             enabled: true,
         };
 
-        upsert(&db, "my-server", &config).unwrap();
+        upsert_for_game(&db, GameId::Valheim, "my-server", &config).unwrap();
 
-        assert_eq!(get(&db, "my-server").unwrap(), Some(config));
+        assert_eq!(
+            get_for_game(&db, GameId::Valheim, "my-server").unwrap(),
+            Some(config)
+        );
     }
 }

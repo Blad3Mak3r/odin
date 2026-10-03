@@ -14,6 +14,7 @@ use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
 use crate::mods::nexus::NexusError;
+use crate::web::routes::saves::SaveFileError;
 
 /// A catch-all for ad-hoc input validation in route handlers that doesn't
 /// warrant its own domain error type (e.g. "password too short"). Always
@@ -51,6 +52,11 @@ impl IntoResponse for ApiError {
 }
 
 fn classify(err: &anyhow::Error) -> StatusCode {
+    match err.downcast_ref::<SaveFileError>() {
+        Some(SaveFileError::InvalidPath) => return StatusCode::BAD_REQUEST,
+        Some(SaveFileError::NotFound(_)) => return StatusCode::NOT_FOUND,
+        None => {}
+    }
     if err.downcast_ref::<ListsError>().is_some() || err.downcast_ref::<BadRequest>().is_some() {
         return StatusCode::BAD_REQUEST;
     }

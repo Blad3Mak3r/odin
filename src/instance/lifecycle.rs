@@ -1,13 +1,16 @@
+use std::fmt::Write;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use sysinfo::Signal;
 
 use super::{Instance, InstanceError, process};
 use crate::cli::validate_instance_name;
 use crate::db::Db;
+use crate::game::GameId;
 use crate::paths::{self, Paths};
 use crate::supervisor;
 
@@ -18,17 +21,17 @@ const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(10);
 /// empty lock file is intentionally persistent; the OS releases the lock
 /// automatically if the owning request/process exits unexpectedly.
 #[derive(Debug)]
-struct LifecycleLock {
+pub(crate) struct LifecycleLock {
     _file: File,
 }
 
 impl LifecycleLock {
-    fn acquire(paths: &Paths, name: &str) -> Result<Self> {
+    pub(crate) fn acquire(paths: &Paths, game: GameId, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
-        let lock_dir = paths.data_dir.join("locks");
+        let lock_dir = paths.runtime_dir().join("lifecycle-locks");
         std::fs::create_dir_all(&lock_dir)
             .with_context(|| format!("failed to create {}", lock_dir.display()))?;
-        let path = lock_dir.join(format!("{name}.lifecycle.lock"));
+        let path = lock_dir.join(lock_filename(paths, game, name));
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -45,6 +48,25 @@ impl LifecycleLock {
                 .with_context(|| format!("failed to lock lifecycle file {}", path.display())),
         }
     }
+}
+
+/// Derives a fixed-format filename so even a future caller that bypasses the
+/// instance-name validator cannot turn a lifecycle lock into a path escape.
+/// The data root and game id keep independent Odin installations and
+/// same-named instances in separate lock domains.
+fn lock_filename(paths: &Paths, game: GameId, name: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(paths.data_dir.to_string_lossy().as_bytes());
+    digest.update([0]);
+    digest.update(game.as_str());
+    digest.update([0]);
+    digest.update(name.as_bytes());
+    let mut filename = String::with_capacity(64 + ".lifecycle.lock".len());
+    for byte in digest.finalize() {
+        write!(filename, "{byte:02x}").expect("writing a lock filename to String cannot fail");
+    }
+    filename.push_str(".lifecycle.lock");
+    filename
 }
 
 /// The single canonical liveness check: a live `(pid, pid_started_at)`
@@ -79,7 +101,7 @@ pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
         );
     }
 
-    check_port_available(paths, db, &instance)?;
+    check_port_available(db, &instance)?;
     prepare_instance_layout(paths, &instance)?;
 
     Ok(instance)
@@ -92,7 +114,7 @@ pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 /// pid_started_at)` in the database itself once it spawns the process, so
 /// this just reloads the instance afterwards to pick that up.
 pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let _lock = LifecycleLock::acquire(paths, name)?;
+    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
     start_unlocked(paths, db, name).await
 }
 
@@ -118,7 +140,7 @@ async fn start_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<Instance> 
 /// process is actually gone (or `STOP_TIMEOUT` has been given a full
 /// chance, supervisor-side escalation included).
 pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let _lock = LifecycleLock::acquire(paths, name)?;
+    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
     stop_unlocked(paths, db, name).await
 }
 
@@ -179,7 +201,7 @@ async fn stop_via_pid_signal(db: &Db, name: &str, pid: u32, pid_started_at: i64)
 /// Stops the instance if it's running, then starts it again. Requires the
 /// instance to already exist (unlike `start`, which creates it on demand).
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let _lock = LifecycleLock::acquire(paths, name)?;
+    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
     let instance = Instance::load_existing(paths, db, name)?;
     if is_running(&instance)? {
         stop_unlocked(paths, db, name).await?;
@@ -191,42 +213,10 @@ pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 /// and no instance already exists under `new_name`. The world name (and thus
 /// its save files) is left untouched — only the instance's own identity moves.
 pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<Instance> {
-    validate_instance_name(new_name).map_err(InstanceError::InvalidName)?;
-
-    if old_name == new_name {
-        bail!("new name is the same as the current name");
+    match crate::game::instances::rename(paths, db, GameId::Valheim, old_name, new_name)? {
+        crate::game::instances::GameInstance::Valheim(instance) => Ok(instance),
+        _ => unreachable!("Valheim rename returned a different game"),
     }
-
-    let mut instance = Instance::load_existing(paths, db, old_name)?;
-
-    if is_running(&instance)? {
-        bail!(
-            "instance '{old_name}' is currently running; run `odin stop {old_name}` before renaming it"
-        );
-    }
-
-    if Instance::load(paths, db, new_name)?.is_some() {
-        bail!(InstanceError::AlreadyExists(new_name.to_string()));
-    }
-
-    let new_dir = paths.instance_dir(new_name);
-    std::fs::rename(&instance.dir, &new_dir).with_context(|| {
-        format!(
-            "failed to move instance directory {} to {}",
-            instance.dir.display(),
-            new_dir.display()
-        )
-    })?;
-
-    instance.dir = new_dir;
-    instance.state.name = new_name.to_string();
-    // The instance row is keyed by name, so saving under the new name inserts
-    // a fresh row rather than updating the old one — the old row (and its
-    // installed_mods) must be deleted explicitly afterwards.
-    instance.save(db)?;
-    crate::db::instances::delete(db, old_name)?;
-
-    Ok(instance)
 }
 
 /// Removes an instance's on-disk directory — optionally preserving its
@@ -234,10 +224,22 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
 /// `commands::delete::run` and `web::routes::instances::delete_instance`,
 /// which differ only in how they gate/confirm the call, not in what it does.
 pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
+    delete_instance_dir(&instance.dir, keep_backups)?;
+    crate::db::instances::delete(db, &instance.state.name)?;
+    Ok(())
+}
+
+/// Deletes an instance directory while optionally retaining its backups.
+/// Shared by game drivers because all current layouts place backups directly
+/// under the instance root.
+pub(crate) fn delete_instance_dir(
+    instance_dir: &std::path::Path,
+    keep_backups: bool,
+) -> Result<()> {
     if keep_backups {
-        let backups_dir = paths::instance_backups_dir(&instance.dir);
-        for entry in std::fs::read_dir(&instance.dir)
-            .with_context(|| format!("failed to read instance dir {}", instance.dir.display()))?
+        let backups_dir = paths::instance_backups_dir(instance_dir);
+        for entry in std::fs::read_dir(instance_dir)
+            .with_context(|| format!("failed to read instance dir {}", instance_dir.display()))?
         {
             let entry = entry?;
             if entry.path() == backups_dir {
@@ -252,28 +254,19 @@ pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
             .with_context(|| format!("failed to remove {}", path.display()))?;
         }
     } else {
-        std::fs::remove_dir_all(&instance.dir)
-            .with_context(|| format!("failed to remove instance dir {}", instance.dir.display()))?;
+        std::fs::remove_dir_all(instance_dir)
+            .with_context(|| format!("failed to remove instance dir {}", instance_dir.display()))?;
     }
-
-    crate::db::instances::delete(db, &instance.state.name)?;
     Ok(())
 }
 
-fn check_port_available(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-    for other in super::list_all(paths, db)? {
-        if other.state.name == instance.state.name {
-            continue;
-        }
-        if other.state.port == instance.state.port && is_running(&other)? {
-            bail!(
-                "port {} is already in use by running instance '{}'",
-                instance.state.port,
-                other.state.name
-            );
-        }
-    }
-    Ok(())
+fn check_port_available(db: &Db, instance: &Instance) -> Result<()> {
+    crate::game::ports::ensure_available(
+        db,
+        GameId::Valheim,
+        &instance.state.name,
+        crate::game::ports::block(GameId::Valheim, instance.state.port)?,
+    )
 }
 
 fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
@@ -322,15 +315,38 @@ mod tests {
     #[test]
     fn lifecycle_lock_is_exclusive_per_instance_and_released_on_drop() {
         let paths = temp_paths("lock");
-        let first = LifecycleLock::acquire(&paths, "alpha").unwrap();
-        let error = LifecycleLock::acquire(&paths, "alpha").unwrap_err();
+        let first = LifecycleLock::acquire(&paths, GameId::Valheim, "alpha").unwrap();
+        let error = LifecycleLock::acquire(&paths, GameId::Valheim, "alpha").unwrap_err();
         assert!(matches!(
             error.downcast_ref::<InstanceError>(),
             Some(InstanceError::TransitionInProgress(name)) if name == "alpha"
         ));
 
-        LifecycleLock::acquire(&paths, "bravo").unwrap();
+        LifecycleLock::acquire(&paths, GameId::Valheim, "bravo").unwrap();
         drop(first);
-        LifecycleLock::acquire(&paths, "alpha").unwrap();
+        LifecycleLock::acquire(&paths, GameId::Valheim, "alpha").unwrap();
+    }
+
+    #[test]
+    fn same_name_in_different_games_uses_independent_lifecycle_locks() {
+        let paths = temp_paths("game-locks");
+        let _valheim = LifecycleLock::acquire(&paths, GameId::Valheim, "shared").unwrap();
+
+        LifecycleLock::acquire(&paths, GameId::Rust, "shared").unwrap();
+    }
+
+    #[test]
+    fn lock_filename_is_a_safe_game_scoped_file_name() {
+        let paths = temp_paths("filename");
+        let valheim = lock_filename(&paths, GameId::Valheim, "shared");
+        let rust = lock_filename(&paths, GameId::Rust, "shared");
+
+        assert_ne!(valheim, rust);
+        assert!(valheim.ends_with(".lifecycle.lock"));
+        assert!(
+            valheim
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.')
+        );
     }
 }

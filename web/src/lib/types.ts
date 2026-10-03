@@ -5,6 +5,43 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
+export type GameId = 'valheim' | 'rust'
+
+export interface GameCapabilities {
+  backups: boolean
+  players: boolean
+  mods: boolean
+  access_lists: boolean
+  readiness: boolean
+}
+
+export interface GameView {
+  id: GameId
+  name: string
+  steam_app_id: string
+  capabilities: GameCapabilities
+}
+
+export interface ManagedInstanceView {
+  tags: string[]
+  id: string
+  game: GameId
+  name: string
+  created_at: string
+  running: boolean
+  capabilities: GameCapabilities
+  config: Record<string, unknown>
+}
+
+export interface RustConfigUpdateRequest {
+  hostname?: string
+  level?: string
+  seed?: number
+  world_size?: number
+  max_players?: number
+  auto_restart?: boolean
+}
+
 export interface ChangelogSection {
   title: string
   changes: string[]
@@ -126,12 +163,12 @@ export interface JobSummary {
 }
 
 export type JobKindDescr =
-  | { kind: 'steamcmd_install' }
+  | { kind: 'steamcmd_install'; game: GameId }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }
-  | { kind: 'backup_create'; instance: string }
-  | { kind: 'backup_restore'; instance: string; backup_id: string }
+  | { kind: 'backup_create'; game: GameId; instance: string }
+  | { kind: 'backup_restore'; game: GameId; instance: string; backup_id: string }
   | { kind: 'bepinex_update'; instance: string; from_version: string | null; to_version: string }
 
 export interface GlobalModInstanceEntry {
@@ -221,6 +258,14 @@ export interface InstanceResources {
 export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'cloning' | 'updating_bepinex'
 export type InstanceTransitions = Record<string, InstanceTransition>
 
+export interface GameInstanceTransition {
+  game: GameId
+  name: string
+  transition: InstanceTransition
+}
+
+export type GameInstanceTransitions = GameInstanceTransition[]
+
 export interface ResourceSample {
   at: string
   cpu_percent: number
@@ -229,10 +274,26 @@ export interface ResourceSample {
 
 export interface PlayerInfo {
   name: string
+  steam_id: string | null
   connected_at: string
 }
 
+export interface PlayerSession {
+  id: string
+  name: string
+  steam_id: string | null
+  joined_at: string
+  left_at: string | null
+}
+
+export interface SaveFileEntry {
+  path: string
+  size_bytes: number
+  modified_at: string | null
+}
+
 export interface InstanceResourceEntry {
+  game: GameId
   name: string
   running: boolean
   ready: boolean
@@ -269,7 +330,9 @@ export type ActivityKind =
 export interface ActivityEvent {
   id: string
   at: string
+  game: GameId
   instance: string | null
+  instance_id?: string
   kind: ActivityKind
 }
 
@@ -294,4 +357,12 @@ export interface WebhookView {
 
 export interface SettingsView {
   nexus_api_key_configured: boolean
+  instance_defaults: InstanceDefaults
+}
+
+export interface InstanceDefaults {
+  auto_restart: boolean
+  backup_enabled: boolean
+  backup_interval_hours: number
+  backup_retain_count: number
 }

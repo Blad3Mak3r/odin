@@ -9,6 +9,7 @@ pub mod lists;
 pub mod process;
 pub mod state;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -216,14 +217,29 @@ fn clone_state(
 }
 
 fn next_available_port(paths: &Paths, db: &Db) -> Result<u16> {
-    let used_ports: Vec<u16> = list_all(paths, db)?.iter().map(|i| i.state.port).collect();
+    let mut reserved_ports = HashSet::new();
+    for instance in list_all(paths, db)? {
+        reserved_ports.extend(crate::game::ports::block(
+            crate::game::GameId::Valheim,
+            instance.state.port,
+        )?);
+    }
+
+    for instance in crate::db::game_instances::list_rust(db)? {
+        reserved_ports.insert(instance.config.port);
+        reserved_ports.insert(instance.config.query_port);
+    }
+
     let mut port = DEFAULT_BASE_PORT;
-    while used_ports.contains(&port) {
+    loop {
+        let candidate = crate::game::ports::block(crate::game::GameId::Valheim, port)?;
+        if candidate.iter().all(|port| !reserved_ports.contains(port)) {
+            return Ok(port);
+        }
         port = port
             .checked_add(PORT_STRIDE)
             .context("no available Valheim port block remains")?;
     }
-    Ok(port)
 }
 
 fn copy_bepinex_configuration(source_dir: &Path, target_dir: &Path) -> Result<()> {

@@ -2,8 +2,8 @@
 //! Spawns `odin run --instance <name>` detached and talks to its
 //! control/events sockets. `spawn_detached`/`ping`/`ping_with_retry`/`stop`
 //! are wired into `instance::lifecycle`; `subscribe_events` (the
-//! `LogTailRegistry` event bridge) lands in a follow-up phase — see that
-//! function's doc comment.
+//! `LogTailRegistry` event bridge are wired into Valheim's lifecycle. Rust
+//! v1 does not expose this Valheim-specific socket/event contract.
 
 use std::time::Duration;
 
@@ -16,13 +16,14 @@ use tokio::process::Command;
 #[cfg(test)]
 use super::protocol::PROTOCOL_VERSION;
 use super::protocol::{Event, MAX_FRAME_BYTES, Request, Response, read_frame, write_frame};
+use crate::cli::validate_instance_name;
 use crate::paths::Paths;
 
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Spawns `odin run --instance <name>` detached: its own process group
-/// (same mechanism `instance::process::build_command` already uses for the
+/// (same mechanism Valheim's command builder already uses for the
 /// Valheim child itself), stdin discarded. stdout/stderr are appended to
 /// `<instance_dir>/logs/supervisor.log` rather than discarded — anything the
 /// supervisor prints before it manages to bind its own sockets (a startup
@@ -32,6 +33,9 @@ const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// dropped immediately; like the Valheim child today, `kill_on_drop`
 /// defaults to `false`, so this does not kill the supervisor.
 pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
+    validate_instance_name(instance_name)
+        .map_err(|error| anyhow::anyhow!("invalid instance name for supervisor: {error}"))?;
+
     let exe = std::env::current_exe().context("failed to resolve odin's own executable path")?;
 
     let log_path =
@@ -46,9 +50,10 @@ pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
         .context("failed to duplicate supervisor.log handle for stderr")?;
 
     let mut cmd = Command::new(exe);
+    // Keep the untrusted value out of argv entirely. Clap validates this
+    // internal hand-off with the same instance-name parser in the child.
     cmd.arg("run")
-        .arg("--instance")
-        .arg(instance_name)
+        .env("ODIN_SUPERVISOR_INSTANCE", instance_name)
         .process_group(0)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout_file))
@@ -302,6 +307,23 @@ mod tests {
             data_dir: dir.clone(),
             config_dir: dir,
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_detached_rejects_invalid_instance_name_before_creating_files() {
+        let paths = temp_paths("invalid-spawn");
+
+        let error = spawn_detached(&paths, "server;touch-owned")
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid instance name for supervisor")
+        );
+        assert!(!paths.data_dir.join("servers").exists());
+        std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 
     /// Binds a Unix socket at `path`, removing any file a previous, crashed

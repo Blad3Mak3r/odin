@@ -2,10 +2,9 @@ use anyhow::Result;
 
 use crate::activity::{ActivityKind, ActivityLog};
 use crate::db::{self, Db};
-use crate::valheim_update::{self, UpdateStatus};
+use crate::game::update::{self, InstallStatus};
+use crate::game::{self, GameId};
 use crate::web::state::AppState;
-
-const LAST_NOTIFIED_BUILD_ID_CACHE_KEY: &str = "valheim_last_notified_build_id";
 
 pub fn spawn(state: AppState) {
     tokio::spawn(async move {
@@ -14,23 +13,32 @@ pub fn spawn(state: AppState) {
             match tokio::task::spawn_blocking(move || run_tick(&tick_state)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    tracing::warn!(%error, "failed to check for Valheim server updates");
+                    tracing::warn!(%error, "failed to check for game server updates");
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "Valheim update monitor task panicked");
+                    tracing::warn!(%error, "game update monitor task panicked");
                 }
             }
-            tokio::time::sleep(valheim_update::CHECK_INTERVAL).await;
+            tokio::time::sleep(update::CHECK_INTERVAL).await;
         }
     });
 }
 
 fn run_tick(state: &AppState) -> Result<()> {
-    let status = valheim_update::check(&state.paths, &state.db)?;
-    record_update_if_new(&state.db, &state.activity, &status)
+    for driver in game::drivers() {
+        let game = driver.id();
+        let status = update::check(&state.paths, &state.db, game)?;
+        record_update_if_new(&state.db, &state.activity, game, &status)?;
+    }
+    Ok(())
 }
 
-fn record_update_if_new(db: &Db, activity: &ActivityLog, status: &UpdateStatus) -> Result<()> {
+fn record_update_if_new(
+    db: &Db,
+    activity: &ActivityLog,
+    game: GameId,
+    status: &InstallStatus,
+) -> Result<()> {
     let (Some(installed_build_id), Some(latest_build_id)) =
         (status.installed_build_id, status.latest_build_id)
     else {
@@ -41,24 +49,20 @@ fn record_update_if_new(db: &Db, activity: &ActivityLog, status: &UpdateStatus) 
     }
 
     let latest_build_id_string = latest_build_id.to_string();
-    if db::cache::get(db, LAST_NOTIFIED_BUILD_ID_CACHE_KEY)?
-        .is_some_and(|entry| entry.value == latest_build_id_string)
-    {
+    let cache_key = format!("{game}_last_notified_build_id");
+    if db::cache::get(db, &cache_key)?.is_some_and(|entry| entry.value == latest_build_id_string) {
         return Ok(());
     }
 
-    activity.record(
+    activity.record_for(
+        game,
         ActivityKind::ServerUpdateAvailable {
             installed_build_id,
             latest_build_id,
         },
         None,
     );
-    db::cache::set(
-        db,
-        LAST_NOTIFIED_BUILD_ID_CACHE_KEY,
-        &latest_build_id_string,
-    )
+    db::cache::set(db, &cache_key, &latest_build_id_string)
 }
 
 #[cfg(test)]
@@ -88,16 +92,36 @@ mod tests {
     fn repeated_checks_record_one_event_for_the_same_latest_build() {
         let db = temp_db();
         let activity = ActivityLog::load(db.clone());
-        let status = UpdateStatus {
+        let status = InstallStatus {
             installed_build_id: Some(100),
             latest_build_id: Some(200),
             update_available: true,
         };
 
-        record_update_if_new(&db, &activity, &status).unwrap();
-        record_update_if_new(&db, &activity, &status).unwrap();
+        record_update_if_new(&db, &activity, GameId::Valheim, &status).unwrap();
+        record_update_if_new(&db, &activity, GameId::Valheim, &status).unwrap();
 
         let (history, _rx) = activity.subscribe();
         assert_eq!(history.len(), 1);
+        assert_eq!(history[0].game, GameId::Valheim);
+    }
+
+    #[test]
+    fn games_do_not_suppress_each_others_update_notifications() {
+        let db = temp_db();
+        let activity = ActivityLog::load(db.clone());
+        let status = InstallStatus {
+            installed_build_id: Some(100),
+            latest_build_id: Some(200),
+            update_available: true,
+        };
+
+        record_update_if_new(&db, &activity, GameId::Valheim, &status).unwrap();
+        record_update_if_new(&db, &activity, GameId::Rust, &status).unwrap();
+
+        let (history, _rx) = activity.subscribe();
+        assert_eq!(history.len(), 2);
+        assert!(history.iter().any(|event| event.game == GameId::Valheim));
+        assert!(history.iter().any(|event| event.game == GameId::Rust));
     }
 }

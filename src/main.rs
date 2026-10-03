@@ -6,6 +6,7 @@ mod commands;
 mod config;
 mod db;
 mod doctor;
+mod game;
 mod http;
 mod instance;
 mod log_poll;
@@ -17,7 +18,6 @@ mod readiness_events;
 mod save_events;
 mod steamcmd;
 mod supervisor;
-mod valheim_update;
 mod web;
 
 use std::process::ExitCode;

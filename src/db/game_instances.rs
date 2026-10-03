@@ -1,0 +1,391 @@
+//! Game-neutral identity records plus Rust's v1 configuration.
+
+use std::collections::HashSet;
+
+use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
+use rusqlite::{OptionalExtension, params};
+use serde::Serialize;
+
+use crate::cli::validate_instance_name;
+use crate::game::{GameId, rust};
+use crate::paths::Paths;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameInstanceIdentity {
+    pub tags: Vec<String>,
+    pub id: String,
+    pub game: GameId,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RustInstanceConfig {
+    pub port: u16,
+    pub query_port: u16,
+    pub hostname: String,
+    pub level: String,
+    pub seed: u32,
+    pub world_size: u32,
+    pub max_players: u16,
+    pub auto_restart: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RustInstance {
+    #[serde(flatten)]
+    pub identity: GameInstanceIdentity,
+    #[serde(flatten)]
+    pub config: RustInstanceConfig,
+    pub pid: Option<u32>,
+    pub pid_started_at: Option<i64>,
+    pub last_started_at: Option<DateTime<Utc>>,
+    pub last_stopped_at: Option<DateTime<Utc>>,
+}
+
+impl RustInstance {
+    pub fn is_running(&self) -> bool {
+        rust::is_running(self)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.identity.name
+    }
+}
+
+pub fn identity(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+) -> Result<Option<GameInstanceIdentity>> {
+    let conn = db.conn();
+    let identity = conn
+        .query_row(
+            "SELECT id, created_at, tags FROM game_instances WHERE game = ?1 AND name = ?2",
+            params![game.as_str(), name],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(identity.map(|(id, created_at, tags)| GameInstanceIdentity {
+        tags: serde_json::from_str(&tags).unwrap_or_default(),
+        id,
+        game,
+        name: name.to_string(),
+        created_at,
+    }))
+}
+
+pub fn valheim_identity(db: &crate::db::Db, name: &str) -> Result<GameInstanceIdentity> {
+    identity(db, GameId::Valheim, name)?.context("Valheim instance is missing its game identity")
+}
+
+pub fn ensure_valheim_identity(
+    db: &crate::db::Db,
+    name: &str,
+    created_at: DateTime<Utc>,
+) -> Result<GameInstanceIdentity> {
+    {
+        let conn = db.conn();
+        conn.execute(
+            "INSERT OR IGNORE INTO game_instances (id, game, name, created_at) VALUES (?1, 'valheim', ?2, ?3)",
+            params![uuid::Uuid::new_v4().to_string(), name, created_at],
+        )?;
+    }
+    valheim_identity(db, name)
+}
+
+pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
+    let conn = db.conn();
+    let mut statement = conn.prepare(
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+         FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
+         WHERE g.game = 'rust' ORDER BY g.name",
+    )?;
+    statement
+        .query_map([], row_to_rust)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+pub fn load_rust(db: &crate::db::Db, name: &str) -> Result<Option<RustInstance>> {
+    let conn = db.conn();
+    conn.query_row(
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+         FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
+         WHERE g.game = 'rust' AND g.name = ?1",
+        params![name],
+        row_to_rust,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<RustInstance> {
+    validate_instance_name(name).map_err(|error| anyhow::anyhow!(error))?;
+    if load_rust(db, name)?.is_some() {
+        bail!("Rust instance '{name}' already exists");
+    }
+    let port = next_rust_port(db)?;
+    let config = rust::default_config(name, port);
+    let id = uuid::Uuid::new_v4().to_string();
+    let created_at = Utc::now();
+    std::fs::create_dir_all(paths.game_instance_dir(GameId::Rust, name))?;
+    let mut conn = db.conn();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO game_instances (id, game, name, created_at) VALUES (?1, 'rust', ?2, ?3)",
+        params![id, name, created_at],
+    )?;
+    tx.execute(
+        "INSERT INTO rust_instance_configs (instance_id, port, query_port, hostname, level, seed, world_size, max_players, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![id, config.port, config.query_port, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
+    )?;
+    tx.commit()?;
+    drop(conn);
+    load_rust(db, name)?.context("failed to load newly-created Rust instance")
+}
+
+pub fn update_rust_config(
+    db: &crate::db::Db,
+    name: &str,
+    config: &RustInstanceConfig,
+) -> Result<RustInstance> {
+    let instance = load_rust(db, name)?.context("Rust instance not found")?;
+    if instance.is_running() {
+        bail!("stop Rust instance '{name}' before changing its configuration");
+    }
+    if config.hostname.trim().is_empty() || config.level.trim().is_empty() {
+        bail!("Rust hostname and level cannot be empty");
+    }
+    if config.world_size == 0 || config.max_players == 0 {
+        bail!("Rust world size and max players must be greater than zero");
+    }
+
+    db.conn().execute(
+        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6, auto_restart = ?7 \
+         WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
+        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
+    )?;
+    load_rust(db, name)?.context("Rust instance disappeared while updating configuration")
+}
+
+pub fn set_rust_pid(
+    db: &crate::db::Db,
+    name: &str,
+    pid: u32,
+    pid_started_at: i64,
+    started_at: DateTime<Utc>,
+) -> Result<RustInstance> {
+    db.conn().execute(
+        "UPDATE rust_instance_configs SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
+        params![name, pid, pid_started_at, started_at],
+    )?;
+    load_rust(db, name)?.context("Rust instance not found")
+}
+
+pub fn clear_rust_pid(db: &crate::db::Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
+    db.conn().execute(
+        "UPDATE rust_instance_configs SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
+        params![name, stopped_at],
+    )?;
+    Ok(())
+}
+
+pub fn delete_rust(db: &crate::db::Db, name: &str) -> Result<()> {
+    db.conn()
+        .execute(
+            "DELETE FROM game_instances WHERE game = 'rust' AND name = ?1",
+            params![name],
+        )
+        .with_context(|| format!("failed to delete Rust instance '{name}'"))?;
+    Ok(())
+}
+
+fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
+    let conn = db.conn();
+    let mut reserved_ports = HashSet::new();
+
+    // Valheim occupies the block declared by its compiled driver.
+    // Rust owns both its game and query ports, which may not be consecutive
+    // after future configuration changes, so reserve their recorded values.
+    let mut valheim_ports = conn.prepare("SELECT port FROM instances")?;
+    for port in valheim_ports
+        .query_map([], |row| row.get::<_, u16>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    {
+        reserved_ports.extend(crate::game::ports::block(GameId::Valheim, port)?);
+    }
+    let mut rust_ports = conn.prepare("SELECT port, query_port FROM rust_instance_configs")?;
+    for (port, query_port) in rust_ports
+        .query_map([], |row| Ok((row.get::<_, u16>(0)?, row.get::<_, u16>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    {
+        reserved_ports.insert(port);
+        reserved_ports.insert(query_port);
+    }
+
+    let mut port = 28015u16;
+    loop {
+        let candidate = crate::game::ports::block(GameId::Rust, port)?;
+        if candidate.iter().all(|port| !reserved_ports.contains(port)) {
+            return Ok(port);
+        }
+        port = port.checked_add(2).context("no Rust port block remains")?;
+    }
+}
+
+fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
+    Ok(RustInstance {
+        identity: GameInstanceIdentity {
+            tags: serde_json::from_str(&row.get::<_, String>(15)?)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+            id: row.get(0)?,
+            game: GameId::Rust,
+            name: row.get(1)?,
+            created_at: row.get(2)?,
+        },
+        config: RustInstanceConfig {
+            port: row.get(3)?,
+            query_port: row.get(4)?,
+            hostname: row.get(5)?,
+            level: row.get(6)?,
+            seed: row.get(7)?,
+            world_size: row.get(8)?,
+            max_players: row.get(9)?,
+            auto_restart: row.get(10)?,
+        },
+        pid: row.get(11)?,
+        pid_started_at: row.get(12)?,
+        last_started_at: row.get(13)?,
+        last_stopped_at: row.get(14)?,
+    })
+}
+
+pub fn set_tags(db: &crate::db::Db, game: GameId, name: &str, tags: &[String]) -> Result<()> {
+    anyhow::ensure!(
+        tags.len() <= 20
+            && tags.iter().all(|tag| !tag.is_empty()
+                && tag.len() <= 32
+                && tag.chars().all(|c| c.is_alphanumeric() || "-_".contains(c))),
+        crate::instance::InstanceError::InvalidName(
+            "Use at most 20 tags of 1–32 letters, digits, hyphens or underscores".into()
+        )
+    );
+    let mut tags = tags.to_vec();
+    tags.sort();
+    tags.dedup();
+    let count = db.conn().execute(
+        "UPDATE game_instances SET tags = ?3 WHERE game = ?1 AND name = ?2",
+        params![game.as_str(), name, serde_json::to_string(&tags)?],
+    )?;
+    anyhow::ensure!(
+        count == 1,
+        crate::instance::InstanceError::NotFound(name.into())
+    );
+    Ok(())
+}
+
+pub fn rename(db: &crate::db::Db, game: GameId, old: &str, new: &str) -> Result<()> {
+    let mut conn = db.conn();
+    let tx = conn.transaction()?;
+    tx.pragma_update(None, "defer_foreign_keys", true)?;
+    let id: String = tx.query_row(
+        "SELECT id FROM game_instances WHERE game = ?1 AND name = ?2",
+        params![game.as_str(), old],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "UPDATE game_instances SET name = ?2 WHERE id = ?1",
+        params![id, new],
+    )?;
+    if game == GameId::Valheim {
+        tx.execute(
+            "UPDATE instances SET name = ?2 WHERE name = ?1",
+            params![old, new],
+        )?;
+        for table in ["installed_mods", "access_list_entries"] {
+            tx.execute(
+                &format!("UPDATE {table} SET instance_name = ?2 WHERE instance_id = ?1"),
+                params![id, new],
+            )?;
+        }
+    }
+    for table in [
+        "backups",
+        "backup_schedules",
+        "backup_storage_configs",
+        "resource_samples",
+    ] {
+        tx.execute(
+            &format!("UPDATE {table} SET instance_name = ?2 WHERE instance_id = ?1"),
+            params![id, new],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_context(label: &str) -> (Paths, crate::db::Db) {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-rust-config-test-{label}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = crate::db::Db::open(&paths).unwrap();
+        (paths, db)
+    }
+
+    #[test]
+    fn update_rust_config_persists_game_specific_settings() {
+        let (paths, db) = temp_context("settings");
+        let instance = create_rust(&paths, &db, "rust-server").unwrap();
+        assert!(!instance.config.auto_restart);
+        let config = RustInstanceConfig {
+            hostname: "Rust Server".to_string(),
+            level: "Barren".to_string(),
+            seed: 42,
+            world_size: 4000,
+            max_players: 100,
+            auto_restart: true,
+            ..instance.config
+        };
+
+        let updated = update_rust_config(&db, "rust-server", &config).unwrap();
+
+        assert_eq!(updated.config.hostname, "Rust Server");
+        assert_eq!(updated.config.max_players, 100);
+        assert!(updated.config.auto_restart);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn rust_port_allocation_skips_valheim_port_blocks() {
+        let (paths, db) = temp_context("ports");
+        let mut valheim = crate::instance::Instance::create(&paths, &db, "valheim-server").unwrap();
+        valheim.state.port = 28016;
+        valheim.save(&db).unwrap();
+
+        let rust = create_rust(&paths, &db, "rust-server").unwrap();
+
+        assert_eq!(rust.config.port, 28019);
+        assert_eq!(rust.config.query_port, 28020);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+}

@@ -1,135 +1,13 @@
-//! Spawns and supervises the `valheim_server.x86_64` OS process directly —
-//! no tmux, no shell script. Replaces `crate::tmux`.
-//!
-//! The dedicated server has no admin/RCON protocol, so there's no console
-//! input to wire up: stdin is `/dev/null` and stdout/stderr are appended to
-//! `console.log`, which is the only channel odin has into the running
-//! server.
-//!
-//! Liveness and signalling both go through `sysinfo`, keyed by
-//! `(pid, pid_started_at)`: `pid_started_at` is the process's own kernel
-//! start time, recorded once right after spawning, and re-checked on every
-//! lookup so a reused pid (e.g. after a host reboot) reads as "not
-//! running" instead of a false positive.
+//! Game-neutral process spawning, liveness, and signalling.
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
-use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
 use tokio::process::{Child, Command};
 
-use super::Instance;
-use crate::paths::{self, Paths};
-
-/// Prepends `prefix` to whatever `var` odin's own process inherited,
-/// mirroring how the old `run.sh` extended `LD_LIBRARY_PATH`/`LD_PRELOAD`
-/// (`"prefix:${VAR:-}"`) rather than clobbering an operator's existing
-/// value outright.
-fn colon_prepend(var: &str, prefix: &str) -> String {
-    match std::env::var(var) {
-        Ok(existing) if !existing.is_empty() => format!("{prefix}:{existing}"),
-        _ => prefix.to_string(),
-    }
-}
-
-/// Builds the ready-to-spawn command for an instance's server process:
-/// working directory, env vars (including BepInEx/Doorstop when
-/// installed), stdio (stdin discarded, stdout/stderr appended to
-/// `console.log`), and args — all set directly on the `Command` builder, no
-/// intermediate shell script. Passing args as native argv (instead of
-/// interpolating them into a shell command string, as the old `run.sh` did)
-/// also removes the shell-injection risk class that existed there, not just
-/// the shell process itself.
-pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
-    let install_dir = paths.shared_install_dir();
-
-    let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
-    let stdout = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&console_log)
-        .with_context(|| format!("failed to open {}", console_log.display()))?;
-    let stderr = stdout
-        .try_clone()
-        .context("failed to duplicate console.log handle for stderr")?;
-
-    let mut cmd = Command::new(install_dir.join("valheim_server.x86_64"));
-    cmd.current_dir(&install_dir)
-        .env(
-            "LD_LIBRARY_PATH",
-            colon_prepend(
-                "LD_LIBRARY_PATH",
-                &install_dir.join("linux64").to_string_lossy(),
-            ),
-        )
-        .env("SteamAppId", "892970")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        // Own process group: a Ctrl-C delivered to odin's own controlling
-        // terminal (relevant only when running interactively in dev, not
-        // under systemd) doesn't also land on the game server.
-        .process_group(0);
-
-    if instance.state.bepinex_installed {
-        // Matches BepInExPack Valheim's own `start_server_bepinex.sh`
-        // (Doorstop 4.x env var names), with absolute paths since the
-        // process's cwd is the shared install dir, not this instance dir
-        // where BepInEx/doorstop_libs actually live.
-        let bepinex_dir = paths::instance_bepinex_dir(&instance.dir);
-        let doorstop_libs_dir = instance.dir.join("doorstop_libs");
-        cmd.env("DOORSTOP_ENABLED", "1")
-            .env(
-                "DOORSTOP_TARGET_ASSEMBLY",
-                bepinex_dir.join("core/BepInEx.Preloader.dll"),
-            )
-            .env(
-                "LD_LIBRARY_PATH",
-                colon_prepend(
-                    "LD_LIBRARY_PATH",
-                    &format!(
-                        "{}:{}",
-                        doorstop_libs_dir.display(),
-                        install_dir.join("linux64").display()
-                    ),
-                ),
-            )
-            .env(
-                "LD_PRELOAD",
-                colon_prepend("LD_PRELOAD", "libdoorstop_x64.so"),
-            );
-    }
-
-    cmd.arg("-nographics")
-        .arg("-batchmode")
-        .arg("-name")
-        .arg(&instance.state.name)
-        .arg("-port")
-        .arg(instance.state.port.to_string())
-        .arg("-world")
-        .arg(&instance.state.world_name)
-        .arg("-savedir")
-        .arg(paths::instance_saves_dir(&instance.dir))
-        .arg("-public")
-        .arg(if instance.state.public { "1" } else { "0" });
-    if let Some(password) = &instance.state.password {
-        cmd.arg("-password").arg(password);
-    }
-
-    tracing::info!(
-        instance = %instance.state.name,
-        port = instance.state.port,
-        bepinex = instance.state.bepinex_installed,
-        "spawning valheim_server.x86_64"
-    );
-
-    Ok(cmd)
-}
-
-/// Spawns `cmd`, detached at the OS level from the moment it starts:
+/// Spawns a game-server command, detached at the OS level from the moment it starts:
 /// `kill_on_drop` is left at its tokio default of `false`, so if `odin
 /// serve` exits or is restarted while holding this `Child`, dropping it
 /// does NOT kill the process — it simply reparents to PID 1 (which reaps
@@ -138,7 +16,7 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
 /// instances survive `systemctl restart odin`; never call `.kill()` on a
 /// `Child` obtained this way except as part of an explicit `stop()`.
 pub async fn spawn(mut cmd: Command) -> Result<Child> {
-    cmd.spawn().context("failed to spawn valheim_server.x86_64")
+    cmd.spawn().context("failed to spawn game server process")
 }
 
 /// The process's own kernel start time — the liveness fingerprint for a

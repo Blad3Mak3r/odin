@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 const MAX_LINES = 1000
 
-export function useLogSocket(instanceName: string) {
+export function useLogSocket(instanceName: string, game: 'valheim' | 'rust' = 'valheim') {
   const [lines, setLines] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
 
@@ -15,7 +15,7 @@ export function useLogSocket(instanceName: string) {
   }
 
   useEffect(() => {
-    const source = new EventSource(`/api/instances/${instanceName}/logs/sse`)
+    const source = new EventSource(`/api/games/${game}/instances/${instanceName}/logs/sse`)
 
     source.onopen = () => setConnected(true)
     source.onerror = () => setConnected(false)
@@ -29,7 +29,7 @@ export function useLogSocket(instanceName: string) {
     return () => {
       source.close()
     }
-  }, [instanceName])
+  }, [game, instanceName])
 
   return { lines, connected }
 }

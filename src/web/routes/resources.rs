@@ -114,7 +114,7 @@ pub async fn export_instance_resources_history(
     Ok(csv_response(&format!("{name}-resources.csv"), &rows))
 }
 
-fn csv_response(filename: &str, rows: &[ResourceSampleRow]) -> Response {
+pub(crate) fn csv_response(filename: &str, rows: &[ResourceSampleRow]) -> Response {
     let mut csv = String::from("at,cpu_percent,memory_bytes\n");
     for row in rows {
         csv.push_str(&format!(

@@ -14,7 +14,8 @@ use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::activity::ActivityEvent;
-use crate::web::runtime::{InstanceTransitions, ResourcesTick};
+use crate::game::GameId;
+use crate::web::runtime::{GameInstanceTransitions, InstanceTransitions, ResourcesTick};
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -29,6 +30,9 @@ enum WireEvent<'a> {
     Transitions {
         transitions: &'a InstanceTransitions,
     },
+    GameTransitions {
+        transitions: &'a GameInstanceTransitions,
+    },
     Lagged {
         skipped: u64,
     },
@@ -39,7 +43,7 @@ pub async fn events_sse(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (history, activity_rx) = state.activity.subscribe();
     let ticks_rx = state.runtime.subscribe_ticks();
-    let (transitions, transitions_rx) = state.runtime.subscribe_transitions();
+    let (game_transitions, transitions_rx) = state.runtime.subscribe_game_transitions();
 
     let activity_stream = stream! {
         for event in &history {
@@ -68,12 +72,18 @@ pub async fn events_sse(
     };
 
     let transitions_stream = stream! {
+        let transitions = valheim_transitions(&game_transitions);
         yield Ok(json_event(&WireEvent::Transitions { transitions: &transitions }));
+        yield Ok(json_event(&WireEvent::GameTransitions { transitions: &game_transitions }));
 
         let mut transitions_rx = transitions_rx;
         loop {
             match transitions_rx.recv().await {
-                Ok(transitions) => yield Ok(json_event(&WireEvent::Transitions { transitions: &transitions })),
+                Ok(game_transitions) => {
+                    let transitions = valheim_transitions(&game_transitions);
+                    yield Ok(json_event(&WireEvent::Transitions { transitions: &transitions }));
+                    yield Ok(json_event(&WireEvent::GameTransitions { transitions: &game_transitions }));
+                }
                 Err(RecvError::Lagged(skipped)) => yield Ok(json_event(&WireEvent::Lagged { skipped })),
                 Err(RecvError::Closed) => return,
             }
@@ -85,6 +95,14 @@ pub async fn events_sse(
         transitions_stream,
     ))
     .keep_alive(KeepAlive::default())
+}
+
+fn valheim_transitions(transitions: &GameInstanceTransitions) -> InstanceTransitions {
+    transitions
+        .iter()
+        .filter(|transition| transition.game == GameId::Valheim)
+        .map(|transition| (transition.name.clone(), transition.transition))
+        .collect()
 }
 
 fn json_event(event: &WireEvent<'_>) -> Event {

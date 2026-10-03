@@ -31,6 +31,8 @@ use tokio::task::AbortHandle;
 
 use crate::activity::ActivityKind;
 use crate::db::Db;
+use crate::db::game_instances;
+use crate::game::GameId;
 use crate::instance;
 use crate::paths::Paths;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
@@ -96,19 +98,31 @@ async fn shutdown_signal() -> Result<()> {
 }
 
 async fn stop_running_instances(state: &AppState) -> Result<()> {
-    let names = instance::running_instance_names(&state.paths, &state.db)?;
-    let results = join_all(
-        names
+    let valheim_names = instance::running_instance_names(&state.paths, &state.db)?;
+    let valheim_results = join_all(
+        valheim_names
             .iter()
             .map(|name| instance::lifecycle::stop(&state.paths, &state.db, name)),
     )
     .await;
-
-    let failures = names
+    let mut failures = valheim_names
         .iter()
-        .zip(results)
-        .filter_map(|(name, result)| result.err().map(|error| format!("{name}: {error:#}")))
+        .zip(valheim_results)
+        .filter_map(|(name, result)| {
+            result
+                .err()
+                .map(|error| format!("valheim/{name}: {error:#}"))
+        })
         .collect::<Vec<_>>();
+
+    for rust_instance in game_instances::list_rust(&state.db)? {
+        if rust_instance.is_running()
+            && let Err(error) =
+                crate::game::rust::stop(&state.paths, &state.db, &rust_instance).await
+        {
+            failures.push(format!("rust/{}: {error:#}", rust_instance.name()));
+        }
+    }
     if !failures.is_empty() {
         bail!(
             "failed to stop one or more instances during shutdown: {}",
@@ -116,7 +130,10 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
         );
     }
 
-    tracing::info!(count = names.len(), "running instances stopped cleanly");
+    tracing::info!(
+        count = valheim_names.len(),
+        "running Valheim instances stopped cleanly"
+    );
     Ok(())
 }
 
@@ -158,10 +175,46 @@ fn spawn_telemetry(state: AppState) {
             for name in tick.crashed_with_auto_restart {
                 attempt_auto_restart(&state, name).await;
             }
+            for name in tick.crashed_rust_with_auto_restart {
+                attempt_rust_auto_restart(&state, name).await;
+            }
 
             tokio::time::sleep(TELEMETRY_INTERVAL).await;
         }
     });
+}
+
+async fn attempt_rust_auto_restart(state: &AppState, name: String) {
+    tracing::warn!(instance = %name, game = "rust", "instance found dead; attempting automatic restart");
+    let _transition = match state.runtime.begin_game_transition(
+        GameId::Rust,
+        &name,
+        InstanceTransition::Starting,
+    ) {
+        Ok(transition) => transition,
+        Err(error) => {
+            tracing::debug!(instance = %name, game = "rust", %error, "automatic restart skipped");
+            return;
+        }
+    };
+    let instance = match game_instances::load_rust(&state.db, &name) {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(instance = %name, game = "rust", %error, "automatic restart skipped");
+            return;
+        }
+    };
+    match crate::game::rust::start(&state.paths, &state.db, &instance).await {
+        Ok(_) => state.activity.record_for(
+            GameId::Rust,
+            ActivityKind::InstanceAutoRestarted,
+            Some(name),
+        ),
+        Err(error) => {
+            tracing::warn!(instance = %name, game = "rust", %error, "automatic restart failed")
+        }
+    }
 }
 
 /// Restarts an instance the telemetry tick found dead with automatic
@@ -201,6 +254,7 @@ struct TelemetryTick {
     /// function since starting an instance is async and this runs on the
     /// blocking thread pool.
     crashed_with_auto_restart: Vec<String>,
+    crashed_rust_with_auto_restart: Vec<String>,
 }
 
 fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
@@ -227,6 +281,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
     let mut entries = Vec::new();
     let mut running_names = Vec::new();
     let mut crashed_with_auto_restart = Vec::new();
+    let mut crashed_rust_with_auto_restart = Vec::new();
     if let Ok(instances) = instance::list_all(&state.paths, &state.db) {
         for inst in &instances {
             let Ok(snapshot) = compute_instance_snapshot(state, inst) else {
@@ -234,20 +289,26 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
             };
             let name = &inst.state.name;
             if persist_now && snapshot.running {
-                state.runtime.persist_sample(
-                    Some(name),
+                state.runtime.persist_game_instance_sample(
+                    GameId::Valheim,
+                    name,
                     now,
                     snapshot.cpu_percent,
                     snapshot.memory_bytes,
                 );
             }
-            if state.runtime.push_instance_sample(name, snapshot) {
+            if state
+                .runtime
+                .push_game_instance_sample(GameId::Valheim, name, snapshot)
+            {
                 let kind = if snapshot.running {
                     ActivityKind::InstanceStarted
                 } else {
                     ActivityKind::InstanceStopped
                 };
-                state.activity.record(kind, Some(name.clone()));
+                state
+                    .activity
+                    .record_for(GameId::Valheim, kind, Some(name.clone()));
             }
             if snapshot.running {
                 running_names.push(name.clone());
@@ -279,6 +340,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 }
             }
             entries.push(InstanceResourceEntry {
+                game: GameId::Valheim,
                 name: name.clone(),
                 running: snapshot.running,
                 ready: snapshot.ready,
@@ -286,6 +348,57 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 memory_bytes: snapshot.memory_bytes,
                 players: state.players.snapshot(name),
                 last_saved_at: state.world_saves.get(name),
+            });
+        }
+    }
+
+    if let Ok(rust_instances) = game_instances::list_rust(&state.db) {
+        for rust_instance in rust_instances {
+            let name = rust_instance.name();
+            let snapshot = routes::games::rust_resource_snapshot(state, &rust_instance);
+            if persist_now && snapshot.running {
+                state.runtime.persist_game_instance_sample(
+                    GameId::Rust,
+                    name,
+                    now,
+                    snapshot.cpu_percent,
+                    snapshot.memory_bytes,
+                );
+            }
+            if state
+                .runtime
+                .push_game_instance_sample(GameId::Rust, name, snapshot)
+            {
+                let kind = if snapshot.running {
+                    ActivityKind::InstanceStarted
+                } else {
+                    ActivityKind::InstanceStopped
+                };
+                state
+                    .activity
+                    .record_for(GameId::Rust, kind, Some(name.to_string()));
+            }
+            if !snapshot.running && rust_instance.pid.is_some() {
+                let _ = game_instances::clear_rust_pid(&state.db, name, chrono::Utc::now());
+                if rust_instance.config.auto_restart
+                    && state.runtime.should_attempt_game_auto_restart(
+                        GameId::Rust,
+                        name,
+                        AUTO_RESTART_COOLDOWN,
+                    )
+                {
+                    crashed_rust_with_auto_restart.push(name.to_string());
+                }
+            }
+            entries.push(InstanceResourceEntry {
+                game: GameId::Rust,
+                name: name.to_string(),
+                running: snapshot.running,
+                ready: false,
+                cpu_percent: snapshot.cpu_percent,
+                memory_bytes: snapshot.memory_bytes,
+                players: Vec::new(),
+                last_saved_at: None,
             });
         }
     }
@@ -302,6 +415,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
     TelemetryTick {
         running: running_names,
         crashed_with_auto_restart,
+        crashed_rust_with_auto_restart,
     }
 }
 

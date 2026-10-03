@@ -1494,6 +1494,7 @@ dependencies = [
  "rusty-s3",
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo",
  "tar",
  "thiserror 2.0.20",

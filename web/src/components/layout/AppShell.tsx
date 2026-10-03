@@ -58,7 +58,7 @@ function SidebarNav({
               </NavLink>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">Valheim server dashboard</p>
+          <p className="text-xs text-muted-foreground">Game server dashboard</p>
         </div>
       </div>
       <nav className="flex flex-col gap-1 px-2">

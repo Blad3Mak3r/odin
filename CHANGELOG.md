@@ -4,6 +4,16 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-03
+
+### What's Changed
+- fix: show live instance uptime by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/79
+- Complete the modular multi-game platform by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/81
+- feature: complete modular multi-game platform by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/80
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.11.0...v0.12.0
+
 ## [0.11.0] - 2026-09-01
 
 ### What's Changed

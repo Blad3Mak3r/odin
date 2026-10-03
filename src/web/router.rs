@@ -517,19 +517,81 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        let app = build_router(AppState::new(paths, db));
+        let app = build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("PUT")
             .uri("/api/games/rust/instances/rusty/config")
             .header("content-type", "application/json")
             .body(Body::from(
-                r#"{"hostname":"Rusty Server","max_players":50}"#,
+                r#"{"hostname":"Rusty Server","max_players":50,"port":29000,"query_port":30000}"#,
             ))
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let view: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(view["config"]["port"], 29000);
+        assert_eq!(view["config"]["query_port"], 30000);
+
+        for (body, expected) in [
+            (r#"{"port":0}"#, StatusCode::BAD_REQUEST),
+            (r#"{"query_port":0}"#, StatusCode::BAD_REQUEST),
+            (r#"{"port":30000}"#, StatusCode::BAD_REQUEST),
+            (r#"{"query_port":29000}"#, StatusCode::BAD_REQUEST),
+            (r#"{"port":65536}"#, StatusCode::UNPROCESSABLE_ENTITY),
+            (r#"{"query_port":-1}"#, StatusCode::UNPROCESSABLE_ENTITY),
+            (r#"{"port":29000.5}"#, StatusCode::UNPROCESSABLE_ENTITY),
+            (r#"{"seed":42}"#, StatusCode::OK),
+        ] {
+            let request = Request::builder()
+                .method("PUT")
+                .uri("/api/games/rust/instances/rusty/config")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                expected,
+                "{body}"
+            );
+            let saved = crate::db::game_instances::load_rust(&db, "rusty")
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.config.port, 29000);
+            assert_eq!(saved.config.query_port, 30000);
+        }
+
+        crate::db::game_instances::set_rust_pid(
+            &db,
+            "rusty",
+            std::process::id(),
+            crate::instance::process::start_time_of(std::process::id()).unwrap(),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/api/games/rust/instances/rusty/config")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"port":31000}"#))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            crate::db::game_instances::load_rust(&db, "rusty")
+                .unwrap()
+                .unwrap()
+                .config
+                .port,
+            29000
+        );
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 
     #[tokio::test]

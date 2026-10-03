@@ -5,7 +5,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
-    instances, jobs, lists, mods, nexus, players, resources, saves, settings, version, webhooks,
+    instances, jobs, lists, mods, nexus, players, resources, rust_access_lists, saves, settings,
+    version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -50,6 +51,16 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/rust/instances/{name}/config",
             put(games::update_rust_config),
+        )
+        .route(
+            "/games/rust/instances/{name}/lists/{kind}",
+            get(rust_access_lists::get_list)
+                .put(rust_access_lists::set_list)
+                .post(rust_access_lists::add_list_entry),
+        )
+        .route(
+            "/games/rust/instances/{name}/lists/{kind}/{id}",
+            delete(rust_access_lists::remove_list_entry),
         )
         .route(
             "/games/rust/instances/{name}/resources",
@@ -591,6 +602,68 @@ mod tests {
                 .port,
             29000
         );
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rust_access_lists_route_edits_owner_entries() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-rust-access-lists-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let app = build_router(AppState::new(paths.clone(), db));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/games/rust/instances/rusty/lists/owner")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"id":"76561197960287930"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/games/rust/instances/rusty/lists/owner")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ids"],
+            serde_json::json!(["76561197960287930"])
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/games/rust/instances/rusty/lists/invalid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 

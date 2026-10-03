@@ -23,8 +23,9 @@ running after logout, and scripts or notes to track ports and configuration.
 Valheim adds `BepInEx`/Thunderstore when you want mods. Odin folds that into
 one background service and dashboard for creating and controlling servers,
 watching logs, editing game-specific configuration, and taking backups. Game
-capabilities appear only where they apply: Valheim includes mods, access
-lists, player state, and readiness; Rust v1 focuses on core operation.
+capabilities appear only where they apply: Valheim includes mods, player
+state, and readiness; both games include their native access lists, while
+Rust v1 otherwise focuses on core operation.
 
 ## Features
 
@@ -245,9 +246,9 @@ odin serve
 
 Then open `http://127.0.0.1:7331` in a browser: install/update Valheim or
 Rust, create and start named instances, edit game-specific configuration,
-watch logs, and take backups. Valheim additionally offers mods, access lists,
-live player state, and readiness. See [Web dashboard](#web-dashboard) for
-details.
+watch logs, and take backups. Both games support access lists; Valheim
+additionally offers mods, live player state, and readiness. See [Web
+dashboard](#web-dashboard) for details.
 
 For scripting or quick one-off Valheim changes, the legacy CLI remains
 available:
@@ -373,11 +374,12 @@ live plus historical CPU/RAM usage with CSV export. Global settings define
 automatic restart and backup defaults for newly created Valheim and Rust
 servers.
 
-Valheim adds Thunderstore mod management, BepInEx update checks, access-list
-editing, live players, and recent player-session history. Every instance's
-Backups tab can use local storage, AWS S3, or Cloudflare R2. Remote backups
-remain listed and can be restored or deleted from Odin; restores download a
-temporary archive and remove it again when the operation finishes.
+Rust access lists manage owners, moderators, and bans while the server is
+stopped. Valheim adds Thunderstore mod management, BepInEx update checks,
+live players, and recent player-session history. Every instance's Backups tab
+can use local storage, AWS S3, or Cloudflare R2. Remote backups remain listed
+and can be restored or deleted from Odin; restores download a temporary
+archive and remove it again when the operation finishes.
 
 **There is no authentication.** `odin serve` binds to `127.0.0.1` by
 default for exactly this reason; if you want to reach it from another

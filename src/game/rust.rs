@@ -1,5 +1,7 @@
 //! Rust Dedicated Server's Linux launch contract.
 
+pub mod access_lists;
+
 use std::fs::OpenOptions;
 use std::process::Stdio;
 use std::time::Duration;

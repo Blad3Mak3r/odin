@@ -131,7 +131,7 @@ impl GameDriver for RustDriver {
             backups: true,
             players: false,
             mods: false,
-            access_lists: false,
+            access_lists: true,
             readiness: false,
         }
     }

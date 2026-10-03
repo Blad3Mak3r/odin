@@ -241,6 +241,7 @@ export interface ConfigFileView {
 }
 
 export type ListKind = 'admin' | 'banned' | 'permitted'
+export type RustAccessListKind = 'owner' | 'moderator' | 'banned'
 
 export interface HostResources {
   cpu_percent: number

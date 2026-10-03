@@ -1,4 +1,5 @@
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
+import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -167,11 +168,12 @@ export function ManagedInstanceDetailPage() {
   const tabs = [
     { id: 'overview', label: 'Overview' },
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
+    ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     { id: 'saves', label: 'Save files' },
     { id: 'logs', label: 'Logs' },
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
-  if (!tab || nestedPath.length > 0 || !tabs.some((candidate) => candidate.id === tab)) {
+  if (!tab || (tab !== 'lists' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
     return <Navigate replace to={`/instances/${detail.game}/${detail.name}/overview`} />
   }
   const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
@@ -197,7 +199,7 @@ export function ManagedInstanceDetailPage() {
           </div>
         }
       />
-      <Tabs value={tab} onValueChange={(value) => navigate(`/instances/${detail.game}/${detail.name}/${value}`)}>
+      <Tabs value={tab} onValueChange={(value) => navigate(value === 'lists' ? `/instances/${detail.game}/${detail.name}/lists/owner` : `/instances/${detail.game}/${detail.name}/${value}`)}>
         <TabsList>
           {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
         </TabsList>
@@ -242,6 +244,9 @@ export function ManagedInstanceDetailPage() {
         </TabsContent>
         {detail.capabilities.backups && (
           <TabsContent value="backups"><BackupsTab name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
+        )}
+        {detail.game === 'rust' && tab === 'lists' && (
+          <TabsContent value="lists"><RustAccessListsTab name={detail.name} path={nestedPath} running={detail.running} /></TabsContent>
         )}
         <TabsContent value="saves"><SaveFilesTab game={detail.game} name={detail.name} /></TabsContent>
         <TabsContent value="logs">

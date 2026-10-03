@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::backup::BackupError;
 use crate::db::webhooks::WebhookError;
+use crate::game::rust::access_lists::RustAccessListError;
 use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
@@ -58,6 +59,7 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         None => {}
     }
     if err.downcast_ref::<ListsError>().is_some()
+        || err.downcast_ref::<RustAccessListError>().is_some()
         || err.downcast_ref::<BadRequest>().is_some()
         || err
             .downcast_ref::<crate::db::game_instances::InvalidRustConfig>()

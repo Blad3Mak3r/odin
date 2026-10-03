@@ -37,6 +37,7 @@ import type {
   PlayerInfo,
   PlayerSession,
   ResourceSample,
+  RustAccessListKind,
   RustConfigUpdateRequest,
   SaveFileEntry,
   SettingsView,
@@ -792,6 +793,30 @@ export function useRemoveListEntry(name: string, kind: ListKind) {
     mutationFn: (id: string) =>
       api.delete<void>(valheimInstancePath(name, `/lists/${kind}/${encodeURIComponent(id)}`)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['instances', name, 'lists', kind] }),
+  })
+}
+
+export function useRustAccessList(name: string, kind: RustAccessListKind) {
+  return useQuery({
+    queryKey: ['managed-instances', 'rust', name, 'lists', kind],
+    queryFn: () => api.get<ListView>(`/games/rust/instances/${name}/lists/${kind}`),
+  })
+}
+
+export function useAddRustAccessListEntry(name: string, kind: RustAccessListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/games/rust/instances/${name}/lists/${kind}`, { id }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name, 'lists', kind] }),
+  })
+}
+
+export function useRemoveRustAccessListEntry(name: string, kind: RustAccessListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.delete<void>(`/games/rust/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name, 'lists', kind] }),
   })
 }
 

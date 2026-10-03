@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-10-03
+
+### What's Changed
+- feature: manage Rust access lists by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/85
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.12.1...v0.12.2
+
 ## [0.12.1] - 2026-10-03
 
 ### What's Changed

@@ -1,8 +1,10 @@
+use std::fmt::Write;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use sysinfo::Signal;
 
 use super::{Instance, InstanceError, process};
@@ -26,17 +28,10 @@ pub(crate) struct LifecycleLock {
 impl LifecycleLock {
     pub(crate) fn acquire(paths: &Paths, game: GameId, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
-        let lock_dir = paths.data_dir.join("locks");
+        let lock_dir = paths.runtime_dir().join("lifecycle-locks");
         std::fs::create_dir_all(&lock_dir)
             .with_context(|| format!("failed to create {}", lock_dir.display()))?;
-        // Keep Valheim's historical lock name so an in-flight operation from
-        // an older Odin process still excludes a newly upgraded one. New
-        // games are namespaced to allow same-named instances to coexist.
-        let filename = match game {
-            GameId::Valheim => format!("{name}.lifecycle.lock"),
-            _ => format!("{}-{name}.lifecycle.lock", game.as_str()),
-        };
-        let path = lock_dir.join(filename);
+        let path = lock_dir.join(lock_filename(paths, game, name));
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -53,6 +48,25 @@ impl LifecycleLock {
                 .with_context(|| format!("failed to lock lifecycle file {}", path.display())),
         }
     }
+}
+
+/// Derives a fixed-format filename so even a future caller that bypasses the
+/// instance-name validator cannot turn a lifecycle lock into a path escape.
+/// The data root and game id keep independent Odin installations and
+/// same-named instances in separate lock domains.
+fn lock_filename(paths: &Paths, game: GameId, name: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(paths.data_dir.to_string_lossy().as_bytes());
+    digest.update([0]);
+    digest.update(game.as_str());
+    digest.update([0]);
+    digest.update(name.as_bytes());
+    let mut filename = String::with_capacity(64 + ".lifecycle.lock".len());
+    for byte in digest.finalize() {
+        write!(filename, "{byte:02x}").expect("writing a lock filename to String cannot fail");
+    }
+    filename.push_str(".lifecycle.lock");
+    filename
 }
 
 /// The single canonical liveness check: a live `(pid, pid_started_at)`
@@ -319,5 +333,20 @@ mod tests {
         let _valheim = LifecycleLock::acquire(&paths, GameId::Valheim, "shared").unwrap();
 
         LifecycleLock::acquire(&paths, GameId::Rust, "shared").unwrap();
+    }
+
+    #[test]
+    fn lock_filename_is_a_safe_game_scoped_file_name() {
+        let paths = temp_paths("filename");
+        let valheim = lock_filename(&paths, GameId::Valheim, "shared");
+        let rust = lock_filename(&paths, GameId::Rust, "shared");
+
+        assert_ne!(valheim, rust);
+        assert!(valheim.ends_with(".lifecycle.lock"));
+        assert!(
+            valheim
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.')
+        );
     }
 }

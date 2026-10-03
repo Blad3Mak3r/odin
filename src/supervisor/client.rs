@@ -16,6 +16,7 @@ use tokio::process::Command;
 #[cfg(test)]
 use super::protocol::PROTOCOL_VERSION;
 use super::protocol::{Event, MAX_FRAME_BYTES, Request, Response, read_frame, write_frame};
+use crate::cli::validate_instance_name;
 use crate::paths::Paths;
 
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
@@ -32,6 +33,9 @@ const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// dropped immediately; like the Valheim child today, `kill_on_drop`
 /// defaults to `false`, so this does not kill the supervisor.
 pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
+    validate_instance_name(instance_name)
+        .map_err(|error| anyhow::anyhow!("invalid instance name for supervisor: {error}"))?;
+
     let exe = std::env::current_exe().context("failed to resolve odin's own executable path")?;
 
     let log_path =
@@ -302,6 +306,23 @@ mod tests {
             data_dir: dir.clone(),
             config_dir: dir,
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_detached_rejects_invalid_instance_name_before_creating_files() {
+        let paths = temp_paths("invalid-spawn");
+
+        let error = spawn_detached(&paths, "server;touch-owned")
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid instance name for supervisor")
+        );
+        assert!(!paths.data_dir.join("servers").exists());
+        std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 
     /// Binds a Unix socket at `path`, removing any file a previous, crashed

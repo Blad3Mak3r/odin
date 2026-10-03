@@ -62,6 +62,8 @@ function asRustConfig(config: Record<string, unknown>): RustConfig | null {
 
 function RustConfigForm({ name, config, running }: { name: string; config: RustConfig; running: boolean }) {
   const update = useUpdateRustConfig()
+  const [port, setPort] = useState(String(config.port))
+  const [queryPort, setQueryPort] = useState(String(config.queryPort))
   const [hostname, setHostname] = useState(config.hostname)
   const [level, setLevel] = useState(config.level)
   const [seed, setSeed] = useState(config.seed)
@@ -73,6 +75,8 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
     {
       name,
       request: {
+        port: Number(port),
+        query_port: Number(queryPort),
         hostname,
         level,
         seed,
@@ -92,11 +96,17 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault()
+        if (Number(port) === Number(queryPort)) {
+          toast.error('Game and query ports must be different')
+          return
+        }
         save()
       }}
     >
       {running && <p className="text-sm text-muted-foreground">Stop this Rust server before changing its configuration.</p>}
       <div className="grid gap-4 sm:grid-cols-2">
+        <ConfigInput id="rust-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />
+        <ConfigInput id="rust-query-port" label="Query port" type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />
         <ConfigInput id="rust-hostname" label="Hostname" value={hostname} disabled={running} onChange={setHostname} />
         <ConfigInput id="rust-level" label="Map" value={level} disabled={running} onChange={setLevel} />
         <ConfigInput id="rust-seed" label="Seed" type="number" value={seed} disabled={running} onChange={(value) => setSeed(Number(value))} />
@@ -110,13 +120,13 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
         </div>
         <Switch id="rust-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} />
       </div>
-      <p className="text-sm text-muted-foreground">Ports are allocated by Odin: game {config.port}, query {config.queryPort}.</p>
+      <p className="text-sm text-muted-foreground">Choose different game and query ports between 1 and 65535. Make sure both ports are available and allowed through your firewall.</p>
       <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save configuration</Button>
     </form>
   )
 }
 
-function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min }: {
+function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min, max }: {
   id: string
   label: string
   type?: 'text' | 'number'
@@ -124,11 +134,12 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min 
   disabled: boolean
   onChange: (value: string) => void
   min?: number
+  max?: number
 }) {
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
-      <Input id={id} type={type} min={min} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <Input id={id} type={type} min={min} max={max} required value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
     </div>
   )
 }

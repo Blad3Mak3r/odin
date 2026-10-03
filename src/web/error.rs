@@ -57,7 +57,12 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         Some(SaveFileError::NotFound(_)) => return StatusCode::NOT_FOUND,
         None => {}
     }
-    if err.downcast_ref::<ListsError>().is_some() || err.downcast_ref::<BadRequest>().is_some() {
+    if err.downcast_ref::<ListsError>().is_some()
+        || err.downcast_ref::<BadRequest>().is_some()
+        || err
+            .downcast_ref::<crate::db::game_instances::InvalidRustConfig>()
+            .is_some()
+    {
         return StatusCode::BAD_REQUEST;
     }
     match err.downcast_ref::<ConfigFileError>() {

@@ -32,6 +32,10 @@ pub struct RustInstanceConfig {
     pub auto_restart: bool,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidRustConfig(pub String);
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RustInstance {
     #[serde(flatten)]
@@ -159,19 +163,28 @@ pub fn update_rust_config(
 ) -> Result<RustInstance> {
     let instance = load_rust(db, name)?.context("Rust instance not found")?;
     if instance.is_running() {
-        bail!("stop Rust instance '{name}' before changing its configuration");
+        bail!(crate::instance::InstanceError::AlreadyRunning(name.into()));
+    }
+    if config.port == 0 || config.query_port == 0 || config.port == config.query_port {
+        bail!(InvalidRustConfig(
+            "Rust game and query ports must be different and between 1 and 65535".into()
+        ));
     }
     if config.hostname.trim().is_empty() || config.level.trim().is_empty() {
-        bail!("Rust hostname and level cannot be empty");
+        bail!(InvalidRustConfig(
+            "Rust hostname and level cannot be empty".into()
+        ));
     }
     if config.world_size == 0 || config.max_players == 0 {
-        bail!("Rust world size and max players must be greater than zero");
+        bail!(InvalidRustConfig(
+            "Rust world size and max players must be greater than zero".into()
+        ));
     }
 
     db.conn().execute(
-        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6, auto_restart = ?7 \
+        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6, auto_restart = ?7, port = ?8, query_port = ?9 \
          WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
-        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
+        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart, config.port, config.query_port],
     )?;
     load_rust(db, name)?.context("Rust instance disappeared while updating configuration")
 }
@@ -214,7 +227,7 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
 
     // Valheim occupies the block declared by its compiled driver.
     // Rust owns both its game and query ports, which may not be consecutive
-    // after future configuration changes, so reserve their recorded values.
+    // after configuration changes, so reserve their recorded values.
     let mut valheim_ports = conn.prepare("SELECT port FROM instances")?;
     for port in valheim_ports
         .query_map([], |row| row.get::<_, u16>(0))?
@@ -356,18 +369,24 @@ mod tests {
         let instance = create_rust(&paths, &db, "rust-server").unwrap();
         assert!(!instance.config.auto_restart);
         let config = RustInstanceConfig {
+            port: 29000,
+            query_port: 30000,
             hostname: "Rust Server".to_string(),
             level: "Barren".to_string(),
             seed: 42,
             world_size: 4000,
             max_players: 100,
             auto_restart: true,
-            ..instance.config
         };
 
         let updated = update_rust_config(&db, "rust-server", &config).unwrap();
 
         assert_eq!(updated.config.hostname, "Rust Server");
+        assert_eq!(updated.config.port, 29000);
+        assert_eq!(updated.config.query_port, 30000);
+        assert_eq!(updated.config.level, "Barren");
+        assert_eq!(updated.config.seed, 42);
+        assert_eq!(updated.config.world_size, 4000);
         assert_eq!(updated.config.max_players, 100);
         assert!(updated.config.auto_restart);
 
@@ -387,5 +406,22 @@ mod tests {
         assert_eq!(rust.config.query_port, 28020);
 
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn port_allocation_reserves_independently_edited_rust_ports() {
+        let (paths, db) = temp_context("edited-ports");
+        let instance = create_rust(&paths, &db, "first").unwrap();
+        let config = RustInstanceConfig {
+            port: 28018,
+            query_port: 28015,
+            ..instance.config
+        };
+        update_rust_config(&db, "first", &config).unwrap();
+
+        let second = create_rust(&paths, &db, "second").unwrap();
+        assert_eq!(second.config.port, 28019);
+        assert_eq!(second.config.query_port, 28020);
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 }

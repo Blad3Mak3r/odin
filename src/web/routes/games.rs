@@ -49,6 +49,8 @@ pub struct DeleteGameInstanceQuery {
 
 #[derive(Deserialize)]
 pub struct RustConfigUpdateRequest {
+    pub port: Option<u16>,
+    pub query_port: Option<u16>,
     pub hostname: Option<String>,
     pub level: Option<String>,
     pub seed: Option<u32>,
@@ -233,10 +235,18 @@ pub async fn update_rust_config(
     Json(request): Json<RustConfigUpdateRequest>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let db = state.db.clone();
+    let paths = state.paths.clone();
     let view = run_blocking(move || {
+        let _lock = lifecycle::LifecycleLock::acquire(&paths, GameId::Rust, &name)?;
         let instance =
             game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
         let mut config = instance.config;
+        if let Some(port) = request.port {
+            config.port = port;
+        }
+        if let Some(query_port) = request.query_port {
+            config.query_port = query_port;
+        }
         if let Some(hostname) = request.hostname {
             config.hostname = hostname;
         }

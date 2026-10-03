@@ -18,3 +18,18 @@ pub async fn get_instance_players(
     run_blocking(move || Instance::load_existing(&paths, &db, &load_name)).await?;
     Ok(Json(state.players.snapshot(&name)))
 }
+
+pub async fn get_player_history(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Vec<crate::db::player_sessions::PlayerSession>>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let load_name = name.clone();
+    run_blocking(move || {
+        Instance::load_existing(&paths, &db, &load_name)?;
+        crate::db::player_sessions::recent(&db, &load_name, 200)
+    })
+    .await
+    .map(Json)
+}

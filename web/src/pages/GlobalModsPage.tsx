@@ -28,7 +28,7 @@ import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
 import {
   useAddMod,
   useGlobalMods,
-  useInstances,
+  useManagedInstances,
   usePruneMod,
   usePruneModVersion,
   useRemoveMod,
@@ -50,10 +50,13 @@ function isModSource(value: string | undefined): value is ModSource {
 }
 
 export function GlobalModsPage() {
-  const instances = useInstances()
+  const instances = useManagedInstances()
   const navigate = useNavigate()
   const { '*': tabPath } = useParams<{ '*': string }>()
-  const instanceNames = useMemo(() => instances.data?.map((i) => i.name) ?? [], [instances.data])
+  const instanceNames = useMemo(
+    () => instances.data?.filter((instance) => instance.game === 'valheim').map((instance) => instance.name) ?? [],
+    [instances.data],
+  )
   const [tab, source, ...rest] = tabPath?.split('/').filter(Boolean) ?? []
   const activeSource = isModSource(source) ? source : null
 

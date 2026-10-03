@@ -122,7 +122,7 @@ async fn spawn_child(
     paths: &Paths,
     instance_name: &str,
 ) -> Result<SpawnedChild> {
-    let cmd = process::build_command(instance, paths)?;
+    let cmd = crate::game::valheim::build_command(instance, paths)?;
     let child = process::spawn(cmd)
         .await
         .with_context(|| format!("failed to start instance '{instance_name}'"))?;
@@ -584,14 +584,16 @@ fn apply_player_event(
             if players.iter().any(|p| p.peer == peer) {
                 return None;
             }
+            let steam_id = crate::player_events::steam_id_from_peer(&peer);
             players.push(TrackedPlayer {
-                peer,
+                peer: peer.clone(),
                 info: PlayerInfo {
                     name: name.clone(),
+                    steam_id: steam_id.clone(),
                     connected_at: Utc::now(),
                 },
             });
-            Some(Event::PlayerJoined { name })
+            Some(Event::PlayerJoined { name, steam_id })
         }
         PlayerEvent::Left { peer } => {
             let index = players.iter().position(|p| p.peer == peer)?;
@@ -689,7 +691,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
             {
-                Event::PlayerJoined { name } => {
+                Event::PlayerJoined { name, .. } => {
                     assert_eq!(name, "Bjorn");
                     saw_joined = true;
                 }

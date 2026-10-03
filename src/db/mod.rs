@@ -23,6 +23,7 @@ pub mod instances;
 pub mod jobs;
 pub mod lists;
 mod migrations;
+pub mod player_sessions;
 pub mod resource_samples;
 pub mod settings;
 pub mod webhooks;

@@ -69,7 +69,11 @@ pub async fn create_instance(
     let activity = state.activity.clone();
     let name = req.name.clone();
     let created = run_blocking(move || {
-        let instance = Instance::create(&paths, &db, &req.name)?;
+        let crate::game::instances::GameInstance::Valheim(instance) =
+            crate::game::instances::create(&paths, &db, crate::game::GameId::Valheim, &req.name)?
+        else {
+            unreachable!("Valheim creation returned a different game")
+        };
         activity.record(ActivityKind::InstanceCreated, Some(name));
         Ok(instance)
     })

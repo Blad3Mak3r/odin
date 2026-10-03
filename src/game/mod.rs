@@ -6,8 +6,11 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+pub mod instances;
+pub mod ports;
 pub mod rust;
 pub mod update;
+pub mod valheim;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,12 +55,23 @@ pub struct GameCapabilities {
     pub readiness: bool,
 }
 
+/// Ports claimed by one default instance of a game. This belongs to the
+/// compiled driver because it is part of the server's launch contract, not
+/// an Odin-wide convention.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct GamePortRequirements {
+    pub count: u16,
+}
+
+/// A statically compiled game module. Runtime-installed modules are
+/// intentionally out of scope: both supported games ship with Odin.
 pub trait GameDriver: Sync {
     fn id(&self) -> GameId;
     fn display_name(&self) -> &'static str;
     fn steam_app_id(&self) -> &'static str;
     fn server_binary(&self) -> &'static str;
     fn capabilities(&self) -> GameCapabilities;
+    fn port_requirements(&self) -> GamePortRequirements;
 }
 
 struct ValheimDriver;
@@ -89,6 +103,10 @@ impl GameDriver for ValheimDriver {
             readiness: true,
         }
     }
+
+    fn port_requirements(&self) -> GamePortRequirements {
+        GamePortRequirements { count: 3 }
+    }
 }
 
 impl GameDriver for RustDriver {
@@ -116,6 +134,10 @@ impl GameDriver for RustDriver {
             access_lists: false,
             readiness: false,
         }
+    }
+
+    fn port_requirements(&self) -> GamePortRequirements {
+        GamePortRequirements { count: 2 }
     }
 }
 

@@ -9,10 +9,11 @@ import { LogsTab } from '@/components/instance/LogsTab'
 import { ModsTab } from '@/components/instance/ModsTab'
 import { PlayersTab } from '@/components/instance/PlayersTab'
 import { ResourcesTab } from '@/components/instance/ResourcesTab'
+import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useInstance } from '@/lib/queries'
 
-const INSTANCE_TABS = ['logs', 'config', 'mods', 'lists', 'backups', 'resources', 'players'] as const
+const INSTANCE_TABS = ['logs', 'config', 'mods', 'lists', 'backups', 'saves', 'resources', 'players'] as const
 type InstanceTab = (typeof INSTANCE_TABS)[number]
 
 function isInstanceTab(value: string | undefined): value is InstanceTab {
@@ -20,14 +21,14 @@ function isInstanceTab(value: string | undefined): value is InstanceTab {
 }
 
 export function InstanceDetailPage() {
-  const { name, '*': tabPath } = useParams<{ name: string; '*': string }>()
+  const { game, name, '*': tabPath } = useParams<{ game?: string; name: string; '*': string }>()
   const navigate = useNavigate()
   const [deleteOpen, setDeleteOpen] = useState(false)
   const instance = useInstance(name ?? '')
 
   if (!name) return null
 
-  const basePath = `/instances/${name}`
+  const basePath = game === 'valheim' ? `/instances/valheim/${name}` : `/instances/${name}`
   const segments = tabPath?.split('/').filter(Boolean) ?? []
   const [tab, ...nestedPath] = segments
 
@@ -69,6 +70,7 @@ export function InstanceDetailPage() {
             <TabsTrigger value="mods">Mods</TabsTrigger>
             <TabsTrigger value="lists">Access lists</TabsTrigger>
             <TabsTrigger value="backups">Backups</TabsTrigger>
+            <TabsTrigger value="saves">Save files</TabsTrigger>
             <TabsTrigger value="resources">Resources</TabsTrigger>
             <TabsTrigger value="players">Players</TabsTrigger>
           </TabsList>
@@ -101,6 +103,11 @@ export function InstanceDetailPage() {
         {tab === 'resources' && (
           <TabsContent value="resources">
             <ResourcesTab name={name} running={instance.data?.running ?? false} />
+          </TabsContent>
+        )}
+        {tab === 'saves' && (
+          <TabsContent value="saves">
+            <SaveFilesTab game="valheim" name={name} />
           </TabsContent>
         )}
         {tab === 'players' && (

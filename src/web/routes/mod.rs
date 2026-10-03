@@ -15,6 +15,7 @@ pub mod mods;
 pub mod nexus;
 pub mod players;
 pub mod resources;
+pub mod saves;
 pub mod settings;
 pub mod version;
 pub mod webhooks;

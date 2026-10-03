@@ -50,9 +50,10 @@ pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
         .context("failed to duplicate supervisor.log handle for stderr")?;
 
     let mut cmd = Command::new(exe);
+    // Keep the untrusted value out of argv entirely. Clap validates this
+    // internal hand-off with the same instance-name parser in the child.
     cmd.arg("run")
-        .arg("--instance")
-        .arg(instance_name)
+        .env("ODIN_SUPERVISOR_INSTANCE", instance_name)
         .process_group(0)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout_file))

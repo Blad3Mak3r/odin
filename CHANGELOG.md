@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-03
+
+### What's Changed
+- Allow editing all existing Rust settings, including ports by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/83
+- fix: prevent Valheim instance route redirect loop by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/84
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.12.0...v0.12.1
+
 ## [0.12.0] - 2026-10-03
 
 ### What's Changed

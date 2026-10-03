@@ -1,4 +1,4 @@
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { SteamIdListEditor } from '@/components/instance/SteamIdListEditor'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
@@ -11,9 +11,8 @@ function isListTab(value: string | undefined): value is ListTab {
 
 export function AccessListsTab({ name, path }: { name: string; path: string[] }) {
   const navigate = useNavigate()
-  const { game } = useParams<{ game?: string }>()
   const [tab, ...rest] = path
-  const basePath = `${game === 'valheim' ? `/instances/valheim/${name}` : `/instances/${name}`}/lists`
+  const basePath = `/instances/valheim/${name}/lists`
 
   if (!isListTab(tab) || rest.length > 0) return <Navigate to={`${basePath}/admin`} replace />
 

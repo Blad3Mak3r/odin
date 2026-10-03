@@ -21,14 +21,18 @@ function isInstanceTab(value: string | undefined): value is InstanceTab {
 }
 
 export function InstanceDetailPage() {
-  const { game, name, '*': tabPath } = useParams<{ game?: string; name: string; '*': string }>()
+  const { name, '*': tabPath } = useParams<{ name: string; '*': string }>()
   const navigate = useNavigate()
   const [deleteOpen, setDeleteOpen] = useState(false)
   const instance = useInstance(name ?? '')
 
   if (!name) return null
 
-  const basePath = game === 'valheim' ? `/instances/valheim/${name}` : `/instances/${name}`
+  // This page exclusively handles Valheim. The generic `:game` route is
+  // rendered by ManagedInstanceDetailPage, so always keep navigation on the
+  // canonical Valheim URL. Falling back to `/instances/:name` would trigger
+  // the legacy redirect and loop indefinitely.
+  const basePath = `/instances/valheim/${name}`
   const segments = tabPath?.split('/').filter(Boolean) ?? []
   const [tab, ...nestedPath] = segments
 

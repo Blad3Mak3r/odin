@@ -1,7 +1,7 @@
 import { Download, Loader2 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { JobProgress } from '@/components/JobProgress'
 import { ModIcon } from '@/components/ModIcon'
@@ -57,9 +57,8 @@ function isModSource(value: string | undefined): value is ModSource {
 
 export function ModsTab({ name, running, path }: { name: string; running: boolean; path: string[] }) {
   const navigate = useNavigate()
-  const { game } = useParams<{ game?: string }>()
   const [tab, source, ...rest] = path
-  const basePath = `${game === 'valheim' ? `/instances/valheim/${name}` : `/instances/${name}`}/mods`
+  const basePath = `/instances/valheim/${name}/mods`
   const activeSource = isModSource(source) ? source : null
 
   if (!isModTab(tab) || rest.length > 0 || (tab === 'installed' && source)) {
@@ -380,7 +379,6 @@ function VersionDialog({
 function ModInstallSearch({ name, running, source }: { name: string; running: boolean; source: ModSource }) {
   const addMod = useAddMod()
   const navigate = useNavigate()
-  const { game } = useParams<{ game?: string }>()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
 
@@ -398,7 +396,7 @@ function ModInstallSearch({ name, running, source }: { name: string; running: bo
       <Tabs
         value={source}
         onValueChange={(value) =>
-          navigate(`${game === 'valheim' ? `/instances/valheim/${name}` : `/instances/${name}`}/mods/marketplace/${value}`)
+          navigate(`/instances/valheim/${name}/mods/marketplace/${value}`)
         }
       >
         <TabsList variant="line">

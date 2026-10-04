@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-10-04
+
+### What's Changed
+- feature: schedule server operating hours by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/91
+- feature: configure Rust RCON by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/92
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.12.5...v0.12.6
+
 ## [0.12.5] - 2026-10-04
 
 ### What's Changed

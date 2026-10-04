@@ -2,6 +2,7 @@ import { ArrowLeft, Copy, Eye, EyeOff, Loader2, Pencil, Trash2 } from 'lucide-re
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { GameIcon } from '@/components/GameIcon'
 import { PlayersBadge } from '@/components/PlayersBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -61,6 +62,7 @@ export function InstanceHeader({
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
+          <GameIcon game="valheim" className="size-9 rounded-md" />
           <div className="flex flex-col">
             <h1 className="text-2xl font-semibold tracking-tight">{instance?.name ?? '…'}</h1>
             {instance && (

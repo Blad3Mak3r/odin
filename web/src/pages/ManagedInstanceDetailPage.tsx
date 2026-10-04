@@ -1,5 +1,6 @@
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
+import { GameIcon } from '@/components/GameIcon'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -182,7 +183,7 @@ export function ManagedInstanceDetailPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={detail.name}
+        title={<span className="flex items-center gap-3"><GameIcon game={detail.game} className="size-9 rounded-md" />{detail.name}</span>}
         description={`${detail.game} server`}
         action={
           <div className="flex gap-2"><ManageInstanceDialog instance={detail} onNavigate={navigate} />

@@ -3,6 +3,7 @@ import { api } from '@/lib/api-client'
 import { formatBytes } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
+import { GameIcon } from '@/components/GameIcon'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -50,8 +51,8 @@ export function MultiGameInstancesPage() {
       />
       <ToggleGroup value={[filter]} onValueChange={(value) => value[0] && setFilter(value[0] as Filter)} variant="outline" size="sm">
         <ToggleGroupItem value="all">All</ToggleGroupItem>
-        <ToggleGroupItem value="valheim">Valheim</ToggleGroupItem>
-        <ToggleGroupItem value="rust">Rust</ToggleGroupItem>
+        <ToggleGroupItem value="valheim"><GameIcon game="valheim" />Valheim</ToggleGroupItem>
+        <ToggleGroupItem value="rust"><GameIcon game="rust" />Rust</ToggleGroupItem>
       </ToggleGroup>
       {games.isError && <QueryError error={games.error} />}
       {games.data && (
@@ -117,7 +118,7 @@ export function GameInstallCard({ game }: { game: GameView }) {
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <div>
-          <CardTitle className="text-base">{game.name}</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-base"><GameIcon game={game.id} className="size-7 rounded-md" />{game.name}</CardTitle>
           <CardDescription>Steam App ID {game.steam_app_id}</CardDescription>
         </div>
         <Button
@@ -156,7 +157,7 @@ function ManagedInstanceRow({ instance, selected, onToggle }: { instance: Manage
     <TableRow>
       <TableCell><Checkbox aria-label={`Select ${instance.game} / ${instance.name}`} checked={selected} onCheckedChange={onToggle} /></TableCell>
       <TableCell className="font-medium"><Link className="hover:underline" to={`/instances/${instance.game}/${instance.name}`}>{instance.name}</Link><div className="flex flex-wrap gap-1">{instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div></TableCell>
-      <TableCell><Badge variant="secondary">{instance.game}</Badge></TableCell>
+      <TableCell><Badge variant="secondary"><GameIcon game={instance.game} className="size-4 rounded-sm" />{instance.game}</Badge></TableCell>
       <TableCell><Badge variant={instance.running ? 'default' : 'secondary'}>{instance.running ? 'running' : 'stopped'}</Badge></TableCell>
       <TableCell className="hidden sm:table-cell">{port}</TableCell>
       <TableCell className="hidden lg:table-cell">{instance.running && resources.data ? `${resources.data.cpu_percent.toFixed(0)}% · ${formatBytes(resources.data.memory_bytes)}` : '—'}</TableCell>
@@ -195,8 +196,8 @@ function CreateManagedInstanceDialog() {
           <Field>
             <FieldLabel>Game</FieldLabel>
             <ToggleGroup value={[game]} onValueChange={(value) => value[0] && setGame(value[0] as GameId)} variant="outline" spacing={0}>
-              <ToggleGroupItem value="valheim">Valheim</ToggleGroupItem>
-              <ToggleGroupItem value="rust">Rust</ToggleGroupItem>
+              <ToggleGroupItem value="valheim"><GameIcon game="valheim" />Valheim</ToggleGroupItem>
+              <ToggleGroupItem value="rust"><GameIcon game="rust" />Rust</ToggleGroupItem>
             </ToggleGroup>
           </Field>
           <Field>

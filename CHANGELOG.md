@@ -4,6 +4,16 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-10-04
+
+### What's Changed
+- Fix live Rust log following and add error view by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/87
+- Align Rust instance dashboard with Valheim by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/88
+- feature: add Rust map wipe actions by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/89
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.12.3...v0.12.4
+
 ## [0.12.3] - 2026-10-04
 
 ### What's Changed

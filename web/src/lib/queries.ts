@@ -41,6 +41,8 @@ import type {
   RustConfigUpdateRequest,
   SaveFileEntry,
   SettingsView,
+  UptimeScheduleRequest,
+  UptimeScheduleView,
   VersionView,
   WebhookView,
 } from './types'
@@ -277,6 +279,23 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
     },
+  })
+}
+
+export function useUptimeSchedule(game: GameId, name: string) {
+  return useQuery({
+    queryKey: ['managed-instances', game, name, 'uptime-schedule'],
+    queryFn: () => api.get<UptimeScheduleView>(`/games/${game}/instances/${name}/uptime-schedule`),
+    enabled: Boolean(name),
+  })
+}
+
+export function useSetUptimeSchedule(game: GameId, name: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (schedule: UptimeScheduleRequest) =>
+      api.put<UptimeScheduleView>(`/games/${game}/instances/${name}/uptime-schedule`, schedule),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'uptime-schedule'] }),
   })
 }
 

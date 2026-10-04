@@ -12,6 +12,10 @@ export function describeJobKind(kind: JobKindDescr): string {
       return `Back up ${kind.game} / ${kind.instance}`
     case 'backup_restore':
       return `Restore ${kind.game} / ${kind.instance} from backup ${kind.backup_id}`
+    case 'map_wipe':
+      return `Wipe map for Rust / ${kind.instance}`
+    case 'full_wipe':
+      return `Fully wipe Rust / ${kind.instance}`
     case 'bepinex_update':
       return `Update BepInEx on ${kind.instance}: ${kind.from_version ?? 'unknown'} → ${kind.to_version}`
     default:

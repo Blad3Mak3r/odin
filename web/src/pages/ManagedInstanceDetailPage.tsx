@@ -1,4 +1,5 @@
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
+import { WipeMapCard } from '@/components/instance/WipeMapCard'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -194,10 +195,11 @@ export function ManagedInstanceDetailPage() {
             </CardContent>
           </Card>
         </TabsContent>
-        <TabsContent value="config">
+        <TabsContent value="config" className="flex flex-col gap-6">
           {rustConfig
             ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
             : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
+          {detail.game === 'rust' && <WipeMapCard name={detail.name} running={detail.running} />}
         </TabsContent>
         {detail.capabilities.backups && (
           <TabsContent value="backups"><BackupsTab name={detail.name} game={detail.game} running={detail.running} /></TabsContent>

@@ -171,6 +171,8 @@ export type JobKindDescr =
   | { kind: 'mod_upload'; instance: string; name: string }
   | { kind: 'backup_create'; game: GameId; instance: string }
   | { kind: 'backup_restore'; game: GameId; instance: string; backup_id: string }
+  | { kind: 'map_wipe'; instance: string }
+  | { kind: 'full_wipe'; instance: string }
   | { kind: 'bepinex_update'; instance: string; from_version: string | null; to_version: string }
 
 export interface GlobalModInstanceEntry {
@@ -327,6 +329,8 @@ export type ActivityKind =
   | { kind: 'backup_created'; backup_id: string }
   | { kind: 'backup_restored'; backup_id: string }
   | { kind: 'backup_pruned'; backup_id: string }
+  | { kind: 'map_wiped' }
+  | { kind: 'full_wiped' }
   | { kind: 'player_joined'; name: string }
   | { kind: 'player_left'; name: string }
 

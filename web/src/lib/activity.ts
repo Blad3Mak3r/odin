@@ -51,6 +51,10 @@ export function describeActivity(kind: ActivityKind, game: GameId): string {
       return `Restored from backup: ${kind.backup_id}`
     case 'backup_pruned':
       return `Old backup pruned: ${kind.backup_id}`
+    case 'map_wiped':
+      return 'Map wiped'
+    case 'full_wiped':
+      return 'Full wipe completed'
     case 'player_joined':
       return `${kind.name} joined`
     case 'player_left':
@@ -77,6 +81,8 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind['kind'], string> = {
   backup_created: 'Backup created',
   backup_restored: 'Backup restored',
   backup_pruned: 'Old backup pruned',
+  map_wiped: 'Map wiped',
+  full_wiped: 'Full wipe completed',
   player_joined: 'Player joined',
   player_left: 'Player left',
 }
@@ -97,6 +103,8 @@ export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   backup_created: Archive,
   backup_restored: ArchiveRestore,
   backup_pruned: ArchiveX,
+  map_wiped: ArchiveX,
+  full_wiped: ArchiveX,
   player_joined: UserPlus,
   player_left: UserMinus,
 }

@@ -128,6 +128,8 @@ fn describe(event: &ActivityEvent) -> String {
         ActivityKind::BackupPruned { backup_id } => {
             format!("🧹 Old backup pruned for **{instance}**: {backup_id}")
         }
+        ActivityKind::MapWiped => format!("💥 Map wiped for **{instance}**"),
+        ActivityKind::FullWiped => format!("💥 Full wipe completed for **{instance}**"),
         ActivityKind::PlayerJoined { name } => format!("👋 {name} joined **{instance}**"),
         ActivityKind::PlayerLeft { name } => format!("👋 {name} left **{instance}**"),
     }

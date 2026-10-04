@@ -53,6 +53,14 @@ pub fn build_router(state: AppState) -> Router {
             put(games::update_rust_config),
         )
         .route(
+            "/games/rust/instances/{name}/wipe-map",
+            post(games::wipe_rust_map),
+        )
+        .route(
+            "/games/rust/instances/{name}/full-wipe",
+            post(games::full_wipe_rust),
+        )
+        .route(
             "/games/rust/instances/{name}/lists/{kind}",
             get(rust_access_lists::get_list)
                 .put(rust_access_lists::set_list)
@@ -602,6 +610,89 @@ mod tests {
                 .port,
             29000
         );
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rust_wipe_map_route_requires_confirmation_and_records_activity() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-rust-wipe-map-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let source = crate::game::rust::backup_source(&paths, &instance);
+        std::fs::create_dir_all(&source).unwrap();
+        let save = source.join("world.sav");
+        std::fs::write(&save, "world").unwrap();
+
+        let state = AppState::new(paths.clone(), db);
+        let app = build_router(state.clone());
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/games/rust/instances/rusty/wipe-map")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"confirmation":"wrong"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        assert!(save.is_file());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/games/rust/instances/rusty/wipe-map")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"confirmation":"rusty"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let job_id = serde_json::from_slice::<serde_json::Value>(&body).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let status = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let snapshot = state.jobs.get(&job_id).unwrap();
+                if !matches!(
+                    snapshot.status,
+                    crate::web::jobs::JobStatus::Queued | crate::web::jobs::JobStatus::Running
+                ) {
+                    return snapshot.status;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("wipe job should finish");
+        assert!(
+            matches!(status, crate::web::jobs::JobStatus::Succeeded),
+            "wipe job failed: {status:?}"
+        );
+        assert!(!save.exists());
+        assert!(state.activity.subscribe().0.into_iter().any(|event| {
+            matches!(event.kind, crate::activity::ActivityKind::MapWiped)
+                && event.instance.as_deref() == Some("rusty")
+        }));
+
         std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 

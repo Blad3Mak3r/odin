@@ -453,6 +453,10 @@ Each Valheim instance's game binaries are a symlink into one shared,
 SteamCMD-managed install — so every Valheim instance always runs the same
 game version, and updating is a single `odin install` rather than one
 download per server. Rust uses its own isolated install under `games/rust/`.
+All Rust instances run that same installation with distinct `server.identity`
+values. Odin also maintains `$HOME/.steam/sdk64/steamclient.so` as a hardlink
+to SteamCMD's 64-bit client library (or a symlink when the paths cross
+filesystems), repairing it before every Rust start so Steamworks can initialize.
 Valheim mods are versioned: `odin mods add` downloads each `(mod, version)`
 once into the shared `mods/` store, and every enabled instance symlinks to
 its exact version. Updating one instance creates or reuses the newer payload

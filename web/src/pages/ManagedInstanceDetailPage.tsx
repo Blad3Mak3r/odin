@@ -7,7 +7,9 @@ import { toast } from 'sonner'
 import { ManagedInstanceHeader } from '@/components/instance/ManagedInstanceHeader'
 import { ManagedLogsTab } from '@/components/instance/ManagedLogsTab'
 import { ManagedResourcesTab } from '@/components/instance/ManagedResourcesTab'
+import { LiveLogOutput } from '@/components/instance/LiveLogOutput'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -15,9 +17,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { QueryError } from '@/components/QueryError'
 import {
   useManagedInstance,
+  useManagedInstanceLogs,
   useUpdateRustConfig,
 } from '@/lib/queries'
 import type { GameId } from '@/lib/types'
+import { useLogSocket } from '@/hooks/useLogSocket'
+
+function isConsoleError(line: string) {
+  return /(?:^|\W)(?:error|exception|fatal|assertion failed|stack trace)(?:\W|$)/i.test(line)
+}
 
 function isGameId(value: string | undefined): value is GameId {
   return value === 'valheim' || value === 'rust'
@@ -140,6 +148,10 @@ export function ManagedInstanceDetailPage() {
   const navigate = useNavigate()
   const gameId = isGameId(game) ? game : 'valheim'
   const instance = useManagedInstance(gameId, name ?? '')
+  const logs = useManagedInstanceLogs(gameId, name ?? '')
+  const liveLogs = useLogSocket(name ?? '', gameId)
+  const consoleLines = liveLogs.lines.length > 0 ? liveLogs.lines : (logs.data?.lines ?? [])
+  const errorLines = consoleLines.filter(isConsoleError)
   if (!isGameId(game) || !name) return null
   if (instance.isError) return <QueryError error={instance.error} />
   if (!instance.data) return null
@@ -147,6 +159,7 @@ export function ManagedInstanceDetailPage() {
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
   const tabs = [
     { id: 'logs', label: 'Logs' },
+    { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
     ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
@@ -168,6 +181,19 @@ export function ManagedInstanceDetailPage() {
           </TabsList>
         </div>
         <TabsContent value="logs"><ManagedLogsTab game={detail.game} name={detail.name} /></TabsContent>
+        <TabsContent value="errors">
+          <Card>
+            <CardHeader>
+              <CardTitle>Errors</CardTitle>
+              <CardDescription>Console lines containing errors, exceptions, fatal failures, assertions, or stack traces.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {logs.isError
+                ? <QueryError error={logs.error} />
+                : <LiveLogOutput lines={errorLines} emptyMessage="No errors found in the available console output." />}
+            </CardContent>
+          </Card>
+        </TabsContent>
         <TabsContent value="config">
           {rustConfig
             ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />

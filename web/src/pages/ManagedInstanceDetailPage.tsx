@@ -1,5 +1,6 @@
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
+import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -199,6 +200,7 @@ export function ManagedInstanceDetailPage() {
           {rustConfig
             ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
             : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
+          <UptimeScheduleCard game={detail.game} name={detail.name} />
           {detail.game === 'rust' && <WipeMapCard name={detail.name} running={detail.running} />}
         </TabsContent>
         {detail.capabilities.backups && (

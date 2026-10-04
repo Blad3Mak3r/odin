@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useConfig, useUpdateConfig } from '@/lib/queries'
+import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
 import type { ConfigView } from '@/lib/types'
 
 const MIN_PORT = 1
@@ -34,7 +35,12 @@ export function ConfigTab({ name }: { name: string }) {
   // Keyed by instance name so switching instances mounts a fresh form
   // seeded from the newly loaded config, instead of syncing state in an
   // effect every time `config.data` changes (e.g. on refetch).
-  return <ConfigForm key={name} initial={config.data} updateConfig={updateConfig} />
+  return (
+    <div className="flex max-w-md flex-col gap-6">
+      <ConfigForm key={name} initial={config.data} updateConfig={updateConfig} />
+      <UptimeScheduleCard game="valheim" name={name} />
+    </div>
+  )
 }
 
 function ConfigForm({

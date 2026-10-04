@@ -213,6 +213,18 @@ export interface BackupScheduleView {
   last_run_at: string | null
 }
 
+export interface UptimeScheduleView {
+  enabled: boolean
+  start_time: string
+  stop_time: string
+}
+
+export interface UptimeScheduleRequest {
+  enabled: boolean
+  start_time: string
+  stop_time: string
+}
+
 export type BackupStorageProvider = 'aws_s3' | 'cloudflare_r2'
 
 export interface BackupStorageView {

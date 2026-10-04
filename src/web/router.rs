@@ -6,7 +6,7 @@ use tower_http::trace::TraceLayer;
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
     instances, jobs, lists, mods, nexus, players, resources, rust_access_lists, saves, settings,
-    version, webhooks,
+    uptime_schedules, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -26,6 +26,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/games", get(games::list_games))
         .route("/games/instances/bulk/{action}", post(bulk::bulk_games))
         .route("/games/{game}/instances/{name}/tags", put(games::set_tags))
+        .route(
+            "/games/{game}/instances/{name}/uptime-schedule",
+            get(uptime_schedules::get_uptime_schedule).put(uptime_schedules::set_uptime_schedule),
+        )
         .route(
             "/games/rust/instances/{name}/clone",
             post(games::clone_rust_instance),

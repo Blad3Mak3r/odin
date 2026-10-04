@@ -43,6 +43,7 @@ mime_guess = "2"
 sysinfo = "0.39"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect"] }
 async-stream = "0.3"
 regex = "1"
 rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }

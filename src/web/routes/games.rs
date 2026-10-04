@@ -66,6 +66,16 @@ pub struct WipeRustMapRequest {
     pub confirmation: String,
 }
 
+#[derive(Deserialize)]
+pub struct RconCommandRequest {
+    pub command: String,
+}
+
+#[derive(Serialize)]
+pub struct RconCommandResponse {
+    pub output: String,
+}
+
 pub async fn list_games() -> Json<Vec<GameView>> {
     Json(
         game::drivers()
@@ -287,6 +297,31 @@ pub async fn update_rust_config(
     })
     .await?;
     Ok(Json(view))
+}
+
+/// Sends one command to the Rust instance through its private loopback
+/// WebRCON connection. The browser never receives the RCON password.
+pub async fn execute_rust_rcon(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(request): Json<RconCommandRequest>,
+) -> ApiResult<Json<RconCommandResponse>> {
+    let command = request.command.trim();
+    if command.is_empty() {
+        return Err(BadRequest("Rust RCON command cannot be empty".to_string()).into());
+    }
+    if command.len() > 16 * 1024 {
+        return Err(BadRequest("Rust RCON command must be at most 16 KiB".to_string()).into());
+    }
+
+    let db = state.db.clone();
+    let name_for_load = name.clone();
+    let instance = run_blocking(move || {
+        game_instances::load_rust(&db, &name_for_load)?.context("Rust instance does not exist")
+    })
+    .await?;
+    let output = rust::rcon::execute(&instance, command).await?;
+    Ok(Json(RconCommandResponse { output }))
 }
 
 pub async fn wipe_rust_map(

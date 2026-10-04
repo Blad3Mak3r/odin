@@ -37,6 +37,7 @@ import type {
   PlayerInfo,
   PlayerSession,
   ResourceSample,
+  RconCommandResponse,
   RustAccessListKind,
   RustConfigUpdateRequest,
   SaveFileEntry,
@@ -320,6 +321,13 @@ export function useUpdateRustConfig() {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
     },
+  })
+}
+
+export function useExecuteRustRcon() {
+  return useMutation({
+    mutationFn: ({ name, command }: { name: string; command: string }) =>
+      api.post<RconCommandResponse>(`/games/rust/instances/${name}/rcon`, { command }),
   })
 }
 

@@ -1,6 +1,7 @@
 //! Rust Dedicated Server's Linux launch contract.
 
 pub mod access_lists;
+pub mod rcon;
 
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;

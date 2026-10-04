@@ -29,6 +29,11 @@ import type { GameId } from '@/lib/types'
 import { cn, formatBytes } from '@/lib/utils'
 import { useLogSocket } from '@/hooks/useLogSocket'
 import { buttonVariants } from '@/components/ui/button-variants'
+import { LiveLogOutput } from '@/components/instance/LiveLogOutput'
+
+function isConsoleError(line: string) {
+  return /(?:^|\W)(?:error|exception|fatal|assertion failed|stack trace)(?:\W|$)/i.test(line)
+}
 
 function isGameId(value: string | undefined): value is GameId {
   return value === 'valheim' || value === 'rust'
@@ -153,6 +158,8 @@ export function ManagedInstanceDetailPage() {
   const instance = useManagedInstance(gameId, name ?? '')
   const logs = useManagedInstanceLogs(gameId, name ?? '')
   const liveLogs = useLogSocket(name ?? '', gameId)
+  const consoleLines = liveLogs.lines.length > 0 ? liveLogs.lines : (logs.data?.lines ?? [])
+  const errorLines = consoleLines.filter(isConsoleError)
   const [resourceHours, setResourceHours] = useState<number | undefined>()
   const resources = useManagedRustResources(name ?? '', gameId === 'rust')
   const resourceHistory = useManagedRustResourceHistory(name ?? '', resourceHours, gameId === 'rust')
@@ -172,6 +179,7 @@ export function ManagedInstanceDetailPage() {
     ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     { id: 'saves', label: 'Save files' },
     { id: 'logs', label: 'Logs' },
+    { id: 'errors', label: 'Errors' },
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
   if (!tab || (tab !== 'lists' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
@@ -253,7 +261,16 @@ export function ManagedInstanceDetailPage() {
         <TabsContent value="logs">
           <Card>
             <CardHeader><CardTitle>Logs</CardTitle><CardDescription>{liveLogs.connected ? 'Live server log.' : 'Last 200 server log lines.'}</CardDescription></CardHeader>
-            <CardContent>{logs.isError ? <QueryError error={logs.error} /> : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{(liveLogs.lines.length > 0 ? liveLogs.lines : logs.data?.lines)?.join('\n') || 'No logs yet.'}</pre>}</CardContent>
+            <CardContent>{logs.isError ? <QueryError error={logs.error} /> : <LiveLogOutput lines={consoleLines} emptyMessage="No logs yet." />}</CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="errors">
+          <Card>
+            <CardHeader>
+              <CardTitle>Errors</CardTitle>
+              <CardDescription>Console lines containing errors, exceptions, fatal failures, assertions, or stack traces.</CardDescription>
+            </CardHeader>
+            <CardContent>{logs.isError ? <QueryError error={logs.error} /> : <LiveLogOutput lines={errorLines} emptyMessage="No errors found in the available console output." />}</CardContent>
           </Card>
         </TabsContent>
       </Tabs>

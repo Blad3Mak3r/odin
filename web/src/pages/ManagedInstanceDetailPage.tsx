@@ -1,16 +1,13 @@
-import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
-import { GameIcon } from '@/components/GameIcon'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { PageHeader } from '@/components/PageHeader'
-import { ResourceMetric } from '@/components/ResourceMetric'
-import { Badge } from '@/components/ui/badge'
+import { ManagedInstanceHeader } from '@/components/instance/ManagedInstanceHeader'
+import { ManagedLogsTab } from '@/components/instance/ManagedLogsTab'
+import { ManagedResourcesTab } from '@/components/instance/ManagedResourcesTab'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -18,17 +15,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { QueryError } from '@/components/QueryError'
 import {
   useManagedInstance,
-  useManagedInstanceAction,
-  useManagedInstanceLogs,
-  useManagedInstanceTransition,
-  useManagedRustResources,
-  useManagedRustResourceHistory,
   useUpdateRustConfig,
 } from '@/lib/queries'
 import type { GameId } from '@/lib/types'
-import { cn, formatBytes } from '@/lib/utils'
-import { useLogSocket } from '@/hooks/useLogSocket'
-import { buttonVariants } from '@/components/ui/button-variants'
 
 function isGameId(value: string | undefined): value is GameId {
   return value === 'valheim' || value === 'rust'
@@ -151,97 +140,38 @@ export function ManagedInstanceDetailPage() {
   const navigate = useNavigate()
   const gameId = isGameId(game) ? game : 'valheim'
   const instance = useManagedInstance(gameId, name ?? '')
-  const logs = useManagedInstanceLogs(gameId, name ?? '')
-  const liveLogs = useLogSocket(name ?? '', gameId)
-  const [resourceHours, setResourceHours] = useState<number | undefined>()
-  const resources = useManagedRustResources(name ?? '', gameId === 'rust')
-  const resourceHistory = useManagedRustResourceHistory(name ?? '', resourceHours, gameId === 'rust')
-  const start = useManagedInstanceAction('start')
-  const stop = useManagedInstanceAction('stop')
-  const restart = useManagedInstanceAction('restart')
-  const transition = useManagedInstanceTransition(gameId, name ?? '')
   if (!isGameId(game) || !name) return null
   if (instance.isError) return <QueryError error={instance.error} />
   if (!instance.data) return null
   const detail = instance.data
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
-  const target = { game: detail.game, name: detail.name }
   const tabs = [
-    { id: 'overview', label: 'Overview' },
-    ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
-    ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
-    { id: 'saves', label: 'Save files' },
     { id: 'logs', label: 'Logs' },
+    { id: 'config', label: 'Config' },
+    ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
+    ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
+    { id: 'saves', label: 'Save files' },
+    { id: 'resources', label: 'Resources' },
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
   if (!tab || (tab !== 'lists' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
-    return <Navigate replace to={`/instances/${detail.game}/${detail.name}/overview`} />
+    return <Navigate replace to={`/instances/${detail.game}/${detail.name}/logs`} />
   }
-  const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
-
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title={<span className="flex items-center gap-3"><GameIcon game={detail.game} className="size-9 rounded-md" />{detail.name}</span>}
-        description={`${detail.game} server`}
-        action={
-          <div className="flex gap-2"><ManageInstanceDialog instance={detail} onNavigate={navigate} />
-            {detail.running ? (
-              <>
-                <Button variant="outline" disabled={busy} onClick={() => restart.mutate(target, { onError: (error) => toast.error(error.message) })}>Restart</Button>
-                <Button variant="outline" disabled={busy} onClick={() => stop.mutate(target, { onError: (error) => toast.error(error.message) })}>Stop</Button>
-              </>
-            ) : (
-              <>
-                <Button disabled={busy} onClick={() => start.mutate(target, { onError: (error) => toast.error(error.message) })}>Start</Button>
-              </>
-            )}
-          </div>
-        }
-      />
+      <ManagedInstanceHeader instance={detail} />
       <Tabs value={tab} onValueChange={(value) => navigate(value === 'lists' ? `/instances/${detail.game}/${detail.name}/lists/owner` : `/instances/${detail.game}/${detail.name}/${value}`)}>
-        <TabsList>
+        <div className="overflow-x-auto">
+          <TabsList className="w-max">
           {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
-        </TabsList>
-        <TabsContent value="overview" className="flex flex-col gap-6">
-          <Card>
-            <CardHeader><CardTitle>Configuration</CardTitle><CardDescription>Game-specific settings managed by Odin.</CardDescription></CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              {rustConfig
-                ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
-                : Object.entries(detail.config).map(([key, value]) => <div key={key} className="flex justify-between gap-4 text-sm"><span className="text-muted-foreground">{key}</span><span>{String(value ?? '—')}</span></div>)}
-            </CardContent>
-          </Card>
-          {detail.game === 'rust' && (
-            <Card>
-              <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Live CPU and memory use for this Rust server.</CardDescription></CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex gap-1">
-                    {[
-                      ['Live', undefined],
-                      ['1h', 1],
-                      ['24h', 24],
-                      ['7d', 168],
-                    ].map(([label, hours]) => (
-                      <Button key={label} size="sm" variant={resourceHours === hours ? 'default' : 'outline'} onClick={() => setResourceHours(hours as number | undefined)}>{label}</Button>
-                    ))}
-                  </div>
-                  <a className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))} download href={`/api/games/rust/instances/${detail.name}/resources/history/export${resourceHours ? `?hours=${resourceHours}` : ''}`}>Export CSV</a>
-                </div>
-                {resources.isError ? <QueryError error={resources.error} /> : (
-                  <>
-                    {resourceHistory.isError && <QueryError error={resourceHistory.error} />}
-                    <ResourceMetric label="CPU" value={`${resources.data?.cpu_percent.toFixed(1) ?? '0.0'}%`} history={resourceHistory.data ?? []} dataKey="cpu_percent" formatValue={(value) => `${value.toFixed(1)}%`} />
-                    <ResourceMetric label="Memory" value={formatBytes(resources.data?.memory_bytes ?? 0)} history={resourceHistory.data ?? []} dataKey="memory_bytes" formatValue={formatBytes} />
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          )}
-          {detail.game === 'valheim' && <Link className="text-sm underline" to={`/instances/valheim/${detail.name}/logs`}>Open the full Valheim dashboard</Link>}
-          <Badge className="w-fit" variant={detail.running ? 'default' : 'secondary'}>{detail.running ? 'running' : 'stopped'}</Badge>
+          </TabsList>
+        </div>
+        <TabsContent value="logs"><ManagedLogsTab game={detail.game} name={detail.name} /></TabsContent>
+        <TabsContent value="config">
+          {rustConfig
+            ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
+            : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
         </TabsContent>
         {detail.capabilities.backups && (
           <TabsContent value="backups"><BackupsTab name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
@@ -250,12 +180,7 @@ export function ManagedInstanceDetailPage() {
           <TabsContent value="lists"><RustAccessListsTab name={detail.name} path={nestedPath} running={detail.running} /></TabsContent>
         )}
         <TabsContent value="saves"><SaveFilesTab game={detail.game} name={detail.name} /></TabsContent>
-        <TabsContent value="logs">
-          <Card>
-            <CardHeader><CardTitle>Logs</CardTitle><CardDescription>{liveLogs.connected ? 'Live server log.' : 'Last 200 server log lines.'}</CardDescription></CardHeader>
-            <CardContent>{logs.isError ? <QueryError error={logs.error} /> : <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{(liveLogs.lines.length > 0 ? liveLogs.lines : logs.data?.lines)?.join('\n') || 'No logs yet.'}</pre>}</CardContent>
-          </Card>
-        </TabsContent>
+        <TabsContent value="resources"><ManagedResourcesTab name={detail.name} running={detail.running} /></TabsContent>
       </Tabs>
     </div>
   )

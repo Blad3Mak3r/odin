@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-10-04
+
+### What's Changed
+- feat: show game icons in dashboard by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/86
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.12.2...v0.12.3
+
 ## [0.12.2] - 2026-10-03
 
 ### What's Changed

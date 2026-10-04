@@ -4,6 +4,7 @@ pub mod access_lists;
 
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -40,6 +41,16 @@ async fn start_unlocked(
     db: &crate::db::Db,
     instance: &RustInstance,
 ) -> Result<RustInstance> {
+    let steam_home = crate::steamcmd::steam_home_dir()?;
+    start_unlocked_with_steam_home(paths, db, instance, &steam_home).await
+}
+
+async fn start_unlocked_with_steam_home(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: &RustInstance,
+    steam_home: &Path,
+) -> Result<RustInstance> {
     if is_running(instance) {
         bail!("instance '{}' is already running", instance.name());
     }
@@ -49,6 +60,10 @@ async fn start_unlocked(
         instance.name(),
         [instance.config.port, instance.config.query_port],
     )?;
+
+    crate::steamcmd::SteamCmd::new(paths.steamcmd_dir())
+        .ensure_sdk64_client_at(steam_home)
+        .context("failed to prepare Rust's Steamworks runtime")?;
 
     let command = build_command(paths, instance)?;
     let child = process::spawn(command)
@@ -95,9 +110,11 @@ pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> 
         .context("failed to duplicate Rust log handle")?;
 
     let config = &instance.config;
+    let library_path = rust_library_path(&install_dir)?;
     let mut command = Command::new(binary);
     command
         .current_dir(&install_dir)
+        .env("LD_LIBRARY_PATH", library_path)
         .arg("-batchmode")
         .arg("-nographics")
         .arg("+server.port")
@@ -122,6 +139,17 @@ pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> 
         .process_group(0);
 
     Ok(command)
+}
+
+fn rust_library_path(install_dir: &Path) -> Result<std::ffi::OsString> {
+    let mut paths = vec![
+        install_dir.to_path_buf(),
+        install_dir.join("RustDedicated_Data/Plugins/x86_64"),
+    ];
+    if let Some(inherited) = std::env::var_os("LD_LIBRARY_PATH") {
+        paths.extend(std::env::split_paths(&inherited));
+    }
+    std::env::join_paths(paths).context("Rust library search paths contain an invalid ':'")
 }
 
 pub async fn stop(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
@@ -412,6 +440,12 @@ mod tests {
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    fn install_fake_steam_client(paths: &Paths) {
+        let client = paths.steamcmd_dir().join("linux64/steamclient.so");
+        std::fs::create_dir_all(client.parent().unwrap()).unwrap();
+        std::fs::write(client, "fake Steam client").unwrap();
+    }
+
     #[test]
     fn delete_removes_world_data_and_preserves_requested_backups() {
         let (paths, db, instance) = temp_context("delete-world");
@@ -559,8 +593,11 @@ mod tests {
     async fn fake_server_start_and_stop_persist_the_process_lifecycle() {
         let (paths, db, instance) = temp_context("lifecycle");
         install_fake_server(&paths);
+        install_fake_steam_client(&paths);
 
-        let started = start(&paths, &db, &instance).await.unwrap();
+        let started = start_unlocked_with_steam_home(&paths, &db, &instance, &paths.data_dir)
+            .await
+            .unwrap();
         assert!(is_running(&started));
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -579,6 +616,31 @@ mod tests {
             .unwrap();
         assert!(!is_running(&stopped));
         assert!(stopped.pid.is_none());
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn rust_command_prepends_its_native_library_directories() {
+        let (paths, _db, instance) = temp_context("library-path");
+        install_fake_server(&paths);
+
+        let command = build_command(&paths, &instance).unwrap();
+        let configured = command
+            .as_std()
+            .get_envs()
+            .find_map(|(name, value)| (name == "LD_LIBRARY_PATH").then_some(value.unwrap()))
+            .unwrap();
+        let configured: Vec<_> = std::env::split_paths(configured).collect();
+        let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
+        let mut expected = vec![
+            install_dir.clone(),
+            install_dir.join("RustDedicated_Data/Plugins/x86_64"),
+        ];
+        if let Some(inherited) = std::env::var_os("LD_LIBRARY_PATH") {
+            expected.extend(std::env::split_paths(&inherited));
+        }
+        assert_eq!(configured, expected);
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

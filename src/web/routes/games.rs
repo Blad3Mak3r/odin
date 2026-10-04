@@ -141,13 +141,18 @@ pub async fn install_game(
                 .data_dir
                 .join("logs")
                 .join(format!("steamcmd-{}-install.log", driver.id()));
-            crate::steamcmd::SteamCmd::new(paths.steamcmd_dir()).update_app_expect_file(
+            let steamcmd = crate::steamcmd::SteamCmd::new(paths.steamcmd_dir());
+            steamcmd.update_app_expect_file(
                 driver.steam_app_id(),
                 &install_dir,
                 &log_file,
                 install_dir.join(driver.server_binary()),
                 |line| logger.line(line),
             )?;
+            if game == GameId::Rust {
+                logger.line("preparing Steamworks runtime");
+                steamcmd.ensure_sdk64_client()?;
+            }
             activity.record_for(game, crate::activity::ActivityKind::ServerInstalled, None);
             logger.line("done");
             Ok(())

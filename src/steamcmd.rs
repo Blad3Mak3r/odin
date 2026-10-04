@@ -1,4 +1,5 @@
 use std::io::{BufRead as _, BufReader, Read, Write as _};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::Sender;
@@ -34,6 +35,106 @@ impl SteamCmd {
 
     pub fn is_installed(&self) -> bool {
         self.script_path().is_file()
+    }
+
+    /// Makes SteamCMD's 64-bit client library available at the fallback path
+    /// used by Steamworks dedicated servers on Linux.
+    ///
+    /// SteamCMD can replace its copy during an update, so this is deliberately
+    /// safe to call before every server start rather than being a one-time
+    /// installation step.
+    pub fn ensure_sdk64_client(&self) -> Result<PathBuf> {
+        self.ensure_sdk64_client_at(&steam_home_dir()?)
+    }
+
+    pub(crate) fn ensure_sdk64_client_at(&self, home_dir: &Path) -> Result<PathBuf> {
+        self.ensure_sdk64_client_at_with(home_dir, |source, destination| {
+            std::fs::hard_link(source, destination)
+        })
+    }
+
+    fn ensure_sdk64_client_at_with(
+        &self,
+        home_dir: &Path,
+        hard_link: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    ) -> Result<PathBuf> {
+        let source = self.steamcmd_dir.join("linux64/steamclient.so");
+        if !source.is_file() {
+            bail!(
+                "SteamCMD's 64-bit Steam client library is missing at {}; reinstall or update the game server",
+                source.display()
+            );
+        }
+        let source = source
+            .canonicalize()
+            .with_context(|| format!("failed to resolve {}", source.display()))?;
+
+        let sdk_dir = home_dir.join(".steam/sdk64");
+        let destination = sdk_dir.join("steamclient.so");
+        std::fs::create_dir_all(&sdk_dir).with_context(|| {
+            format!("failed to create Steam SDK directory {}", sdk_dir.display())
+        })?;
+
+        let source_metadata = std::fs::metadata(&source)
+            .with_context(|| format!("failed to inspect {}", source.display()))?;
+        match std::fs::metadata(&destination) {
+            Ok(destination_metadata)
+                if source_metadata.dev() == destination_metadata.dev()
+                    && source_metadata.ino() == destination_metadata.ino() =>
+            {
+                return Ok(destination);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", destination.display()));
+            }
+        }
+        if std::fs::symlink_metadata(&destination).is_ok_and(|metadata| metadata.is_dir()) {
+            bail!(
+                "cannot install Steam client library because {} is a directory",
+                destination.display()
+            );
+        }
+
+        let temporary = sdk_dir.join(format!(
+            ".steamclient.so.{}.{}.tmp",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        match hard_link(&source, &temporary) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+                std::os::unix::fs::symlink(&source, &temporary).with_context(|| {
+                    format!(
+                        "failed to link Steam client library {} -> {}",
+                        temporary.display(),
+                        source.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to hard-link Steam client library {} -> {}",
+                        temporary.display(),
+                        source.display()
+                    )
+                });
+            }
+        }
+
+        if let Err(error) = std::fs::rename(&temporary, &destination) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to activate Steam client library at {}",
+                    destination.display()
+                )
+            });
+        }
+        Ok(destination)
     }
 
     /// Downloads and unpacks SteamCMD into `steamcmd_dir` if it isn't already there.
@@ -190,6 +291,18 @@ impl SteamCmd {
     }
 }
 
+pub(crate) fn steam_home_dir() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").context(
+        "HOME is not set; cannot determine Steamworks SDK directory for dedicated servers",
+    )?;
+    let home = PathBuf::from(home);
+    anyhow::ensure!(
+        home.is_absolute(),
+        "HOME must be an absolute path to prepare the Steamworks SDK directory"
+    );
+    Ok(home)
+}
+
 /// Reads the `buildid` field out of the ACF manifest SteamCMD writes at
 /// `<install_dir>/steamapps/appmanifest_<app_id>.acf` after an `app_update`.
 /// Returns `None` if the app isn't installed there (no manifest, or no
@@ -267,6 +380,22 @@ fn stream_lines(source: impl Read, tx: &Sender<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "odin-steamcmd-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    fn steamcmd_with_client(label: &str) -> (PathBuf, SteamCmd) {
+        let dir = temp_dir(label);
+        let steamcmd_dir = dir.join("steamcmd");
+        std::fs::create_dir_all(steamcmd_dir.join("linux64")).unwrap();
+        std::fs::write(steamcmd_dir.join("linux64/steamclient.so"), "version one").unwrap();
+        (dir, SteamCmd::new(steamcmd_dir))
+    }
 
     const SAMPLE_MANIFEST: &str = r#""AppState"
 {
@@ -364,5 +493,80 @@ mod tests {
         assert_eq!(installed_build_id(&dir, "896660"), Some(12345678));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sdk64_client_is_hard_linked_idempotently_and_repaired_after_update() {
+        let (dir, steamcmd) = steamcmd_with_client("sdk64-hardlink");
+        let home = dir.join("home");
+        let source = steamcmd.steamcmd_dir.join("linux64/steamclient.so");
+
+        let destination = steamcmd.ensure_sdk64_client_at(&home).unwrap();
+        let source_metadata = std::fs::metadata(&source).unwrap();
+        let destination_metadata = std::fs::metadata(&destination).unwrap();
+        assert_eq!(source_metadata.dev(), destination_metadata.dev());
+        assert_eq!(source_metadata.ino(), destination_metadata.ino());
+
+        let unchanged_metadata =
+            std::fs::metadata(steamcmd.ensure_sdk64_client_at(&home).unwrap()).unwrap();
+        assert_eq!(destination_metadata.ino(), unchanged_metadata.ino());
+
+        let replacement = steamcmd.steamcmd_dir.join("linux64/steamclient.so.new");
+        std::fs::write(&replacement, "version two").unwrap();
+        std::fs::rename(replacement, &source).unwrap();
+        assert_ne!(
+            std::fs::metadata(&source).unwrap().ino(),
+            std::fs::metadata(&destination).unwrap().ino()
+        );
+
+        steamcmd.ensure_sdk64_client_at(&home).unwrap();
+        assert_eq!(
+            std::fs::metadata(&source).unwrap().ino(),
+            std::fs::metadata(&destination).unwrap().ino()
+        );
+        assert_eq!(std::fs::read_to_string(destination).unwrap(), "version two");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn sdk64_client_uses_a_symlink_across_filesystems() {
+        let (dir, steamcmd) = steamcmd_with_client("sdk64-symlink");
+        let home = dir.join("home");
+        let destination = steamcmd
+            .ensure_sdk64_client_at_with(&home, |_, _| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::CrossesDevices,
+                    "simulated cross-device hard link",
+                ))
+            })
+            .unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_link(destination).unwrap(),
+            steamcmd
+                .steamcmd_dir
+                .join("linux64/steamclient.so")
+                .canonicalize()
+                .unwrap()
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn sdk64_client_reports_a_missing_steamcmd_library() {
+        let dir = temp_dir("sdk64-missing");
+        let steamcmd = SteamCmd::new(dir.join("steamcmd"));
+        let error = steamcmd
+            .ensure_sdk64_client_at(&dir.join("home"))
+            .unwrap_err();
+        assert!(error.to_string().contains("linux64/steamclient.so"));
     }
 }

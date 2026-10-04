@@ -46,6 +46,10 @@ export interface RustConfigUpdateRequest {
   auto_restart?: boolean
 }
 
+export interface RconCommandResponse {
+  output: string
+}
+
 export interface ChangelogSection {
   title: string
   changes: string[]

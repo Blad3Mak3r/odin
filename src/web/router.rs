@@ -57,6 +57,10 @@ pub fn build_router(state: AppState) -> Router {
             put(games::update_rust_config),
         )
         .route(
+            "/games/rust/instances/{name}/rcon",
+            post(games::execute_rust_rcon),
+        )
+        .route(
             "/games/rust/instances/{name}/wipe-map",
             post(games::wipe_rust_map),
         )
@@ -621,6 +625,34 @@ mod tests {
                 .port,
             29000
         );
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rust_rcon_route_rejects_an_empty_command_without_connecting() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-rust-rcon-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let app = build_router(AppState::new(paths.clone(), db));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/games/rust/instances/rusty/rcon")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"command":"   "}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 

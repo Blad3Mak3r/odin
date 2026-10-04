@@ -1,4 +1,5 @@
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
+import { RustRconTab } from '@/components/instance/RustRconTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
 import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
 import { useState } from 'react'
@@ -171,6 +172,7 @@ export function ManagedInstanceDetailPage() {
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
   const tabs = [
     { id: 'logs', label: 'Logs' },
+    ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
     ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
@@ -193,6 +195,7 @@ export function ManagedInstanceDetailPage() {
           </TabsList>
         </div>
         <TabsContent value="logs"><ManagedLogsTab game={detail.game} name={detail.name} /></TabsContent>
+        {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab name={detail.name} running={detail.running} /></TabsContent>}
         <TabsContent value="errors">
           <Card>
             <CardHeader>

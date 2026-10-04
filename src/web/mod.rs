@@ -17,6 +17,7 @@ mod state;
 mod static_files;
 pub mod supervisor;
 mod update_monitor;
+mod uptime_scheduler;
 mod webhooks;
 mod world_saves;
 
@@ -51,6 +52,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     update_monitor::spawn(state.clone());
     spawn_telemetry(state.clone());
     backup_scheduler::spawn(state.clone());
+    uptime_scheduler::spawn(state.clone());
 
     let router = router::build_router(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
@@ -332,6 +334,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 let _ = std::fs::remove_file(crate::supervisor::pidfile_path(&state.paths, name));
 
                 if inst.state.auto_restart
+                    && permits_scheduled_uptime(state, GameId::Valheim, name)
                     && state
                         .runtime
                         .should_attempt_auto_restart(name, AUTO_RESTART_COOLDOWN)
@@ -381,6 +384,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
             if !snapshot.running && rust_instance.pid.is_some() {
                 let _ = game_instances::clear_rust_pid(&state.db, name, chrono::Utc::now());
                 if rust_instance.config.auto_restart
+                    && permits_scheduled_uptime(state, GameId::Rust, name)
                     && state.runtime.should_attempt_game_auto_restart(
                         GameId::Rust,
                         name,
@@ -416,6 +420,19 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
         running: running_names,
         crashed_with_auto_restart,
         crashed_rust_with_auto_restart,
+    }
+}
+
+/// Crash recovery must honor an enabled operating-hours schedule too; without
+/// this guard, a server that crashed outside its configured window could be
+/// restarted by telemetry for one scheduler interval before being stopped.
+fn permits_scheduled_uptime(state: &AppState, game: GameId, name: &str) -> bool {
+    match crate::db::uptime_schedules::permits_running_now(&state.db, game, name) {
+        Ok(permitted) => permitted,
+        Err(error) => {
+            tracing::warn!(%game, instance = %name, %error, "could not read uptime schedule; skipping automatic restart");
+            false
+        }
     }
 }
 

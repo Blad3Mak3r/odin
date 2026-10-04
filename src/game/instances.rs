@@ -57,6 +57,16 @@ pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInst
     }
 }
 
+/// Returns the authoritative liveness state for an instance regardless of
+/// game. Used by background policy loops before they decide whether a
+/// lifecycle operation is needed.
+pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
+    match load(paths, db, game, name)? {
+        GameInstance::Valheim(instance) => lifecycle::is_running(&instance),
+        GameInstance::Rust(instance) => Ok(instance.is_running()),
+    }
+}
+
 pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
     match game {
         GameId::Valheim => lifecycle::start(paths, db, name)

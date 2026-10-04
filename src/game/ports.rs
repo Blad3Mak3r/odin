@@ -60,7 +60,11 @@ pub fn ensure_available(
         if !instance.is_running() {
             continue;
         }
-        for port in [instance.config.port, instance.config.query_port] {
+        for port in [
+            instance.config.port,
+            instance.config.query_port,
+            instance.config.rcon_port,
+        ] {
             if requested_ports.contains(&port) {
                 anyhow::bail!(
                     "port {port} is already in use by running Rust instance '{}'",
@@ -83,7 +87,10 @@ mod tests {
             block(GameId::Valheim, 2456).unwrap(),
             vec![2456, 2457, 2458]
         );
-        assert_eq!(block(GameId::Rust, 28015).unwrap(), vec![28015, 28016]);
+        assert_eq!(
+            block(GameId::Rust, 28015).unwrap(),
+            vec![28015, 28016, 28017]
+        );
     }
 
     #[test]

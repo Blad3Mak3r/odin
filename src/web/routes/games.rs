@@ -51,6 +51,8 @@ pub struct DeleteGameInstanceQuery {
 pub struct RustConfigUpdateRequest {
     pub port: Option<u16>,
     pub query_port: Option<u16>,
+    pub rcon_port: Option<u16>,
+    pub rcon_password: Option<String>,
     pub hostname: Option<String>,
     pub level: Option<String>,
     pub seed: Option<u32>,
@@ -256,6 +258,12 @@ pub async fn update_rust_config(
         }
         if let Some(query_port) = request.query_port {
             config.query_port = query_port;
+        }
+        if let Some(rcon_port) = request.rcon_port {
+            config.rcon_port = rcon_port;
+        }
+        if let Some(rcon_password) = request.rcon_password {
+            config.rcon_password = rcon_password;
         }
         if let Some(hostname) = request.hostname {
             config.hostname = hostname;
@@ -617,6 +625,8 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
         config: serde_json::json!({
             "port": instance.config.port,
             "query_port": instance.config.query_port,
+            "rcon_port": instance.config.rcon_port,
+            "rcon_password": instance.config.rcon_password,
             "hostname": instance.config.hostname,
             "level": instance.config.level,
             "seed": instance.config.seed,

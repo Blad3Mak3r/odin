@@ -98,6 +98,68 @@ mod tests {
     }
 
     #[test]
+    fn latest_schema_includes_rust_rcon_configuration() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).unwrap();
+
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('rust_instance_configs')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+
+        assert!(columns.contains(&"rcon_port".to_string()));
+        assert!(columns.contains(&"rcon_password".to_string()));
+    }
+
+    #[test]
+    fn v20_assigns_existing_rust_instances_non_conflicting_rcon_ports() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 20 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('first', 'rust', 'first', '2026-01-01T00:00:00Z'),
+                ('second', 'rust', 'second', '2026-01-01T00:00:00Z');
+             INSERT INTO rust_instance_configs (instance_id, port, query_port, hostname, level, seed, world_size, max_players, auto_restart) VALUES
+                ('first', 28015, 28016, 'first', 'Procedural Map', 1, 3000, 50, 0),
+                ('second', 28017, 28018, 'second', 'Procedural Map', 2, 3000, 50, 0);",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let rcon: Vec<(u16, String)> = conn
+            .prepare(
+                "SELECT rcon_port, rcon_password FROM rust_instance_configs ORDER BY instance_id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rcon.len(), 2);
+        assert_ne!(rcon[0].0, rcon[1].0);
+        assert!(
+            rcon.iter()
+                .all(|(port, _)| ![28015, 28016, 28017, 28018].contains(port))
+        );
+        assert!(rcon.iter().all(|(_, password)| password.len() == 32));
+    }
+
+    #[test]
     fn v1_tmux_session_column_is_dropped_and_pid_columns_are_nullable() {
         let mut conn = Connection::open_in_memory().unwrap();
         // Apply only 0001 by hand, seed a v1-shaped row, then run the full

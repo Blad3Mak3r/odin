@@ -36,6 +36,8 @@ function isGameId(value: string | undefined): value is GameId {
 type RustConfig = {
   port: number
   queryPort: number
+  rconPort: number
+  rconPassword: string
   hostname: string
   level: string
   seed: number
@@ -47,6 +49,8 @@ type RustConfig = {
 function asRustConfig(config: Record<string, unknown>): RustConfig | null {
   const port = config.port
   const queryPort = config.query_port
+  const rconPort = config.rcon_port
+  const rconPassword = config.rcon_password
   const hostname = config.hostname
   const level = config.level
   const seed = config.seed
@@ -54,17 +58,19 @@ function asRustConfig(config: Record<string, unknown>): RustConfig | null {
   const maxPlayers = config.max_players
   const autoRestart = config.auto_restart
   if (
-    typeof port !== 'number' || typeof queryPort !== 'number' || typeof hostname !== 'string' ||
+    typeof port !== 'number' || typeof queryPort !== 'number' || typeof rconPort !== 'number' || typeof rconPassword !== 'string' || typeof hostname !== 'string' ||
     typeof level !== 'string' || typeof seed !== 'number' || typeof worldSize !== 'number' ||
     typeof maxPlayers !== 'number' || typeof autoRestart !== 'boolean'
   ) return null
-  return { port, queryPort, hostname, level, seed, worldSize, maxPlayers, autoRestart }
+  return { port, queryPort, rconPort, rconPassword, hostname, level, seed, worldSize, maxPlayers, autoRestart }
 }
 
 function RustConfigForm({ name, config, running }: { name: string; config: RustConfig; running: boolean }) {
   const update = useUpdateRustConfig()
   const [port, setPort] = useState(String(config.port))
   const [queryPort, setQueryPort] = useState(String(config.queryPort))
+  const [rconPort, setRconPort] = useState(String(config.rconPort))
+  const [rconPassword, setRconPassword] = useState(config.rconPassword)
   const [hostname, setHostname] = useState(config.hostname)
   const [level, setLevel] = useState(config.level)
   const [seed, setSeed] = useState(config.seed)
@@ -78,6 +84,8 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
       request: {
         port: Number(port),
         query_port: Number(queryPort),
+        rcon_port: Number(rconPort),
+        rcon_password: rconPassword,
         hostname,
         level,
         seed,
@@ -97,8 +105,8 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault()
-        if (Number(port) === Number(queryPort)) {
-          toast.error('Game and query ports must be different')
+        if (new Set([Number(port), Number(queryPort), Number(rconPort)]).size !== 3) {
+          toast.error('Game, query, and RCON ports must be different')
           return
         }
         save()
@@ -108,6 +116,8 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
       <div className="grid gap-4 sm:grid-cols-2">
         <ConfigInput id="rust-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />
         <ConfigInput id="rust-query-port" label="Query port" type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />
+        <ConfigInput id="rust-rcon-port" label="RCON port" type="number" min={1} max={65535} value={rconPort} disabled={running} onChange={setRconPort} />
+        <ConfigInput id="rust-rcon-password" label="RCON password" type="password" value={rconPassword} disabled={running} onChange={setRconPassword} />
         <ConfigInput id="rust-hostname" label="Hostname" value={hostname} disabled={running} onChange={setHostname} />
         <ConfigInput id="rust-level" label="Map" value={level} disabled={running} onChange={setLevel} />
         <ConfigInput id="rust-seed" label="Seed" type="number" value={seed} disabled={running} onChange={(value) => setSeed(Number(value))} />
@@ -121,7 +131,7 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
         </div>
         <Switch id="rust-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} />
       </div>
-      <p className="text-sm text-muted-foreground">Choose different game and query ports between 1 and 65535. Make sure both ports are available and allowed through your firewall.</p>
+      <p className="text-sm text-muted-foreground">Choose different game, query, and RCON ports between 1 and 65535. Keep the RCON password secret, and only allow its TCP port through your firewall when remote administration is needed.</p>
       <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save configuration</Button>
     </form>
   )
@@ -130,7 +140,7 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
 function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min, max }: {
   id: string
   label: string
-  type?: 'text' | 'number'
+  type?: 'text' | 'number' | 'password'
   value: string | number
   disabled: boolean
   onChange: (value: string) => void

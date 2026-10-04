@@ -36,6 +36,8 @@ export interface ManagedInstanceView {
 export interface RustConfigUpdateRequest {
   port?: number
   query_port?: number
+  rcon_port?: number
+  rcon_password?: string
   hostname?: string
   level?: string
   seed?: number

@@ -137,7 +137,7 @@ impl GameDriver for RustDriver {
     }
 
     fn port_requirements(&self) -> GamePortRequirements {
-        GamePortRequirements { count: 2 }
+        GamePortRequirements { count: 3 }
     }
 }
 

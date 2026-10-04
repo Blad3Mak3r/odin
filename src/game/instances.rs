@@ -205,6 +205,8 @@ pub fn clone_rust(paths: &Paths, db: &Db, source: &str, target: &str) -> Result<
     let mut config = original.config;
     config.port = cloned.config.port;
     config.query_port = cloned.config.query_port;
+    config.rcon_port = cloned.config.rcon_port;
+    config.rcon_password = cloned.config.rcon_password;
     config.hostname = target.into();
     if let Err(error) = game_instances::update_rust_config(db, target, &config) {
         game_instances::delete_rust(db, target)?;
@@ -307,6 +309,8 @@ mod tests {
         let cloned = clone_rust(&paths, &db, "source", "target").unwrap();
         assert_ne!(original.identity.id, cloned.identity.id);
         assert_ne!(original.config.port, cloned.config.port);
+        assert_ne!(original.config.rcon_port, cloned.config.rcon_port);
+        assert_ne!(original.config.rcon_password, cloned.config.rcon_password);
         assert_eq!(original.config.seed, cloned.config.seed);
         assert!(cloned.pid.is_none());
         assert!(!rust::backup_source(&paths, &cloned).exists());

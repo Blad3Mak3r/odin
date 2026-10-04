@@ -18,6 +18,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
   const action = { game: instance.game, name: instance.name }
   const port = numberConfig(instance.config, 'port')
   const queryPort = numberConfig(instance.config, 'query_port')
+  const rconPort = numberConfig(instance.config, 'rcon_port')
   const hostname = stringConfig(instance.config, 'hostname')
   const map = stringConfig(instance.config, 'level')
 
@@ -79,6 +80,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
         {hostname && <span>Hostname: {hostname}</span>}
         {port !== null && <span>Port: {port}</span>}
         {queryPort !== null && <span>Query port: {queryPort}</span>}
+        {rconPort !== null && <span>RCON port: {rconPort}</span>}
         {map && <span>Map: {map}</span>}
       </div>
     </div>

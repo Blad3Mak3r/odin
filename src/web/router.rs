@@ -542,7 +542,7 @@ mod tests {
             .uri("/api/games/rust/instances/rusty/config")
             .header("content-type", "application/json")
             .body(Body::from(
-                r#"{"hostname":"Rusty Server","max_players":50,"port":29000,"query_port":30000}"#,
+                r#"{"hostname":"Rusty Server","max_players":50,"port":29000,"query_port":30000,"rcon_port":31000,"rcon_password":"rcon-secret"}"#,
             ))
             .unwrap();
 
@@ -555,14 +555,20 @@ mod tests {
         let view: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(view["config"]["port"], 29000);
         assert_eq!(view["config"]["query_port"], 30000);
+        assert_eq!(view["config"]["rcon_port"], 31000);
+        assert_eq!(view["config"]["rcon_password"], "rcon-secret");
 
         for (body, expected) in [
             (r#"{"port":0}"#, StatusCode::BAD_REQUEST),
             (r#"{"query_port":0}"#, StatusCode::BAD_REQUEST),
+            (r#"{"rcon_port":0}"#, StatusCode::BAD_REQUEST),
             (r#"{"port":30000}"#, StatusCode::BAD_REQUEST),
             (r#"{"query_port":29000}"#, StatusCode::BAD_REQUEST),
+            (r#"{"rcon_port":29000}"#, StatusCode::BAD_REQUEST),
+            (r#"{"rcon_password":"   "}"#, StatusCode::BAD_REQUEST),
             (r#"{"port":65536}"#, StatusCode::UNPROCESSABLE_ENTITY),
             (r#"{"query_port":-1}"#, StatusCode::UNPROCESSABLE_ENTITY),
+            (r#"{"rcon_port":29000.5}"#, StatusCode::UNPROCESSABLE_ENTITY),
             (r#"{"port":29000.5}"#, StatusCode::UNPROCESSABLE_ENTITY),
             (r#"{"seed":42}"#, StatusCode::OK),
         ] {
@@ -582,6 +588,7 @@ mod tests {
                 .unwrap();
             assert_eq!(saved.config.port, 29000);
             assert_eq!(saved.config.query_port, 30000);
+            assert_eq!(saved.config.rcon_port, 31000);
         }
 
         crate::db::game_instances::set_rust_pid(

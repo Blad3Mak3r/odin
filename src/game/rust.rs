@@ -58,7 +58,11 @@ async fn start_unlocked_with_steam_home(
         db,
         crate::game::GameId::Rust,
         instance.name(),
-        [instance.config.port, instance.config.query_port],
+        [
+            instance.config.port,
+            instance.config.query_port,
+            instance.config.rcon_port,
+        ],
     )?;
 
     crate::steamcmd::SteamCmd::new(paths.steamcmd_dir())
@@ -121,6 +125,12 @@ pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> 
         .arg(config.port.to_string())
         .arg("+server.queryport")
         .arg(config.query_port.to_string())
+        .arg("+rcon.port")
+        .arg(config.rcon_port.to_string())
+        .arg("+rcon.password")
+        .arg(&config.rcon_password)
+        .arg("+rcon.web")
+        .arg("1")
         .arg("+server.identity")
         .arg(&instance.identity.id)
         .arg("+server.hostname")
@@ -395,6 +405,8 @@ pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
     RustInstanceConfig {
         port,
         query_port: port + 1,
+        rcon_port: port + 2,
+        rcon_password: generate_rcon_password(),
         hostname: name.to_string(),
         level: "Procedural Map".to_string(),
         seed: rand::random(),
@@ -402,6 +414,17 @@ pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
         max_players: 50,
         auto_restart: false,
     }
+}
+
+fn generate_rcon_password() -> String {
+    use rand::RngExt;
+    use rand::distr::Alphanumeric;
+
+    rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect()
 }
 
 #[cfg(test)]
@@ -641,6 +664,30 @@ mod tests {
             expected.extend(std::env::split_paths(&inherited));
         }
         assert_eq!(configured, expected);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn rust_command_enables_web_rcon_with_the_instance_configuration() {
+        let (paths, _db, instance) = temp_context("rcon");
+        install_fake_server(&paths);
+
+        let command = build_command(&paths, &instance).unwrap();
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(args.windows(2).any(
+            |args| args[0] == "+rcon.port" && args[1] == instance.config.rcon_port.to_string()
+        ));
+        assert!(
+            args.windows(2)
+                .any(|args| args[0] == "+rcon.password" && args[1] == instance.config.rcon_password)
+        );
+        assert!(args.windows(2).any(|args| args == ["+rcon.web", "1"]));
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

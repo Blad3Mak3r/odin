@@ -24,6 +24,8 @@ pub struct GameInstanceIdentity {
 pub struct RustInstanceConfig {
     pub port: u16,
     pub query_port: u16,
+    pub rcon_port: u16,
+    pub rcon_password: String,
     pub hostname: String,
     pub level: String,
     pub seed: u32,
@@ -108,7 +110,7 @@ pub fn ensure_valheim_identity(
 pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
     let conn = db.conn();
     let mut statement = conn.prepare(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' ORDER BY g.name",
     )?;
@@ -121,7 +123,7 @@ pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
 pub fn load_rust(db: &crate::db::Db, name: &str) -> Result<Option<RustInstance>> {
     let conn = db.conn();
     conn.query_row(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' AND g.name = ?1",
         params![name],
@@ -148,8 +150,8 @@ pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Rust
         params![id, name, created_at],
     )?;
     tx.execute(
-        "INSERT INTO rust_instance_configs (instance_id, port, query_port, hostname, level, seed, world_size, max_players, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![id, config.port, config.query_port, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
+        "INSERT INTO rust_instance_configs (instance_id, port, query_port, rcon_port, rcon_password, hostname, level, seed, world_size, max_players, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![id, config.port, config.query_port, config.rcon_port, config.rcon_password, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
     )?;
     tx.commit()?;
     drop(conn);
@@ -165,9 +167,22 @@ pub fn update_rust_config(
     if instance.is_running() {
         bail!(crate::instance::InstanceError::AlreadyRunning(name.into()));
     }
-    if config.port == 0 || config.query_port == 0 || config.port == config.query_port {
+    if config.port == 0
+        || config.query_port == 0
+        || config.rcon_port == 0
+        || [config.port, config.query_port, config.rcon_port]
+            .into_iter()
+            .collect::<HashSet<_>>()
+            .len()
+            != 3
+    {
         bail!(InvalidRustConfig(
-            "Rust game and query ports must be different and between 1 and 65535".into()
+            "Rust game, query, and RCON ports must be different and between 1 and 65535".into()
+        ));
+    }
+    if config.rcon_password.trim().is_empty() {
+        bail!(InvalidRustConfig(
+            "Rust RCON password cannot be empty".into()
         ));
     }
     if config.hostname.trim().is_empty() || config.level.trim().is_empty() {
@@ -182,9 +197,9 @@ pub fn update_rust_config(
     }
 
     db.conn().execute(
-        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6, auto_restart = ?7, port = ?8, query_port = ?9 \
+        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6, auto_restart = ?7, port = ?8, query_port = ?9, rcon_port = ?10, rcon_password = ?11 \
          WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
-        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart, config.port, config.query_port],
+        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart, config.port, config.query_port, config.rcon_port, config.rcon_password],
     )?;
     load_rust(db, name)?.context("Rust instance disappeared while updating configuration")
 }
@@ -235,13 +250,21 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
     {
         reserved_ports.extend(crate::game::ports::block(GameId::Valheim, port)?);
     }
-    let mut rust_ports = conn.prepare("SELECT port, query_port FROM rust_instance_configs")?;
-    for (port, query_port) in rust_ports
-        .query_map([], |row| Ok((row.get::<_, u16>(0)?, row.get::<_, u16>(1)?)))?
+    let mut rust_ports =
+        conn.prepare("SELECT port, query_port, rcon_port FROM rust_instance_configs")?;
+    for (port, query_port, rcon_port) in rust_ports
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, u16>(0)?,
+                row.get::<_, u16>(1)?,
+                row.get::<_, u16>(2)?,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?
     {
         reserved_ports.insert(port);
         reserved_ports.insert(query_port);
+        reserved_ports.insert(rcon_port);
     }
 
     let mut port = 28015u16;
@@ -257,7 +280,7 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
 fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
     Ok(RustInstance {
         identity: GameInstanceIdentity {
-            tags: serde_json::from_str(&row.get::<_, String>(15)?)
+            tags: serde_json::from_str(&row.get::<_, String>(17)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
             id: row.get(0)?,
             game: GameId::Rust,
@@ -267,17 +290,19 @@ fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
         config: RustInstanceConfig {
             port: row.get(3)?,
             query_port: row.get(4)?,
-            hostname: row.get(5)?,
-            level: row.get(6)?,
-            seed: row.get(7)?,
-            world_size: row.get(8)?,
-            max_players: row.get(9)?,
-            auto_restart: row.get(10)?,
+            rcon_port: row.get(5)?,
+            rcon_password: row.get(6)?,
+            hostname: row.get(7)?,
+            level: row.get(8)?,
+            seed: row.get(9)?,
+            world_size: row.get(10)?,
+            max_players: row.get(11)?,
+            auto_restart: row.get(12)?,
         },
-        pid: row.get(11)?,
-        pid_started_at: row.get(12)?,
-        last_started_at: row.get(13)?,
-        last_stopped_at: row.get(14)?,
+        pid: row.get(13)?,
+        pid_started_at: row.get(14)?,
+        last_started_at: row.get(15)?,
+        last_stopped_at: row.get(16)?,
     })
 }
 
@@ -371,6 +396,8 @@ mod tests {
         let config = RustInstanceConfig {
             port: 29000,
             query_port: 30000,
+            rcon_port: 31000,
+            rcon_password: "rcon-secret".to_string(),
             hostname: "Rust Server".to_string(),
             level: "Barren".to_string(),
             seed: 42,
@@ -384,6 +411,8 @@ mod tests {
         assert_eq!(updated.config.hostname, "Rust Server");
         assert_eq!(updated.config.port, 29000);
         assert_eq!(updated.config.query_port, 30000);
+        assert_eq!(updated.config.rcon_port, 31000);
+        assert_eq!(updated.config.rcon_password, "rcon-secret");
         assert_eq!(updated.config.level, "Barren");
         assert_eq!(updated.config.seed, 42);
         assert_eq!(updated.config.world_size, 4000);
@@ -404,6 +433,7 @@ mod tests {
 
         assert_eq!(rust.config.port, 28019);
         assert_eq!(rust.config.query_port, 28020);
+        assert_eq!(rust.config.rcon_port, 28021);
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

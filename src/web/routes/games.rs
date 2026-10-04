@@ -10,10 +10,10 @@ use serde_json::Value;
 use sysinfo::Pid;
 
 use crate::db::game_instances::{self, GameInstanceIdentity, RustInstance};
-use crate::game::{self, GameId, instances as game_instances_ops};
+use crate::game::{self, GameId, instances as game_instances_ops, rust};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
-use crate::web::error::{ApiResult, run_blocking};
+use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
 use crate::web::runtime::{InstanceSnapshot, InstanceTransition, ResourceSample};
@@ -57,6 +57,11 @@ pub struct RustConfigUpdateRequest {
     pub world_size: Option<u32>,
     pub max_players: Option<u16>,
     pub auto_restart: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct WipeRustMapRequest {
+    pub confirmation: String,
 }
 
 pub async fn list_games() -> Json<Vec<GameView>> {
@@ -269,6 +274,74 @@ pub async fn update_rust_config(
     })
     .await?;
     Ok(Json(view))
+}
+
+pub async fn wipe_rust_map(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(request): Json<WipeRustMapRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    if request.confirmation != name {
+        return Err(BadRequest("type the exact instance name to wipe its map".to_string()).into());
+    }
+
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let activity = state.activity.clone();
+    let id = state.jobs.spawn(
+        JobKindDescr::MapWipe {
+            instance: name.clone(),
+        },
+        move |logger| {
+            logger.line(format!("wiping map for '{name}'"));
+            let instance =
+                game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+            let wiped = rust::wipe_map(&paths, &db, &instance)?;
+            logger.line(format!("removed {wiped} world save file(s)"));
+            activity.record_for(
+                GameId::Rust,
+                crate::activity::ActivityKind::MapWiped,
+                Some(name),
+            );
+            logger.line("done");
+            Ok(())
+        },
+    );
+    Ok(Json(JobHandle { id }))
+}
+
+pub async fn full_wipe_rust(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(request): Json<WipeRustMapRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    if request.confirmation != name {
+        return Err(BadRequest("type the exact instance name to fully wipe it".to_string()).into());
+    }
+
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let activity = state.activity.clone();
+    let id = state.jobs.spawn(
+        JobKindDescr::FullWipe {
+            instance: name.clone(),
+        },
+        move |logger| {
+            logger.line(format!("fully wiping '{name}'"));
+            let instance =
+                game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+            let wiped = rust::full_wipe(&paths, &db, &instance)?;
+            logger.line(format!("removed {wiped} world and blueprint file(s)"));
+            activity.record_for(
+                GameId::Rust,
+                crate::activity::ActivityKind::FullWiped,
+                Some(name),
+            );
+            logger.line("done");
+            Ok(())
+        },
+    );
+    Ok(Json(JobHandle { id }))
 }
 
 pub async fn get_rust_resources(

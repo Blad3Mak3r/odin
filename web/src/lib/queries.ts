@@ -304,6 +304,32 @@ export function useUpdateRustConfig() {
   })
 }
 
+export function useWipeRustMap() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, confirmation }: { name: string; confirmation: string }) =>
+      api.post<JobHandle>('/games/rust/instances/' + name + '/wipe-map', { confirmation }),
+    onSuccess: (_job, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+      queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useFullWipeRust() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, confirmation }: { name: string; confirmation: string }) =>
+      api.post<JobHandle>('/games/rust/instances/' + name + '/full-wipe', { confirmation }),
+    onSuccess: (_job, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+      queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
 export function useManagedBackups(game: GameId, name: string) {
   return useQuery({
     queryKey: ['managed-instances', game, name, 'backups'],

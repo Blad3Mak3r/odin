@@ -2,7 +2,8 @@
 
 pub mod access_lists;
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
+use std::io::ErrorKind;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -184,6 +185,81 @@ pub fn delete(
     crate::db::game_instances::delete_rust(db, instance.name())
 }
 
+/// Deletes Rust's persisted world state without affecting server
+/// configuration, blueprints, or Rust+ pairing data. Rust creates a new world
+/// from the configured map settings when no `.sav` file remains on its next
+/// start.
+pub fn wipe_map(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<usize> {
+    wipe(paths, db, instance, false)
+}
+
+/// Deletes Rust's persisted world state and learned blueprints while
+/// preserving server configuration and Rust+ pairing data.
+pub fn full_wipe(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<usize> {
+    wipe(paths, db, instance, true)
+}
+
+fn wipe(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: &RustInstance,
+    wipe_blueprints: bool,
+) -> Result<usize> {
+    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
+    let instance = refresh(db, instance)?;
+    if is_running(&instance) {
+        anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
+            instance.name().to_string()
+        ));
+    }
+
+    let source = backup_source(paths, &instance);
+    let entries = match fs::read_dir(&source) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("failed to read Rust world data at {}", source.display())
+            });
+        }
+    };
+
+    let mut wiped = 0;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to read {}", source.display()))?;
+        let file_type = entry.file_type().with_context(|| {
+            format!(
+                "failed to inspect Rust world data at {}",
+                entry.path().display()
+            )
+        })?;
+        if !(file_type.is_file() || file_type.is_symlink())
+            || !is_wipe_file(&entry, wipe_blueprints)
+        {
+            continue;
+        }
+        fs::remove_file(entry.path()).with_context(|| {
+            format!(
+                "failed to remove Rust world data at {}",
+                entry.path().display()
+            )
+        })?;
+        wiped += 1;
+    }
+    Ok(wiped)
+}
+
+fn is_wipe_file(entry: &fs::DirEntry, wipe_blueprints: bool) -> bool {
+    entry.file_name().to_str().is_some_and(|name| {
+        name.ends_with(".sav")
+            || name.contains(".sav.")
+            || (wipe_blueprints
+                && (name == "player.blueprints"
+                    || name.starts_with("player.blueprints-")
+                    || name.starts_with("player.blueprints.")))
+    })
+}
+
 pub fn backup_source(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
     // Rust itself stores an identity under its shared install tree.  Using the
     // immutable Odin id prevents collisions even when games share a name.
@@ -357,6 +433,94 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[test]
+    fn wipe_map_removes_only_world_saves() {
+        let (paths, db, instance) = temp_context("wipe-map");
+        let source = backup_source(&paths, &instance);
+        assert_eq!(wipe_map(&paths, &db, &instance).unwrap(), 0);
+        std::fs::create_dir_all(source.join("cfg")).unwrap();
+        for file in ["world.sav", "world.sav.old", "world.sav.1"] {
+            std::fs::write(source.join(file), "world").unwrap();
+        }
+        for file in [
+            "world.map",
+            "player.blueprints",
+            "companion.id",
+            "cfg/users.cfg",
+        ] {
+            std::fs::write(source.join(file), "preserve").unwrap();
+        }
+
+        assert_eq!(wipe_map(&paths, &db, &instance).unwrap(), 3);
+        for file in ["world.sav", "world.sav.old", "world.sav.1"] {
+            assert!(!source.join(file).exists());
+        }
+        for file in [
+            "world.map",
+            "player.blueprints",
+            "companion.id",
+            "cfg/users.cfg",
+        ] {
+            assert!(source.join(file).is_file());
+        }
+        assert_eq!(wipe_map(&paths, &db, &instance).unwrap(), 0);
+
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[test]
+    fn wipe_map_refuses_a_running_instance() {
+        let (paths, db, instance) = temp_context("wipe-map-running");
+        let source = backup_source(&paths, &instance);
+        std::fs::create_dir_all(&source).unwrap();
+        let save = source.join("world.sav");
+        std::fs::write(&save, "world").unwrap();
+        game_instances::set_rust_pid(
+            &db,
+            instance.name(),
+            std::process::id(),
+            crate::instance::process::start_time_of(std::process::id()).unwrap(),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+
+        assert!(wipe_map(&paths, &db, &instance).is_err());
+        assert!(save.is_file());
+
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[test]
+    fn full_wipe_removes_blueprints_and_their_journals() {
+        let (paths, db, instance) = temp_context("full-wipe");
+        let source = backup_source(&paths, &instance);
+        std::fs::create_dir_all(&source).unwrap();
+        for file in [
+            "world.sav",
+            "player.blueprints",
+            "player.blueprints-wal",
+            "player.blueprints-shm",
+            "player.blueprints.old",
+        ] {
+            std::fs::write(source.join(file), "wipe").unwrap();
+        }
+        std::fs::write(source.join("companion.id"), "preserve").unwrap();
+
+        assert_eq!(full_wipe(&paths, &db, &instance).unwrap(), 5);
+        for file in [
+            "world.sav",
+            "player.blueprints",
+            "player.blueprints-wal",
+            "player.blueprints-shm",
+            "player.blueprints.old",
+        ] {
+            assert!(!source.join(file).exists());
+        }
+        assert!(source.join("companion.id").is_file());
+
         std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 

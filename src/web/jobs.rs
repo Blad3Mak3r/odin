@@ -57,6 +57,12 @@ pub enum JobKindDescr {
         instance: String,
         backup_id: String,
     },
+    MapWipe {
+        instance: String,
+    },
+    FullWipe {
+        instance: String,
+    },
     #[serde(rename = "bepinex_update")]
     BepInExUpdate {
         instance: String,

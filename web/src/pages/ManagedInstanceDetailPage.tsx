@@ -1,5 +1,6 @@
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
+import { WipeMapCard } from '@/components/instance/WipeMapCard'
 import { GameIcon } from '@/components/GameIcon'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
@@ -213,6 +214,7 @@ export function ManagedInstanceDetailPage() {
                 : Object.entries(detail.config).map(([key, value]) => <div key={key} className="flex justify-between gap-4 text-sm"><span className="text-muted-foreground">{key}</span><span>{String(value ?? '—')}</span></div>)}
             </CardContent>
           </Card>
+          {detail.game === 'rust' && <WipeMapCard name={detail.name} running={detail.running} />}
           {detail.game === 'rust' && (
             <Card>
               <CardHeader><CardTitle>Server resources</CardTitle><CardDescription>Live CPU and memory use for this Rust server.</CardDescription></CardHeader>

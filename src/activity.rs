@@ -57,6 +57,8 @@ pub enum ActivityKind {
     BackupPruned {
         backup_id: String,
     },
+    MapWiped,
+    FullWiped,
     PlayerJoined {
         name: String,
     },

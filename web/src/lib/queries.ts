@@ -234,10 +234,10 @@ export function useManagedInstanceTransition(game: GameId, name: string) {
   })
 }
 
-export function useManagedInstanceLogs(game: GameId, name: string) {
+export function useManagedInstanceLogs(game: GameId, name: string, lines = 200) {
   return useQuery({
-    queryKey: ['managed-instances', game, name, 'logs'],
-    queryFn: () => api.get<LogsView>(`/games/${game}/instances/${name}/logs`),
+    queryKey: ['managed-instances', game, name, 'logs', lines],
+    queryFn: () => api.get<LogsView>(`/games/${game}/instances/${name}/logs?lines=${lines}`),
     refetchInterval: 5_000,
   })
 }

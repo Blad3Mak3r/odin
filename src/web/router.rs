@@ -72,6 +72,14 @@ pub fn build_router(state: AppState) -> Router {
             "/games/instances/id/{id}/logs/sse",
             get(sse::game_logs_sse_by_id),
         )
+        .route(
+            "/games/instances/id/{id}/saves",
+            get(saves::list_save_files_by_id),
+        )
+        .route(
+            "/games/instances/id/{id}/saves/{*path}",
+            get(saves::download_save_file_by_id),
+        )
         .route("/games/{game}/install", post(games::install_game))
         .route(
             "/games/{game}/install/status",

@@ -50,6 +50,19 @@ pub async fn list_save_files(
     .map(Json)
 }
 
+pub async fn list_save_files_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<SaveFileEntry>>> {
+    let db = state.db.clone();
+    let identity = run_blocking(move || {
+        crate::db::game_instances::identity_by_id(&db, &id)?
+            .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))
+    })
+    .await?;
+    list_save_files(State(state), Path((identity.game, identity.name))).await
+}
+
 pub async fn download_save_file(
     State(state): State<AppState>,
     Path((game, name, requested)): Path<(GameId, String, String)>,
@@ -111,6 +124,23 @@ pub async fn download_save_file(
         .map_err(Into::into)
 }
 
+pub async fn download_save_file_by_id(
+    State(state): State<AppState>,
+    Path((id, requested)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    let db = state.db.clone();
+    let identity = run_blocking(move || {
+        crate::db::game_instances::identity_by_id(&db, &id)?
+            .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))
+    })
+    .await?;
+    download_save_file(
+        State(state),
+        Path((identity.game, identity.name, requested)),
+    )
+    .await
+}
+
 fn save_root(
     paths: &crate::paths::Paths,
     db: &crate::db::Db,
@@ -128,10 +158,12 @@ fn save_root(
             Ok(crate::game::rust::backup_source(paths, &instance))
         }
         GameId::VRising => Ok(paths.game_instance_dir(game, name).join("data/Saves")),
-        GameId::Palworld => Ok(paths.game_instance_dir(game, name).join("saves")),
+        GameId::Palworld => Ok(paths
+            .game_instance_dir(game, name)
+            .join("runtime/Pal/Saved/SaveGames")),
         GameId::RunescapeDragonwilds => Ok(paths
             .game_instance_dir(game, name)
-            .join("RSDragonwilds/Saved/Savegames")),
+            .join("runtime/RSDragonwilds/Saved/Savegames")),
     }
 }
 

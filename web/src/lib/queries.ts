@@ -149,10 +149,10 @@ export function usePlayerHistory(name: string) {
   })
 }
 
-export function useSaveFiles(game: GameId, name: string) {
+export function useSaveFiles(game: GameId, name: string, id?: string) {
   return useQuery({
-    queryKey: ['save-files', game, name],
-    queryFn: () => api.get<SaveFileEntry[]>(`/games/${game}/instances/${name}/saves`),
+    queryKey: ['save-files', id ?? `${game}/${name}`],
+    queryFn: () => api.get<SaveFileEntry[]>(id ? `/games/instances/id/${id}/saves` : `/games/${game}/instances/${name}/saves`),
   })
 }
 

@@ -315,7 +315,7 @@ export function ManagedInstanceDetailPage() {
         {detail.game === 'vrising' && tab === 'lists' && (
           <TabsContent value="lists"><VRisingAccessListsTab name={detail.name} path={nestedPath} basePath={listsBasePath} /></TabsContent>
         )}
-        <TabsContent value="saves"><SaveFilesTab game={detail.game} name={detail.name} /></TabsContent>
+        <TabsContent value="saves"><SaveFilesTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab name={detail.name} running={detail.running} /></TabsContent>
       </Tabs>
     </div>

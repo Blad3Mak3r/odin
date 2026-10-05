@@ -353,6 +353,10 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 }
             }
             entries.push(InstanceResourceEntry {
+                id: crate::db::game_instances::identity(&state.db, GameId::Valheim, name)
+                    .ok()
+                    .flatten()
+                    .map(|identity| identity.id),
                 game: GameId::Valheim,
                 name: name.clone(),
                 running: snapshot.running,
@@ -420,6 +424,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 }
             }
             entries.push(InstanceResourceEntry {
+                id: Some(rust_instance.identity.id.clone()),
                 game: GameId::Rust,
                 name: name.to_string(),
                 running: snapshot.running,

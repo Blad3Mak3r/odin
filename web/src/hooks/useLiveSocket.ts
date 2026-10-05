@@ -154,13 +154,13 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
         })
         return changed ? next : prev
       })
-      queryClient.setQueryData<ManagedInstanceView>(['managed-instances', entry.game, entry.name], (prev) =>
+      if (entry.id) queryClient.setQueryData<ManagedInstanceView>(['managed-instances', entry.id], (prev) =>
         prev && prev.running !== entry.running ? { ...prev, running: entry.running } : prev,
       )
-      queryClient.setQueryData(['managed-instances', 'rust', entry.name, 'resources'], resources)
+      if (entry.id) queryClient.setQueryData(['managed-instances', entry.id, 'resources'], resources)
       if (entry.running) {
-        queryClient.setQueryData<ResourceSample[]>(
-          ['managed-instances', 'rust', entry.name, 'resource-history'],
+        if (entry.id) queryClient.setQueryData<ResourceSample[]>(
+          ['managed-instances', entry.id, 'resource-history'],
           (prev) => appendCapped(
             prev,
             { at, cpu_percent: entry.cpu_percent, memory_bytes: entry.memory_bytes },

@@ -327,6 +327,7 @@ export interface SaveFileEntry {
 }
 
 export interface InstanceResourceEntry {
+  id: string | null
   game: GameId
   name: string
   running: boolean

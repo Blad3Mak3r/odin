@@ -102,6 +102,9 @@ pub struct InstanceSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstanceResourceEntry {
+    /// Stable UUID when the game uses Odin's multi-game identity store.
+    /// Valheim's compatibility telemetry has no UUID in this hot path yet.
+    pub id: Option<String>,
     pub game: GameId,
     pub name: String,
     pub running: bool,

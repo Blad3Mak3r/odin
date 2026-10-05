@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.12.9] - 2026-10-05
+
+### What's Changed
+- feature: add games installation page by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/95
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.12.8...v0.12.9
+
 ## [0.12.8] - 2026-10-05
 
 ### What's Changed

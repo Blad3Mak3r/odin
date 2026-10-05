@@ -388,6 +388,13 @@ export function useExecuteRustRcon() {
   })
 }
 
+export function useExecuteVRisingRcon() {
+  return useMutation({
+    mutationFn: ({ id, command }: { id: string; command: string }) =>
+      api.post<RconCommandResponse>(`/games/instances/id/${id}/vrising/rcon`, { command }),
+  })
+}
+
 export function useWipeRustMap() {
   const queryClient = useQueryClient()
   return useMutation({

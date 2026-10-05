@@ -1,5 +1,6 @@
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
 import { VRisingAccessListsTab } from '@/components/instance/VRisingAccessListsTab'
+import { VRisingRconTab } from '@/components/instance/VRisingRconTab'
 import { PalworldAdminTab } from '@/components/instance/PalworldAdminTab'
 import { RustRconTab } from '@/components/instance/RustRconTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
@@ -263,6 +264,7 @@ export function ManagedInstanceDetailPage() {
   const tabs = [
     { id: 'logs', label: 'Logs' },
     ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
+    ...(detail.game === 'vrising' ? [{ id: 'rcon', label: 'RCON' }] : []),
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
     ...(detail.game === 'palworld' ? [{ id: 'admin', label: 'Admin' }] : []),
@@ -289,6 +291,7 @@ export function ManagedInstanceDetailPage() {
         </div>
         <TabsContent value="logs"><ManagedLogsTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
         {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab name={detail.name} running={detail.running} /></TabsContent>}
+        {detail.game === 'vrising' && <TabsContent value="rcon"><VRisingRconTab id={detail.id} running={detail.running} /></TabsContent>}
         <TabsContent value="errors">
           <Card>
             <CardHeader>

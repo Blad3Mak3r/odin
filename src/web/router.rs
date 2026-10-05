@@ -460,11 +460,14 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("PUT")
-            .uri("/api/games/rust/instances/rusty/config")
+            .uri(format!("/api/instances/{rust_id}/config"))
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"hostname":"Rusty Server","max_players":50,"port":29000,"query_port":30000,"rcon_port":31000,"rcon_password":"rcon-secret"}"#,
@@ -499,7 +502,7 @@ mod tests {
         ] {
             let request = Request::builder()
                 .method("PUT")
-                .uri("/api/games/rust/instances/rusty/config")
+                .uri(format!("/api/instances/{rust_id}/config"))
                 .header("content-type", "application/json")
                 .body(Body::from(body))
                 .unwrap();
@@ -526,7 +529,7 @@ mod tests {
         .unwrap();
         let request = Request::builder()
             .method("PUT")
-            .uri("/api/games/rust/instances/rusty/config")
+            .uri(format!("/api/instances/{rust_id}/config"))
             .header("content-type", "application/json")
             .body(Body::from(r#"{"port":31000}"#))
             .unwrap();
@@ -558,11 +561,14 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db));
         let request = Request::builder()
             .method("POST")
-            .uri("/api/games/rust/instances/rusty/rcon")
+            .uri(format!("/api/instances/{rust_id}/rust/rcon"))
             .header("content-type", "application/json")
             .body(Body::from(r#"{"command":"   "}"#))
             .unwrap();
@@ -587,6 +593,7 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         let instance = crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = instance.identity.id.clone();
         let source = crate::game::rust::backup_source(&paths, &instance);
         std::fs::create_dir_all(&source).unwrap();
         let save = source.join("world.sav");
@@ -599,7 +606,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/games/rust/instances/rusty/wipe-map")
+                    .uri(format!("/api/instances/{rust_id}/rust/wipe-map"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"confirmation":"wrong"}"#))
                     .unwrap(),
@@ -613,7 +620,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/games/rust/instances/rusty/wipe-map")
+                    .uri(format!("/api/instances/{rust_id}/rust/wipe-map"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"confirmation":"rusty"}"#))
                     .unwrap(),
@@ -669,7 +676,10 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db));
 
         let response = app
@@ -677,7 +687,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/games/rust/instances/rusty/lists/owner")
+                    .uri(format!("/api/instances/{rust_id}/rust/lists/owner"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":"76561197960287930"}"#))
                     .unwrap(),
@@ -690,7 +700,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/games/rust/instances/rusty/lists/owner")
+                    .uri(format!("/api/instances/{rust_id}/rust/lists/owner"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -708,7 +718,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/games/rust/instances/rusty/lists/invalid")
+                    .uri(format!("/api/instances/{rust_id}/rust/lists/invalid"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -732,11 +742,14 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         Instance::create(&paths, &db, "shared").unwrap();
-        crate::db::game_instances::create_rust(&paths, &db, "shared").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "shared")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("DELETE")
-            .uri("/api/games/rust/instances/shared")
+            .uri(format!("/api/instances/{rust_id}"))
             .body(Body::empty())
             .unwrap();
 
@@ -765,10 +778,13 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/rust/instances/rusty/resources")
+            .uri(format!("/api/instances/{rust_id}/resources"))
             .body(Body::empty())
             .unwrap();
 
@@ -790,10 +806,13 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/rust/instances/rusty/resources/history")
+            .uri(format!("/api/instances/{rust_id}/resources/history"))
             .body(Body::empty())
             .unwrap();
 

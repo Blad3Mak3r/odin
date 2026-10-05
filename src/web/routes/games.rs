@@ -679,13 +679,30 @@ async fn get_logs_for(
         load_view(&paths, &db, game, &name)?;
         let log_file = crate::paths::instance_logs_dir(&paths.game_instance_dir(game, &name))
             .join("console.log");
-        if !log_file.is_file() {
-            return Ok(Vec::new());
+        let mut lines = if log_file.is_file() {
+            crate::commands::logs::read_tail(&log_file, query.lines)?
+                .lines()
+                .map(str::to_string)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Dragonwilds writes its Unreal server log independently from stdout.
+        // Include it in Odin's normal log view rather than making operators
+        // hunt through the isolated runtime tree after a failed start.
+        if game == GameId::RunescapeDragonwilds {
+            let native_log = paths
+                .game_instance_dir(game, &name)
+                .join("runtime/RSDragonwilds/Saved/Logs/RSDragonwilds.log");
+            if native_log.is_file() {
+                lines.extend(
+                    crate::commands::logs::read_tail(&native_log, query.lines)?
+                        .lines()
+                        .map(|line| format!("[RSDragonwilds] {line}")),
+                );
+            }
         }
-        Ok(crate::commands::logs::read_tail(&log_file, query.lines)?
-            .lines()
-            .map(str::to_string)
-            .collect())
+        Ok(lines)
     })
     .await?;
     Ok(Json(crate::web::routes::instances::LogsView { lines }))

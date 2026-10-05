@@ -35,7 +35,12 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-3">
           <GameIcon game={instance.game} className="size-9 rounded-md" />
-          <h1 className="text-2xl font-semibold tracking-tight">{instance.name}</h1>
+          <div className="flex flex-col">
+            <h1 className="text-2xl font-semibold tracking-tight">{instance.name}</h1>
+            <span className="text-sm text-muted-foreground">
+              Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}
+            </span>
+          </div>
           <Badge variant={instance.running ? 'default' : 'secondary'}>
             {transition.data ?? (instance.running ? 'running' : 'stopped')}
           </Badge>

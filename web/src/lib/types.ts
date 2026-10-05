@@ -29,6 +29,7 @@ export interface ManagedInstanceView {
   name: string
   created_at: string
   running: boolean
+  odin_version: string | null
   capabilities: GameCapabilities
   config: Record<string, unknown>
 }

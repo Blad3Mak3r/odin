@@ -50,15 +50,19 @@ impl Supervisor {
         world_saves: &WorldSaveRegistry,
         activity: &ActivityLog,
     ) -> Option<AbortHandle> {
-        let stream = client::subscribe_events(paths, name).await.ok()?;
+        let stream = client::subscribe_events(paths, crate::game::GameId::Valheim, name)
+            .await
+            .ok()?;
 
         if let Ok(Response::Players {
             players: current_players,
-        }) = client::players(paths, name).await
+        }) = client::players(paths, crate::game::GameId::Valheim, name).await
         {
             players.replace_snapshot(name, current_players);
         }
-        if let Ok(Response::LastSaved { at: Some(at) }) = client::last_saved(paths, name).await {
+        if let Ok(Response::LastSaved { at: Some(at) }) =
+            client::last_saved(paths, crate::game::GameId::Valheim, name).await
+        {
             world_saves.set(name, at);
         }
 

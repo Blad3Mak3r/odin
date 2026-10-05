@@ -51,7 +51,12 @@ fn outdated_running_instances(paths: &Paths, db: &Db) -> anyhow::Result<Vec<Stri
             protocol_version,
             odin_version,
             ..
-        }) = client::ping_blocking(paths, &instance.state.name, SUPERVISOR_PING_TIMEOUT)
+        }) = client::ping_blocking(
+            paths,
+            crate::game::GameId::Valheim,
+            &instance.state.name,
+            SUPERVISOR_PING_TIMEOUT,
+        )
         else {
             continue;
         };

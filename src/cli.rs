@@ -130,6 +130,8 @@ pub enum Command {
             env = "ODIN_SUPERVISOR_INSTANCE"
         )]
         instance: String,
+        #[arg(long, env = "ODIN_SUPERVISOR_GAME", default_value = "valheim")]
+        game: crate::game::GameId,
     },
 }
 

@@ -12,13 +12,14 @@ use crate::paths::Paths;
 /// `tokio::spawn`ed connection/log-poller tasks) cooperatively on this one
 /// thread instead, exactly like `commands::start`/`stop`/`restart` already
 /// do for their own lightweight async needs.
-pub fn run(paths: &Paths, instance_name: &str) -> Result<()> {
+pub fn run(paths: &Paths, game: crate::game::GameId, instance_name: &str) -> Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("failed to start async runtime")?
         .block_on(crate::supervisor::server::run_instance(
             paths.clone(),
+            game,
             instance_name,
         ))
 }

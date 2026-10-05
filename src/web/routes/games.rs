@@ -852,13 +852,27 @@ async fn restart_instance_for(
     Ok(Json(view))
 }
 
-async fn resolve_instance_id(state: &AppState, id: &str) -> ApiResult<GameInstanceIdentity> {
+pub(crate) async fn resolve_instance_id(
+    state: &AppState,
+    id: &str,
+) -> ApiResult<GameInstanceIdentity> {
     let db = state.db.clone();
     let id = id.to_string();
     run_blocking(move || {
         game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")
     })
     .await
+}
+
+/// Resolves a UUID for a Valheim-only extension. The extension handlers keep
+/// using the filesystem-facing instance name internally, but names are never
+/// accepted from an HTTP path.
+pub(crate) async fn resolve_valheim_instance_name(state: &AppState, id: &str) -> ApiResult<String> {
+    let identity = resolve_instance_id(state, id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    Ok(identity.name)
 }
 
 pub async fn list_backups_by_id(

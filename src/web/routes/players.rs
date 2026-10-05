@@ -19,6 +19,14 @@ pub async fn get_instance_players(
     Ok(Json(state.players.snapshot(&name)))
 }
 
+pub async fn get_instance_players_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<PlayerInfo>>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    get_instance_players(State(state), Path(name)).await
+}
+
 pub async fn get_player_history(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -32,4 +40,12 @@ pub async fn get_player_history(
     })
     .await
     .map(Json)
+}
+
+pub async fn get_player_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<crate::db::player_sessions::PlayerSession>>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    get_player_history(State(state), Path(name)).await
 }

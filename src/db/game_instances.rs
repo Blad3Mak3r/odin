@@ -120,7 +120,9 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
             port: 8211,
             query_port: None,
             admin_port: Some(8212),
-            settings: json!({"server_name": name, "max_players": 32, "rest_api_enabled": true}),
+            // Do not expose Palworld's administrative API until its operator
+            // has supplied a password. The dashboard can enable it later.
+            settings: json!({"server_name": name, "max_players": 32, "rest_api_enabled": false, "admin_password": ""}),
             auto_restart: false,
         },
         GameId::RunescapeDragonwilds => GenericGameConfig {
@@ -397,6 +399,20 @@ fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Result<(
                 "RuneScape: Dragonwilds beacon port must be game port + 1111 ({expected_beacon})"
             )));
         }
+    }
+    if game == GameId::Palworld
+        && settings
+            .get("rest_api_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && settings
+            .get("admin_password")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        bail!(InvalidGenericConfig(
+            "Palworld admin password is required when the REST API is enabled".into()
+        ));
     }
     Ok(())
 }

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod generic;
 pub mod instances;
+pub mod palworld;
 pub mod ports;
 pub mod proton_ge;
 pub mod rust;

@@ -222,10 +222,15 @@ fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Res
         .settings
         .get("rest_api_enabled")
         .and_then(Value::as_bool)
-        .unwrap_or(true);
+        .unwrap_or(false);
     let rest_port = instance.config.admin_port.unwrap_or(8212);
+    let admin_password = ini_string(&setting_string(
+        &instance.config.settings,
+        "admin_password",
+        "",
+    ));
     let contents = format!(
-        "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
+        "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},AdminPassword=\"{admin_password}\",RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
         instance.config.port,
         if rest_enabled { "True" } else { "False" },
     );

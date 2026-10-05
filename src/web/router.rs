@@ -5,8 +5,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
-    instances, jobs, lists, mods, nexus, players, resources, rust_access_lists, saves, settings,
-    uptime_schedules, version, vrising_access_lists, webhooks,
+    instances, jobs, lists, mods, nexus, palworld, players, resources, rust_access_lists, saves,
+    settings, uptime_schedules, version, vrising_access_lists, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -71,6 +71,35 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/instances/id/{id}/logs/sse",
             get(sse::game_logs_sse_by_id),
+        )
+        .route(
+            "/games/instances/id/{id}/palworld/players",
+            get(palworld::players),
+        )
+        .route(
+            "/games/instances/id/{id}/palworld/metrics",
+            get(palworld::metrics),
+        )
+        .route(
+            "/games/instances/id/{id}/palworld/announce",
+            post(palworld::announce),
+        )
+        .route(
+            "/games/instances/id/{id}/palworld/save",
+            post(palworld::save),
+        )
+        .route(
+            "/games/instances/id/{id}/palworld/kick",
+            post(palworld::kick),
+        )
+        .route("/games/instances/id/{id}/palworld/ban", post(palworld::ban))
+        .route(
+            "/games/instances/id/{id}/palworld/unban",
+            post(palworld::unban),
+        )
+        .route(
+            "/games/instances/id/{id}/palworld/shutdown",
+            post(palworld::shutdown),
         )
         .route(
             "/games/instances/id/{id}/saves",

@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod lists;
 pub mod mods;
 pub mod nexus;
+pub mod palworld;
 pub mod players;
 pub mod resources;
 pub mod rust_access_lists;

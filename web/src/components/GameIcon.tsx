@@ -6,6 +6,9 @@ import { cn } from '@/lib/utils'
 const GAME_ICON_SOURCES: Partial<Record<GameId, string>> = {
   valheim: '/games/valheim.png',
   rust: '/games/rust.png',
+  vrising: '/games/vrising.png',
+  palworld: '/games/palworld.png',
+  'runescape-dragonwilds': '/games/runescape-dragonwilds.png',
 }
 
 export function GameIcon({

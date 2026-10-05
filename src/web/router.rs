@@ -172,18 +172,6 @@ pub fn build_router(state: AppState) -> Router {
             "/games/{game}/instances/{name}",
             get(games::get_instance).delete(games::delete_instance),
         )
-        .route(
-            "/games/rust/instances/{name}/resources",
-            get(games::get_rust_resources),
-        )
-        .route(
-            "/games/rust/instances/{name}/resources/history",
-            get(games::get_rust_resource_history),
-        )
-        .route(
-            "/games/rust/instances/{name}/resources/history/export",
-            get(games::export_rust_resource_history),
-        )
         .route("/games/{game}/instances/{name}/logs", get(games::get_logs))
         .route(
             "/games/{game}/instances/{name}/logs/sse",

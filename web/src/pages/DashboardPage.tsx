@@ -1,7 +1,6 @@
 import { AlertTriangle, CheckCircle2, XCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { PageHeader } from '@/components/PageHeader'
-import { GameInstallCard } from '@/pages/MultiGameInstancesPage'
 import { QueryError } from '@/components/QueryError'
 import { ResourceMetric, ResourceMetricSkeleton } from '@/components/ResourceMetric'
 import { Badge } from '@/components/ui/badge'
@@ -14,7 +13,6 @@ import {
   useDoctor,
   useHostResourceHistory,
   useHostResources,
-  useGames,
   useJobs,
 } from '@/lib/queries'
 import type { CheckResult } from '@/lib/types'
@@ -38,7 +36,6 @@ export function DashboardPage() {
   const doctor = useDoctor()
   const resources = useHostResources()
   const history = useHostResourceHistory()
-  const games = useGames()
   const jobs = useJobs()
   const activity = useActivityFeed()
 
@@ -63,8 +60,6 @@ export function DashboardPage() {
             {doctor.data?.map((check) => <CheckRow key={check.label} check={check} />)}
           </CardContent>
         </Card>
-
-        {games.data?.map((game) => <GameInstallCard key={game.id} game={game} />)}
 
         <Card>
           <CardHeader>

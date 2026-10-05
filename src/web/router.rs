@@ -60,6 +60,26 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/backups/{backup_id}/restore",
             post(games::restore_backup_by_id),
         )
+        .route(
+            "/instances/{id}/backups/jobs",
+            post(backups::create_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backups/{backup_id}/restore/job",
+            post(backups::restore_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backups/{backup_id}",
+            delete(backups::delete_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backup-schedule",
+            get(backups::get_backup_schedule_by_id).put(backups::set_backup_schedule_by_id),
+        )
+        .route(
+            "/instances/{id}/backup-storage",
+            get(backups::get_backup_storage_by_id).put(backups::set_backup_storage_by_id),
+        )
         .route("/instances/{id}/config", put(games::update_config_by_id))
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))

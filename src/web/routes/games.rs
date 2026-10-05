@@ -683,6 +683,22 @@ pub async fn list_backups(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
+    list_backups_for(state, game, name).await
+}
+
+pub async fn list_backups_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    list_backups_for(state, identity.game, identity.name).await
+}
+
+async fn list_backups_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let backups =
@@ -693,6 +709,22 @@ pub async fn list_backups(
 pub async fn create_backup(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
+) -> ApiResult<Json<crate::backup::BackupEntry>> {
+    create_backup_for(state, game, name).await
+}
+
+pub async fn create_backup_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::backup::BackupEntry>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    create_backup_for(state, identity.game, identity.name).await
+}
+
+async fn create_backup_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> ApiResult<Json<crate::backup::BackupEntry>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -712,6 +744,23 @@ pub async fn create_backup(
 pub async fn restore_backup(
     State(state): State<AppState>,
     Path((game, name, backup_id)): Path<(GameId, String, String)>,
+) -> ApiResult<StatusCode> {
+    restore_backup_for(state, game, name, backup_id).await
+}
+
+pub async fn restore_backup_by_id(
+    State(state): State<AppState>,
+    Path((id, backup_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    restore_backup_for(state, identity.game, identity.name, backup_id).await
+}
+
+async fn restore_backup_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    backup_id: String,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
     let db = state.db.clone();

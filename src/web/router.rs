@@ -1,6 +1,6 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
@@ -83,6 +83,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
+        .route(
+            "/instances/{id}/valheim/clone",
+            post(instances::clone_instance_by_id),
+        )
         .route(
             "/instances/{id}/valheim/last-exit",
             get(diagnostics::get_last_exit_by_id),
@@ -245,138 +249,6 @@ pub fn build_router(state: AppState) -> Router {
             "/games/{game}/instances",
             get(games::list_instances).post(games::create_instance),
         )
-        // Valheim's canonical module routes deliberately reuse the mature
-        // handlers below. The legacy `/instances/...` routes remain aliases
-        // while dashboard links move to `/instances/valheim/...`.
-        .route(
-            "/games/valheim/instances/{name}/clone",
-            post(instances::clone_instance),
-        )
-        .route(
-            "/games/valheim/instances/{name}/status",
-            get(instances::get_instance),
-        )
-        .route(
-            "/games/valheim/instances/{name}/rename",
-            post(instances::rename_instance),
-        )
-        .route(
-            "/games/valheim/instances/{name}/config",
-            get(instances::get_config).put(instances::set_config),
-        )
-        .route(
-            "/games/valheim/instances/{name}/logs/sse",
-            get(sse::logs_sse),
-        )
-        .route(
-            "/games/valheim/instances/{name}/last-exit",
-            get(diagnostics::get_last_exit),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods",
-            get(mods::list_mods).post(mods::add_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/update",
-            post(mods::update_mods),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/status",
-            get(bepinex::status),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/update",
-            post(bepinex::update),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/modpack",
-            get(mods::download_modpack),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/upload",
-            post(mods::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}",
-            delete(mods::remove_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/enable",
-            post(mods::enable_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/disable",
-            post(mods::disable_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/version",
-            put(mods::select_mod_version),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/pinned",
-            put(mods::set_mod_pinned),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backup-schedule",
-            get(backups::get_backup_schedule).put(backups::set_backup_schedule),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backup-storage",
-            get(backups::get_backup_storage).put(backups::set_backup_storage),
-        )
-        // Valheim backups already expose job progress in the dashboard. Keep
-        // that richer contract under the canonical namespace while the
-        // generic backup route remains the synchronous driver operation.
-        .route(
-            "/games/valheim/instances/{name}/backups/jobs",
-            post(backups::create_backup),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backups/{id}/restore/job",
-            post(backups::restore_backup),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backups/{id}",
-            delete(backups::delete_backup),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/config",
-            get(config_files::list_config_files),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/config/{filename}",
-            get(config_files::get_config_file).put(config_files::set_config_file),
-        )
-        .route(
-            "/games/valheim/instances/{name}/lists/{kind}",
-            get(lists::get_list)
-                .put(lists::set_list)
-                .post(lists::add_list_entry),
-        )
-        .route(
-            "/games/valheim/instances/{name}/lists/{kind}/{id}",
-            delete(lists::remove_list_entry),
-        )
-        .route(
-            "/games/valheim/instances/{name}/resources",
-            get(resources::get_instance_resources),
-        )
-        .route(
-            "/games/valheim/instances/{name}/resources/history",
-            get(resources::get_instance_resources_history),
-        )
-        .route(
-            "/games/valheim/instances/{name}/resources/history/export",
-            get(resources::export_instance_resources_history),
-        )
-        .route(
-            "/games/valheim/instances/{name}/players",
-            get(players::get_instance_players),
-        )
-        .route(
-            "/games/valheim/instances/{name}/players/history",
-            get(players::get_player_history),
-        )
         .route(
             "/instances",
             get(instances::list_instances).post(instances::create_instance),
@@ -431,13 +303,21 @@ pub fn build_router(state: AppState) -> Router {
         .route("/webhooks/{id}/enable", post(webhooks::enable_webhook))
         .route("/webhooks/{id}/disable", post(webhooks::disable_webhook))
         .route("/webhooks/{id}/test", post(webhooks::test_webhook))
+        // Never let the dashboard's SPA fallback turn a retired or misspelled
+        // API URL into a successful HTML response.
+        .fallback(|| async { axum::http::StatusCode::NOT_FOUND })
         .with_state(state);
 
     Router::new()
         .nest("/api", api)
+        .route("/api/{*path}", any(api_not_found))
         .route("/", get(static_files::serve_index))
         .route("/{*path}", get(static_files::serve_asset))
         .layer(TraceLayer::new_for_http())
+}
+
+async fn api_not_found() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
 }
 
 #[cfg(test)]
@@ -536,6 +416,34 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn valheim_game_name_api_routes_are_not_registered() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-valheim-retired-route-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        Instance::create(&paths, &db, "meadows").unwrap();
+        let app = build_router(AppState::new(paths, db));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/games/valheim/instances/meadows/rename")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"new_name":"mistlands"}"#))
+            .unwrap();
+
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[tokio::test]

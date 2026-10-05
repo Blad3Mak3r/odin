@@ -130,37 +130,18 @@ pub async fn clone_instance(
     Ok(Json(instance_view))
 }
 
-pub async fn get_instance(
+pub async fn clone_instance_by_id(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path(id): Path<String>,
+    Json(req): Json<CloneInstanceRequest>,
 ) -> ApiResult<Json<InstanceView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let instance_view = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &name)?;
-        view(&paths, instance)
-    })
-    .await?;
-    Ok(Json(instance_view))
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    clone_instance(State(state), Path(name), Json(req)).await
 }
 
 #[derive(Deserialize)]
 pub struct RenameRequest {
     pub new_name: String,
-}
-
-pub async fn rename_instance(
-    State(state): State<AppState>,
-    Path(old_name): Path<String>,
-    Json(req): Json<RenameRequest>,
-) -> ApiResult<Json<InstanceView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let renamed =
-        run_blocking(move || lifecycle::rename(&paths, &db, &old_name, &req.new_name)).await?;
-    let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, renamed)).await?;
-    Ok(Json(instance_view))
 }
 
 #[derive(Serialize)]

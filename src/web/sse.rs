@@ -85,6 +85,9 @@ pub async fn game_logs_sse_by_id(
         crate::db::game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")
     })
     .await?;
+    if identity.game == GameId::Valheim {
+        return logs_sse(State(state), Path(identity.name)).await;
+    }
     game_logs_sse_for(state, identity.game, identity.name).await
 }
 

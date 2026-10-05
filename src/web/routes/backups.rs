@@ -69,6 +69,9 @@ pub async fn create_backup_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<JobHandle>> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return Ok(create_backup(State(state), Path(name)).await);
+    }
     Ok(create_backup_for_game(State(state), Path((game, name))).await)
 }
 
@@ -141,6 +144,9 @@ pub async fn get_backup_storage_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<BackupStorageView>> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return get_backup_storage(State(state), Path(name)).await;
+    }
     get_backup_storage_for_game(State(state), Path((game, name))).await
 }
 
@@ -232,6 +238,9 @@ pub async fn set_backup_storage_by_id(
     Json(req): Json<SetBackupStorageRequest>,
 ) -> ApiResult<Json<BackupStorageView>> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return set_backup_storage(State(state), Path(name), Json(req)).await;
+    }
     set_backup_storage_for_game(State(state), Path((game, name)), Json(req)).await
 }
 
@@ -280,6 +289,9 @@ pub async fn restore_backup_by_id(
     Path((id, backup_id)): Path<(String, String)>,
 ) -> ApiResult<Json<JobHandle>> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return Ok(restore_backup(State(state), Path((name, backup_id))).await);
+    }
     Ok(restore_backup_for_game(State(state), Path((game, name, backup_id))).await)
 }
 
@@ -309,6 +321,9 @@ pub async fn delete_backup_by_id(
     Path((id, backup_id)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return delete_backup(State(state), Path((name, backup_id))).await;
+    }
     delete_backup_for_game(State(state), Path((game, name, backup_id))).await
 }
 
@@ -371,6 +386,9 @@ pub async fn get_backup_schedule_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<BackupScheduleView>> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return get_backup_schedule(State(state), Path(name)).await;
+    }
     get_backup_schedule_for_game(State(state), Path((game, name))).await
 }
 
@@ -432,5 +450,8 @@ pub async fn set_backup_schedule_by_id(
     Json(req): Json<SetBackupScheduleRequest>,
 ) -> ApiResult<Json<BackupScheduleView>> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return set_backup_schedule(State(state), Path(name), Json(req)).await;
+    }
     set_backup_schedule_for_game(State(state), Path((game, name)), Json(req)).await
 }

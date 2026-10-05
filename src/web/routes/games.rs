@@ -594,6 +594,13 @@ pub async fn get_resources_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<InstanceSnapshot>> {
     let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game == GameId::Valheim {
+        return crate::web::routes::resources::get_instance_resources(
+            State(state),
+            Path(identity.name),
+        )
+        .await;
+    }
     Ok(Json(
         state
             .runtime
@@ -648,6 +655,14 @@ pub async fn get_resource_history_by_id(
     Query(query): Query<crate::web::routes::resources::HistoryQuery>,
 ) -> ApiResult<Json<Vec<ResourceSample>>> {
     let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game == GameId::Valheim {
+        return crate::web::routes::resources::get_instance_resources_history(
+            State(state),
+            Path(identity.name),
+            Query(query),
+        )
+        .await;
+    }
     match query.hours {
         Some(hours) => {
             let db = state.db.clone();
@@ -712,6 +727,14 @@ pub async fn export_resource_history_by_id(
     Query(query): Query<crate::web::routes::resources::HistoryQuery>,
 ) -> ApiResult<Response> {
     let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game == GameId::Valheim {
+        return crate::web::routes::resources::export_instance_resources_history(
+            State(state),
+            Path(identity.name),
+            Query(query),
+        )
+        .await;
+    }
     let hours = query.hours.unwrap_or(24 * 7);
     let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
     let db = state.db.clone();

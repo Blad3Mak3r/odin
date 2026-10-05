@@ -398,10 +398,10 @@ export function useExecuteVRisingRcon() {
 export function useWipeRustMap() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, confirmation }: { name: string; confirmation: string }) =>
-      api.post<JobHandle>('/games/rust/instances/' + name + '/wipe-map', { confirmation }),
-    onSuccess: (_job, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+    mutationFn: ({ id, confirmation }: { id: string; confirmation: string }) =>
+      api.post<JobHandle>(`/instances/${id}/rust/wipe-map`, { confirmation }),
+    onSuccess: (_job, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instance', id] })
       queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
@@ -411,10 +411,10 @@ export function useWipeRustMap() {
 export function useFullWipeRust() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, confirmation }: { name: string; confirmation: string }) =>
-      api.post<JobHandle>('/games/rust/instances/' + name + '/full-wipe', { confirmation }),
-    onSuccess: (_job, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+    mutationFn: ({ id, confirmation }: { id: string; confirmation: string }) =>
+      api.post<JobHandle>(`/instances/${id}/rust/full-wipe`, { confirmation }),
+    onSuccess: (_job, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instance', id] })
       queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },

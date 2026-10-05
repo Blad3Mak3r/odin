@@ -113,6 +113,14 @@ pub fn build_router(state: AppState) -> Router {
             post(games::execute_rust_rcon_by_id),
         )
         .route(
+            "/instances/{id}/rust/wipe-map",
+            post(games::wipe_rust_map_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/full-wipe",
+            post(games::full_wipe_rust_by_id),
+        )
+        .route(
             "/instances/{id}/vrising/lists/{kind}",
             get(vrising_access_lists::get_list_by_id)
                 .post(vrising_access_lists::add_list_entry_by_id),

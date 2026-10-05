@@ -18,7 +18,7 @@ import { useFullWipeRust, useWipeRustMap } from '@/lib/queries'
 
 type WipeMode = 'map' | 'full'
 
-export function WipeMapCard({ name, running }: { name: string; running: boolean }) {
+export function WipeMapCard({ id, name, running }: { id: string; name: string; running: boolean }) {
   const [open, setOpen] = useState(false)
   const [confirmation, setConfirmation] = useState('')
   const [jobId, setJobId] = useState<string | null>(null)
@@ -47,7 +47,7 @@ export function WipeMapCard({ name, running }: { name: string; running: boolean 
   }
 
   const wipe = () => {
-    const variables = { name, confirmation }
+    const variables = { id, confirmation }
     const options = {
       onSuccess,
       onError: (error: Error) => toast.error(error.message),

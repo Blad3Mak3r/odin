@@ -562,6 +562,32 @@ pub async fn full_wipe_rust(
     Ok(Json(JobHandle { id }))
 }
 
+/// Queues a Rust map wipe using the instance's durable UUID.
+pub async fn wipe_rust_map_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<WipeRustMapRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    wipe_rust_map(State(state), Path(identity.name), Json(request)).await
+}
+
+/// Queues a full Rust wipe using the instance's durable UUID.
+pub async fn full_wipe_rust_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<WipeRustMapRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    full_wipe_rust(State(state), Path(identity.name), Json(request)).await
+}
+
 pub async fn get_rust_resources(
     State(state): State<AppState>,
     Path(name): Path<String>,

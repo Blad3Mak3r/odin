@@ -312,7 +312,7 @@ export function ManagedInstanceDetailPage() {
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} name={detail.name} config={genericConfig} running={detail.running} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
           <UptimeScheduleCard id={detail.id} />
-          {detail.game === 'rust' && <WipeMapCard name={detail.name} running={detail.running} />}
+          {detail.game === 'rust' && <WipeMapCard id={detail.id} name={detail.name} running={detail.running} />}
         </TabsContent>
         {detail.game === 'palworld' && <TabsContent value="admin"><PalworldAdminTab id={detail.id} running={detail.running} /></TabsContent>}
         {detail.capabilities.backups && (

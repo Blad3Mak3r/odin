@@ -14,13 +14,18 @@ use crate::db::game_instances::GenericGameInstance;
 
 const REST_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn request(instance: &GenericGameInstance, endpoint: &str) -> Result<RequestBuilder> {
-    let settings = &instance.config.settings;
-    if !settings
+pub fn rest_enabled(instance: &GenericGameInstance) -> bool {
+    instance
+        .config
+        .settings
         .get("rest_api_enabled")
         .and_then(Value::as_bool)
         .unwrap_or(false)
-    {
+}
+
+fn request(instance: &GenericGameInstance, endpoint: &str) -> Result<RequestBuilder> {
+    let settings = &instance.config.settings;
+    if !rest_enabled(instance) {
         bail!("Palworld REST API is disabled for this instance");
     }
     let password = settings
@@ -41,11 +46,7 @@ fn request(instance: &GenericGameInstance, endpoint: &str) -> Result<RequestBuil
 
 fn get(instance: &GenericGameInstance, endpoint: &str) -> Result<RequestBuilder> {
     let settings = &instance.config.settings;
-    if !settings
-        .get("rest_api_enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if !rest_enabled(instance) {
         bail!("Palworld REST API is disabled for this instance");
     }
     let password = settings

@@ -191,13 +191,21 @@ pub fn create_backup(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
             crate::backup::create(&instance, db)
         }
         GameInstance::Rust(instance) => rust::create_backup(paths, db, &instance),
-        GameInstance::Generic(instance) => crate::backup::create_at(
-            db,
-            instance.identity.game,
-            instance.name(),
-            &paths.game_instance_dir(instance.identity.game, instance.name()),
-            &generic_save_dir(paths, &instance),
-        ),
+        GameInstance::Generic(instance) => {
+            // A filesystem copy made while Palworld is changing its world is
+            // not a useful backup. Its local REST endpoint owns the save
+            // operation, so ask it to flush before taking the snapshot.
+            if instance.identity.game == GameId::Palworld && instance.is_running() {
+                crate::game::palworld::save(&instance)?;
+            }
+            crate::backup::create_at(
+                db,
+                instance.identity.game,
+                instance.name(),
+                &paths.game_instance_dir(instance.identity.game, instance.name()),
+                &generic_save_dir(paths, &instance),
+            )
+        }
     }
 }
 

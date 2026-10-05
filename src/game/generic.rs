@@ -355,6 +355,21 @@ pub async fn stop(paths: &Paths, db: &crate::db::Db, game: GameId, name: &str) -
     let (Some(pid), Some(started_at)) = (instance.pid, instance.pid_started_at) else {
         bail!("instance '{name}' is not running");
     };
+    // Palworld's REST shutdown tells the server to flush its world and exit
+    // itself. Wait for that first; if it is unavailable or times out, retain
+    // the normal supervisor stop as a bounded fallback.
+    if game == GameId::Palworld && crate::game::palworld::rest_enabled(&instance) {
+        let palworld = instance.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::game::palworld::shutdown(&palworld, Some(0), None)
+        })
+        .await
+        .context("Palworld shutdown task panicked")??;
+        if crate::instance::process::wait_until_gone(pid, started_at, Duration::from_secs(40)).await
+        {
+            return Ok(());
+        }
+    }
     crate::supervisor::client::stop(paths, game, name, 30).await?;
     if !crate::instance::process::wait_until_gone(pid, started_at, Duration::from_secs(40)).await {
         bail!("instance '{name}' did not stop");

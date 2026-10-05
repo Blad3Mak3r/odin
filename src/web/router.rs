@@ -173,22 +173,6 @@ pub fn build_router(state: AppState) -> Router {
             get(games::get_instance).delete(games::delete_instance),
         )
         .route(
-            "/games/rust/instances/{name}/config",
-            put(games::update_rust_config),
-        )
-        .route(
-            "/games/vrising/instances/{name}/config",
-            put(games::update_generic_config),
-        )
-        .route(
-            "/games/palworld/instances/{name}/config",
-            put(games::update_generic_config),
-        )
-        .route(
-            "/games/runescape-dragonwilds/instances/{name}/config",
-            put(games::update_generic_config),
-        )
-        .route(
             "/games/rust/instances/{name}/rcon",
             post(games::execute_rust_rcon),
         )

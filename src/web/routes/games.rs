@@ -309,14 +309,6 @@ async fn delete_instance_for(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn update_rust_config(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<RustConfigUpdateRequest>,
-) -> ApiResult<Json<ManagedInstanceView>> {
-    update_rust_config_for(state, name, request).await
-}
-
 async fn update_rust_config_for(
     state: AppState,
     name: String,
@@ -364,14 +356,6 @@ async fn update_rust_config_for(
     })
     .await?;
     Ok(Json(view))
-}
-
-pub async fn update_generic_config(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-    Json(request): Json<GenericConfigUpdateRequest>,
-) -> ApiResult<Json<ManagedInstanceView>> {
-    update_generic_config_for(state, game, name, request).await
 }
 
 async fn update_generic_config_for(

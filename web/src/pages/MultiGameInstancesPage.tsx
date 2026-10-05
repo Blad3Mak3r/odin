@@ -17,7 +17,7 @@ import { QueryError } from '@/components/QueryError'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useCreateManagedInstance, useGames, useJobs, useManagedInstanceAction, useManagedInstanceTransition, useManagedInstances } from '@/lib/queries'
+import { useCreateManagedInstance, useGames, useManagedInstanceAction, useManagedInstanceTransition, useManagedInstances } from '@/lib/queries'
 import type { GameId, GameView, ManagedInstanceView, InstanceResources } from '@/lib/types'
 
 type Filter = 'all' | GameId

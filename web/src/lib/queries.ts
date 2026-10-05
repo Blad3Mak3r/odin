@@ -913,27 +913,27 @@ export function useRemoveListEntry(name: string, kind: ListKind) {
   })
 }
 
-export function useRustAccessList(name: string, kind: RustAccessListKind) {
+export function useRustAccessList(id: string, kind: RustAccessListKind) {
   return useQuery({
-    queryKey: ['managed-instances', 'rust', name, 'lists', kind],
-    queryFn: () => api.get<ListView>(`/games/rust/instances/${name}/lists/${kind}`),
+    queryKey: ['managed-instances', id, 'lists', kind],
+    queryFn: () => api.get<ListView>(`/instances/${id}/rust/lists/${kind}`),
   })
 }
 
-export function useAddRustAccessListEntry(name: string, kind: RustAccessListKind) {
+export function useAddRustAccessListEntry(id: string, kind: RustAccessListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post<void>(`/games/rust/instances/${name}/lists/${kind}`, { id }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name, 'lists', kind] }),
+    mutationFn: (entryId: string) => api.post<void>(`/instances/${id}/rust/lists/${kind}`, { id: entryId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
   })
 }
 
-export function useRemoveRustAccessListEntry(name: string, kind: RustAccessListKind) {
+export function useRemoveRustAccessListEntry(id: string, kind: RustAccessListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) =>
-      api.delete<void>(`/games/rust/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name, 'lists', kind] }),
+    mutationFn: (entryId: string) =>
+      api.delete<void>(`/instances/${id}/rust/lists/${kind}/${encodeURIComponent(entryId)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
   })
 }
 

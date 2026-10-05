@@ -18,7 +18,7 @@ function isRustListTab(value: string | undefined): value is RustListTab {
   return LIST_TABS.some((tab) => tab === value)
 }
 
-export function RustAccessListsTab({ name, path, running, basePath }: { name: string; path: string[]; running: boolean; basePath: string }) {
+export function RustAccessListsTab({ id, path, running, basePath }: { id: string; path: string[]; running: boolean; basePath: string }) {
   const navigate = useNavigate()
   const [tab, ...rest] = path
 
@@ -35,18 +35,18 @@ export function RustAccessListsTab({ name, path, running, basePath }: { name: st
           <TabsTrigger value="moderator">Moderators</TabsTrigger>
           <TabsTrigger value="banned">Banned</TabsTrigger>
         </TabsList>
-        {tab === 'owner' && <TabsContent value="owner"><RustSteamIdListEditor name={name} kind="owner" running={running} /></TabsContent>}
-        {tab === 'moderator' && <TabsContent value="moderator"><RustSteamIdListEditor name={name} kind="moderator" running={running} /></TabsContent>}
-        {tab === 'banned' && <TabsContent value="banned"><RustSteamIdListEditor name={name} kind="banned" running={running} /></TabsContent>}
+        {tab === 'owner' && <TabsContent value="owner"><RustSteamIdListEditor id={id} kind="owner" running={running} /></TabsContent>}
+        {tab === 'moderator' && <TabsContent value="moderator"><RustSteamIdListEditor id={id} kind="moderator" running={running} /></TabsContent>}
+        {tab === 'banned' && <TabsContent value="banned"><RustSteamIdListEditor id={id} kind="banned" running={running} /></TabsContent>}
       </Tabs>
     </div>
   )
 }
 
-function RustSteamIdListEditor({ name, kind, running }: { name: string; kind: RustAccessListKind; running: boolean }) {
-  const list = useRustAccessList(name, kind)
-  const addEntry = useAddRustAccessListEntry(name, kind)
-  const removeEntry = useRemoveRustAccessListEntry(name, kind)
+function RustSteamIdListEditor({ id, kind, running }: { id: string; kind: RustAccessListKind; running: boolean }) {
+  const list = useRustAccessList(id, kind)
+  const addEntry = useAddRustAccessListEntry(id, kind)
+  const removeEntry = useRemoveRustAccessListEntry(id, kind)
   const [newId, setNewId] = useState('')
   const { confirm, dialog } = useConfirmDialog()
 

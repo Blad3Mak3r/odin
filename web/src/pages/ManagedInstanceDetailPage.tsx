@@ -319,7 +319,7 @@ export function ManagedInstanceDetailPage() {
           <TabsContent value="backups"><BackupsTab id={detail.id} name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
         )}
         {detail.game === 'rust' && tab === 'lists' && (
-          <TabsContent value="lists"><RustAccessListsTab name={detail.name} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabsContent>
+          <TabsContent value="lists"><RustAccessListsTab id={detail.id} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabsContent>
         )}
         {detail.game === 'vrising' && tab === 'lists' && (
           <TabsContent value="lists"><VRisingAccessListsTab id={detail.id} path={nestedPath} basePath={listsBasePath} /></TabsContent>

@@ -117,6 +117,16 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/vrising/lists/{kind}/{entry_id}",
             delete(vrising_access_lists::remove_list_entry_by_id),
         )
+        .route(
+            "/instances/{id}/rust/lists/{kind}",
+            get(rust_access_lists::get_list_by_id)
+                .put(rust_access_lists::set_list_by_id)
+                .post(rust_access_lists::add_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/lists/{kind}/{entry_id}",
+            delete(rust_access_lists::remove_list_entry_by_id),
+        )
         .route("/instances/{id}/saves", get(saves::list_save_files_by_id))
         .route(
             "/instances/{id}/saves/{*path}",

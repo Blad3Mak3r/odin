@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
+import type { GameId } from '@/lib/types'
 
 const MAX_LINES = 1000
 
-export function useLogSocket(instanceName: string, game: 'valheim' | 'rust' = 'valheim') {
+export function useLogSocket(instanceName: string, game: GameId = 'valheim') {
   const [lines, setLines] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
 

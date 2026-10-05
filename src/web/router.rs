@@ -173,18 +173,6 @@ pub fn build_router(state: AppState) -> Router {
             get(games::get_instance).delete(games::delete_instance),
         )
         .route(
-            "/games/rust/instances/{name}/rcon",
-            post(games::execute_rust_rcon),
-        )
-        .route(
-            "/games/rust/instances/{name}/wipe-map",
-            post(games::wipe_rust_map),
-        )
-        .route(
-            "/games/rust/instances/{name}/full-wipe",
-            post(games::full_wipe_rust),
-        )
-        .route(
             "/games/rust/instances/{name}/lists/{kind}",
             get(rust_access_lists::get_list)
                 .put(rust_access_lists::set_list)

@@ -413,10 +413,10 @@ pub async fn update_config_by_id(
 
 /// Sends one command to the Rust instance through its private loopback
 /// WebRCON connection. The browser never receives the RCON password.
-pub async fn execute_rust_rcon(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<RconCommandRequest>,
+async fn execute_rust_rcon_for(
+    state: AppState,
+    name: String,
+    request: RconCommandRequest,
 ) -> ApiResult<Json<RconCommandResponse>> {
     let command = request.command.trim().to_string();
     if command.is_empty() {
@@ -445,7 +445,7 @@ pub async fn execute_rust_rcon_by_id(
     if identity.game != GameId::Rust {
         return Err(BadRequest("this API is only available for Rust instances".into()).into());
     }
-    execute_rust_rcon(State(state), Path(identity.name), Json(request)).await
+    execute_rust_rcon_for(state, identity.name, request).await
 }
 
 /// Executes V Rising's Source RCON command through the loopback listener
@@ -478,10 +478,10 @@ pub async fn execute_vrising_rcon_by_id(
     Ok(Json(RconCommandResponse { output }))
 }
 
-pub async fn wipe_rust_map(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<WipeRustMapRequest>,
+async fn wipe_rust_map_for(
+    state: AppState,
+    name: String,
+    request: WipeRustMapRequest,
 ) -> ApiResult<Json<JobHandle>> {
     if request.confirmation != name {
         return Err(BadRequest("type the exact instance name to wipe its map".to_string()).into());
@@ -512,10 +512,10 @@ pub async fn wipe_rust_map(
     Ok(Json(JobHandle { id }))
 }
 
-pub async fn full_wipe_rust(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<WipeRustMapRequest>,
+async fn full_wipe_rust_for(
+    state: AppState,
+    name: String,
+    request: WipeRustMapRequest,
 ) -> ApiResult<Json<JobHandle>> {
     if request.confirmation != name {
         return Err(BadRequest("type the exact instance name to fully wipe it".to_string()).into());
@@ -556,7 +556,7 @@ pub async fn wipe_rust_map_by_id(
     if identity.game != GameId::Rust {
         return Err(BadRequest("this API is only available for Rust instances".into()).into());
     }
-    wipe_rust_map(State(state), Path(identity.name), Json(request)).await
+    wipe_rust_map_for(state, identity.name, request).await
 }
 
 /// Queues a full Rust wipe using the instance's durable UUID.
@@ -569,7 +569,7 @@ pub async fn full_wipe_rust_by_id(
     if identity.game != GameId::Rust {
         return Err(BadRequest("this API is only available for Rust instances".into()).into());
     }
-    full_wipe_rust(State(state), Path(identity.name), Json(request)).await
+    full_wipe_rust_for(state, identity.name, request).await
 }
 
 pub async fn get_rust_resources(

@@ -188,6 +188,14 @@ pub async fn get_config(
     }))
 }
 
+pub async fn get_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ConfigView>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    get_config(State(state), Path(name)).await
+}
+
 #[derive(Deserialize)]
 pub struct ConfigUpdateRequest {
     pub world: Option<String>,
@@ -212,6 +220,15 @@ pub async fn set_config(
         public: instance.state.public,
         auto_restart: instance.state.auto_restart,
     }))
+}
+
+pub async fn set_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ConfigUpdateRequest>,
+) -> ApiResult<Json<ConfigView>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    set_config(State(state), Path(name), Json(req)).await
 }
 
 fn update_config(

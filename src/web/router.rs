@@ -77,7 +77,10 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/backup-storage",
             get(backups::get_backup_storage_by_id).put(backups::set_backup_storage_by_id),
         )
-        .route("/instances/{id}/config", put(games::update_config_by_id))
+        .route(
+            "/instances/{id}/config",
+            get(instances::get_config_by_id).put(games::update_config_by_id),
+        )
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
         .route(
@@ -428,7 +431,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_valheim_config_route_uses_the_valheim_module_handler() {
+    async fn valheim_config_route_uses_the_durable_uuid() {
         let dir = std::env::temp_dir().join(format!(
             "odin-router-valheim-module-test-{}-{}",
             std::process::id(),
@@ -440,10 +443,17 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        Instance::create(&paths, &db, "meadows").unwrap();
+        let instance = Instance::create(&paths, &db, "meadows").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "meadows",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/valheim/instances/meadows/config")
+            .uri(format!("/api/instances/{id}/config"))
             .body(Body::empty())
             .unwrap();
 
@@ -453,7 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_valheim_status_route_keeps_the_full_dashboard_view() {
+    async fn valheim_instance_route_keeps_the_full_dashboard_view() {
         let dir = std::env::temp_dir().join(format!(
             "odin-router-valheim-status-test-{}-{}",
             std::process::id(),
@@ -465,10 +475,17 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        Instance::create(&paths, &db, "meadows").unwrap();
+        let instance = Instance::create(&paths, &db, "meadows").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "meadows",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/valheim/instances/meadows/status")
+            .uri(format!("/api/instances/{id}"))
             .body(Body::empty())
             .unwrap();
 

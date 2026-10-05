@@ -386,10 +386,21 @@ pub async fn update_config_by_id(
                 .map_err(|error| BadRequest(format!("invalid game configuration: {error}")))?;
             update_generic_config_for(state, identity.game, identity.name, request).await
         }
-        GameId::Valheim => Err(BadRequest(
-            "Valheim configuration remains on its dedicated compatibility endpoint".into(),
-        )
-        .into()),
+        GameId::Valheim => {
+            let request = serde_json::from_value(request)
+                .map_err(|error| BadRequest(format!("invalid Valheim configuration: {error}")))?;
+            let _ = crate::web::routes::instances::set_config_by_id(
+                State(state.clone()),
+                Path(id),
+                Json(request),
+            )
+            .await?;
+            let paths = state.paths.clone();
+            let db = state.db.clone();
+            let name = identity.name;
+            let view = run_blocking(move || load_view(&paths, &db, GameId::Valheim, &name)).await?;
+            Ok(Json(view))
+        }
     }
 }
 

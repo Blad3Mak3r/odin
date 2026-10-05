@@ -34,25 +34,32 @@ pub async fn start(
 ) -> Result<RustInstance> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
-    start_unlocked(paths, db, &instance).await
+    start_unlocked(paths, db, instance.name()).await
 }
 
-async fn start_unlocked(
-    paths: &Paths,
-    db: &crate::db::Db,
-    instance: &RustInstance,
-) -> Result<RustInstance> {
-    let steam_home = crate::steamcmd::steam_home_dir()?;
-    start_unlocked_with_steam_home(paths, db, instance, &steam_home).await
+async fn start_unlocked(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<RustInstance> {
+    let instance = prepare_start(paths, db, name)?;
+    crate::supervisor::client::spawn_detached(paths, &instance.identity)
+        .await
+        .with_context(|| format!("failed to start Rust instance '{name}'"))?;
+    crate::supervisor::client::ping_with_retry(
+        paths,
+        crate::game::GameId::Rust,
+        name,
+        Duration::from_secs(10),
+    )
+    .await
+    .with_context(|| format!("failed to start Rust instance '{name}'"))?;
+    crate::db::game_instances::load_rust(db, name)?.context("Rust instance disappeared after start")
 }
 
-async fn start_unlocked_with_steam_home(
-    paths: &Paths,
-    db: &crate::db::Db,
-    instance: &RustInstance,
-    steam_home: &Path,
-) -> Result<RustInstance> {
-    if is_running(instance) {
+/// Performs the synchronous checks and setup required before the Rust
+/// supervisor launches `RustDedicated`. It is also called by `odin run`, so
+/// the hidden supervisor command remains safe when invoked independently.
+pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<RustInstance> {
+    let instance =
+        crate::db::game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
+    if is_running(&instance) {
         bail!("instance '{}' is already running", instance.name());
     }
     crate::game::ports::ensure_available(
@@ -67,25 +74,10 @@ async fn start_unlocked_with_steam_home(
     )?;
 
     crate::steamcmd::SteamCmd::new(paths.steamcmd_dir())
-        .ensure_sdk64_client_at(steam_home)
+        .ensure_sdk64_client_at(&crate::steamcmd::steam_home_dir()?)
         .context("failed to prepare Rust's Steamworks runtime")?;
-
-    let command = build_command(paths, instance)?;
-    let child = process::spawn(command)
-        .await
-        .context("failed to start RustDedicated")?;
-    let pid = child.id().context("spawned RustDedicated has no pid")?;
-    let pid_started_at = process::start_time_of(pid)?;
-    // Dropping Tokio's Child leaves the dedicated server running. Its PID
-    // fingerprint is persisted and is the authority for later stop/restart.
-    drop(child);
-    crate::db::game_instances::set_rust_pid(
-        db,
-        instance.name(),
-        pid,
-        pid_started_at,
-        chrono::Utc::now(),
-    )
+    build_command(paths, &instance)?;
+    Ok(instance)
 }
 
 /// Builds Rust Dedicated's process command using Odin's game-isolated
@@ -166,10 +158,10 @@ fn rust_library_path(install_dir: &Path) -> Result<std::ffi::OsString> {
 pub async fn stop(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
-    stop_unlocked(db, &instance).await
+    stop_unlocked(paths, db, &instance).await
 }
 
-async fn stop_unlocked(db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
+async fn stop_unlocked(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
     let (Some(pid), Some(started_at)) = (instance.pid, instance.pid_started_at) else {
         bail!("instance '{}' is not running", instance.name());
     };
@@ -177,14 +169,24 @@ async fn stop_unlocked(db: &crate::db::Db, instance: &RustInstance) -> Result<()
         bail!("instance '{}' is not running", instance.name());
     }
 
-    process::send_signal(pid, started_at, Signal::Interrupt)?;
-    if !process::wait_until_gone(pid, started_at, STOP_TIMEOUT).await {
-        process::send_signal(pid, started_at, Signal::Kill)?;
-        if !process::wait_until_gone(pid, started_at, Duration::from_secs(5)).await {
-            bail!("instance '{}' did not stop", instance.name());
+    match crate::supervisor::client::stop(
+        paths,
+        crate::game::GameId::Rust,
+        instance.name(),
+        STOP_TIMEOUT.as_secs(),
+    )
+    .await
+    {
+        Ok(()) => {
+            if !process::wait_until_gone(pid, started_at, STOP_TIMEOUT + Duration::from_secs(10))
+                .await
+            {
+                bail!("Rust instance '{}' did not stop", instance.name());
+            }
+            Ok(())
         }
+        Err(_) => stop_via_pid_signal(db, instance.name(), pid, started_at).await,
     }
-    crate::db::game_instances::clear_rust_pid(db, instance.name(), chrono::Utc::now())
 }
 
 pub async fn restart(
@@ -195,11 +197,25 @@ pub async fn restart(
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
     if is_running(&instance) {
-        stop_unlocked(db, &instance).await?;
+        stop_unlocked(paths, db, &instance).await?;
     }
-    let refreshed = crate::db::game_instances::load_rust(db, instance.name())?
-        .context("Rust instance disappeared while restarting")?;
-    start_unlocked(paths, db, &refreshed).await
+    start_unlocked(paths, db, instance.name()).await
+}
+
+async fn stop_via_pid_signal(
+    db: &crate::db::Db,
+    name: &str,
+    pid: u32,
+    started_at: i64,
+) -> Result<()> {
+    process::send_signal(pid, started_at, Signal::Interrupt)?;
+    if !process::wait_until_gone(pid, started_at, STOP_TIMEOUT).await {
+        process::send_signal(pid, started_at, Signal::Kill)?;
+        if !process::wait_until_gone(pid, started_at, Duration::from_secs(5)).await {
+            bail!("Rust instance '{name}' did not stop");
+        }
+    }
+    crate::db::game_instances::clear_rust_pid(db, name, chrono::Utc::now())
 }
 
 pub fn delete(
@@ -619,8 +635,16 @@ mod tests {
         install_fake_server(&paths);
         install_fake_steam_client(&paths);
 
-        let started = start_unlocked_with_steam_home(&paths, &db, &instance, &paths.data_dir)
+        let child = process::spawn(build_command(&paths, &instance).unwrap())
             .await
+            .unwrap();
+        let pid = child.id().unwrap();
+        let started_at = process::start_time_of(pid).unwrap();
+        drop(child);
+        game_instances::set_rust_pid(&db, instance.name(), pid, started_at, chrono::Utc::now())
+            .unwrap();
+        let started = game_instances::load_rust(&db, instance.name())
+            .unwrap()
             .unwrap();
         assert!(is_running(&started));
 

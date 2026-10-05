@@ -17,12 +17,14 @@ use tokio::process::Command;
 use super::protocol::PROTOCOL_VERSION;
 use super::protocol::{Event, MAX_FRAME_BYTES, Request, Response, read_frame, write_frame};
 use crate::cli::validate_instance_name;
+use crate::db::game_instances::GameInstanceIdentity;
+use crate::game::GameId;
 use crate::paths::Paths;
 
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Spawns `odin run --instance <name>` detached: its own process group
+/// Spawns `odin run --instance-id <uuid>` detached: its own process group
 /// (same mechanism Valheim's command builder already uses for the
 /// Valheim child itself), stdin discarded. stdout/stderr are appended to
 /// `<instance_dir>/logs/supervisor.log` rather than discarded — anything the
@@ -32,14 +34,16 @@ const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// itself a systemd unit journald would capture. The `Child` handle is
 /// dropped immediately; like the Valheim child today, `kill_on_drop`
 /// defaults to `false`, so this does not kill the supervisor.
-pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
+pub async fn spawn_detached(paths: &Paths, identity: &GameInstanceIdentity) -> Result<()> {
+    let game = identity.game;
+    let instance_name = &identity.name;
     validate_instance_name(instance_name)
         .map_err(|error| anyhow::anyhow!("invalid instance name for supervisor: {error}"))?;
 
     let exe = std::env::current_exe().context("failed to resolve odin's own executable path")?;
 
-    let log_path =
-        crate::paths::instance_logs_dir(&paths.instance_dir(instance_name)).join("supervisor.log");
+    let log_path = crate::paths::instance_logs_dir(&paths.game_instance_dir(game, instance_name))
+        .join("supervisor.log");
     let stdout_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -50,17 +54,17 @@ pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
         .context("failed to duplicate supervisor.log handle for stderr")?;
 
     let mut cmd = Command::new(exe);
-    // Keep the untrusted value out of argv entirely. Clap validates this
-    // internal hand-off with the same instance-name parser in the child.
+    // Keep the UUID out of argv entirely. The child resolves it against the
+    // database before it touches any instance-specific path.
     cmd.arg("run")
-        .env("ODIN_SUPERVISOR_INSTANCE", instance_name)
+        .env("ODIN_SUPERVISOR_INSTANCE_ID", &identity.id)
         .process_group(0)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout_file))
         .stderr(std::process::Stdio::from(stderr_file));
     let child = cmd
         .spawn()
-        .with_context(|| format!("failed to spawn 'odin run --instance {instance_name}'"))?;
+        .with_context(|| format!("failed to spawn supervisor for instance {instance_name}"))?;
     drop(child);
     Ok(())
 }
@@ -69,9 +73,10 @@ pub async fn spawn_detached(paths: &Paths, instance_name: &str) -> Result<()> {
 /// socket and returns the response. Fails immediately (no retry) if the
 /// socket doesn't exist or nothing answers — see `ping_with_retry` for
 /// waiting out a just-spawned supervisor's startup time.
-pub async fn ping(paths: &Paths, instance_name: &str) -> Result<Response> {
+pub async fn ping(paths: &Paths, game: GameId, instance_name: &str) -> Result<Response> {
     request_path(
         paths,
+        game,
         instance_name,
         &Request::Ping,
         CONTROL_REQUEST_TIMEOUT,
@@ -85,9 +90,10 @@ pub async fn ping(paths: &Paths, instance_name: &str) -> Result<Response> {
 /// context (it seeds `PlayerRegistry` with this once, right after
 /// connecting to the events socket, before applying subsequent pushed
 /// `Event::PlayerJoined`/`PlayerLeft`).
-pub async fn players(paths: &Paths, instance_name: &str) -> Result<Response> {
+pub async fn players(paths: &Paths, game: GameId, instance_name: &str) -> Result<Response> {
     request_path(
         paths,
+        game,
         instance_name,
         &Request::Players,
         CONTROL_REQUEST_TIMEOUT,
@@ -99,9 +105,10 @@ pub async fn players(paths: &Paths, instance_name: &str) -> Result<Response> {
 /// same rationale as `players`: async, seeds `WorldSaveRegistry` once right
 /// after connecting to the events socket, before applying subsequent pushed
 /// `Event::WorldSaved`.
-pub async fn last_saved(paths: &Paths, instance_name: &str) -> Result<Response> {
+pub async fn last_saved(paths: &Paths, game: GameId, instance_name: &str) -> Result<Response> {
     request_path(
         paths,
+        game,
         instance_name,
         &Request::LastSaved,
         CONTROL_REQUEST_TIMEOUT,
@@ -114,9 +121,10 @@ pub async fn last_saved(paths: &Paths, instance_name: &str) -> Result<Response> 
 /// needs to feed, unlike `players`/`last_saved`, so no local registry or
 /// seeding dance either — just ask the supervisor directly each time it's
 /// requested).
-pub async fn last_exit(paths: &Paths, instance_name: &str) -> Result<Response> {
+pub async fn last_exit(paths: &Paths, game: GameId, instance_name: &str) -> Result<Response> {
     request_path(
         paths,
+        game,
         instance_name,
         &Request::LastExit,
         CONTROL_REQUEST_TIMEOUT,
@@ -134,6 +142,7 @@ pub async fn last_exit(paths: &Paths, instance_name: &str) -> Result<Response> {
 /// only a real reply proves the supervisor has reached its serving loop.
 pub async fn ping_with_retry(
     paths: &Paths,
+    game: GameId,
     instance_name: &str,
     timeout: Duration,
 ) -> Result<Response> {
@@ -141,9 +150,9 @@ pub async fn ping_with_retry(
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let result = if remaining >= CONTROL_REQUEST_TIMEOUT {
-            ping(paths, instance_name).await
+            ping(paths, game, instance_name).await
         } else {
-            request_path(paths, instance_name, &Request::Ping, remaining).await
+            request_path(paths, game, instance_name, &Request::Ping, remaining).await
         };
         match result {
             Ok(response) => return Ok(response),
@@ -164,8 +173,13 @@ pub async fn ping_with_retry(
 /// a `tokio::net::UnixStream` would be pointless — plain blocking I/O with a
 /// short timeout is simpler and just as correct there. A slow/wedged
 /// supervisor reads as "unreachable" rather than stalling the tick.
-pub fn ping_blocking(paths: &Paths, instance_name: &str, timeout: Duration) -> Result<Response> {
-    request_blocking(paths, instance_name, timeout, &Request::Ping)
+pub fn ping_blocking(
+    paths: &Paths,
+    game: GameId,
+    instance_name: &str,
+    timeout: Duration,
+) -> Result<Response> {
+    request_blocking(paths, game, instance_name, timeout, &Request::Ping)
 }
 
 /// Synchronous `Stats` request — same rationale and same blocking-I/O
@@ -175,8 +189,13 @@ pub fn ping_blocking(paths: &Paths, instance_name: &str, timeout: Duration) -> R
 /// request entirely (an old supervisor from before an upgrade); callers
 /// should treat either exactly like a ping timeout: fall back to the
 /// host-side sysinfo walk for this tick.
-pub fn stats_blocking(paths: &Paths, instance_name: &str, timeout: Duration) -> Result<Response> {
-    request_blocking(paths, instance_name, timeout, &Request::Stats)
+pub fn stats_blocking(
+    paths: &Paths,
+    game: GameId,
+    instance_name: &str,
+    timeout: Duration,
+) -> Result<Response> {
+    request_blocking(paths, game, instance_name, timeout, &Request::Stats)
 }
 
 /// Shared body for the blocking request variants: connect, write one
@@ -184,6 +203,7 @@ pub fn stats_blocking(paths: &Paths, instance_name: &str, timeout: Duration) -> 
 /// comment for why this stays plain blocking I/O rather than tokio.
 fn request_blocking(
     paths: &Paths,
+    game: GameId,
     instance_name: &str,
     timeout: Duration,
     req: &Request,
@@ -191,7 +211,7 @@ fn request_blocking(
     use std::io::{BufRead, Write};
     use std::os::unix::net::UnixStream as StdUnixStream;
 
-    let mut stream = StdUnixStream::connect(super::control_sock_path(paths, instance_name))
+    let mut stream = StdUnixStream::connect(super::control_sock_path(paths, game, instance_name))
         .context("failed to connect to control socket")?;
     stream
         .set_read_timeout(Some(timeout))
@@ -221,9 +241,15 @@ fn request_blocking(
 /// the request — not once the process has actually exited (the supervisor
 /// itself removes the DB pid and its socket/pidfiles once it does);
 /// `instance::lifecycle::stop` waits for the actual exit separately.
-pub async fn stop(paths: &Paths, instance_name: &str, timeout_secs: u64) -> Result<()> {
+pub async fn stop(
+    paths: &Paths,
+    game: GameId,
+    instance_name: &str,
+    timeout_secs: u64,
+) -> Result<()> {
     match request_path(
         paths,
+        game,
         instance_name,
         &Request::Stop { timeout_secs },
         CONTROL_REQUEST_TIMEOUT,
@@ -238,12 +264,13 @@ pub async fn stop(paths: &Paths, instance_name: &str, timeout_secs: u64) -> Resu
 
 async fn request_path(
     paths: &Paths,
+    game: GameId,
     instance_name: &str,
     req: &Request,
     timeout: Duration,
 ) -> Result<Response> {
     tokio::time::timeout(timeout, async {
-        let mut stream = UnixStream::connect(super::control_sock_path(paths, instance_name))
+        let mut stream = UnixStream::connect(super::control_sock_path(paths, game, instance_name))
             .await
             .context("failed to connect to control socket")?;
         request(&mut stream, req).await
@@ -267,11 +294,12 @@ async fn request(stream: &mut UnixStream, req: &Request) -> Result<Response> {
 /// `LogTailRegistry` directly instead of polling `console.log`.
 pub async fn subscribe_events(
     paths: &Paths,
+    game: GameId,
     instance_name: &str,
 ) -> Result<impl Stream<Item = Event> + use<>> {
     let stream = tokio::time::timeout(
         CONTROL_REQUEST_TIMEOUT,
-        UnixStream::connect(super::events_sock_path(paths, instance_name)),
+        UnixStream::connect(super::events_sock_path(paths, game, instance_name)),
     )
     .await
     .context("timed out connecting to events socket")?
@@ -313,9 +341,14 @@ mod tests {
     async fn spawn_detached_rejects_invalid_instance_name_before_creating_files() {
         let paths = temp_paths("invalid-spawn");
 
-        let error = spawn_detached(&paths, "server;touch-owned")
-            .await
-            .unwrap_err();
+        let identity = GameInstanceIdentity {
+            tags: Vec::new(),
+            id: uuid::Uuid::new_v4().to_string(),
+            game: GameId::Valheim,
+            name: "server;touch-owned".to_string(),
+            created_at: chrono::Utc::now(),
+        };
+        let error = spawn_detached(&paths, &identity).await.unwrap_err();
 
         assert!(
             error
@@ -341,7 +374,7 @@ mod tests {
     /// against a real Unix socket without needing `instance::process` or a
     /// real Valheim binary at all.
     async fn fake_supervisor_once(paths: &Paths, instance_name: &str, response: Response) {
-        let sock_path = super::super::control_sock_path(paths, instance_name);
+        let sock_path = super::super::control_sock_path(paths, GameId::Valheim, instance_name);
         let listener = bind_fresh(&sock_path);
         let (stream, _) = listener.accept().await.unwrap();
         let (read_half, mut write_half) = stream.into_split();
@@ -375,7 +408,9 @@ mod tests {
 
         // Give the fake supervisor a moment to bind before connecting.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let response = ping(&paths, "client-test-ping").await.unwrap();
+        let response = ping(&paths, GameId::Valheim, "client-test-ping")
+            .await
+            .unwrap();
         assert!(matches!(response, Response::Pong { pid: 1234, .. }));
 
         server.await.unwrap();
@@ -407,8 +442,13 @@ mod tests {
             }
         });
 
-        let response =
-            ping_with_retry(&paths, "client-test-ping-retry", Duration::from_secs(2)).await;
+        let response = ping_with_retry(
+            &paths,
+            GameId::Valheim,
+            "client-test-ping-retry",
+            Duration::from_secs(2),
+        )
+        .await;
         assert!(matches!(response, Ok(Response::Pong { pid: 4321, .. })));
 
         server.await.unwrap();
@@ -420,6 +460,7 @@ mod tests {
         let paths = temp_paths("ping-timeout");
         let result = ping_with_retry(
             &paths,
+            GameId::Valheim,
             "client-test-ping-timeout",
             Duration::from_millis(150),
         )
@@ -431,7 +472,8 @@ mod tests {
     #[tokio::test]
     async fn ping_times_out_if_supervisor_accepts_without_reply() {
         let paths = temp_paths("ping-stalled");
-        let sock_path = super::super::control_sock_path(&paths, "client-test-ping-stalled");
+        let sock_path =
+            super::super::control_sock_path(&paths, GameId::Valheim, "client-test-ping-stalled");
         let listener = bind_fresh(&sock_path);
         let server = tokio::spawn(async move {
             let (_stream, _) = listener.accept().await.unwrap();
@@ -440,6 +482,7 @@ mod tests {
 
         let result = super::request_path(
             &paths,
+            GameId::Valheim,
             "client-test-ping-stalled",
             &Request::Ping,
             Duration::from_millis(50),
@@ -454,7 +497,8 @@ mod tests {
     #[test]
     fn ping_blocking_returns_the_supervisors_response() {
         let paths = temp_paths("ping-blocking");
-        let sock_path = super::super::control_sock_path(&paths, "client-test-ping-blocking");
+        let sock_path =
+            super::super::control_sock_path(&paths, GameId::Valheim, "client-test-ping-blocking");
         std::fs::create_dir_all(sock_path.parent().unwrap()).unwrap();
         let _ = std::fs::remove_file(&sock_path);
         let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
@@ -479,8 +523,13 @@ mod tests {
             writer.write_all(response.as_bytes()).unwrap();
         });
 
-        let response =
-            ping_blocking(&paths, "client-test-ping-blocking", Duration::from_secs(2)).unwrap();
+        let response = ping_blocking(
+            &paths,
+            GameId::Valheim,
+            "client-test-ping-blocking",
+            Duration::from_secs(2),
+        )
+        .unwrap();
         assert!(matches!(response, Response::Pong { pid: 555, .. }));
 
         server.join().unwrap();
@@ -493,6 +542,7 @@ mod tests {
         let paths = temp_paths("ping-blocking-fail");
         let result = ping_blocking(
             &paths,
+            GameId::Valheim,
             "client-test-ping-blocking-fail",
             Duration::from_millis(200),
         );
@@ -503,7 +553,8 @@ mod tests {
     #[test]
     fn stats_blocking_returns_the_supervisors_response() {
         let paths = temp_paths("stats-blocking");
-        let sock_path = super::super::control_sock_path(&paths, "client-test-stats-blocking");
+        let sock_path =
+            super::super::control_sock_path(&paths, GameId::Valheim, "client-test-stats-blocking");
         std::fs::create_dir_all(sock_path.parent().unwrap()).unwrap();
         let _ = std::fs::remove_file(&sock_path);
         let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
@@ -524,8 +575,13 @@ mod tests {
             writer.write_all(response.as_bytes()).unwrap();
         });
 
-        let response =
-            stats_blocking(&paths, "client-test-stats-blocking", Duration::from_secs(2)).unwrap();
+        let response = stats_blocking(
+            &paths,
+            GameId::Valheim,
+            "client-test-stats-blocking",
+            Duration::from_secs(2),
+        )
+        .unwrap();
         assert!(matches!(
             response,
             Response::Stats {
@@ -544,6 +600,7 @@ mod tests {
         let paths = temp_paths("stats-blocking-fail");
         let result = stats_blocking(
             &paths,
+            GameId::Valheim,
             "client-test-stats-blocking-fail",
             Duration::from_millis(200),
         );
@@ -561,8 +618,11 @@ mod tests {
     #[test]
     fn stats_blocking_surfaces_a_closed_connection_as_unreachable() {
         let paths = temp_paths("stats-blocking-old-supervisor");
-        let sock_path =
-            super::super::control_sock_path(&paths, "client-test-stats-blocking-old-supervisor");
+        let sock_path = super::super::control_sock_path(
+            &paths,
+            GameId::Valheim,
+            "client-test-stats-blocking-old-supervisor",
+        );
         std::fs::create_dir_all(sock_path.parent().unwrap()).unwrap();
         let _ = std::fs::remove_file(&sock_path);
         let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
@@ -579,6 +639,7 @@ mod tests {
 
         let result = stats_blocking(
             &paths,
+            GameId::Valheim,
             "client-test-stats-blocking-old-supervisor",
             Duration::from_secs(2),
         );
@@ -600,7 +661,9 @@ mod tests {
         });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        stop(&paths, "client-test-stop-ok", 30).await.unwrap();
+        stop(&paths, GameId::Valheim, "client-test-stop-ok", 30)
+            .await
+            .unwrap();
 
         server.await.unwrap();
         std::fs::remove_dir_all(&paths.data_dir).ok();
@@ -625,7 +688,9 @@ mod tests {
         });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let err = stop(&paths, "client-test-stop-err", 30).await.unwrap_err();
+        let err = stop(&paths, GameId::Valheim, "client-test-stop-err", 30)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("boom"));
 
         server.await.unwrap();

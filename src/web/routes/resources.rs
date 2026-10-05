@@ -189,6 +189,7 @@ pub(crate) fn compute_instance_snapshot(
     // binary, or whose supervisor has crashed but Valheim itself survived).
     let supervisor_ping = crate::supervisor::client::ping_blocking(
         &state.paths,
+        crate::game::GameId::Valheim,
         &instance.state.name,
         SUPERVISOR_PING_TIMEOUT,
     );
@@ -224,6 +225,7 @@ pub(crate) fn compute_instance_snapshot(
             memory_bytes,
         }) = crate::supervisor::client::stats_blocking(
             &state.paths,
+            crate::game::GameId::Valheim,
             &instance.state.name,
             SUPERVISOR_PING_TIMEOUT,
         )

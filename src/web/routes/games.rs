@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 use sysinfo::Pid;
 
 use crate::db::game_instances::{self, GameInstanceIdentity, RustInstance};
@@ -32,6 +33,7 @@ pub struct ManagedInstanceView {
     #[serde(flatten)]
     pub identity: GameInstanceIdentity,
     pub running: bool,
+    pub odin_version: Option<String>,
     pub capabilities: crate::game::GameCapabilities,
     pub config: Value,
 }
@@ -179,7 +181,7 @@ pub async fn list_all_instances(
     let db = state.db.clone();
     let views = run_blocking(move || {
         let mut views = valheim_views(&paths, &db)?;
-        views.extend(rust_views(&db)?);
+        views.extend(rust_views(&paths, &db)?);
         views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
         Ok(views)
     })
@@ -195,7 +197,7 @@ pub async fn list_instances(
     let db = state.db.clone();
     let views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
-        GameId::Rust => rust_views(&db),
+        GameId::Rust => rust_views(&paths, &db),
     })
     .await?;
     Ok(Json(views))
@@ -293,7 +295,8 @@ pub async fn update_rust_config(
         if let Some(auto_restart) = request.auto_restart {
             config.auto_restart = auto_restart;
         }
-        game_instances::update_rust_config(&db, &name, &config).map(rust_view)
+        game_instances::update_rust_config(&db, &name, &config)
+            .map(|instance| rust_view(&paths, instance))
     })
     .await?;
     Ok(Json(view))
@@ -609,7 +612,7 @@ fn game_instance_view(
 ) -> anyhow::Result<ManagedInstanceView> {
     match instance {
         game_instances_ops::GameInstance::Valheim(instance) => valheim_view(paths, db, instance),
-        game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(instance)),
+        game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(paths, instance)),
     }
 }
 
@@ -621,7 +624,7 @@ fn valheim_views(paths: &Paths, db: &crate::db::Db) -> anyhow::Result<Vec<Manage
 }
 
 fn valheim_view(
-    _paths: &Paths,
+    paths: &Paths,
     db: &crate::db::Db,
     instance: Instance,
 ) -> anyhow::Result<ManagedInstanceView> {
@@ -633,6 +636,7 @@ fn valheim_view(
     Ok(ManagedInstanceView {
         identity,
         running: lifecycle::is_running(&instance)?,
+        odin_version: supervisor_version(paths, GameId::Valheim, &instance.state.name),
         capabilities: game::driver(GameId::Valheim).capabilities(),
         config: serde_json::json!({
             "world_name": instance.state.world_name,
@@ -644,18 +648,20 @@ fn valheim_view(
     })
 }
 
-fn rust_views(db: &crate::db::Db) -> anyhow::Result<Vec<ManagedInstanceView>> {
+fn rust_views(paths: &Paths, db: &crate::db::Db) -> anyhow::Result<Vec<ManagedInstanceView>> {
     Ok(game_instances::list_rust(db)?
         .into_iter()
-        .map(rust_view)
+        .map(|instance| rust_view(paths, instance))
         .collect())
 }
 
-fn rust_view(instance: RustInstance) -> ManagedInstanceView {
+fn rust_view(paths: &Paths, instance: RustInstance) -> ManagedInstanceView {
     let running = instance.is_running();
+    let odin_version = supervisor_version(paths, GameId::Rust, instance.name());
     ManagedInstanceView {
         identity: instance.identity,
         running,
+        odin_version,
         capabilities: game::driver(GameId::Rust).capabilities(),
         config: serde_json::json!({
             "port": instance.config.port,
@@ -669,6 +675,13 @@ fn rust_view(instance: RustInstance) -> ManagedInstanceView {
             "max_players": instance.config.max_players,
             "auto_restart": instance.config.auto_restart,
         }),
+    }
+}
+
+fn supervisor_version(paths: &Paths, game: GameId, name: &str) -> Option<String> {
+    match crate::supervisor::client::ping_blocking(paths, game, name, Duration::from_millis(300)) {
+        Ok(crate::supervisor::protocol::Response::Pong { odin_version, .. }) => odin_version,
+        _ => None,
     }
 }
 
@@ -720,7 +733,7 @@ mod tests {
 
     fn list_all_for_test(paths: &Paths, db: &Db) -> anyhow::Result<Vec<ManagedInstanceView>> {
         let mut views = valheim_views(paths, db)?;
-        views.extend(rust_views(db)?);
+        views.extend(rust_views(paths, db)?);
         Ok(views)
     }
 }
@@ -771,7 +784,7 @@ pub async fn clone_rust_instance(
             crate::activity::ActivityKind::InstanceCloned { source: name },
             Some(req.name),
         );
-        Ok(rust_view(instance))
+        Ok(rust_view(&paths, instance))
     })
     .await?;
     Ok(Json(view))

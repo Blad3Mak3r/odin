@@ -127,6 +127,6 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::Serve { bind, port } => commands::serve::run(&paths, &bind, port),
-        Command::Run { instance } => commands::run::run(&paths, &instance),
+        Command::Run { instance_id } => commands::run::run(&paths, instance_id),
     }
 }

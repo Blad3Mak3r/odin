@@ -327,11 +327,21 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 // an `odin run` crash rather than a normal exit. Remove
                 // whatever it left behind so a future start doesn't trip
                 // over a stale socket/pidfile.
-                let _ =
-                    std::fs::remove_file(crate::supervisor::control_sock_path(&state.paths, name));
-                let _ =
-                    std::fs::remove_file(crate::supervisor::events_sock_path(&state.paths, name));
-                let _ = std::fs::remove_file(crate::supervisor::pidfile_path(&state.paths, name));
+                let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
+                    &state.paths,
+                    GameId::Valheim,
+                    name,
+                ));
+                let _ = std::fs::remove_file(crate::supervisor::events_sock_path(
+                    &state.paths,
+                    GameId::Valheim,
+                    name,
+                ));
+                let _ = std::fs::remove_file(crate::supervisor::pidfile_path(
+                    &state.paths,
+                    GameId::Valheim,
+                    name,
+                ));
 
                 if inst.state.auto_restart
                     && permits_scheduled_uptime(state, GameId::Valheim, name)
@@ -383,6 +393,21 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
             }
             if !snapshot.running && rust_instance.pid.is_some() {
                 let _ = game_instances::clear_rust_pid(&state.db, name, chrono::Utc::now());
+                let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
+                    &state.paths,
+                    GameId::Rust,
+                    name,
+                ));
+                let _ = std::fs::remove_file(crate::supervisor::events_sock_path(
+                    &state.paths,
+                    GameId::Rust,
+                    name,
+                ));
+                let _ = std::fs::remove_file(crate::supervisor::pidfile_path(
+                    &state.paths,
+                    GameId::Rust,
+                    name,
+                ));
                 if rust_instance.config.auto_restart
                     && permits_scheduled_uptime(state, GameId::Rust, name)
                     && state.runtime.should_attempt_game_auto_restart(

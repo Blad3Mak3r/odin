@@ -28,6 +28,8 @@ use super::protocol::{
     ErrorCode, Event, PROTOCOL_VERSION, Request, Response, read_frame, write_frame,
 };
 use crate::db::Db;
+use crate::db::game_instances::RustInstance;
+use crate::game::GameId;
 use crate::instance::{Instance, lifecycle, process};
 use crate::paths::{self, Paths};
 
@@ -113,16 +115,86 @@ struct SpawnedChild {
     started_at: chrono::DateTime<Utc>,
 }
 
-/// Builds and spawns `instance`'s Valheim process, reading its own kernel
+enum SupervisedInstance {
+    Valheim(Instance),
+    Rust(RustInstance),
+}
+
+impl SupervisedInstance {
+    fn prepare(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<Self> {
+        match game {
+            GameId::Valheim => lifecycle::prepare_start(paths, db, name).map(Self::Valheim),
+            GameId::Rust => crate::game::rust::prepare_start(paths, db, name).map(Self::Rust),
+        }
+    }
+
+    fn command(&self, paths: &Paths) -> Result<tokio::process::Command> {
+        match self {
+            Self::Valheim(instance) => crate::game::valheim::build_command(instance, paths),
+            Self::Rust(instance) => crate::game::rust::build_command(paths, instance),
+        }
+    }
+
+    fn log_path(&self, paths: &Paths) -> PathBuf {
+        match self {
+            Self::Valheim(instance) => paths::instance_logs_dir(&instance.dir).join("console.log"),
+            Self::Rust(instance) => {
+                paths::instance_logs_dir(&paths.game_instance_dir(GameId::Rust, instance.name()))
+                    .join("console.log")
+            }
+        }
+    }
+
+    fn auto_restart(&self, db: &Db, name: &str) -> bool {
+        match self {
+            Self::Valheim(_) => crate::db::instances::load(db, name)
+                .ok()
+                .flatten()
+                .is_some_and(|instance| instance.auto_restart),
+            Self::Rust(_) => crate::db::game_instances::load_rust(db, name)
+                .ok()
+                .flatten()
+                .is_some_and(|instance| instance.config.auto_restart),
+        }
+    }
+
+    fn set_pid(
+        &self,
+        db: &Db,
+        name: &str,
+        pid: u32,
+        pid_started_at: i64,
+        started_at: chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        match self {
+            Self::Valheim(_) => {
+                crate::db::instances::set_pid(db, name, pid, pid_started_at, started_at)
+            }
+            Self::Rust(_) => {
+                crate::db::game_instances::set_rust_pid(db, name, pid, pid_started_at, started_at)
+                    .map(|_| ())
+            }
+        }
+    }
+
+    fn clear_pid(&self, db: &Db, name: &str, stopped_at: chrono::DateTime<Utc>) -> Result<()> {
+        match self {
+            Self::Valheim(_) => crate::db::instances::clear_pid(db, name, stopped_at),
+            Self::Rust(_) => crate::db::game_instances::clear_rust_pid(db, name, stopped_at),
+        }
+    }
+}
+
+/// Builds and spawns a supervised game process, reading its own kernel
 /// start time right away for the liveness fingerprint. Shared by
 /// `run_instance`'s initial spawn and its automatic-restart path so both
 /// go through identical setup.
 async fn spawn_child(
-    instance: &Instance,
+    instance: &SupervisedInstance,
     paths: &Paths,
     instance_name: &str,
 ) -> Result<SpawnedChild> {
-    let cmd = crate::game::valheim::build_command(instance, paths)?;
+    let cmd = instance.command(paths)?;
     let child = process::spawn(cmd)
         .await
         .with_context(|| format!("failed to start instance '{instance_name}'"))?;
@@ -137,23 +209,28 @@ async fn spawn_child(
     })
 }
 
-/// Runs the supervisor for `instance_name` end to end: prepares and spawns
-/// the Valheim process, serves the control/events sockets, and blocks until
+/// Runs the supervisor for `instance_id` end to end: resolves its immutable
+/// identity, prepares and spawns the game process, serves the control/events
+/// sockets, and blocks until
 /// the process exits for good (either on its own with no automatic restart
 /// eligible, or via a `Stop` request) and cleanup is complete. An exit that
 /// *is* eligible for automatic restart (see `RESTART_COOLDOWN`) respawns
 /// the child in place instead of returning. `commands::run::run` just calls
 /// this and returns.
-pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
+pub async fn run_instance(paths: Paths, instance_id: String) -> Result<()> {
     let db = Db::open(&paths).context("failed to open database")?;
-    let mut instance = lifecycle::prepare_start(&paths, &db, instance_name)?;
+    let identity = crate::db::game_instances::identity_by_id(&db, &instance_id)?
+        .context("supervisor instance UUID does not exist")?;
+    let game = identity.game;
+    let instance_name = identity.name;
+    let instance = SupervisedInstance::prepare(&paths, &db, game, &instance_name)?;
 
     let run_dir = paths.runtime_dir();
     std::fs::create_dir_all(&run_dir)
         .with_context(|| format!("failed to create {}", run_dir.display()))?;
-    let control_path = super::control_sock_path(&paths, instance_name);
-    let events_path = super::events_sock_path(&paths, instance_name);
-    let pidfile = super::pidfile_path(&paths, instance_name);
+    let control_path = super::control_sock_path(&paths, game, &instance_name);
+    let events_path = super::events_sock_path(&paths, game, &instance_name);
+    let pidfile = super::pidfile_path(&paths, game, &instance_name);
 
     let control_listener = bind_private(&control_path)?;
     let events_listener = match bind_private(&events_path) {
@@ -165,17 +242,15 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     };
     write_pidfile(&pidfile)?;
 
-    let spawned = spawn_child(&instance, &paths, instance_name).await?;
+    let spawned = spawn_child(&instance, &paths, &instance_name).await?;
     let mut child = spawned.child;
     let mut pid = spawned.pid;
     let mut pid_started_at = spawned.pid_started_at;
     let mut started_at = spawned.started_at;
-    instance.state.pid = Some(pid);
-    instance.state.pid_started_at = Some(pid_started_at);
-    crate::db::instances::set_pid(&db, instance_name, pid, pid_started_at, started_at)?;
+    instance.set_pid(&db, &instance_name, pid, pid_started_at, started_at)?;
 
     let (events_tx, _) = broadcast::channel::<Event>(EVENT_BROADCAST_CAPACITY);
-    let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
+    let console_log = instance.log_path(&paths);
     let players: PlayersHandle = Arc::new(Mutex::new(Vec::new()));
     let last_saved: SavedHandle = Arc::new(Mutex::new(None));
     let ready: ReadyHandle = Arc::new(Mutex::new(false));
@@ -225,10 +300,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
                 // snapshot loaded at startup — an operator can toggle
                 // auto-restart from the dashboard while this instance is
                 // running.
-                let auto_restart = crate::db::instances::load(&db, instance_name)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|s| s.auto_restart);
+                let auto_restart = instance.auto_restart(&db, &instance_name);
                 let cooldown_elapsed = last_restart_attempt
                     .is_none_or(|at| at.elapsed() >= RESTART_COOLDOWN);
 
@@ -242,18 +314,14 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
                     ?code,
                     "instance exited unexpectedly; attempting automatic restart"
                 );
-                match spawn_child(&instance, &paths, instance_name).await {
+                match spawn_child(&instance, &paths, &instance_name).await {
                     Ok(respawned) => {
                         child = respawned.child;
                         pid = respawned.pid;
                         pid_started_at = respawned.pid_started_at;
                         started_at = respawned.started_at;
-                        if let Err(e) = crate::db::instances::set_pid(
-                            &db,
-                            instance_name,
-                            pid,
-                            pid_started_at,
-                            started_at,
+                        if let Err(e) = instance.set_pid(
+                            &db, &instance_name, pid, pid_started_at, started_at,
                         ) {
                             tracing::warn!(instance = instance_name, error = %e, "failed to persist restarted pid");
                         }
@@ -309,7 +377,7 @@ pub async fn run_instance(paths: Paths, instance_name: &str) -> Result<()> {
     log_poller.abort();
     stats_refresher.abort();
     let _ = events_tx.send(Event::Exited { code: exit_code });
-    crate::db::instances::clear_pid(&db, instance_name, Utc::now())?;
+    instance.clear_pid(&db, &instance_name, Utc::now())?;
     cleanup(&control_path, &events_path, &pidfile);
 
     tracing::info!(instance = instance_name, ?exit_code, "supervisor exiting");
@@ -862,12 +930,23 @@ mod tests {
         let paths = temp_paths("run-e2e");
         std::fs::create_dir_all(paths.shared_install_dir().parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&real_install, paths.shared_install_dir()).unwrap();
+        let db = Db::open(&paths).unwrap();
+        let instance = Instance::create(&paths, &db, "e2e-run").unwrap();
+        let instance_id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "e2e-run",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
+        drop(db);
 
-        let supervisor_task = tokio::spawn(run_instance(paths.clone(), "e2e-run"));
+        let supervisor_task = tokio::spawn(run_instance(paths.clone(), instance_id));
 
-        let response = client::ping_with_retry(&paths, "e2e-run", Duration::from_secs(10))
-            .await
-            .unwrap();
+        let response =
+            client::ping_with_retry(&paths, GameId::Valheim, "e2e-run", Duration::from_secs(10))
+                .await
+                .unwrap();
         let (pid, pid_started_at) = match response {
             Response::Pong {
                 pid,
@@ -891,7 +970,7 @@ mod tests {
         // install with working Steam connectivity).
         assert!(
             matches!(
-                client::ping(&paths, "e2e-run").await,
+                client::ping(&paths, GameId::Valheim, "e2e-run").await,
                 Ok(Response::Pong { ready: false, .. })
             ),
             "expected a freshly spawned instance to report ready: false"
@@ -902,7 +981,12 @@ mod tests {
         tokio::time::sleep(STATS_REFRESH_INTERVAL + Duration::from_secs(1)).await;
         let stats_paths = paths.clone();
         let stats_response = tokio::task::spawn_blocking(move || {
-            client::stats_blocking(&stats_paths, "e2e-run", Duration::from_secs(2))
+            client::stats_blocking(
+                &stats_paths,
+                GameId::Valheim,
+                "e2e-run",
+                Duration::from_secs(2),
+            )
         })
         .await
         .unwrap()
@@ -912,13 +996,15 @@ mod tests {
             "expected Stats with nonzero memory_bytes, got {stats_response:?}"
         );
 
-        client::stop(&paths, "e2e-run", 30).await.unwrap();
+        client::stop(&paths, GameId::Valheim, "e2e-run", 30)
+            .await
+            .unwrap();
         supervisor_task.await.unwrap().unwrap();
 
         assert!(!process::is_alive(pid, pid_started_at));
-        assert!(!super::super::control_sock_path(&paths, "e2e-run").exists());
-        assert!(!super::super::events_sock_path(&paths, "e2e-run").exists());
-        assert!(!super::super::pidfile_path(&paths, "e2e-run").exists());
+        assert!(!super::super::control_sock_path(&paths, GameId::Valheim, "e2e-run").exists());
+        assert!(!super::super::events_sock_path(&paths, GameId::Valheim, "e2e-run").exists());
+        assert!(!super::super::pidfile_path(&paths, GameId::Valheim, "e2e-run").exists());
 
         let reloaded =
             crate::instance::Instance::load_existing(&paths, &Db::open(&paths).unwrap(), "e2e-run")
@@ -962,13 +1048,25 @@ mod tests {
         let mut instance = Instance::create(&paths, &db, "e2e-auto-restart").unwrap();
         instance.state.auto_restart = true;
         instance.save(&db).unwrap();
+        let instance_id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "e2e-auto-restart",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
         drop(db);
 
-        let supervisor_task = tokio::spawn(run_instance(paths.clone(), "e2e-auto-restart"));
+        let supervisor_task = tokio::spawn(run_instance(paths.clone(), instance_id));
 
-        let response = client::ping_with_retry(&paths, "e2e-auto-restart", Duration::from_secs(10))
-            .await
-            .unwrap();
+        let response = client::ping_with_retry(
+            &paths,
+            GameId::Valheim,
+            "e2e-auto-restart",
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
         let (first_pid, first_pid_started_at) = match response {
             Response::Pong {
                 pid,
@@ -991,7 +1089,7 @@ mod tests {
                 pid,
                 pid_started_at,
                 ..
-            }) = client::ping(&paths, "e2e-auto-restart").await
+            }) = client::ping(&paths, GameId::Valheim, "e2e-auto-restart").await
                 && pid != first_pid
             {
                 break (pid, pid_started_at);
@@ -1007,7 +1105,7 @@ mod tests {
         // proving the unconditional exit-diagnostics snapshot in the
         // `child.wait()` branch actually ran for a real SIGKILL, not just
         // the synthetic line fed to it in `poll_console_log`'s own test.
-        match client::last_exit(&paths, "e2e-auto-restart").await {
+        match client::last_exit(&paths, GameId::Valheim, "e2e-auto-restart").await {
             Ok(Response::LastExit { info: Some(info) }) => {
                 assert!(
                     info.code.is_none(),
@@ -1018,7 +1116,9 @@ mod tests {
             other => panic!("expected LastExit with recorded info, got {other:?}"),
         }
 
-        client::stop(&paths, "e2e-auto-restart", 30).await.unwrap();
+        client::stop(&paths, GameId::Valheim, "e2e-auto-restart", 30)
+            .await
+            .unwrap();
         supervisor_task.await.unwrap().unwrap();
 
         assert!(!process::is_alive(second_pid, second_pid_started_at));

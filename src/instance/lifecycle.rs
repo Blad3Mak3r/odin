@@ -119,12 +119,14 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 }
 
 async fn start_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    prepare_start(paths, db, name)?;
+    let instance = prepare_start(paths, db, name)?;
+    let identity =
+        crate::db::game_instances::ensure_valheim_identity(db, name, instance.state.created_at)?;
 
-    supervisor::client::spawn_detached(paths, name)
+    supervisor::client::spawn_detached(paths, &identity)
         .await
         .with_context(|| format!("failed to start instance '{name}'"))?;
-    supervisor::client::ping_with_retry(paths, name, SUPERVISOR_START_TIMEOUT)
+    supervisor::client::ping_with_retry(paths, GameId::Valheim, name, SUPERVISOR_START_TIMEOUT)
         .await
         .with_context(|| format!("failed to start instance '{name}'"))?;
 
@@ -155,7 +157,7 @@ async fn stop_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<()> {
         bail!(InstanceError::NotRunning(name.to_string()));
     }
 
-    match supervisor::client::stop(paths, name, STOP_TIMEOUT.as_secs()).await {
+    match supervisor::client::stop(paths, GameId::Valheim, name, STOP_TIMEOUT.as_secs()).await {
         Ok(()) => {
             // The supervisor owns the shutdown sequence (SIGINT, then its
             // own SIGKILL escalation after STOP_TIMEOUT) and clears the DB

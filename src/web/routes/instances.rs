@@ -27,7 +27,12 @@ pub struct InstanceView {
 fn view(paths: &Paths, instance: Instance) -> anyhow::Result<InstanceView> {
     let running = lifecycle::is_running(&instance)?;
     let odin_version = if running {
-        match client::ping_blocking(paths, &instance.state.name, Duration::from_millis(300)) {
+        match client::ping_blocking(
+            paths,
+            crate::game::GameId::Valheim,
+            &instance.state.name,
+            Duration::from_millis(300),
+        ) {
             Ok(Response::Pong { odin_version, .. }) => odin_version,
             _ => None,
         }

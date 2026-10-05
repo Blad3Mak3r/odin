@@ -11,11 +11,11 @@ import type { GameId } from '@/lib/types'
 const LINE_OPTIONS = [100, 200, 500, 1000]
 const LIVE_TAIL_LINES = 200
 
-export function ManagedLogsTab({ game, name }: { game: GameId; name: string }) {
+export function ManagedLogsTab({ id, game, name }: { id?: string; game: GameId; name: string }) {
   const [lineCount, setLineCount] = useState(200)
   const [filter, setFilter] = useState('')
-  const logs = useManagedInstanceLogs(game, name, lineCount)
-  const socket = useLogSocket(name, game)
+  const logs = useManagedInstanceLogs(game, name, lineCount, id)
+  const socket = useLogSocket(name, game, id)
   const scrollRef = useRef<HTMLDivElement>(null)
   const showExpandedHistory = lineCount > LIVE_TAIL_LINES
   const live = !showExpandedHistory && (socket.connected || socket.lines.length > 0)

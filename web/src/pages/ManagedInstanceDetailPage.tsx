@@ -246,8 +246,8 @@ export function ManagedInstanceDetailPage() {
   const instanceByName = useManagedInstance(gameId, name ?? '')
   const instance = id ? instanceById : instanceByName
   const detailForRequests = instance.data
-  const logs = useManagedInstanceLogs(detailForRequests?.game ?? gameId, detailForRequests?.name ?? name ?? '')
-  const liveLogs = useLogSocket(detailForRequests?.name ?? name ?? '', detailForRequests?.game ?? gameId)
+  const logs = useManagedInstanceLogs(detailForRequests?.game ?? gameId, detailForRequests?.name ?? name ?? '', 200, detailForRequests?.id)
+  const liveLogs = useLogSocket(detailForRequests?.name ?? name ?? '', detailForRequests?.game ?? gameId, detailForRequests?.id)
   const consoleLines = liveLogs.lines.length > 0 ? liveLogs.lines : (logs.data?.lines ?? [])
   const errorLines = consoleLines.filter(isConsoleError)
   if (!id && (!isGameId(game) || !name)) return null
@@ -282,7 +282,7 @@ export function ManagedInstanceDetailPage() {
           {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
           </TabsList>
         </div>
-        <TabsContent value="logs"><ManagedLogsTab game={detail.game} name={detail.name} /></TabsContent>
+        <TabsContent value="logs"><ManagedLogsTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
         {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab name={detail.name} running={detail.running} /></TabsContent>}
         <TabsContent value="errors">
           <Card>

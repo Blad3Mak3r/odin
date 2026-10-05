@@ -590,6 +590,24 @@ pub async fn get_logs(
     Path((game, name)): Path<(GameId, String)>,
     Query(query): Query<crate::web::routes::instances::LogsQuery>,
 ) -> ApiResult<Json<crate::web::routes::instances::LogsView>> {
+    get_logs_for(state, game, name, query).await
+}
+
+pub async fn get_logs_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::instances::LogsQuery>,
+) -> ApiResult<Json<crate::web::routes::instances::LogsView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    get_logs_for(state, identity.game, identity.name, query).await
+}
+
+async fn get_logs_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    query: crate::web::routes::instances::LogsQuery,
+) -> ApiResult<Json<crate::web::routes::instances::LogsView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let lines = run_blocking(move || {

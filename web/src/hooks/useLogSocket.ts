@@ -3,7 +3,7 @@ import type { GameId } from '@/lib/types'
 
 const MAX_LINES = 1000
 
-export function useLogSocket(instanceName: string, game: GameId = 'valheim') {
+export function useLogSocket(instanceName: string, game: GameId = 'valheim', id?: string) {
   const [lines, setLines] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
 
@@ -16,7 +16,7 @@ export function useLogSocket(instanceName: string, game: GameId = 'valheim') {
   }
 
   useEffect(() => {
-    const source = new EventSource(`/api/games/${game}/instances/${instanceName}/logs/sse`)
+    const source = new EventSource(id ? `/api/games/instances/id/${id}/logs/sse` : `/api/games/${game}/instances/${instanceName}/logs/sse`)
 
     source.onopen = () => setConnected(true)
     source.onerror = () => setConnected(false)
@@ -30,7 +30,7 @@ export function useLogSocket(instanceName: string, game: GameId = 'valheim') {
     return () => {
       source.close()
     }
-  }, [game, instanceName])
+  }, [game, id, instanceName])
 
   return { lines, connected }
 }

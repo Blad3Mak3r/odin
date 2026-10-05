@@ -385,9 +385,10 @@ automatic restart and backup defaults for every newly created game server.
 The dashboard routes instances as `/instance/<uuid>` and the public API uses
 `/api/instances/<uuid>/…`. Treat the UUID returned by the instance list as the
 canonical identifier for lifecycle, configuration, logs, saves, backups, and
-game-specific administration. Game/name API paths are legacy compatibility
-routes and must not be used by new integrations; a rename never changes the
-UUID.
+game-specific administration. The former game/name API paths have been
+removed; integrations must resolve and retain the UUID from the instance list.
+Historical dashboard URLs are redirected to their UUID route, so a rename
+never changes a bookmark's target.
 
 V Rising uses a managed, cached Proton-GE runtime and keeps its persistent
 data and RCON listener per instance. Palworld's administrative REST API is

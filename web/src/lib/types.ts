@@ -47,6 +47,14 @@ export interface RustConfigUpdateRequest {
   auto_restart?: boolean
 }
 
+export interface GenericConfigUpdateRequest {
+  port: number
+  query_port: number | null
+  admin_port: number | null
+  settings: Record<string, unknown>
+  auto_restart: boolean
+}
+
 export interface RconCommandResponse {
   output: string
 }

@@ -64,6 +64,15 @@ pub struct RustConfigUpdateRequest {
 }
 
 #[derive(Deserialize)]
+pub struct GenericConfigUpdateRequest {
+    pub port: u16,
+    pub query_port: Option<u16>,
+    pub admin_port: Option<u16>,
+    pub settings: Value,
+    pub auto_restart: bool,
+}
+
+#[derive(Deserialize)]
 pub struct WipeRustMapRequest {
     pub confirmation: String,
 }
@@ -331,6 +340,31 @@ pub async fn update_rust_config(
     Ok(Json(view))
 }
 
+pub async fn update_generic_config(
+    State(state): State<AppState>,
+    Path((game, name)): Path<(GameId, String)>,
+    Json(request): Json<GenericConfigUpdateRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    if !game_instances::is_generic_game(game) {
+        return Err(BadRequest("this game has a dedicated configuration contract".into()).into());
+    }
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        let config = game_instances::GenericGameConfig {
+            port: request.port,
+            query_port: request.query_port,
+            admin_port: request.admin_port,
+            settings: request.settings,
+            auto_restart: request.auto_restart,
+        };
+        game_instances::update_generic_config(&db, game, &name, &config)
+            .map(|instance| generic_view(&paths, instance))
+    })
+    .await?;
+    Ok(Json(view))
+}
+
 /// Sends one command to the Rust instance through its private loopback
 /// WebRCON connection. The browser never receives the RCON password.
 pub async fn execute_rust_rcon(
@@ -516,6 +550,22 @@ pub async fn start_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
+    start_instance_for(state, game, name).await
+}
+
+pub async fn start_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    start_instance_for(state, identity.game, identity.name).await
+}
+
+async fn start_instance_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+) -> ApiResult<Json<ManagedInstanceView>> {
     let _transition =
         state
             .runtime
@@ -536,6 +586,18 @@ pub async fn stop_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
 ) -> ApiResult<StatusCode> {
+    stop_instance_for(state, game, name).await
+}
+
+pub async fn stop_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    stop_instance_for(state, identity.game, identity.name).await
+}
+
+async fn stop_instance_for(state: AppState, game: GameId, name: String) -> ApiResult<StatusCode> {
     let _transition =
         state
             .runtime
@@ -552,6 +614,22 @@ pub async fn stop_instance(
 pub async fn restart_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    restart_instance_for(state, game, name).await
+}
+
+pub async fn restart_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    restart_instance_for(state, identity.game, identity.name).await
+}
+
+async fn restart_instance_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let _transition =
         state
@@ -572,6 +650,15 @@ pub async fn restart_instance(
         Some(name),
     );
     Ok(Json(view))
+}
+
+async fn resolve_instance_id(state: &AppState, id: &str) -> ApiResult<GameInstanceIdentity> {
+    let db = state.db.clone();
+    let id = id.to_string();
+    run_blocking(move || {
+        game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")
+    })
+    .await
 }
 
 pub async fn list_backups(
@@ -724,6 +811,16 @@ fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstance
     let name = instance.identity.name.clone();
     let mut config = instance.config.settings.clone();
     if let Value::Object(values) = &mut config {
+        for secret in [
+            "admin_password",
+            "world_password",
+            "rcon_password",
+            "password",
+        ] {
+            if values.contains_key(secret) {
+                values.insert(secret.to_string(), Value::String(String::new()));
+            }
+        }
         values.insert("port".into(), serde_json::json!(instance.config.port));
         values.insert(
             "query_port".into(),

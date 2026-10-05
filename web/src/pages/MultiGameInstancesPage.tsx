@@ -99,7 +99,7 @@ function ManagedInstanceRow({ instance, selected, onToggle }: { instance: Manage
   const transition = useManagedInstanceTransition(instance.game, instance.name)
   const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
   const port = typeof instance.config.port === 'number' ? instance.config.port : '—'
-  const action = { game: instance.game, name: instance.name }
+  const action = { id: instance.id, game: instance.game, name: instance.name }
 
   return (
     <TableRow>

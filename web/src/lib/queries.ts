@@ -19,6 +19,7 @@ import type {
   GameId,
   GameInstanceTransitions,
   GameView,
+  GenericConfigUpdateRequest,
   HostResources,
   InstallStatusView,
   InstanceResources,
@@ -283,11 +284,12 @@ export function useCreateManagedInstance() {
 export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
-      api.post<ManagedInstanceView>(`/games/${game}/instances/${name}/${action}`),
+    mutationFn: ({ id, game, name }: { id?: string; game: GameId; name: string }) =>
+      api.post<ManagedInstanceView>(id ? `/games/instances/id/${id}/${action}` : `/games/${game}/instances/${name}/${action}`),
     onSuccess: (_instance, variables) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
+      if (variables.id) queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.id] })
     },
   })
 }
@@ -329,6 +331,19 @@ export function useUpdateRustConfig() {
     onSuccess: (_instance, { name }) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+    },
+  })
+}
+
+export function useUpdateGenericConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ game, name, request }: { game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; name: string; request: GenericConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/games/${game}/instances/${name}/config`, request),
+    onSuccess: (instance) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.game, instance.name] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
     },
   })
 }

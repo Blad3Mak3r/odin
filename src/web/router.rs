@@ -40,6 +40,18 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/games/instances", get(games::list_all_instances))
         .route("/games/instances/id/{id}", get(games::get_instance_by_id))
+        .route(
+            "/games/instances/id/{id}/start",
+            post(games::start_instance_by_id),
+        )
+        .route(
+            "/games/instances/id/{id}/stop",
+            post(games::stop_instance_by_id),
+        )
+        .route(
+            "/games/instances/id/{id}/restart",
+            post(games::restart_instance_by_id),
+        )
         .route("/games/{game}/install", post(games::install_game))
         .route(
             "/games/{game}/install/status",
@@ -56,6 +68,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/rust/instances/{name}/config",
             put(games::update_rust_config),
+        )
+        .route(
+            "/games/vrising/instances/{name}/config",
+            put(games::update_generic_config),
+        )
+        .route(
+            "/games/palworld/instances/{name}/config",
+            put(games::update_generic_config),
+        )
+        .route(
+            "/games/runescape-dragonwilds/instances/{name}/config",
+            put(games::update_generic_config),
         )
         .route(
             "/games/rust/instances/{name}/rcon",

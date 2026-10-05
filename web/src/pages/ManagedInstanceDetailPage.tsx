@@ -22,9 +22,10 @@ import {
   useManagedInstance,
   useManagedInstanceById,
   useManagedInstanceLogs,
+  useUpdateGenericConfig,
   useUpdateRustConfig,
 } from '@/lib/queries'
-import type { GameId } from '@/lib/types'
+import type { GameId, GenericConfigUpdateRequest } from '@/lib/types'
 import { useLogSocket } from '@/hooks/useLogSocket'
 
 function isConsoleError(line: string) {
@@ -48,6 +49,8 @@ type RustConfig = {
   autoRestart: boolean
 }
 
+type GenericConfig = GenericConfigUpdateRequest
+
 function asRustConfig(config: Record<string, unknown>): RustConfig | null {
   const port = config.port
   const queryPort = config.query_port
@@ -65,6 +68,19 @@ function asRustConfig(config: Record<string, unknown>): RustConfig | null {
     typeof maxPlayers !== 'number' || typeof autoRestart !== 'boolean'
   ) return null
   return { port, queryPort, rconPort, rconPassword, hostname, level, seed, worldSize, maxPlayers, autoRestart }
+}
+
+function asGenericConfig(config: Record<string, unknown>): GenericConfig | null {
+  const port = config.port
+  const queryPort = config.query_port
+  const adminPort = config.admin_port
+  const settings = { ...config }
+  delete settings.port
+  delete settings.query_port
+  delete settings.admin_port
+  delete settings.auto_restart
+  if (typeof port !== 'number' || (typeof queryPort !== 'number' && queryPort !== null) || (typeof adminPort !== 'number' && adminPort !== null) || typeof config.auto_restart !== 'boolean') return null
+  return { port, query_port: queryPort, admin_port: adminPort, settings, auto_restart: config.auto_restart }
 }
 
 function RustConfigForm({ name, config, running }: { name: string; config: RustConfig; running: boolean }) {
@@ -139,7 +155,7 @@ function RustConfigForm({ name, config, running }: { name: string; config: RustC
   )
 }
 
-function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min, max }: {
+function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min, max, required = true }: {
   id: string
   label: string
   type?: 'text' | 'number' | 'password'
@@ -148,12 +164,74 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min,
   onChange: (value: string) => void
   min?: number
   max?: number
+  required?: boolean
 }) {
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
-      <Input id={id} type={type} min={min} max={max} required value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <Input id={id} type={type} min={min} max={max} required={required} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
     </div>
+  )
+}
+
+function GenericConfigForm({ game, name, config, running }: { game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; name: string; config: GenericConfig; running: boolean }) {
+  const update = useUpdateGenericConfig()
+  const [port, setPort] = useState(String(config.port))
+  const [queryPort, setQueryPort] = useState(config.query_port === null ? '' : String(config.query_port))
+  const [adminPort, setAdminPort] = useState(config.admin_port === null ? '' : String(config.admin_port))
+  const [serverName, setServerName] = useState(typeof config.settings.server_name === 'string' ? config.settings.server_name : name)
+  const [maxPlayers, setMaxPlayers] = useState(typeof config.settings.max_players === 'number' ? String(config.settings.max_players) : '32')
+  const [ownerId, setOwnerId] = useState(typeof config.settings.owner_id === 'string' ? config.settings.owner_id : '')
+  const [worldName, setWorldName] = useState(typeof config.settings.default_world_name === 'string' ? config.settings.default_world_name : name)
+  const [adminPassword, setAdminPassword] = useState(typeof config.settings.admin_password === 'string' ? config.settings.admin_password : '')
+  const [worldPassword, setWorldPassword] = useState(typeof config.settings.world_password === 'string' ? config.settings.world_password : '')
+  const [autoRestart, setAutoRestart] = useState(config.auto_restart)
+  const [rconEnabled, setRconEnabled] = useState(config.settings.rcon_enabled === true)
+  const [restEnabled, setRestEnabled] = useState(config.settings.rest_api_enabled !== false)
+  const isDragonwilds = game === 'runescape-dragonwilds'
+
+  const save = () => {
+    const settings: Record<string, unknown> = { ...config.settings, server_name: serverName }
+    if (game === 'vrising') Object.assign(settings, { max_players: Number(maxPlayers), rcon_enabled: rconEnabled })
+    if (game === 'palworld') Object.assign(settings, { max_players: Number(maxPlayers), rest_api_enabled: restEnabled })
+    if (isDragonwilds) Object.assign(settings, { owner_id: ownerId, default_world_name: worldName, admin_password: adminPassword, world_password: worldPassword })
+    update.mutate({
+      game,
+      name,
+      request: {
+        port: Number(port),
+        query_port: queryPort ? Number(queryPort) : null,
+        admin_port: adminPort ? Number(adminPort) : null,
+        settings,
+        auto_restart: autoRestart,
+      },
+    }, {
+      onSuccess: () => toast.success('Server configuration saved'),
+      onError: (error) => toast.error(error.message),
+    })
+  }
+
+  return (
+    <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}>
+      <p className="text-sm text-muted-foreground">Stop this server before changing its configuration. Empty password fields keep their existing value.</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />
+        {config.query_port !== null && <ConfigInput id="generic-query-port" label={isDragonwilds ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}
+        {config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : 'RCON port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}
+        <ConfigInput id="generic-server-name" label="Server name" value={serverName} disabled={running} onChange={setServerName} />
+        {!isDragonwilds && <ConfigInput id="generic-max-players" label="Max players" type="number" min={1} value={maxPlayers} disabled={running} onChange={setMaxPlayers} />}
+        {isDragonwilds && <>
+          <ConfigInput id="dragonwilds-owner-id" label="Owner ID" value={ownerId} disabled={running} onChange={setOwnerId} />
+          <ConfigInput id="dragonwilds-world" label="Default world" value={worldName} disabled={running} onChange={setWorldName} />
+          <ConfigInput id="dragonwilds-admin-password" label="Administration password" type="password" value={adminPassword} disabled={running} onChange={setAdminPassword} required={false} />
+          <ConfigInput id="dragonwilds-world-password" label="World password" type="password" value={worldPassword} disabled={running} onChange={setWorldPassword} required={false} />
+        </>}
+      </div>
+      {game === 'vrising' && <div className="flex items-center justify-between rounded-xl border p-3"><Label htmlFor="vrising-rcon">Enable local RCON</Label><Switch id="vrising-rcon" checked={rconEnabled} disabled={running} onCheckedChange={setRconEnabled} /></div>}
+      {game === 'palworld' && <div className="flex items-center justify-between rounded-xl border p-3"><Label htmlFor="palworld-rest">Enable local REST API</Label><Switch id="palworld-rest" checked={restEnabled} disabled={running} onCheckedChange={setRestEnabled} /></div>}
+      <div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div>
+      <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save configuration</Button>
+    </form>
   )
 }
 
@@ -174,6 +252,7 @@ export function ManagedInstanceDetailPage() {
   if (!instance.data) return null
   const detail = instance.data
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
+  const genericConfig = detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds' ? asGenericConfig(detail.config) : null
   const tabs = [
     { id: 'logs', label: 'Logs' },
     ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
@@ -216,7 +295,9 @@ export function ManagedInstanceDetailPage() {
         <TabsContent value="config" className="flex flex-col gap-6">
           {rustConfig
             ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} name={detail.name} config={rustConfig} running={detail.running} />
-            : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
+            : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds')
+              ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} game={detail.game} name={detail.name} config={genericConfig} running={detail.running} />
+              : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
           <UptimeScheduleCard game={detail.game} name={detail.name} />
           {detail.game === 'rust' && <WipeMapCard name={detail.name} running={detail.running} />}
         </TabsContent>

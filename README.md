@@ -1,8 +1,9 @@
 # Odin
 
 **Odin** is a self-hosted web service for orchestrating dedicated game
-servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/)
-and Rust, from one binary and one web dashboard. In Norse mythology, Odin is
+servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/),
+Rust, V Rising, Palworld, and RuneScape: Dragonwilds from one binary and one
+web dashboard. In Norse mythology, Odin is
 the All-Father who watches over the nine realms; this Odin watches over your
 game servers — installing and updating them, running and supervising named
 instances, and managing each game's configuration, backups, and supported
@@ -39,10 +40,16 @@ Rust v1 otherwise focuses on core operation.
 - **One binary, no runtime dependencies** beyond (transparently managed)
   SteamCMD and a handful of OS shared libraries — no Python, no Docker, no
   terminal multiplexer required.
-- **Multiple games and named instances.** Orchestrate Valheim and Rust side
-  by side on one host. Each game keeps its own installation and instances;
-  an instance name may be reused by another game without sharing data or
-  ports. Valheim's existing data layout remains unchanged for upgrades.
+- **Multiple games and UUID-addressed instances.** Orchestrate Valheim, Rust,
+  V Rising, Palworld, and RuneScape: Dragonwilds side by side on one host.
+  Each instance has a persistent UUID for dashboard navigation and API calls;
+  names remain editable labels and may be reused by another game without
+  sharing data or ports.
+
+- **Compiled game drivers.** Odin ships drivers rather than loading plugins:
+  V Rising runs in an isolated Proton-GE prefix; Palworld uses its local,
+  authenticated REST API; and Dragonwilds uses isolated runtime/config/save
+  trees with separate game and beacon UDP ports.
 - **Detached by default, and restart-proof.** Every instance runs as its
   own directly-supervised background process, so it keeps running after you
   disconnect — and after `odin serve` itself is restarted or upgraded.
@@ -244,9 +251,9 @@ help`](#development) for every available target.
 odin serve
 ```
 
-Then open `http://127.0.0.1:7331` in a browser: install/update Valheim or
-Rust, create and start named instances, edit game-specific configuration,
-watch logs, and take backups. Both games support access lists; Valheim
+Then open `http://127.0.0.1:7331` in a browser: install/update the supported
+games, create and start instances, edit game-specific configuration, watch
+logs, and take backups. Rust and V Rising support access lists; Valheim
 additionally offers mods, live player state, and readiness. See [Web
 dashboard](#web-dashboard) for details.
 
@@ -373,6 +380,22 @@ configuration, live logs, downloadable save files, scheduled backups, and
 live plus historical CPU/RAM usage with CSV export. Global settings define
 automatic restart and backup defaults for newly created Valheim and Rust
 servers.
+
+### Instance API identity
+
+The dashboard routes instances as `/instance/<uuid>` and the public API uses
+`/api/instances/<uuid>/…`. Treat the UUID returned by the instance list as the
+canonical identifier for lifecycle, configuration, logs, saves, backups, and
+game-specific administration. Game/name API paths are legacy compatibility
+routes and must not be used by new integrations; a rename never changes the
+UUID.
+
+V Rising uses a managed, cached Proton-GE runtime and keeps its persistent
+data and RCON listener per instance. Palworld's administrative REST API is
+called only on its loopback port by Odin; it is never proxied directly to the
+network. Dragonwilds configuration is editable only while stopped, because
+the game discards live edits; its game and beacon UDP ports are configured
+independently.
 
 Rust access lists manage owners, moderators, and bans while the server is
 stopped. Valheim adds Thunderstore mod management, BepInEx update checks,

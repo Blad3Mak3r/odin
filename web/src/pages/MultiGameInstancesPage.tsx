@@ -4,14 +4,12 @@ import { formatBytes } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { GameIcon } from '@/components/GameIcon'
-import { Loader2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -19,7 +17,7 @@ import { QueryError } from '@/components/QueryError'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useCreateManagedInstance, useGameInstallStatus, useGames, useInstallGame, useJobs, useManagedInstanceAction, useManagedInstanceTransition, useManagedInstances } from '@/lib/queries'
+import { useCreateManagedInstance, useGames, useManagedInstanceAction, useManagedInstanceTransition, useManagedInstances } from '@/lib/queries'
 import type { GameId, GameView, ManagedInstanceView, InstanceResources } from '@/lib/types'
 
 type Filter = 'all' | GameId
@@ -47,19 +45,13 @@ export function MultiGameInstancesPage() {
       <PageHeader
         title="Instances"
         description="Every game server Odin manages."
-        action={<CreateManagedInstanceDialog />}
+        action={<CreateManagedInstanceDialog games={games.data ?? []} />}
       />
       <ToggleGroup value={[filter]} onValueChange={(value) => value[0] && setFilter(value[0] as Filter)} variant="outline" size="sm">
         <ToggleGroupItem value="all">All</ToggleGroupItem>
-        <ToggleGroupItem value="valheim"><GameIcon game="valheim" />Valheim</ToggleGroupItem>
-        <ToggleGroupItem value="rust"><GameIcon game="rust" />Rust</ToggleGroupItem>
+        {games.data?.map((game) => <ToggleGroupItem key={game.id} value={game.id}><GameIcon game={game.id} />{game.name}</ToggleGroupItem>)}
       </ToggleGroup>
       {games.isError && <QueryError error={games.error} />}
-      {games.data && (
-        <section className="grid gap-4 md:grid-cols-2">
-          {games.data.map((game) => <GameInstallCard key={game.id} game={game} />)}
-        </section>
-      )}
       <div className="flex flex-wrap gap-3">
         <Input aria-label="Search instances or tags" placeholder="Search instances or tags…" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-sm" />
         <select aria-label="Sort instances" className="rounded-md border bg-background px-3 text-sm" value={sort} onChange={(e) => setSort(e.target.value)}><option value="name">Name</option><option value="game">Game</option><option value="status">Running first</option></select>
@@ -90,50 +82,6 @@ export function MultiGameInstancesPage() {
         </TableBody>
       </Table>
     </div>
-  )
-}
-
-export function GameInstallCard({ game }: { game: GameView }) {
-  const status = useGameInstallStatus(game.id)
-  const install = useInstallGame()
-  const jobs = useJobs()
-  const wasRunning = useRef(false)
-  const runningJob = jobs.data?.find(
-    (job) => job.kind.kind === 'steamcmd_install' && job.kind.game === game.id &&
-      (job.status.status === 'queued' || job.status.status === 'running'),
-  )
-
-  useEffect(() => {
-    if (wasRunning.current && !runningJob) status.refetch()
-    wasRunning.current = Boolean(runningJob)
-  }, [runningJob, status])
-
-  const label = !status.data?.installed
-    ? 'Not installed'
-    : status.data.update_available
-      ? `Update available: ${status.data.installed_build_id} → ${status.data.latest_build_id}`
-      : `Up to date (build ${status.data.installed_build_id})`
-
-  return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0">
-        <div>
-          <CardTitle className="flex items-center gap-2 text-base"><GameIcon game={game.id} className="size-7 rounded-md" />{game.name}</CardTitle>
-          <CardDescription>Steam App ID {game.steam_app_id}</CardDescription>
-        </div>
-        <Button
-          size="sm"
-          disabled={install.isPending || Boolean(runningJob)}
-          onClick={() => install.mutate(game.id, { onError: (error) => toast.error(error.message) })}
-        >
-          {(install.isPending || runningJob) && <Loader2 className="size-4 animate-spin" />}
-          Install / update
-        </Button>
-      </CardHeader>
-      <CardContent>
-        {status.isError ? <QueryError error={status.error} /> : <Badge variant={status.data?.update_available ? 'secondary' : 'outline'}>{label}</Badge>}
-      </CardContent>
-    </Card>
   )
 }
 
@@ -173,16 +121,17 @@ function ManagedInstanceRow({ instance, selected, onToggle }: { instance: Manage
   )
 }
 
-function CreateManagedInstanceDialog() {
+function CreateManagedInstanceDialog({ games }: { games: GameView[] }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
-  const [game, setGame] = useState<GameId>('valheim')
+  const [game, setGame] = useState<GameId | null>(null)
   const create = useCreateManagedInstance()
-  const submit = () => create.mutate({ game, name }, {
+  const selectedGame = games.some(({ id }) => id === game) ? game : (games[0]?.id ?? null)
+  const submit = () => selectedGame && create.mutate({ game: selectedGame, name }, {
     onSuccess: () => {
       setOpen(false)
       setName('')
-      toast.success(`${game} instance '${name}' created`)
+      toast.success(`${selectedGame} instance '${name}' created`)
     },
     onError: (error) => toast.error(error.message),
   })
@@ -195,17 +144,16 @@ function CreateManagedInstanceDialog() {
         <FieldGroup>
           <Field>
             <FieldLabel>Game</FieldLabel>
-            <ToggleGroup value={[game]} onValueChange={(value) => value[0] && setGame(value[0] as GameId)} variant="outline" spacing={0}>
-              <ToggleGroupItem value="valheim"><GameIcon game="valheim" />Valheim</ToggleGroupItem>
-              <ToggleGroupItem value="rust"><GameIcon game="rust" />Rust</ToggleGroupItem>
+            <ToggleGroup value={selectedGame ? [selectedGame] : []} onValueChange={(value) => value[0] && setGame(value[0] as GameId)} variant="outline" spacing={0}>
+              {games.map((availableGame) => <ToggleGroupItem key={availableGame.id} value={availableGame.id}><GameIcon game={availableGame.id} />{availableGame.name}</ToggleGroupItem>)}
             </ToggleGroup>
           </Field>
           <Field>
             <FieldLabel htmlFor="managed-instance-name">Name</FieldLabel>
-            <Input id="managed-instance-name" placeholder="my-server" value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && name && submit()} />
+            <Input id="managed-instance-name" placeholder="my-server" value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && name && selectedGame && submit()} />
           </Field>
         </FieldGroup>
-        <DialogFooter><Button disabled={!name || create.isPending} onClick={submit}>Create</Button></DialogFooter>
+        <DialogFooter><Button disabled={!name || !selectedGame || create.isPending} onClick={submit}>Create</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   )

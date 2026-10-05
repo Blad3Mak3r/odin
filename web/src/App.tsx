@@ -9,6 +9,7 @@ const DashboardPage = lazy(() =>
 const MultiGameInstancesPage = lazy(() =>
   import('@/pages/MultiGameInstancesPage').then((m) => ({ default: m.MultiGameInstancesPage })),
 )
+const GamesPage = lazy(() => import('@/pages/GamesPage').then((m) => ({ default: m.GamesPage })))
 const ManagedInstanceDetailPage = lazy(() =>
   import('@/pages/ManagedInstanceDetailPage').then((m) => ({ default: m.ManagedInstanceDetailPage })),
 )
@@ -52,6 +53,7 @@ function App() {
       <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/games" element={<GamesPage />} />
           <Route path="/instances" element={<MultiGameInstancesPage />} />
           <Route path="/instances/valheim/:name/*" element={<InstanceDetailPage />} />
           <Route path="/instances/:game/:name/*" element={<ManagedInstanceDetailPage />} />

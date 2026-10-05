@@ -290,7 +290,7 @@ export function ManagedInstanceDetailPage() {
           </TabsList>
         </div>
         <TabsContent value="logs"><ManagedLogsTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
-        {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab name={detail.name} running={detail.running} /></TabsContent>}
+        {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab id={detail.id} running={detail.running} /></TabsContent>}
         {detail.game === 'vrising' && <TabsContent value="rcon"><VRisingRconTab id={detail.id} running={detail.running} /></TabsContent>}
         <TabsContent value="errors">
           <Card>

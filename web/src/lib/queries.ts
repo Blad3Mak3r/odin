@@ -383,8 +383,8 @@ export function useUpdateGenericConfig() {
 
 export function useExecuteRustRcon() {
   return useMutation({
-    mutationFn: ({ name, command }: { name: string; command: string }) =>
-      api.post<RconCommandResponse>(`/games/rust/instances/${name}/rcon`, { command }),
+    mutationFn: ({ id, command }: { id: string; command: string }) =>
+      api.post<RconCommandResponse>(`/instances/${id}/rust/rcon`, { command }),
   })
 }
 

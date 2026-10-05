@@ -109,6 +109,10 @@ pub fn build_router(state: AppState) -> Router {
             post(games::execute_vrising_rcon_by_id),
         )
         .route(
+            "/instances/{id}/rust/rcon",
+            post(games::execute_rust_rcon_by_id),
+        )
+        .route(
             "/instances/{id}/vrising/lists/{kind}",
             get(vrising_access_lists::get_list_by_id)
                 .post(vrising_access_lists::add_list_entry_by_id),

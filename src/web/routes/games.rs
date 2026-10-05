@@ -452,6 +452,18 @@ pub async fn execute_rust_rcon(
     Ok(Json(RconCommandResponse { output }))
 }
 
+pub async fn execute_rust_rcon_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<RconCommandRequest>,
+) -> ApiResult<Json<RconCommandResponse>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    execute_rust_rcon(State(state), Path(identity.name), Json(request)).await
+}
+
 /// Executes V Rising's Source RCON command through the loopback listener
 /// configured by Odin. Its password is never returned to API clients.
 pub async fn execute_vrising_rcon_by_id(

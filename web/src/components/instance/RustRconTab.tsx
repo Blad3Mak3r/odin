@@ -6,13 +6,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useExecuteRustRcon } from '@/lib/queries'
 
-export function RustRconTab({ name, running }: { name: string; running: boolean }) {
+export function RustRconTab({ id, running }: { id: string; running: boolean }) {
   const execute = useExecuteRustRcon()
   const [command, setCommand] = useState('')
   const [output, setOutput] = useState<string | null>(null)
 
   const submit = () => execute.mutate(
-    { name, command },
+    { id, command },
     {
       onSuccess: (response) => setOutput(response.output),
       onError: (error) => toast.error(error.message),

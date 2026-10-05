@@ -173,24 +173,6 @@ pub fn build_router(state: AppState) -> Router {
             get(games::get_instance).delete(games::delete_instance),
         )
         .route(
-            "/games/rust/instances/{name}/lists/{kind}",
-            get(rust_access_lists::get_list)
-                .put(rust_access_lists::set_list)
-                .post(rust_access_lists::add_list_entry),
-        )
-        .route(
-            "/games/rust/instances/{name}/lists/{kind}/{id}",
-            delete(rust_access_lists::remove_list_entry),
-        )
-        .route(
-            "/games/vrising/instances/{name}/lists/{kind}",
-            get(vrising_access_lists::get_list).post(vrising_access_lists::add_list_entry),
-        )
-        .route(
-            "/games/vrising/instances/{name}/lists/{kind}/{id}",
-            delete(vrising_access_lists::remove_list_entry),
-        )
-        .route(
             "/games/rust/instances/{name}/resources",
             get(games::get_rust_resources),
         )

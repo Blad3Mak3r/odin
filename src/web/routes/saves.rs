@@ -127,6 +127,11 @@ fn save_root(
                 .ok_or_else(|| InstanceError::NotFound(name.to_string()))?;
             Ok(crate::game::rust::backup_source(paths, &instance))
         }
+        GameId::VRising => Ok(paths.game_instance_dir(game, name).join("data/Saves")),
+        GameId::Palworld => Ok(paths.game_instance_dir(game, name).join("saves")),
+        GameId::RunescapeDragonwilds => Ok(paths
+            .game_instance_dir(game, name)
+            .join("RSDragonwilds/Saved/Savegames")),
     }
 }
 

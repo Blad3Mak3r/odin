@@ -57,11 +57,24 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         let sql = std::str::from_utf8(&sql.data)
             .with_context(|| format!("migration '{file}' is not valid UTF-8"))?;
 
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)
-            .with_context(|| format!("failed to apply migration '{file}'"))?;
-        tx.pragma_update(None, "user_version", version)?;
-        tx.commit()?;
+        // 0021 replaces the parent identity table in order to widen its
+        // SQLite CHECK constraint. SQLite only permits that operation with
+        // foreign keys disabled before a transaction begins.
+        if version == 21 {
+            conn.pragma_update(None, "foreign_keys", "OFF")?;
+            let result = conn
+                .execute_batch(sql)
+                .with_context(|| format!("failed to apply migration '{file}'"));
+            conn.pragma_update(None, "foreign_keys", "ON")?;
+            result?;
+            conn.pragma_update(None, "user_version", version)?;
+        } else {
+            let tx = conn.transaction()?;
+            tx.execute_batch(sql)
+                .with_context(|| format!("failed to apply migration '{file}'"))?;
+            tx.pragma_update(None, "user_version", version)?;
+            tx.commit()?;
+        }
         tracing::info!(migration = file, "applied database migration");
     }
 

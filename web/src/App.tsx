@@ -55,6 +55,7 @@ function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/games" element={<GamesPage />} />
           <Route path="/instances" element={<MultiGameInstancesPage />} />
+          <Route path="/instance/:id/*" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/valheim/:name/*" element={<InstanceDetailPage />} />
           <Route path="/instances/:game/:name/*" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/:name/*" element={<LegacyValheimInstanceRedirect />} />

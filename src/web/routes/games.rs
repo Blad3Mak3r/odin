@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::time::Duration;
 use sysinfo::Pid;
 
-use crate::db::game_instances::{self, GameInstanceIdentity, RustInstance};
+use crate::db::game_instances::{self, GameInstanceIdentity, GenericGameInstance, RustInstance};
 use crate::game::{self, GameId, instances as game_instances_ops, rust};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
@@ -148,6 +148,7 @@ pub async fn install_game(
                         );
                     }
                 }
+                GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {}
             }
             let driver = game::driver(game);
             let install_dir = paths.game_install_dir(game);
@@ -182,6 +183,13 @@ pub async fn list_all_instances(
     let views = run_blocking(move || {
         let mut views = valheim_views(&paths, &db)?;
         views.extend(rust_views(&paths, &db)?);
+        for game in [
+            GameId::VRising,
+            GameId::Palworld,
+            GameId::RunescapeDragonwilds,
+        ] {
+            views.extend(generic_views(&paths, &db, game)?);
+        }
         views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
         Ok(views)
     })
@@ -198,6 +206,9 @@ pub async fn list_instances(
     let views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
         GameId::Rust => rust_views(&paths, &db),
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+            generic_views(&paths, &db, game)
+        }
     })
     .await?;
     Ok(Json(views))
@@ -231,6 +242,24 @@ pub async fn get_instance(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = run_blocking(move || load_view(&paths, &db, game, &name)).await?;
+    Ok(Json(view))
+}
+
+/// Resolves the durable instance identity used by dashboard URLs. Names are
+/// deliberately not accepted here: a rename must never invalidate a bookmark
+/// or point a later operation at a different game with the same name.
+pub async fn get_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        let identity =
+            game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")?;
+        load_view(&paths, &db, identity.game, &identity.name)
+    })
+    .await?;
     Ok(Json(view))
 }
 
@@ -613,6 +642,7 @@ fn game_instance_view(
     match instance {
         game_instances_ops::GameInstance::Valheim(instance) => valheim_view(paths, db, instance),
         game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(paths, instance)),
+        game_instances_ops::GameInstance::Generic(instance) => Ok(generic_view(paths, instance)),
     }
 }
 
@@ -675,6 +705,45 @@ fn rust_view(paths: &Paths, instance: RustInstance) -> ManagedInstanceView {
             "max_players": instance.config.max_players,
             "auto_restart": instance.config.auto_restart,
         }),
+    }
+}
+
+fn generic_views(
+    paths: &Paths,
+    db: &crate::db::Db,
+    game: GameId,
+) -> anyhow::Result<Vec<ManagedInstanceView>> {
+    Ok(game_instances::list_generic(db, game)?
+        .into_iter()
+        .map(|instance| generic_view(paths, instance))
+        .collect())
+}
+
+fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstanceView {
+    let game = instance.identity.game;
+    let name = instance.identity.name.clone();
+    let mut config = instance.config.settings.clone();
+    if let Value::Object(values) = &mut config {
+        values.insert("port".into(), serde_json::json!(instance.config.port));
+        values.insert(
+            "query_port".into(),
+            serde_json::json!(instance.config.query_port),
+        );
+        values.insert(
+            "admin_port".into(),
+            serde_json::json!(instance.config.admin_port),
+        );
+        values.insert(
+            "auto_restart".into(),
+            serde_json::json!(instance.config.auto_restart),
+        );
+    }
+    ManagedInstanceView {
+        running: instance.is_running(),
+        odin_version: supervisor_version(paths, game, &name),
+        capabilities: game::driver(game).capabilities(),
+        identity: instance.identity,
+        config,
     }
 }
 

@@ -39,6 +39,7 @@ pub fn build_router(state: AppState) -> Router {
             post(games::rename_instance),
         )
         .route("/games/instances", get(games::list_all_instances))
+        .route("/games/instances/id/{id}", get(games::get_instance_by_id))
         .route("/games/{game}/install", post(games::install_game))
         .route(
             "/games/{game}/install/status",

@@ -139,6 +139,9 @@ fn game_name(game: crate::game::GameId) -> &'static str {
     match game {
         crate::game::GameId::Valheim => "Valheim",
         crate::game::GameId::Rust => "Rust",
+        crate::game::GameId::VRising => "V Rising",
+        crate::game::GameId::Palworld => "Palworld",
+        crate::game::GameId::RunescapeDragonwilds => "RuneScape: Dragonwilds",
     }
 }
 

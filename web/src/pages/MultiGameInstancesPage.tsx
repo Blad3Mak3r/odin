@@ -104,7 +104,7 @@ function ManagedInstanceRow({ instance, selected, onToggle }: { instance: Manage
   return (
     <TableRow>
       <TableCell><Checkbox aria-label={`Select ${instance.game} / ${instance.name}`} checked={selected} onCheckedChange={onToggle} /></TableCell>
-      <TableCell className="font-medium"><Link className="hover:underline" to={`/instances/${instance.game}/${instance.name}`}>{instance.name}</Link><div className="text-xs font-normal text-muted-foreground">Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}</div><div className="flex flex-wrap gap-1">{instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div></TableCell>
+      <TableCell className="font-medium"><Link className="hover:underline" to={`/instance/${instance.id}`}>{instance.name}</Link><div className="text-xs font-normal text-muted-foreground">Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}</div><div className="flex flex-wrap gap-1">{instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div></TableCell>
       <TableCell><Badge variant="secondary"><GameIcon game={instance.game} className="size-4 rounded-sm" />{instance.game}</Badge></TableCell>
       <TableCell><Badge variant={instance.running ? 'default' : 'secondary'}>{instance.running ? 'running' : 'stopped'}</Badge></TableCell>
       <TableCell className="hidden sm:table-cell">{port}</TableCell>

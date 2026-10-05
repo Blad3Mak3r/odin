@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { QueryError } from '@/components/QueryError'
 import {
   useManagedInstance,
+  useManagedInstanceById,
   useManagedInstanceLogs,
   useUpdateRustConfig,
 } from '@/lib/queries'
@@ -31,7 +32,7 @@ function isConsoleError(line: string) {
 }
 
 function isGameId(value: string | undefined): value is GameId {
-  return value === 'valheim' || value === 'rust'
+  return value === 'valheim' || value === 'rust' || value === 'vrising' || value === 'palworld' || value === 'runescape-dragonwilds'
 }
 
 type RustConfig = {
@@ -157,15 +158,18 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min,
 }
 
 export function ManagedInstanceDetailPage() {
-  const { game, name, '*': tabPath } = useParams<{ game: string; name: string; '*': string }>()
+  const { id, game, name, '*': tabPath } = useParams<{ id: string; game: string; name: string; '*': string }>()
   const navigate = useNavigate()
   const gameId = isGameId(game) ? game : 'valheim'
-  const instance = useManagedInstance(gameId, name ?? '')
-  const logs = useManagedInstanceLogs(gameId, name ?? '')
-  const liveLogs = useLogSocket(name ?? '', gameId)
+  const instanceById = useManagedInstanceById(id ?? '')
+  const instanceByName = useManagedInstance(gameId, name ?? '')
+  const instance = id ? instanceById : instanceByName
+  const detailForRequests = instance.data
+  const logs = useManagedInstanceLogs(detailForRequests?.game ?? gameId, detailForRequests?.name ?? name ?? '')
+  const liveLogs = useLogSocket(detailForRequests?.name ?? name ?? '', detailForRequests?.game ?? gameId)
   const consoleLines = liveLogs.lines.length > 0 ? liveLogs.lines : (logs.data?.lines ?? [])
   const errorLines = consoleLines.filter(isConsoleError)
-  if (!isGameId(game) || !name) return null
+  if (!id && (!isGameId(game) || !name)) return null
   if (instance.isError) return <QueryError error={instance.error} />
   if (!instance.data) return null
   const detail = instance.data
@@ -182,13 +186,13 @@ export function ManagedInstanceDetailPage() {
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
   if (!tab || (tab !== 'lists' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
-    return <Navigate replace to={`/instances/${detail.game}/${detail.name}/logs`} />
+    return <Navigate replace to={id ? `/instance/${id}/logs` : `/instances/${detail.game}/${detail.name}/logs`} />
   }
 
   return (
     <div className="flex flex-col gap-6">
       <ManagedInstanceHeader instance={detail} />
-      <Tabs value={tab} onValueChange={(value) => navigate(value === 'lists' ? `/instances/${detail.game}/${detail.name}/lists/owner` : `/instances/${detail.game}/${detail.name}/${value}`)}>
+      <Tabs value={tab} onValueChange={(value) => navigate(id ? (value === 'lists' ? `/instance/${id}/lists/owner` : `/instance/${id}/${value}`) : (value === 'lists' ? `/instances/${detail.game}/${detail.name}/lists/owner` : `/instances/${detail.game}/${detail.name}/${value}`))}>
         <div className="overflow-x-auto">
           <TabsList className="w-max">
           {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}

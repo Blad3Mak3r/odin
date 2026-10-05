@@ -225,6 +225,15 @@ export function useManagedInstance(game: GameId, name: string) {
   })
 }
 
+export function useManagedInstanceById(id: string) {
+  return useQuery({
+    queryKey: ['managed-instances', id],
+    queryFn: () => api.get<ManagedInstanceView>(`/games/instances/id/${id}`),
+    enabled: Boolean(id),
+    refetchInterval: 5_000,
+  })
+}
+
 export function useManagedInstanceTransition(game: GameId, name: string) {
   return useQuery({
     queryKey: ['game-instance-transitions'],

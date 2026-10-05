@@ -1,5 +1,6 @@
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
 import { VRisingAccessListsTab } from '@/components/instance/VRisingAccessListsTab'
+import { PalworldAdminTab } from '@/components/instance/PalworldAdminTab'
 import { RustRconTab } from '@/components/instance/RustRconTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
 import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
@@ -262,6 +263,7 @@ export function ManagedInstanceDetailPage() {
     ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
+    ...(detail.game === 'palworld' ? [{ id: 'admin', label: 'Admin' }] : []),
     ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
     { id: 'saves', label: 'Save files' },
@@ -307,6 +309,7 @@ export function ManagedInstanceDetailPage() {
           <UptimeScheduleCard game={detail.game} name={detail.name} />
           {detail.game === 'rust' && <WipeMapCard name={detail.name} running={detail.running} />}
         </TabsContent>
+        {detail.game === 'palworld' && <TabsContent value="admin"><PalworldAdminTab id={detail.id} running={detail.running} /></TabsContent>}
         {detail.capabilities.backups && (
           <TabsContent value="backups"><BackupsTab name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
         )}

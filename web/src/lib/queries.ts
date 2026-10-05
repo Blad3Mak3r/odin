@@ -256,6 +256,36 @@ export function useManagedInstanceLogs(game: GameId, name: string, lines = 200, 
   })
 }
 
+export function usePalworldPlayers(id: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'palworld', 'players'],
+    queryFn: () => api.get<unknown>(`/games/instances/id/${id}/palworld/players`),
+    refetchInterval: 10_000,
+    enabled: Boolean(id) && enabled,
+  })
+}
+
+export function usePalworldMetrics(id: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'palworld', 'metrics'],
+    queryFn: () => api.get<unknown>(`/games/instances/id/${id}/palworld/metrics`),
+    refetchInterval: 10_000,
+    enabled: Boolean(id) && enabled,
+  })
+}
+
+export function usePalworldAction(action: 'announce' | 'save' | 'kick' | 'ban' | 'unban' | 'shutdown') {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, request }: { id: string; request?: Record<string, unknown> }) =>
+      api.post<unknown>(`/games/instances/id/${id}/palworld/${action}`, request),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'palworld'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
 export function useManagedRustResources(name: string, enabled = true) {
   return useQuery({
     queryKey: ['managed-instances', 'rust', name, 'resources'],

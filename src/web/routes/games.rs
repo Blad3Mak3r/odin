@@ -1300,3 +1300,16 @@ pub async fn clone_rust_instance(
     .await?;
     Ok(Json(view))
 }
+
+/// Clones a Rust instance selected by its durable UUID.
+pub async fn clone_rust_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<CreateGameInstanceRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    clone_rust_instance(State(state), Path(identity.name), Json(req)).await
+}

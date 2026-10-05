@@ -121,6 +121,10 @@ pub fn build_router(state: AppState) -> Router {
             post(games::full_wipe_rust_by_id),
         )
         .route(
+            "/instances/{id}/rust/clone",
+            post(games::clone_rust_instance_by_id),
+        )
+        .route(
             "/instances/{id}/vrising/lists/{kind}",
             get(vrising_access_lists::get_list_by_id)
                 .post(vrising_access_lists::add_list_entry_by_id),

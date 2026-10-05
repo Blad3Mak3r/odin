@@ -102,6 +102,10 @@ pub fn build_router(state: AppState) -> Router {
             post(palworld::shutdown),
         )
         .route(
+            "/games/instances/id/{id}/vrising/rcon",
+            post(games::execute_vrising_rcon_by_id),
+        )
+        .route(
             "/games/instances/id/{id}/saves",
             get(saves::list_save_files_by_id),
         )

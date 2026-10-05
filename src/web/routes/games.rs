@@ -434,7 +434,7 @@ pub async fn execute_rust_rcon(
     Path(name): Path<String>,
     Json(request): Json<RconCommandRequest>,
 ) -> ApiResult<Json<RconCommandResponse>> {
-    let command = request.command.trim();
+    let command = request.command.trim().to_string();
     if command.is_empty() {
         return Err(BadRequest("Rust RCON command cannot be empty".to_string()).into());
     }
@@ -448,7 +448,37 @@ pub async fn execute_rust_rcon(
         game_instances::load_rust(&db, &name_for_load)?.context("Rust instance does not exist")
     })
     .await?;
-    let output = rust::rcon::execute(&instance, command).await?;
+    let output = rust::rcon::execute(&instance, &command).await?;
+    Ok(Json(RconCommandResponse { output }))
+}
+
+/// Executes V Rising's Source RCON command through the loopback listener
+/// configured by Odin. Its password is never returned to API clients.
+pub async fn execute_vrising_rcon_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<RconCommandRequest>,
+) -> ApiResult<Json<RconCommandResponse>> {
+    let command = request.command.trim().to_string();
+    if command.is_empty() {
+        return Err(BadRequest("V Rising RCON command cannot be empty".to_string()).into());
+    }
+    if command.len() > 16 * 1024 {
+        return Err(BadRequest("V Rising RCON command must be at most 16 KiB".to_string()).into());
+    }
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::VRising {
+        return Err(BadRequest("this API is only available for V Rising instances".into()).into());
+    }
+    let db = state.db.clone();
+    let name = identity.name;
+    let instance = run_blocking(move || {
+        game_instances::load_generic(&db, GameId::VRising, &name)?
+            .context("V Rising instance does not exist")
+    })
+    .await?;
+    let output =
+        run_blocking(move || crate::game::vrising::execute_rcon(&instance, &command)).await?;
     Ok(Json(RconCommandResponse { output }))
 }
 

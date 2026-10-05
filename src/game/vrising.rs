@@ -1,12 +1,21 @@
 //! V Rising's administrator and ban files live below the instance-specific
 //! persistent-data path selected by Odin's `-persistentDataPath` argument.
 
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::PathBuf;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use thiserror::Error;
 
 use crate::paths::Paths;
+
+const RCON_TIMEOUT: Duration = Duration::from_secs(5);
+const RCON_MAX_PACKET: usize = 64 * 1024;
+const AUTH_REQUEST: i32 = 3;
+const AUTH_RESPONSE: i32 = 2;
+const EXEC_COMMAND: i32 = 2;
 
 #[derive(Debug, Error)]
 pub enum VRisingAccessListError {
@@ -119,6 +128,88 @@ pub fn remove_id(paths: &Paths, name: &str, kind: VRisingAccessListKind, id: &st
     Ok(true)
 }
 
+/// Executes V Rising's Source RCON protocol through its loopback-only
+/// listener. The credentials remain in Odin's database and are never
+/// included in the HTTP response or sent to the browser.
+pub fn execute_rcon(
+    instance: &crate::db::game_instances::GenericGameInstance,
+    command: &str,
+) -> Result<String> {
+    let settings = &instance.config.settings;
+    if !settings
+        .get("rcon_enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        bail!("V Rising RCON is disabled for this instance");
+    }
+    let password = settings
+        .get("rcon_password")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("V Rising RCON requires a password")?;
+    let port = instance
+        .config
+        .admin_port
+        .context("V Rising RCON port is not configured")?;
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let mut stream = TcpStream::connect_timeout(&address.into(), RCON_TIMEOUT)
+        .with_context(|| format!("failed to connect to V Rising RCON at {address}"))?;
+    stream.set_read_timeout(Some(RCON_TIMEOUT))?;
+    stream.set_write_timeout(Some(RCON_TIMEOUT))?;
+
+    write_rcon_packet(&mut stream, 1, AUTH_REQUEST, password)?;
+    let (id, packet_type, _) = read_rcon_packet(&mut stream)?;
+    if id == -1 {
+        bail!("V Rising RCON authentication failed");
+    }
+    if id != 1 || packet_type != AUTH_RESPONSE {
+        bail!("V Rising RCON returned an unexpected authentication response");
+    }
+
+    write_rcon_packet(&mut stream, 2, EXEC_COMMAND, command)?;
+    let (id, _packet_type, output) = read_rcon_packet(&mut stream)?;
+    if id != 2 {
+        bail!("V Rising RCON returned an unexpected command response");
+    }
+    Ok(output)
+}
+
+fn write_rcon_packet(stream: &mut TcpStream, id: i32, packet_type: i32, body: &str) -> Result<()> {
+    let body = body.as_bytes();
+    let length = 10usize
+        .checked_add(body.len())
+        .context("V Rising RCON request is too large")?;
+    if length > RCON_MAX_PACKET {
+        bail!("V Rising RCON request is too large");
+    }
+    stream.write_all(&(length as i32).to_le_bytes())?;
+    stream.write_all(&id.to_le_bytes())?;
+    stream.write_all(&packet_type.to_le_bytes())?;
+    stream.write_all(body)?;
+    stream.write_all(&[0, 0])?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn read_rcon_packet(stream: &mut TcpStream) -> Result<(i32, i32, String)> {
+    let mut length = [0; 4];
+    stream.read_exact(&mut length)?;
+    let length = i32::from_le_bytes(length);
+    if !(10..=RCON_MAX_PACKET as i32).contains(&length) {
+        bail!("V Rising RCON sent an invalid packet length");
+    }
+    let mut packet = vec![0; length as usize];
+    stream.read_exact(&mut packet)?;
+    let id = i32::from_le_bytes(packet[0..4].try_into().expect("packet id length"));
+    let packet_type = i32::from_le_bytes(packet[4..8].try_into().expect("packet type length"));
+    if !packet.ends_with(&[0, 0]) {
+        bail!("V Rising RCON sent an unterminated packet");
+    }
+    let output = String::from_utf8_lossy(&packet[8..packet.len() - 2]).into_owned();
+    Ok((id, packet_type, output))
+}
+
 fn validate_steam_id64(id: &str) -> Result<(), VRisingAccessListError> {
     if id.len() != 17 || !id.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(VRisingAccessListError::WrongIdLength(id.to_string()));
@@ -152,5 +243,11 @@ mod tests {
             vec!["76561197960287930", "76561197960287931"]
         );
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn rcon_packet_reader_rejects_impossible_lengths() {
+        assert!(!(10..=RCON_MAX_PACKET as i32).contains(&9));
+        assert!(!(10..=RCON_MAX_PACKET as i32).contains(&(RCON_MAX_PACKET as i32 + 1)));
     }
 }

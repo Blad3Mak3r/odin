@@ -24,8 +24,8 @@ fn generic_save_dir(paths: &Paths, instance: &GenericGameInstance) -> std::path:
     let root = paths.game_instance_dir(instance.identity.game, instance.name());
     match instance.identity.game {
         GameId::VRising => root.join("data/Saves"),
-        GameId::Palworld => root.join("saves"),
-        GameId::RunescapeDragonwilds => root.join("RSDragonwilds/Saved/Savegames"),
+        GameId::Palworld => root.join("runtime/Pal/Saved/SaveGames"),
+        GameId::RunescapeDragonwilds => root.join("runtime/RSDragonwilds/Saved/Savegames"),
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
 }

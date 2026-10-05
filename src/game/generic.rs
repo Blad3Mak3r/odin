@@ -1,6 +1,7 @@
 //! Launch contracts shared by the first compiled, schema-driven game drivers.
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
@@ -51,8 +52,13 @@ pub fn prepare_start(
     {
         bail!("RuneScape: Dragonwilds owner ID is required before starting an instance");
     }
-    if game == GameId::VRising {
-        write_vrising_host_settings(paths, &instance)?;
+    match game {
+        GameId::VRising => write_vrising_host_settings(paths, &instance)?,
+        GameId::Palworld | GameId::RunescapeDragonwilds => {
+            prepare_native_runtime(paths, &instance)?;
+            write_native_settings(paths, &instance)?;
+        }
+        GameId::Valheim | GameId::Rust => unreachable!(),
     }
     Ok(instance)
 }
@@ -108,6 +114,150 @@ fn setting_u64(settings: &Value, key: &str) -> Option<u64> {
     settings.get(key).and_then(Value::as_u64)
 }
 
+fn native_runtime_dir(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
+    paths
+        .game_instance_dir(instance.identity.game, instance.name())
+        .join("runtime")
+}
+
+/// Palworld and Dragonwilds write their Saved directory relative to their
+/// install tree. Build a lightweight, per-instance runtime with hard links
+/// to immutable Steam files and a private Saved directory, so several
+/// servers never overwrite each other's configuration or worlds. The tree
+/// is refreshed on every start, making SteamCMD updates visible immediately.
+fn prepare_native_runtime(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
+    let source = paths.game_install_dir(instance.identity.game);
+    let destination = native_runtime_dir(paths, instance);
+    sync_runtime_tree(&source, &destination, instance.identity.game, Path::new(""))?;
+    let saved = match instance.identity.game {
+        GameId::Palworld => destination.join("Pal/Saved"),
+        GameId::RunescapeDragonwilds => destination.join("RSDragonwilds/Saved"),
+        GameId::Valheim | GameId::Rust | GameId::VRising => unreachable!(),
+    };
+    fs::create_dir_all(saved)?;
+    Ok(())
+}
+
+fn sync_runtime_tree(
+    source: &Path,
+    destination: &Path,
+    game: GameId,
+    relative: &Path,
+) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in
+        fs::read_dir(source).with_context(|| format!("failed to read {}", source.display()))?
+    {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let child_relative = relative.join(&file_name);
+        if is_instance_data_path(game, &child_relative) {
+            continue;
+        }
+        let source_path = entry.path();
+        let destination_path = destination.join(&file_name);
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            sync_runtime_tree(&source_path, &destination_path, game, &child_relative)?;
+        } else if file_type.is_symlink() {
+            replace_with_symlink(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            if destination_path.exists() || destination_path.symlink_metadata().is_ok() {
+                fs::remove_file(&destination_path)?;
+            }
+            fs::hard_link(&source_path, &destination_path)
+                .or_else(|_| fs::copy(&source_path, &destination_path).map(|_| ()))?;
+        }
+    }
+    Ok(())
+}
+
+fn is_instance_data_path(game: GameId, relative: &Path) -> bool {
+    match game {
+        GameId::Palworld => relative.starts_with("Pal/Saved"),
+        GameId::RunescapeDragonwilds => relative.starts_with("RSDragonwilds/Saved"),
+        GameId::Valheim | GameId::Rust | GameId::VRising => false,
+    }
+}
+
+#[cfg(unix)]
+fn replace_with_symlink(source: &Path, destination: &Path) -> Result<()> {
+    if destination.exists() || destination.symlink_metadata().is_ok() {
+        if destination.is_dir() {
+            fs::remove_dir_all(destination)?;
+        } else {
+            fs::remove_file(destination)?;
+        }
+    }
+    std::os::unix::fs::symlink(fs::read_link(source)?, destination)?;
+    Ok(())
+}
+
+fn write_native_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
+    match instance.identity.game {
+        GameId::Palworld => write_palworld_settings(paths, instance),
+        GameId::RunescapeDragonwilds => write_dragonwilds_settings(paths, instance),
+        GameId::Valheim | GameId::Rust | GameId::VRising => unreachable!(),
+    }
+}
+
+fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
+    let settings_file = native_runtime_dir(paths, instance)
+        .join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini");
+    let parent = settings_file
+        .parent()
+        .expect("Palworld settings has a parent");
+    fs::create_dir_all(parent)?;
+    let server_name = ini_string(&setting_string(
+        &instance.config.settings,
+        "server_name",
+        instance.name(),
+    ));
+    let max_players = setting_u64(&instance.config.settings, "max_players").unwrap_or(32);
+    let rest_enabled = instance
+        .config
+        .settings
+        .get("rest_api_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let rest_port = instance.config.admin_port.unwrap_or(8212);
+    let contents = format!(
+        "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
+        instance.config.port,
+        if rest_enabled { "True" } else { "False" },
+    );
+    fs::write(&settings_file, contents)
+        .with_context(|| format!("failed to write {}", settings_file.display()))
+}
+
+fn write_dragonwilds_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
+    let settings_file = native_runtime_dir(paths, instance)
+        .join("RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini");
+    let parent = settings_file
+        .parent()
+        .expect("Dragonwilds settings has a parent");
+    fs::create_dir_all(parent)?;
+    let settings = &instance.config.settings;
+    let contents = format!(
+        "[/Script/Dominion.DedicatedServerSettings]\nOwnerId={}\nServerName={}\nDefaultWorldName={}\nAdminPassword={}\nDefaultWorldPassword={}\n",
+        ini_string(&setting_string(settings, "owner_id", "")),
+        ini_string(&setting_string(settings, "server_name", instance.name())),
+        ini_string(&setting_string(
+            settings,
+            "default_world_name",
+            instance.name()
+        )),
+        ini_string(&setting_string(settings, "admin_password", "")),
+        ini_string(&setting_string(settings, "world_password", "")),
+    );
+    fs::write(&settings_file, contents)
+        .with_context(|| format!("failed to write {}", settings_file.display()))
+}
+
+fn ini_string(value: &str) -> String {
+    value.replace(['\r', '\n'], "").replace('"', "\\\"")
+}
+
 pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Command> {
     let game = instance.identity.game;
     let install_dir = paths.game_install_dir(game);
@@ -119,7 +269,11 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
         .append(true)
         .open(log_dir.join("console.log"))?;
     let stderr = stdout.try_clone()?;
-    let binary = install_dir.join(driver(game).server_binary());
+    let runtime_dir = match game {
+        GameId::Palworld | GameId::RunescapeDragonwilds => native_runtime_dir(paths, instance),
+        GameId::Valheim | GameId::Rust | GameId::VRising => install_dir.clone(),
+    };
+    let binary = runtime_dir.join(driver(game).server_binary());
     let mut command = match game {
         GameId::VRising => {
             let proton = paths.data_dir.join("runtimes/proton-ge/proton");
@@ -140,7 +294,7 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
         GameId::Valheim | GameId::Rust => unreachable!("generic command called for typed driver"),
     };
     command
-        .current_dir(&install_dir)
+        .current_dir(&runtime_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
@@ -164,7 +318,10 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
             command.arg(format!("-port={}", instance.config.port));
         }
         GameId::RunescapeDragonwilds => {
-            command.arg("-log");
+            command
+                .arg("-log")
+                .arg("-port")
+                .arg(instance.config.port.to_string());
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
@@ -203,6 +360,37 @@ mod tests {
     use crate::db::game_instances::{GameInstanceIdentity, GenericGameConfig};
     use chrono::Utc;
 
+    fn generic_instance(game: GameId, settings: Value) -> GenericGameInstance {
+        GenericGameInstance {
+            identity: GameInstanceIdentity {
+                id: "id".into(),
+                game,
+                name: "server".into(),
+                created_at: Utc::now(),
+                tags: Vec::new(),
+            },
+            config: GenericGameConfig {
+                port: if game == GameId::Palworld { 8211 } else { 7777 },
+                query_port: if game == GameId::RunescapeDragonwilds {
+                    Some(8888)
+                } else {
+                    None
+                },
+                admin_port: if game == GameId::Palworld {
+                    Some(8212)
+                } else {
+                    None
+                },
+                settings,
+                auto_restart: false,
+            },
+            pid: None,
+            pid_started_at: None,
+            last_started_at: None,
+            last_stopped_at: None,
+        }
+    }
+
     #[test]
     fn vrising_host_settings_are_written_to_the_isolated_persistent_data_path() {
         let dir =
@@ -211,26 +399,14 @@ mod tests {
             data_dir: dir.clone(),
             config_dir: dir.clone(),
         };
-        let instance = GenericGameInstance {
-            identity: GameInstanceIdentity {
-                id: "id".into(),
-                game: GameId::VRising,
-                name: "vrising".into(),
-                created_at: Utc::now(),
-                tags: Vec::new(),
-            },
-            config: GenericGameConfig {
-                port: 27015,
-                query_port: Some(27016),
-                admin_port: Some(25575),
-                settings: json!({"server_name": "V Rising Test", "max_players": 40, "rcon_enabled": true}),
-                auto_restart: false,
-            },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
-        };
+        let mut instance = generic_instance(
+            GameId::VRising,
+            json!({"server_name": "V Rising Test", "max_players": 40, "rcon_enabled": true}),
+        );
+        instance.identity.name = "vrising".into();
+        instance.config.port = 27015;
+        instance.config.query_port = Some(27016);
+        instance.config.admin_port = Some(25575);
 
         write_vrising_host_settings(&paths, &instance).unwrap();
 
@@ -249,6 +425,77 @@ mod tests {
         assert_eq!(config["MaxConnectedUsers"], 40);
         assert_eq!(config["Rcon"]["Port"], 25575);
         assert_eq!(config["Rcon"]["BindAddress"], "127.0.0.1");
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn palworld_runtime_keeps_saved_data_isolated_while_refreshing_steam_files() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-palworld-runtime-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let install = paths.game_install_dir(GameId::Palworld);
+        fs::create_dir_all(install.join("Pal/Saved")).unwrap();
+        fs::write(install.join("PalServer.sh"), "server-v1").unwrap();
+        fs::write(install.join("Pal/Saved/shared.txt"), "must-not-copy").unwrap();
+        let instance = generic_instance(
+            GameId::Palworld,
+            json!({"server_name": "Pals", "max_players": 24, "rest_api_enabled": true}),
+        );
+
+        prepare_native_runtime(&paths, &instance).unwrap();
+        write_native_settings(&paths, &instance).unwrap();
+        let runtime = native_runtime_dir(&paths, &instance);
+        assert_eq!(
+            fs::read_to_string(runtime.join("PalServer.sh")).unwrap(),
+            "server-v1"
+        );
+        assert!(!runtime.join("Pal/Saved/shared.txt").exists());
+        assert!(
+            fs::read_to_string(runtime.join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"))
+                .unwrap()
+                .contains("ServerName=\"Pals\"")
+        );
+
+        fs::create_dir_all(runtime.join("Pal/Saved/SaveGames")).unwrap();
+        fs::write(runtime.join("Pal/Saved/SaveGames/world.sav"), "world").unwrap();
+        fs::write(install.join("PalServer.sh"), "server-v2").unwrap();
+        prepare_native_runtime(&paths, &instance).unwrap();
+        assert_eq!(
+            fs::read_to_string(runtime.join("PalServer.sh")).unwrap(),
+            "server-v2"
+        );
+        assert_eq!(
+            fs::read_to_string(runtime.join("Pal/Saved/SaveGames/world.sav")).unwrap(),
+            "world"
+        );
+        fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn dragonwilds_settings_use_the_linux_server_file_and_required_keys() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-dragon-settings-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let instance = generic_instance(
+            GameId::RunescapeDragonwilds,
+            json!({"owner_id": "owner", "server_name": "Dragon", "default_world_name": "World", "admin_password": "admin", "world_password": "join"}),
+        );
+
+        write_dragonwilds_settings(&paths, &instance).unwrap();
+
+        let settings = fs::read_to_string(
+            native_runtime_dir(&paths, &instance)
+                .join("RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini"),
+        )
+        .unwrap();
+        assert!(settings.contains("OwnerId=owner"));
+        assert!(settings.contains("DefaultWorldPassword=join"));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

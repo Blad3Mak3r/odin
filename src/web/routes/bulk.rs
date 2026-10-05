@@ -18,6 +18,10 @@ use crate::web::routes::mods::{JobHandle, spawn_mod_update_job};
 use crate::web::runtime::InstanceTransition;
 use crate::web::state::AppState;
 
+/// Bounds one UUID-based bulk request and makes result allocation independent
+/// from untrusted JSON input.
+const MAX_BULK_INSTANCE_IDS: usize = 100;
+
 #[derive(Deserialize)]
 pub struct BulkRequest {
     pub names: Vec<String>,
@@ -168,12 +172,12 @@ pub async fn bulk_games_by_id(
 
     if !["start", "stop", "restart", "mods", "bepinex"].contains(&action.as_str())
         || req.ids.is_empty()
-        || req.ids.len() > 100
+        || req.ids.len() > MAX_BULK_INSTANCE_IDS
     {
         return Err(BadRequest("Choose an operation and 1–100 instances".into()).into());
     }
 
-    let mut results = Vec::with_capacity(req.ids.len());
+    let mut results = Vec::with_capacity(MAX_BULK_INSTANCE_IDS);
     for id in req.ids {
         let db = state.db.clone();
         let lookup_id = id.clone();

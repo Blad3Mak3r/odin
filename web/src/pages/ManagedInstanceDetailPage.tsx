@@ -311,7 +311,7 @@ export function ManagedInstanceDetailPage() {
             : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds')
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} name={detail.name} config={genericConfig} running={detail.running} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
-          <UptimeScheduleCard game={detail.game} name={detail.name} />
+          <UptimeScheduleCard id={detail.id} />
           {detail.game === 'rust' && <WipeMapCard name={detail.name} running={detail.running} />}
         </TabsContent>
         {detail.game === 'palworld' && <TabsContent value="admin"><PalworldAdminTab id={detail.id} running={detail.running} /></TabsContent>}

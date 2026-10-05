@@ -62,6 +62,19 @@ pub async fn get_uptime_schedule(
     Ok(Json(schedule.map(Into::into).unwrap_or_default()))
 }
 
+pub async fn get_uptime_schedule_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<UptimeScheduleView>> {
+    let db = state.db.clone();
+    let identity = run_blocking(move || {
+        crate::db::game_instances::identity_by_id(&db, &id)?
+            .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))
+    })
+    .await?;
+    get_uptime_schedule(State(state), Path((identity.game, identity.name))).await
+}
+
 pub async fn set_uptime_schedule(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
@@ -86,6 +99,25 @@ pub async fn set_uptime_schedule(
     })
     .await?;
     Ok(Json(schedule.into()))
+}
+
+pub async fn set_uptime_schedule_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<SetUptimeScheduleRequest>,
+) -> ApiResult<Json<UptimeScheduleView>> {
+    let db = state.db.clone();
+    let identity = run_blocking(move || {
+        crate::db::game_instances::identity_by_id(&db, &id)?
+            .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))
+    })
+    .await?;
+    set_uptime_schedule(
+        State(state),
+        Path((identity.game, identity.name)),
+        Json(request),
+    )
+    .await
 }
 
 fn parse_time(value: &str) -> Result<u16, BadRequest> {

@@ -325,20 +325,20 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   })
 }
 
-export function useUptimeSchedule(game: GameId, name: string) {
+export function useUptimeSchedule(id: string) {
   return useQuery({
-    queryKey: ['managed-instances', game, name, 'uptime-schedule'],
-    queryFn: () => api.get<UptimeScheduleView>(`/games/${game}/instances/${name}/uptime-schedule`),
-    enabled: Boolean(name),
+    queryKey: ['managed-instances', id, 'uptime-schedule'],
+    queryFn: () => api.get<UptimeScheduleView>(`/instances/${id}/uptime-schedule`),
+    enabled: Boolean(id),
   })
 }
 
-export function useSetUptimeSchedule(game: GameId, name: string) {
+export function useSetUptimeSchedule(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (schedule: UptimeScheduleRequest) =>
-      api.put<UptimeScheduleView>(`/games/${game}/instances/${name}/uptime-schedule`, schedule),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'uptime-schedule'] }),
+      api.put<UptimeScheduleView>(`/instances/${id}/uptime-schedule`, schedule),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'uptime-schedule'] }),
   })
 }
 

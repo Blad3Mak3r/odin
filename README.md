@@ -378,8 +378,7 @@ It covers dependency status, fleet search, tags, bulk lifecycle actions,
 instance create/start/stop/restart/rename/clone/delete, game-specific
 configuration, live logs, downloadable save files, scheduled backups, and
 live plus historical CPU/RAM usage with CSV export. Global settings define
-automatic restart and backup defaults for newly created Valheim and Rust
-servers.
+automatic restart and backup defaults for every newly created game server.
 
 ### Instance API identity
 
@@ -395,7 +394,8 @@ data and RCON listener per instance. Palworld's administrative REST API is
 called only on its loopback port by Odin; it is never proxied directly to the
 network. Dragonwilds configuration is editable only while stopped, because
 the game discards live edits; its game and beacon UDP ports are configured
-independently.
+independently. Creating a Dragonwilds configuration requires an owner ID,
+server name, default world, and administration password before it can start.
 
 Rust access lists manage owners, moderators, and bans while the server is
 stopped. Valheim adds Thunderstore mod management, BepInEx update checks,

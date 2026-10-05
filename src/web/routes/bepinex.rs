@@ -56,11 +56,27 @@ pub async fn status(
     Ok(Json(status))
 }
 
+pub async fn status_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<BepInExStatus>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    status(State(state), Path(name)).await
+}
+
 pub async fn update(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<JobHandle>> {
     Ok(Json(spawn_update(&state, name).await?))
+}
+
+pub async fn update_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    update(State(state), Path(name)).await
 }
 
 pub async fn spawn_update(state: &AppState, name: String) -> ApiResult<JobHandle> {

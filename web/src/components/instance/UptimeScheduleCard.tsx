@@ -8,17 +8,17 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useSetUptimeSchedule, useUptimeSchedule } from '@/lib/queries'
-import type { GameId, UptimeScheduleView } from '@/lib/types'
+import type { UptimeScheduleView } from '@/lib/types'
 
-export function UptimeScheduleCard({ game, name }: { game: GameId; name: string }) {
-  const schedule = useUptimeSchedule(game, name)
+export function UptimeScheduleCard({ id }: { id: string }) {
+  const schedule = useUptimeSchedule(id)
   if (schedule.isError) return <QueryError error={schedule.error} />
   if (!schedule.data) return <Skeleton className="h-48 w-full" />
-  return <UptimeScheduleForm key={JSON.stringify(schedule.data)} game={game} name={name} initial={schedule.data} />
+  return <UptimeScheduleForm key={JSON.stringify(schedule.data)} id={id} initial={schedule.data} />
 }
 
-function UptimeScheduleForm({ game, name, initial }: { game: GameId; name: string; initial: UptimeScheduleView }) {
-  const setSchedule = useSetUptimeSchedule(game, name)
+function UptimeScheduleForm({ id, initial }: { id: string; initial: UptimeScheduleView }) {
+  const setSchedule = useSetUptimeSchedule(id)
   const [enabled, setEnabled] = useState(initial.enabled)
   const [startTime, setStartTime] = useState(initial.start_time)
   const [stopTime, setStopTime] = useState(initial.stop_time)

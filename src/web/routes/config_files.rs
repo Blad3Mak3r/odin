@@ -22,6 +22,14 @@ pub async fn list_config_files(
     Ok(Json(files))
 }
 
+pub async fn list_config_files_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<ConfigFileEntry>>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    list_config_files(State(state), Path(name)).await
+}
+
 #[derive(Serialize)]
 pub struct ConfigFileView {
     pub content: String,
@@ -39,6 +47,14 @@ pub async fn get_config_file(
     })
     .await?;
     Ok(Json(ConfigFileView { content }))
+}
+
+pub async fn get_config_file_by_id(
+    State(state): State<AppState>,
+    Path((id, filename)): Path<(String, String)>,
+) -> ApiResult<Json<ConfigFileView>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    get_config_file(State(state), Path((name, filename))).await
 }
 
 #[derive(Deserialize)]
@@ -59,4 +75,13 @@ pub async fn set_config_file(
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn set_config_file_by_id(
+    State(state): State<AppState>,
+    Path((id, filename)): Path<(String, String)>,
+    Json(req): Json<SetConfigFileRequest>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    set_config_file(State(state), Path((name, filename)), Json(req)).await
 }

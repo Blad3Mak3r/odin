@@ -55,10 +55,10 @@ function isModSource(value: string | undefined): value is ModSource {
   return MOD_SOURCES.some((source) => source === value)
 }
 
-export function ModsTab({ name, running, path }: { name: string; running: boolean; path: string[] }) {
+export function ModsTab({ id, name, running, path }: { id: string; name: string; running: boolean; path: string[] }) {
   const navigate = useNavigate()
   const [tab, source, ...rest] = path
-  const basePath = `/instances/valheim/${name}/mods`
+  const basePath = `/instance/${id}/mods`
   const activeSource = isModSource(source) ? source : null
 
   if (!isModTab(tab) || rest.length > 0 || (tab === 'installed' && source)) {
@@ -82,25 +82,25 @@ export function ModsTab({ name, running, path }: { name: string; running: boolea
       {tab === 'installed' && (
         <TabsContent value="installed">
           <div className="flex flex-col gap-8">
-            <BepInExCard name={name} running={running} />
-            <InstalledMods name={name} running={running} />
+            <BepInExCard id={id} name={name} running={running} />
+            <InstalledMods id={id} name={name} running={running} />
             <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
-              <ModConfigFiles name={name} />
+              <ModConfigFiles id={id} />
             </Suspense>
           </div>
         </TabsContent>
       )}
       {tab === 'marketplace' && (
         <TabsContent value="marketplace">
-          <ModInstallSearch name={name} running={running} source={activeSource ?? 'thunderstore'} />
+          <ModInstallSearch id={id} name={name} running={running} source={activeSource ?? 'thunderstore'} />
         </TabsContent>
       )}
     </Tabs>
   )
 }
 
-function BepInExCard({ name, running }: { name: string; running: boolean }) {
-  const status = useBepInExStatus(name)
+function BepInExCard({ id, name, running }: { id: string; name: string; running: boolean }) {
+  const status = useBepInExStatus(id)
   const update = useUpdateBepInEx()
   const queryClient = useQueryClient()
   const [jobId, setJobId] = useState<string | null>(null)
@@ -108,12 +108,12 @@ function BepInExCard({ name, running }: { name: string; running: boolean }) {
 
   useEffect(() => {
     if (job.status?.status !== 'succeeded' && job.status?.status !== 'failed') return
-    queryClient.invalidateQueries({ queryKey: ['instances', name, 'bepinex-status'] })
-    queryClient.invalidateQueries({ queryKey: ['instances', name] })
+    queryClient.invalidateQueries({ queryKey: ['instances', id, 'bepinex-status'] })
+    queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
     queryClient.invalidateQueries({ queryKey: ['instances'] })
     queryClient.invalidateQueries({ queryKey: ['jobs'] })
     queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
-  }, [job.status?.status, name, queryClient])
+  }, [id, job.status?.status, queryClient])
 
   const active = update.isPending || job.status?.status === 'queued' || job.status?.status === 'running'
   const installed = status.data?.installed
@@ -162,7 +162,7 @@ function BepInExCard({ name, running }: { name: string; running: boolean }) {
               size="sm"
               disabled={running || active}
               onClick={() =>
-                update.mutate(name, {
+                update.mutate(id, {
                   onSuccess: (handle) => setJobId(handle.id),
                   onError: (error) => toast.error(error.message),
                 })
@@ -183,8 +183,8 @@ function BepInExCard({ name, running }: { name: string; running: boolean }) {
   )
 }
 
-function InstalledMods({ name, running }: { name: string; running: boolean }) {
-  const mods = useMods(name)
+function InstalledMods({ id, name, running }: { id: string; name: string; running: boolean }) {
+  const mods = useMods(id)
   const setEnabled = useSetModEnabled()
   const removeMod = useRemoveMod()
   const updateMods = useUpdateMods()
@@ -201,7 +201,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
       confirmLabel: 'Remove',
     })
     if (!confirmed) return
-    removeMod.mutate({ name, modId }, { onError: (e) => toast.error(e.message) })
+    removeMod.mutate({ name: id, modId }, { onError: (e) => toast.error(e.message) })
   }
 
   return (
@@ -213,7 +213,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
         </h2>
         <div className="flex items-center gap-2">
           <a
-            href={`/api/games/valheim/instances/${name}/mods/modpack`}
+            href={`/api/instances/${id}/valheim/mods/modpack`}
             download
             className={cn(
               buttonVariants({ variant: 'outline', size: 'sm' }),
@@ -228,7 +228,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
             variant="outline"
             disabled={updateMods.isPending}
             onClick={() =>
-              updateMods.mutate(name, {
+              updateMods.mutate(id, {
                 onSuccess: (handle) => setJobId(handle.id),
                 onError: (e) => toast.error(e.message),
               })
@@ -282,7 +282,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
                   disabled={setPinned.isPending}
                   onClick={() =>
                     setPinned.mutate(
-                      { name, modId: m.mod_id, pinned: !m.pinned },
+                      { name: id, modId: m.mod_id, pinned: !m.pinned },
                       { onError: (e) => toast.error(e.message) },
                     )
                   }
@@ -294,7 +294,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
                   disabled={running || setEnabled.isPending}
                   onCheckedChange={(enabled) =>
                     setEnabled.mutate(
-                      { name, modId: m.mod_id, enabled },
+                      { name: id, modId: m.mod_id, enabled },
                       { onError: (e) => toast.error(e.message) },
                     )
                   }
@@ -315,7 +315,7 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
 
       {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
       <VersionDialog
-        name={name}
+        id={id}
         mod={versionMod}
         open={versionMod !== null}
         onOpenChange={(open) => !open && setVersionMod(null)}
@@ -325,12 +325,12 @@ function InstalledMods({ name, running }: { name: string; running: boolean }) {
 }
 
 function VersionDialog({
-  name,
+  id,
   mod,
   open,
   onOpenChange,
 }: {
-  name: string
+  id: string
   mod: InstalledMod | null
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -355,7 +355,7 @@ function VersionDialog({
               disabled={selectVersion.isPending}
               onClick={() =>
                 selectVersion.mutate(
-                  { name, modId: mod.mod_id, version },
+                  { name: id, modId: mod.mod_id, version },
                   {
                     onSuccess: () => {
                       toast.success(`Using ${mod.mod_id} v${version}`)
@@ -376,7 +376,7 @@ function VersionDialog({
   )
 }
 
-function ModInstallSearch({ name, running, source }: { name: string; running: boolean; source: ModSource }) {
+function ModInstallSearch({ id, name, running, source }: { id: string; name: string; running: boolean; source: ModSource }) {
   const addMod = useAddMod()
   const navigate = useNavigate()
   const [jobId, setJobId] = useState<string | null>(null)
@@ -384,7 +384,7 @@ function ModInstallSearch({ name, running, source }: { name: string; running: bo
 
   const handleSelect = (mod: { mod_id: string }) =>
     addMod.mutate(
-      { name, modId: mod.mod_id },
+      { name: id, modId: mod.mod_id },
       {
         onSuccess: (handle) => setJobId(handle.id),
         onError: (e) => toast.error(e.message),
@@ -396,7 +396,7 @@ function ModInstallSearch({ name, running, source }: { name: string; running: bo
       <Tabs
         value={source}
         onValueChange={(value) =>
-          navigate(`/instances/valheim/${name}/mods/marketplace/${value}`)
+          navigate(`/instance/${id}/mods/marketplace/${value}`)
         }
       >
         <TabsList variant="line">
@@ -419,7 +419,7 @@ function ModInstallSearch({ name, running, source }: { name: string; running: bo
         )}
         {source === 'upload' && (
           <TabsContent value="upload">
-            <UploadModForm name={name} running={running} />
+            <UploadModForm name={id} instanceName={name} running={running} />
           </TabsContent>
         )}
       </Tabs>

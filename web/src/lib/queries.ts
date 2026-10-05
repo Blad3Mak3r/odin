@@ -19,6 +19,7 @@ import type {
   GameId,
   GameInstanceTransitions,
   GameView,
+  GenericConfigUpdateRequest,
   HostResources,
   InstallStatusView,
   InstanceResources,
@@ -45,6 +46,7 @@ import type {
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
+  VRisingAccessListKind,
   WebhookView,
 } from './types'
 
@@ -58,8 +60,8 @@ const LIVE_FALLBACK_INTERVAL = 30_000
 // newly published release without needing a manual reload.
 const VERSION_CHECK_INTERVAL = 30 * 60_000
 
-function valheimInstancePath(name: string, suffix = '') {
-  return `/games/valheim/instances/${name}${suffix}`
+function valheimInstancePath(id: string, suffix = '') {
+  return `/instances/${id}/valheim${suffix}`
 }
 
 export function useVersion() {
@@ -103,10 +105,10 @@ export function useHostResourceHistory() {
   })
 }
 
-export function useInstanceResources(name: string, enabled = true) {
+export function useInstanceResources(id: string, enabled = true) {
   return useQuery({
-    queryKey: ['resources', 'instance', name],
-    queryFn: () => api.get<InstanceResources>(valheimInstancePath(name, '/resources')),
+    queryKey: ['resources', 'instance', id],
+    queryFn: () => api.get<InstanceResources>(`/instances/${id}/resources`),
     refetchInterval: LIVE_FALLBACK_INTERVAL,
     enabled,
   })
@@ -117,40 +119,40 @@ export function useInstanceResources(name: string, enabled = true) {
 // A specific `hours` reads a downsampled long-range history straight from
 // the database instead, under its own query key so it doesn't collide with
 // the live one.
-export function useInstanceResourceHistory(name: string, hours?: number, enabled = true) {
+export function useInstanceResourceHistory(id: string, hours?: number, enabled = true) {
   return useQuery({
     queryKey: hours
-      ? ['resource-history', 'instance', name, hours]
-      : ['resource-history', 'instance', name],
+      ? ['resource-history', 'instance', id, hours]
+      : ['resource-history', 'instance', id],
     queryFn: () =>
       api.get<ResourceSample[]>(
-        valheimInstancePath(name, `/resources/history${hours ? `?hours=${hours}` : ''}`),
+        `/instances/${id}/resources/history${hours ? `?hours=${hours}` : ''}`,
       ),
     staleTime: hours ? 60_000 : Infinity,
     enabled,
   })
 }
 
-export function usePlayers(name: string, enabled = true) {
+export function usePlayers(id: string, enabled = true) {
   return useQuery({
-    queryKey: ['players', name],
-    queryFn: () => api.get<PlayerInfo[]>(valheimInstancePath(name, '/players')),
+    queryKey: ['players', id],
+    queryFn: () => api.get<PlayerInfo[]>(valheimInstancePath(id, '/players')),
     staleTime: Infinity,
     enabled,
   })
 }
 
-export function usePlayerHistory(name: string) {
+export function usePlayerHistory(id: string) {
   return useQuery({
-    queryKey: ['players', name, 'history'],
-    queryFn: () => api.get<PlayerSession[]>(valheimInstancePath(name, '/players/history')),
+    queryKey: ['players', id, 'history'],
+    queryFn: () => api.get<PlayerSession[]>(valheimInstancePath(id, '/players/history')),
   })
 }
 
-export function useSaveFiles(game: GameId, name: string) {
+export function useSaveFiles(id: string) {
   return useQuery({
-    queryKey: ['save-files', game, name],
-    queryFn: () => api.get<SaveFileEntry[]>(`/games/${game}/instances/${name}/saves`),
+    queryKey: ['save-files', id],
+    queryFn: () => api.get<SaveFileEntry[]>(`/instances/${id}/saves`),
   })
 }
 
@@ -217,47 +219,79 @@ export function useManagedInstances() {
   })
 }
 
-export function useManagedInstance(game: GameId, name: string) {
+export function useManagedInstanceById(id: string) {
   return useQuery({
-    queryKey: ['managed-instances', game, name],
-    queryFn: () => api.get<ManagedInstanceView>(`/games/${game}/instances/${name}`),
+    queryKey: ['managed-instances', id],
+    queryFn: () => api.get<ManagedInstanceView>(`/instances/${id}`),
+    enabled: Boolean(id),
     refetchInterval: 5_000,
   })
 }
 
-export function useManagedInstanceTransition(game: GameId, name: string) {
+export function useManagedInstanceTransition(id: string, game: GameId, name: string) {
   return useQuery({
     queryKey: ['game-instance-transitions'],
     queryFn: () => Promise.resolve<GameInstanceTransitions>([]),
     initialData: [] as GameInstanceTransitions,
     staleTime: Infinity,
     select: (transitions): InstanceTransition | null => (
-      transitions.find((transition) => transition.game === game && transition.name === name)?.transition ?? null
+      transitions.find((transition) => transition.id === id || (transition.id === null && transition.game === game && transition.name === name))?.transition ?? null
     ),
   })
 }
 
-export function useManagedInstanceLogs(game: GameId, name: string, lines = 200) {
+export function useManagedInstanceLogs(id: string, lines = 200) {
   return useQuery({
-    queryKey: ['managed-instances', game, name, 'logs', lines],
-    queryFn: () => api.get<LogsView>(`/games/${game}/instances/${name}/logs?lines=${lines}`),
+    queryKey: ['managed-instances', id, 'logs', lines],
+    queryFn: () => api.get<LogsView>(`/instances/${id}/logs?lines=${lines}`),
     refetchInterval: 5_000,
+    enabled: Boolean(id),
   })
 }
 
-export function useManagedRustResources(name: string, enabled = true) {
+export function usePalworldPlayers(id: string, enabled = true) {
   return useQuery({
-    queryKey: ['managed-instances', 'rust', name, 'resources'],
-    queryFn: () => api.get<InstanceResources>(`/games/rust/instances/${name}/resources`),
+    queryKey: ['managed-instances', id, 'palworld', 'players'],
+    queryFn: () => api.get<unknown>(`/instances/${id}/palworld/players`),
+    refetchInterval: 10_000,
+    enabled: Boolean(id) && enabled,
+  })
+}
+
+export function usePalworldMetrics(id: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'palworld', 'metrics'],
+    queryFn: () => api.get<unknown>(`/instances/${id}/palworld/metrics`),
+    refetchInterval: 10_000,
+    enabled: Boolean(id) && enabled,
+  })
+}
+
+export function usePalworldAction(action: 'announce' | 'save' | 'kick' | 'ban' | 'unban' | 'shutdown') {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, request }: { id: string; request?: Record<string, unknown> }) =>
+      api.post<unknown>(`/instances/${id}/palworld/${action}`, request),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'palworld'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
+export function useManagedResources(id: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'resources'],
+    queryFn: () => api.get<InstanceResources>(`/instances/${id}/resources`),
     refetchInterval: 5_000,
     enabled,
   })
 }
 
-export function useManagedRustResourceHistory(name: string, hours?: number, enabled = true) {
+export function useManagedResourceHistory(id: string, hours?: number, enabled = true) {
   return useQuery({
-    queryKey: ['managed-instances', 'rust', name, 'resource-history', hours],
-    queryFn: () => api.get<ResourceSample[]>(`/games/rust/instances/${name}/resources/history${hours ? `?hours=${hours}` : ''}`),
+    queryKey: ['managed-instances', id, 'resource-history', hours],
+    queryFn: () => api.get<ResourceSample[]>(`/instances/${id}/resources/history${hours ? `?hours=${hours}` : ''}`),
     enabled,
   })
 }
@@ -274,39 +308,39 @@ export function useCreateManagedInstance() {
 export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
-      api.post<ManagedInstanceView>(`/games/${game}/instances/${name}/${action}`),
-    onSuccess: (_instance, variables) => {
+    mutationFn: ({ id }: { id: string }) =>
+      api.post<ManagedInstanceView>(`/instances/${id}/${action}`),
+    onSuccess: (_instance, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
     },
   })
 }
 
-export function useUptimeSchedule(game: GameId, name: string) {
+export function useUptimeSchedule(id: string) {
   return useQuery({
-    queryKey: ['managed-instances', game, name, 'uptime-schedule'],
-    queryFn: () => api.get<UptimeScheduleView>(`/games/${game}/instances/${name}/uptime-schedule`),
-    enabled: Boolean(name),
+    queryKey: ['managed-instances', id, 'uptime-schedule'],
+    queryFn: () => api.get<UptimeScheduleView>(`/instances/${id}/uptime-schedule`),
+    enabled: Boolean(id),
   })
 }
 
-export function useSetUptimeSchedule(game: GameId, name: string) {
+export function useSetUptimeSchedule(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (schedule: UptimeScheduleRequest) =>
-      api.put<UptimeScheduleView>(`/games/${game}/instances/${name}/uptime-schedule`, schedule),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'uptime-schedule'] }),
+      api.put<UptimeScheduleView>(`/instances/${id}/uptime-schedule`, schedule),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'uptime-schedule'] }),
   })
 }
 
 export function useDeleteManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name, keepBackups }: { game: GameId; name: string; keepBackups?: boolean }) =>
-      api.delete<void>(`/games/${game}/instances/${name}${keepBackups ? '?keep_backups=true' : ''}`),
-    onSuccess: (_result, { game, name }) => {
-      queryClient.removeQueries({ queryKey: ['managed-instances', game, name] })
+    mutationFn: ({ id, keepBackups }: { id: string; keepBackups?: boolean }) =>
+      api.delete<void>(`/instances/${id}${keepBackups ? '?keep_backups=true' : ''}`),
+    onSuccess: (_result, { id }) => {
+      queryClient.removeQueries({ queryKey: ['managed-instances', id] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
     },
   })
@@ -315,29 +349,60 @@ export function useDeleteManagedInstance() {
 export function useUpdateRustConfig() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, request }: { name: string; request: RustConfigUpdateRequest }) =>
-      api.put<ManagedInstanceView>(`/games/rust/instances/${name}/config`, request),
-    onSuccess: (_instance, { name }) => {
+    mutationFn: ({ id, request }: { id: string; request: RustConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/instances/${id}/config`, request),
+    onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
+    },
+  })
+}
+
+export function useUpdateGenericConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, request }: { id: string; request: GenericConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/instances/${id}/config`, request),
+    onSuccess: (instance) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
+    },
+  })
+}
+
+export function useUpdateValheimConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, request }: { id: string; request: ConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/instances/${id}/config`, request),
+    onSuccess: (instance) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
     },
   })
 }
 
 export function useExecuteRustRcon() {
   return useMutation({
-    mutationFn: ({ name, command }: { name: string; command: string }) =>
-      api.post<RconCommandResponse>(`/games/rust/instances/${name}/rcon`, { command }),
+    mutationFn: ({ id, command }: { id: string; command: string }) =>
+      api.post<RconCommandResponse>(`/instances/${id}/rust/rcon`, { command }),
+  })
+}
+
+export function useExecuteVRisingRcon() {
+  return useMutation({
+    mutationFn: ({ id, command }: { id: string; command: string }) =>
+      api.post<RconCommandResponse>(`/instances/${id}/vrising/rcon`, { command }),
   })
 }
 
 export function useWipeRustMap() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, confirmation }: { name: string; confirmation: string }) =>
-      api.post<JobHandle>('/games/rust/instances/' + name + '/wipe-map', { confirmation }),
-    onSuccess: (_job, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+    mutationFn: ({ id, confirmation }: { id: string; confirmation: string }) =>
+      api.post<JobHandle>(`/instances/${id}/rust/wipe-map`, { confirmation }),
+    onSuccess: (_job, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instance', id] })
       queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
@@ -347,40 +412,13 @@ export function useWipeRustMap() {
 export function useFullWipeRust() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, confirmation }: { name: string; confirmation: string }) =>
-      api.post<JobHandle>('/games/rust/instances/' + name + '/full-wipe', { confirmation }),
-    onSuccess: (_job, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+    mutationFn: ({ id, confirmation }: { id: string; confirmation: string }) =>
+      api.post<JobHandle>(`/instances/${id}/rust/full-wipe`, { confirmation }),
+    onSuccess: (_job, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instance', id] })
       queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
-  })
-}
-
-export function useManagedBackups(game: GameId, name: string) {
-  return useQuery({
-    queryKey: ['managed-instances', game, name, 'backups'],
-    queryFn: () => api.get<BackupEntry[]>(`/games/${game}/instances/${name}/backups`),
-  })
-}
-
-export function useCreateManagedBackup() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
-      api.post<BackupEntry>(`/games/${game}/instances/${name}/backups`),
-    onSuccess: (_backup, { game, name }) =>
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'backups'] }),
-  })
-}
-
-export function useRestoreManagedBackup() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ game, name, backupId }: { game: GameId; name: string; backupId: string }) =>
-      api.post<void>(`/games/${game}/instances/${name}/backups/${backupId}/restore`),
-    onSuccess: (_result, { game, name }) =>
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', game, name, 'backups'] }),
   })
 }
 
@@ -515,20 +553,21 @@ export function useDeleteInstance() {
   })
 }
 
-export function useConfig(name: string) {
+export function useConfig(id: string) {
   return useQuery({
-    queryKey: ['instances', name, 'config'],
-    queryFn: () => api.get<ConfigView>(valheimInstancePath(name, '/config')),
+    queryKey: ['managed-instances', id, 'config'],
+    queryFn: () => api.get<ConfigView>(`/instances/${id}/config`),
   })
 }
 
-export function useUpdateConfig(name: string) {
+export function useUpdateConfig(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (req: ConfigUpdateRequest) => api.put<ConfigView>(valheimInstancePath(name, '/config'), req),
+    mutationFn: (req: ConfigUpdateRequest) => api.put<ManagedInstanceView>(`/instances/${id}/config`, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'config'] })
-      queryClient.invalidateQueries({ queryKey: ['instances', name] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'config'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
     },
   })
 }
@@ -642,80 +681,80 @@ export function useUpdateMods() {
   })
 }
 
-export function useBackups(name: string, game: GameId = 'valheim') {
+export function useBackups(id: string) {
   return useQuery({
-    queryKey: ['game-backups', game, name, 'backups'],
+    queryKey: ['managed-instances', id, 'backups'],
     refetchInterval: 5_000,
-    queryFn: () => api.get<BackupEntry[]>(`/games/${game}/instances/${name}/backups`),
+    queryFn: () => api.get<BackupEntry[]>(`/instances/${id}/backups`),
   })
 }
 
-export function useCreateBackup(game: GameId = 'valheim') {
+export function useCreateBackup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<JobHandle>(`/games/${game}/instances/${name}/backups/jobs`),
-    onSuccess: (_data, name) => {
-      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backups'] })
+    mutationFn: (id: string) => api.post<JobHandle>(`/instances/${id}/backups/jobs`),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'backups'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
 }
 
-export function useRestoreBackup(game: GameId = 'valheim') {
+export function useRestoreBackup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
-      api.post<JobHandle>(`/games/${game}/instances/${name}/backups/${backupId}/restore/job`),
-    onSuccess: (_data, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backups'] })
+    mutationFn: ({ id, backupId }: { id: string; backupId: string }) =>
+      api.post<JobHandle>(`/instances/${id}/backups/${backupId}/restore/job`),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'backups'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
 }
 
-export function useDeleteBackup(game: GameId = 'valheim') {
+export function useDeleteBackup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, backupId }: { name: string; backupId: string }) =>
-      api.delete<void>(`/games/${game}/instances/${name}/backups/${backupId}`),
-    onSuccess: (_data, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backups'] })
+    mutationFn: ({ id, backupId }: { id: string; backupId: string }) =>
+      api.delete<void>(`/instances/${id}/backups/${backupId}`),
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'backups'] })
     },
   })
 }
 
-export function useBackupSchedule(name: string, game: GameId = 'valheim') {
+export function useBackupSchedule(id: string) {
   return useQuery({
-    queryKey: ['game-backups', game, name, 'backup-schedule'],
-    queryFn: () => api.get<BackupScheduleView>(`/games/${game}/instances/${name}/backup-schedule`),
+    queryKey: ['managed-instances', id, 'backup-schedule'],
+    queryFn: () => api.get<BackupScheduleView>(`/instances/${id}/backup-schedule`),
   })
 }
 
-export function useSetBackupSchedule(name: string, game: GameId = 'valheim') {
+export function useSetBackupSchedule(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (req: Omit<BackupScheduleView, 'last_run_at'>) =>
-      api.put<BackupScheduleView>(`/games/${game}/instances/${name}/backup-schedule`, req),
+      api.put<BackupScheduleView>(`/instances/${id}/backup-schedule`, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backup-schedule'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'backup-schedule'] })
     },
   })
 }
 
-export function useBackupStorage(name: string, game: GameId = 'valheim') {
+export function useBackupStorage(id: string) {
   return useQuery({
-    queryKey: ['game-backups', game, name, 'backup-storage'],
-    queryFn: () => api.get<BackupStorageView>(`/games/${game}/instances/${name}/backup-storage`),
+    queryKey: ['managed-instances', id, 'backup-storage'],
+    queryFn: () => api.get<BackupStorageView>(`/instances/${id}/backup-storage`),
   })
 }
 
-export function useSetBackupStorage(name: string, game: GameId = 'valheim') {
+export function useSetBackupStorage(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (req: BackupStorageRequest) =>
-      api.put<BackupStorageView>(`/games/${game}/instances/${name}/backup-storage`, req),
+      api.put<BackupStorageView>(`/instances/${id}/backup-storage`, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['game-backups', game, name, 'backup-storage'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'backup-storage'] })
     },
   })
 }
@@ -849,27 +888,50 @@ export function useRemoveListEntry(name: string, kind: ListKind) {
   })
 }
 
-export function useRustAccessList(name: string, kind: RustAccessListKind) {
+export function useRustAccessList(id: string, kind: RustAccessListKind) {
   return useQuery({
-    queryKey: ['managed-instances', 'rust', name, 'lists', kind],
-    queryFn: () => api.get<ListView>(`/games/rust/instances/${name}/lists/${kind}`),
+    queryKey: ['managed-instances', id, 'lists', kind],
+    queryFn: () => api.get<ListView>(`/instances/${id}/rust/lists/${kind}`),
   })
 }
 
-export function useAddRustAccessListEntry(name: string, kind: RustAccessListKind) {
+export function useAddRustAccessListEntry(id: string, kind: RustAccessListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post<void>(`/games/rust/instances/${name}/lists/${kind}`, { id }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name, 'lists', kind] }),
+    mutationFn: (entryId: string) => api.post<void>(`/instances/${id}/rust/lists/${kind}`, { id: entryId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
   })
 }
 
-export function useRemoveRustAccessListEntry(name: string, kind: RustAccessListKind) {
+export function useRemoveRustAccessListEntry(id: string, kind: RustAccessListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) =>
-      api.delete<void>(`/games/rust/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name, 'lists', kind] }),
+    mutationFn: (entryId: string) =>
+      api.delete<void>(`/instances/${id}/rust/lists/${kind}/${encodeURIComponent(entryId)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
+  })
+}
+
+export function useVRisingAccessList(id: string, kind: VRisingAccessListKind) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'lists', kind],
+    queryFn: () => api.get<ListView>(`/instances/${id}/vrising/lists/${kind}`),
+  })
+}
+
+export function useAddVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (entryId: string) => api.post<void>(`/instances/${id}/vrising/lists/${kind}`, { id: entryId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
+  })
+}
+
+export function useRemoveVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (entryId: string) => api.delete<void>(`/instances/${id}/vrising/lists/${kind}/${encodeURIComponent(entryId)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
   })
 }
 

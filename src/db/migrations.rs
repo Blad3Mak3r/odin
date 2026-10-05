@@ -57,11 +57,24 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         let sql = std::str::from_utf8(&sql.data)
             .with_context(|| format!("migration '{file}' is not valid UTF-8"))?;
 
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)
-            .with_context(|| format!("failed to apply migration '{file}'"))?;
-        tx.pragma_update(None, "user_version", version)?;
-        tx.commit()?;
+        // 0021 replaces the parent identity table in order to widen its
+        // SQLite CHECK constraint. SQLite only permits that operation with
+        // foreign keys disabled before a transaction begins.
+        if version == 21 {
+            conn.pragma_update(None, "foreign_keys", "OFF")?;
+            let result = conn
+                .execute_batch(sql)
+                .with_context(|| format!("failed to apply migration '{file}'"));
+            conn.pragma_update(None, "foreign_keys", "ON")?;
+            result?;
+            conn.pragma_update(None, "user_version", version)?;
+        } else {
+            let tx = conn.transaction()?;
+            tx.execute_batch(sql)
+                .with_context(|| format!("failed to apply migration '{file}'"))?;
+            tx.pragma_update(None, "user_version", version)?;
+            tx.commit()?;
+        }
         tracing::info!(migration = file, "applied database migration");
     }
 
@@ -157,6 +170,51 @@ mod tests {
                 .all(|(port, _)| ![28015, 28016, 28017, 28018].contains(port))
         );
         assert!(rcon.iter().all(|(_, password)| password.len() == 32));
+    }
+
+    #[test]
+    fn v21_expands_the_game_catalog_without_losing_existing_instances() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 21 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('legacy-rust', 'rust', 'legacy', '2026-01-01T00:00:00Z');
+             INSERT INTO rust_instance_configs (instance_id, port, query_port, rcon_port, rcon_password, hostname, level, seed, world_size, max_players, auto_restart)
+                VALUES ('legacy-rust', 28015, 28016, 28017, 'secret', 'legacy', 'Barren', 1, 3000, 50, 0);",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let existing: String = conn
+            .query_row(
+                "SELECT game FROM game_instances WHERE id = 'legacy-rust'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(existing, "rust");
+        conn.execute(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES ('pal', 'palworld', 'pal', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO generic_game_instance_configs (instance_id, port, config_json) VALUES ('pal', 8211, '{}')",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

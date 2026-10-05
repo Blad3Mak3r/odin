@@ -14,7 +14,9 @@ use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::activity::ActivityEvent;
+use crate::db::game_instances;
 use crate::game::GameId;
+use crate::web::error::run_blocking;
 use crate::web::runtime::{GameInstanceTransitions, InstanceTransitions, ResourcesTick};
 use crate::web::state::AppState;
 
@@ -71,7 +73,9 @@ pub async fn events_sse(
         }
     };
 
+    let transitions_state = state.clone();
     let transitions_stream = stream! {
+        let game_transitions = resolve_transition_ids(&transitions_state, game_transitions).await;
         let transitions = valheim_transitions(&game_transitions);
         yield Ok(json_event(&WireEvent::Transitions { transitions: &transitions }));
         yield Ok(json_event(&WireEvent::GameTransitions { transitions: &game_transitions }));
@@ -80,6 +84,7 @@ pub async fn events_sse(
         loop {
             match transitions_rx.recv().await {
                 Ok(game_transitions) => {
+                    let game_transitions = resolve_transition_ids(&transitions_state, game_transitions).await;
                     let transitions = valheim_transitions(&game_transitions);
                     yield Ok(json_event(&WireEvent::Transitions { transitions: &transitions }));
                     yield Ok(json_event(&WireEvent::GameTransitions { transitions: &game_transitions }));
@@ -95,6 +100,31 @@ pub async fn events_sse(
         transitions_stream,
     ))
     .keep_alive(KeepAlive::default())
+}
+
+/// The runtime intentionally avoids database access while guarding a
+/// transition. Resolve UUIDs only at the SSE boundary, where they become the
+/// public client identity and an absent/deleted record can safely be null.
+async fn resolve_transition_ids(
+    state: &AppState,
+    transitions: GameInstanceTransitions,
+) -> GameInstanceTransitions {
+    let db = state.db.clone();
+    let fallback = transitions.clone();
+    run_blocking(move || {
+        Ok(transitions
+            .into_iter()
+            .map(|mut transition| {
+                transition.id = game_instances::identity(&db, transition.game, &transition.name)
+                    .ok()
+                    .flatten()
+                    .map(|identity| identity.id);
+                transition
+            })
+            .collect())
+    })
+    .await
+    .unwrap_or(fallback)
 }
 
 fn valheim_transitions(transitions: &GameInstanceTransitions) -> InstanceTransitions {

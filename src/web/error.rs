@@ -64,6 +64,9 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         || err
             .downcast_ref::<crate::db::game_instances::InvalidRustConfig>()
             .is_some()
+        || err
+            .downcast_ref::<crate::db::game_instances::InvalidGenericConfig>()
+            .is_some()
     {
         return StatusCode::BAD_REQUEST;
     }

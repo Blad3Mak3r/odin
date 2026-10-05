@@ -28,7 +28,7 @@ use super::protocol::{
     ErrorCode, Event, PROTOCOL_VERSION, Request, Response, read_frame, write_frame,
 };
 use crate::db::Db;
-use crate::db::game_instances::RustInstance;
+use crate::db::game_instances::{GenericGameInstance, RustInstance};
 use crate::game::GameId;
 use crate::instance::{Instance, lifecycle, process};
 use crate::paths::{self, Paths};
@@ -118,6 +118,7 @@ struct SpawnedChild {
 enum SupervisedInstance {
     Valheim(Instance),
     Rust(RustInstance),
+    Generic(GenericGameInstance),
 }
 
 impl SupervisedInstance {
@@ -125,6 +126,9 @@ impl SupervisedInstance {
         match game {
             GameId::Valheim => lifecycle::prepare_start(paths, db, name).map(Self::Valheim),
             GameId::Rust => crate::game::rust::prepare_start(paths, db, name).map(Self::Rust),
+            GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+                crate::game::generic::prepare_start(paths, db, game, name).map(Self::Generic)
+            }
         }
     }
 
@@ -132,6 +136,7 @@ impl SupervisedInstance {
         match self {
             Self::Valheim(instance) => crate::game::valheim::build_command(instance, paths),
             Self::Rust(instance) => crate::game::rust::build_command(paths, instance),
+            Self::Generic(instance) => crate::game::generic::build_command(paths, instance),
         }
     }
 
@@ -142,6 +147,10 @@ impl SupervisedInstance {
                 paths::instance_logs_dir(&paths.game_instance_dir(GameId::Rust, instance.name()))
                     .join("console.log")
             }
+            Self::Generic(instance) => paths::instance_logs_dir(
+                &paths.game_instance_dir(instance.identity.game, instance.name()),
+            )
+            .join("console.log"),
         }
     }
 
@@ -155,6 +164,12 @@ impl SupervisedInstance {
                 .ok()
                 .flatten()
                 .is_some_and(|instance| instance.config.auto_restart),
+            Self::Generic(instance) => {
+                crate::db::game_instances::load_generic(db, instance.identity.game, name)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|instance| instance.config.auto_restart)
+            }
         }
     }
 
@@ -174,6 +189,14 @@ impl SupervisedInstance {
                 crate::db::game_instances::set_rust_pid(db, name, pid, pid_started_at, started_at)
                     .map(|_| ())
             }
+            Self::Generic(instance) => crate::db::game_instances::set_generic_pid(
+                db,
+                instance.identity.game,
+                name,
+                pid,
+                pid_started_at,
+                started_at,
+            ),
         }
     }
 
@@ -181,6 +204,12 @@ impl SupervisedInstance {
         match self {
             Self::Valheim(_) => crate::db::instances::clear_pid(db, name, stopped_at),
             Self::Rust(_) => crate::db::game_instances::clear_rust_pid(db, name, stopped_at),
+            Self::Generic(instance) => crate::db::game_instances::clear_generic_pid(
+                db,
+                instance.identity.game,
+                name,
+                stopped_at,
+            ),
         }
     }
 }

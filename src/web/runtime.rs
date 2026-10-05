@@ -46,6 +46,9 @@ pub type InstanceTransitions = HashMap<String, InstanceTransition>;
 /// blocking each other.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GameInstanceTransition {
+    /// Resolved by the SSE boundary before this transition reaches clients.
+    /// The runtime itself deliberately remains independent of database I/O.
+    pub id: Option<String>,
     pub game: GameId,
     pub name: String,
     pub transition: InstanceTransition,
@@ -102,6 +105,9 @@ pub struct InstanceSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstanceResourceEntry {
+    /// Stable UUID when the game uses Odin's multi-game identity store.
+    /// Valheim's compatibility telemetry has no UUID in this hot path yet.
+    pub id: Option<String>,
     pub game: GameId,
     pub name: String,
     pub running: bool,
@@ -328,12 +334,6 @@ impl RuntimeRegistry {
             .unwrap_or_default()
     }
 
-    /// Drops cached state for an instance that no longer exists, so a
-    /// deleted-then-recreated instance doesn't briefly show stale history.
-    pub fn remove_instance(&self, name: &str) {
-        self.remove_game_instance(GameId::Valheim, name);
-    }
-
     pub fn remove_game_instance(&self, game: GameId, name: &str) {
         self.instances
             .lock()
@@ -471,6 +471,7 @@ fn game_transition_snapshot(
     let mut snapshot: GameInstanceTransitions = transitions
         .iter()
         .map(|(key, transition)| GameInstanceTransition {
+            id: None,
             game: key.game,
             name: key.name.clone(),
             transition: *transition,

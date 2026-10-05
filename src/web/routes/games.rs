@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::time::Duration;
 use sysinfo::Pid;
 
-use crate::db::game_instances::{self, GameInstanceIdentity, RustInstance};
+use crate::db::game_instances::{self, GameInstanceIdentity, GenericGameInstance, RustInstance};
 use crate::game::{self, GameId, instances as game_instances_ops, rust};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
@@ -61,6 +61,15 @@ pub struct RustConfigUpdateRequest {
     pub world_size: Option<u32>,
     pub max_players: Option<u16>,
     pub auto_restart: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct GenericConfigUpdateRequest {
+    pub port: u16,
+    pub query_port: Option<u16>,
+    pub admin_port: Option<u16>,
+    pub settings: Value,
+    pub auto_restart: bool,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +157,7 @@ pub async fn install_game(
                         );
                     }
                 }
+                GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {}
             }
             let driver = game::driver(game);
             let install_dir = paths.game_install_dir(game);
@@ -182,6 +192,13 @@ pub async fn list_all_instances(
     let views = run_blocking(move || {
         let mut views = valheim_views(&paths, &db)?;
         views.extend(rust_views(&paths, &db)?);
+        for game in [
+            GameId::VRising,
+            GameId::Palworld,
+            GameId::RunescapeDragonwilds,
+        ] {
+            views.extend(generic_views(&paths, &db, game)?);
+        }
         views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
         Ok(views)
     })
@@ -198,6 +215,9 @@ pub async fn list_instances(
     let views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
         GameId::Rust => rust_views(&paths, &db),
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+            generic_views(&paths, &db, game)
+        }
     })
     .await?;
     Ok(Json(views))
@@ -224,25 +244,43 @@ pub async fn create_instance(
     Ok(Json(view))
 }
 
-pub async fn get_instance(
+/// Resolves the durable instance identity used by dashboard URLs. Names are
+/// deliberately not accepted here: a rename must never invalidate a bookmark
+/// or point a later operation at a different game with the same name.
+pub async fn get_instance_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let view = run_blocking(move || load_view(&paths, &db, game, &name)).await?;
+    let view = run_blocking(move || {
+        let identity =
+            game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")?;
+        load_view(&paths, &db, identity.game, &identity.name)
+    })
+    .await?;
     Ok(Json(view))
 }
 
-pub async fn delete_instance(
+pub async fn delete_instance_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
     Query(query): Query<DeleteGameInstanceQuery>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    delete_instance_for(state, identity.game, identity.name, query.keep_backups).await
+}
+
+async fn delete_instance_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    keep_backups: bool,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let instance_name = name.clone();
-    run_blocking(move || game_instances_ops::delete(&paths, &db, game, &name, query.keep_backups))
+    run_blocking(move || game_instances_ops::delete(&paths, &db, game, &name, keep_backups))
         .await?;
     state.runtime.remove_game_instance(game, &instance_name);
     state.activity.record_for(
@@ -253,10 +291,10 @@ pub async fn delete_instance(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn update_rust_config(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<RustConfigUpdateRequest>,
+async fn update_rust_config_for(
+    state: AppState,
+    name: String,
+    request: RustConfigUpdateRequest,
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let db = state.db.clone();
     let paths = state.paths.clone();
@@ -302,14 +340,78 @@ pub async fn update_rust_config(
     Ok(Json(view))
 }
 
+async fn update_generic_config_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    request: GenericConfigUpdateRequest,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    if !game_instances::is_generic_game(game) {
+        return Err(BadRequest("this game has a dedicated configuration contract".into()).into());
+    }
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        let config = game_instances::GenericGameConfig {
+            port: request.port,
+            query_port: request.query_port,
+            admin_port: request.admin_port,
+            settings: request.settings,
+            auto_restart: request.auto_restart,
+        };
+        game_instances::update_generic_config(&db, game, &name, &config)
+            .map(|instance| generic_view(&paths, instance))
+    })
+    .await?;
+    Ok(Json(view))
+}
+
+/// Canonical UUID configuration endpoint. The game-specific request remains
+/// typed after identity resolution, so clients never have to include a game
+/// or mutable name in their URL.
+pub async fn update_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<Value>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    match identity.game {
+        GameId::Rust => {
+            let request = serde_json::from_value(request)
+                .map_err(|error| BadRequest(format!("invalid Rust configuration: {error}")))?;
+            update_rust_config_for(state, identity.name, request).await
+        }
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+            let request = serde_json::from_value(request)
+                .map_err(|error| BadRequest(format!("invalid game configuration: {error}")))?;
+            update_generic_config_for(state, identity.game, identity.name, request).await
+        }
+        GameId::Valheim => {
+            let request = serde_json::from_value(request)
+                .map_err(|error| BadRequest(format!("invalid Valheim configuration: {error}")))?;
+            let _ = crate::web::routes::instances::set_config_by_id(
+                State(state.clone()),
+                Path(id),
+                Json(request),
+            )
+            .await?;
+            let paths = state.paths.clone();
+            let db = state.db.clone();
+            let name = identity.name;
+            let view = run_blocking(move || load_view(&paths, &db, GameId::Valheim, &name)).await?;
+            Ok(Json(view))
+        }
+    }
+}
+
 /// Sends one command to the Rust instance through its private loopback
 /// WebRCON connection. The browser never receives the RCON password.
-pub async fn execute_rust_rcon(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<RconCommandRequest>,
+async fn execute_rust_rcon_for(
+    state: AppState,
+    name: String,
+    request: RconCommandRequest,
 ) -> ApiResult<Json<RconCommandResponse>> {
-    let command = request.command.trim();
+    let command = request.command.trim().to_string();
     if command.is_empty() {
         return Err(BadRequest("Rust RCON command cannot be empty".to_string()).into());
     }
@@ -323,14 +425,56 @@ pub async fn execute_rust_rcon(
         game_instances::load_rust(&db, &name_for_load)?.context("Rust instance does not exist")
     })
     .await?;
-    let output = rust::rcon::execute(&instance, command).await?;
+    let output = rust::rcon::execute(&instance, &command).await?;
     Ok(Json(RconCommandResponse { output }))
 }
 
-pub async fn wipe_rust_map(
+pub async fn execute_rust_rcon_by_id(
     State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<WipeRustMapRequest>,
+    Path(id): Path<String>,
+    Json(request): Json<RconCommandRequest>,
+) -> ApiResult<Json<RconCommandResponse>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    execute_rust_rcon_for(state, identity.name, request).await
+}
+
+/// Executes V Rising's Source RCON command through the loopback listener
+/// configured by Odin. Its password is never returned to API clients.
+pub async fn execute_vrising_rcon_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<RconCommandRequest>,
+) -> ApiResult<Json<RconCommandResponse>> {
+    let command = request.command.trim().to_string();
+    if command.is_empty() {
+        return Err(BadRequest("V Rising RCON command cannot be empty".to_string()).into());
+    }
+    if command.len() > 16 * 1024 {
+        return Err(BadRequest("V Rising RCON command must be at most 16 KiB".to_string()).into());
+    }
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::VRising {
+        return Err(BadRequest("this API is only available for V Rising instances".into()).into());
+    }
+    let db = state.db.clone();
+    let name = identity.name;
+    let instance = run_blocking(move || {
+        game_instances::load_generic(&db, GameId::VRising, &name)?
+            .context("V Rising instance does not exist")
+    })
+    .await?;
+    let output =
+        run_blocking(move || crate::game::vrising::execute_rcon(&instance, &command)).await?;
+    Ok(Json(RconCommandResponse { output }))
+}
+
+async fn wipe_rust_map_for(
+    state: AppState,
+    name: String,
+    request: WipeRustMapRequest,
 ) -> ApiResult<Json<JobHandle>> {
     if request.confirmation != name {
         return Err(BadRequest("type the exact instance name to wipe its map".to_string()).into());
@@ -361,10 +505,10 @@ pub async fn wipe_rust_map(
     Ok(Json(JobHandle { id }))
 }
 
-pub async fn full_wipe_rust(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(request): Json<WipeRustMapRequest>,
+async fn full_wipe_rust_for(
+    state: AppState,
+    name: String,
+    request: WipeRustMapRequest,
 ) -> ApiResult<Json<JobHandle>> {
     if request.confirmation != name {
         return Err(BadRequest("type the exact instance name to fully wipe it".to_string()).into());
@@ -395,6 +539,32 @@ pub async fn full_wipe_rust(
     Ok(Json(JobHandle { id }))
 }
 
+/// Queues a Rust map wipe using the instance's durable UUID.
+pub async fn wipe_rust_map_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<WipeRustMapRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    wipe_rust_map_for(state, identity.name, request).await
+}
+
+/// Queues a full Rust wipe using the instance's durable UUID.
+pub async fn full_wipe_rust_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<WipeRustMapRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    full_wipe_rust_for(state, identity.name, request).await
+}
+
 pub async fn get_rust_resources(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -405,6 +575,37 @@ pub async fn get_rust_resources(
     })
     .await?;
     Ok(Json(rust_resource_snapshot(&state, &instance)))
+}
+
+pub async fn get_rust_resources_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<InstanceSnapshot>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    get_rust_resources(State(state), Path(identity.name)).await
+}
+
+/// Returns the latest resource sample for any managed game instance.
+pub async fn get_resources_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<InstanceSnapshot>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game == GameId::Valheim {
+        return crate::web::routes::resources::get_instance_resources(
+            State(state),
+            Path(identity.name),
+        )
+        .await;
+    }
+    Ok(Json(
+        state
+            .runtime
+            .game_instance_snapshot(identity.game, &identity.name),
+    ))
 }
 
 pub async fn get_rust_resource_history(
@@ -435,6 +636,53 @@ pub async fn get_rust_resource_history(
     }
 }
 
+pub async fn get_rust_resource_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    get_rust_resource_history(State(state), Path(identity.name), Query(query)).await
+}
+
+/// Returns resource history for any managed game instance, addressed by UUID.
+pub async fn get_resource_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game == GameId::Valheim {
+        return crate::web::routes::resources::get_instance_resources_history(
+            State(state),
+            Path(identity.name),
+            Query(query),
+        )
+        .await;
+    }
+    match query.hours {
+        Some(hours) => {
+            let db = state.db.clone();
+            let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+            let game = identity.game;
+            let name = identity.name;
+            let rows = run_blocking(move || {
+                crate::db::resource_samples::range_for_instance(&db, game, &name, since)
+            })
+            .await?;
+            Ok(Json(rows.into_iter().map(Into::into).collect()))
+        }
+        None => Ok(Json(
+            state
+                .runtime
+                .game_instance_history(identity.game, &identity.name),
+        )),
+    }
+}
+
 pub async fn export_rust_resource_history(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -460,10 +708,63 @@ pub async fn export_rust_resource_history(
     ))
 }
 
-pub async fn get_logs(
+pub async fn export_rust_resource_history_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Response> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    export_rust_resource_history(State(state), Path(identity.name), Query(query)).await
+}
+
+/// Exports resource history for any managed game instance, addressed by UUID.
+pub async fn export_resource_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Response> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game == GameId::Valheim {
+        return crate::web::routes::resources::export_instance_resources_history(
+            State(state),
+            Path(identity.name),
+            Query(query),
+        )
+        .await;
+    }
+    let hours = query.hours.unwrap_or(24 * 7);
+    let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+    let db = state.db.clone();
+    let game = identity.game;
+    let name = identity.name.clone();
+    let lookup_name = name.clone();
+    let rows = run_blocking(move || {
+        crate::db::resource_samples::range_for_instance(&db, game, &lookup_name, since)
+    })
+    .await?;
+    Ok(crate::web::routes::resources::csv_response(
+        &format!("{game}-{name}-resources.csv"),
+        &rows,
+    ))
+}
+
+pub async fn get_logs_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
     Query(query): Query<crate::web::routes::instances::LogsQuery>,
+) -> ApiResult<Json<crate::web::routes::instances::LogsView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    get_logs_for(state, identity.game, identity.name, query).await
+}
+
+async fn get_logs_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    query: crate::web::routes::instances::LogsQuery,
 ) -> ApiResult<Json<crate::web::routes::instances::LogsView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -471,21 +772,47 @@ pub async fn get_logs(
         load_view(&paths, &db, game, &name)?;
         let log_file = crate::paths::instance_logs_dir(&paths.game_instance_dir(game, &name))
             .join("console.log");
-        if !log_file.is_file() {
-            return Ok(Vec::new());
+        let mut lines = if log_file.is_file() {
+            crate::commands::logs::read_tail(&log_file, query.lines)?
+                .lines()
+                .map(str::to_string)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Dragonwilds writes its Unreal server log independently from stdout.
+        // Include it in Odin's normal log view rather than making operators
+        // hunt through the isolated runtime tree after a failed start.
+        if game == GameId::RunescapeDragonwilds {
+            let native_log = paths
+                .game_instance_dir(game, &name)
+                .join("runtime/RSDragonwilds/Saved/Logs/RSDragonwilds.log");
+            if native_log.is_file() {
+                lines.extend(
+                    crate::commands::logs::read_tail(&native_log, query.lines)?
+                        .lines()
+                        .map(|line| format!("[RSDragonwilds] {line}")),
+                );
+            }
         }
-        Ok(crate::commands::logs::read_tail(&log_file, query.lines)?
-            .lines()
-            .map(str::to_string)
-            .collect())
+        Ok(lines)
     })
     .await?;
     Ok(Json(crate::web::routes::instances::LogsView { lines }))
 }
 
-pub async fn start_instance(
+pub async fn start_instance_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    start_instance_for(state, identity.game, identity.name).await
+}
+
+async fn start_instance_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let _transition =
         state
@@ -503,10 +830,15 @@ pub async fn start_instance(
     Ok(Json(view))
 }
 
-pub async fn stop_instance(
+pub async fn stop_instance_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    stop_instance_for(state, identity.game, identity.name).await
+}
+
+async fn stop_instance_for(state: AppState, game: GameId, name: String) -> ApiResult<StatusCode> {
     let _transition =
         state
             .runtime
@@ -520,9 +852,18 @@ pub async fn stop_instance(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn restart_instance(
+pub async fn restart_instance_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    restart_instance_for(state, identity.game, identity.name).await
+}
+
+async fn restart_instance_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let _transition =
         state
@@ -545,9 +886,41 @@ pub async fn restart_instance(
     Ok(Json(view))
 }
 
-pub async fn list_backups(
+pub(crate) async fn resolve_instance_id(
+    state: &AppState,
+    id: &str,
+) -> ApiResult<GameInstanceIdentity> {
+    let db = state.db.clone();
+    let id = id.to_string();
+    run_blocking(move || {
+        game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")
+    })
+    .await
+}
+
+/// Resolves a UUID for a Valheim-only extension. The extension handlers keep
+/// using the filesystem-facing instance name internally, but names are never
+/// accepted from an HTTP path.
+pub(crate) async fn resolve_valheim_instance_name(state: &AppState, id: &str) -> ApiResult<String> {
+    let identity = resolve_instance_id(state, id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    Ok(identity.name)
+}
+
+pub async fn list_backups_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    list_backups_for(state, identity.game, identity.name).await
+}
+
+async fn list_backups_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -556,9 +929,18 @@ pub async fn list_backups(
     Ok(Json(backups))
 }
 
-pub async fn create_backup(
+pub async fn create_backup_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::backup::BackupEntry>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    create_backup_for(state, identity.game, identity.name).await
+}
+
+async fn create_backup_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> ApiResult<Json<crate::backup::BackupEntry>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -575,9 +957,19 @@ pub async fn create_backup(
     Ok(Json(backup))
 }
 
-pub async fn restore_backup(
+pub async fn restore_backup_by_id(
     State(state): State<AppState>,
-    Path((game, name, backup_id)): Path<(GameId, String, String)>,
+    Path((id, backup_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    restore_backup_for(state, identity.game, identity.name, backup_id).await
+}
+
+async fn restore_backup_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    backup_id: String,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -613,6 +1005,7 @@ fn game_instance_view(
     match instance {
         game_instances_ops::GameInstance::Valheim(instance) => valheim_view(paths, db, instance),
         game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(paths, instance)),
+        game_instances_ops::GameInstance::Generic(instance) => Ok(generic_view(paths, instance)),
     }
 }
 
@@ -678,6 +1071,55 @@ fn rust_view(paths: &Paths, instance: RustInstance) -> ManagedInstanceView {
     }
 }
 
+fn generic_views(
+    paths: &Paths,
+    db: &crate::db::Db,
+    game: GameId,
+) -> anyhow::Result<Vec<ManagedInstanceView>> {
+    Ok(game_instances::list_generic(db, game)?
+        .into_iter()
+        .map(|instance| generic_view(paths, instance))
+        .collect())
+}
+
+fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstanceView {
+    let game = instance.identity.game;
+    let name = instance.identity.name.clone();
+    let mut config = instance.config.settings.clone();
+    if let Value::Object(values) = &mut config {
+        for secret in [
+            "admin_password",
+            "world_password",
+            "rcon_password",
+            "password",
+        ] {
+            if values.contains_key(secret) {
+                values.insert(secret.to_string(), Value::String(String::new()));
+            }
+        }
+        values.insert("port".into(), serde_json::json!(instance.config.port));
+        values.insert(
+            "query_port".into(),
+            serde_json::json!(instance.config.query_port),
+        );
+        values.insert(
+            "admin_port".into(),
+            serde_json::json!(instance.config.admin_port),
+        );
+        values.insert(
+            "auto_restart".into(),
+            serde_json::json!(instance.config.auto_restart),
+        );
+    }
+    ManagedInstanceView {
+        running: instance.is_running(),
+        odin_version: supervisor_version(paths, game, &name),
+        capabilities: game::driver(game).capabilities(),
+        identity: instance.identity,
+        config,
+    }
+}
+
 fn supervisor_version(paths: &Paths, game: GameId, name: &str) -> Option<String> {
     match crate::supervisor::client::ping_blocking(paths, game, name, Duration::from_millis(300)) {
         Ok(crate::supervisor::protocol::Response::Pong { odin_version, .. }) => odin_version,
@@ -688,6 +1130,34 @@ fn supervisor_version(paths: &Paths, game: GameId, name: &str) -> Option<String>
 pub(crate) fn rust_resource_snapshot(
     state: &AppState,
     instance: &RustInstance,
+) -> InstanceSnapshot {
+    if !instance.is_running() {
+        return InstanceSnapshot::default();
+    }
+
+    let root_pids: Vec<u32> = instance.pid.into_iter().collect();
+    let system = state.resources.lock().expect("resources lock poisoned");
+    let mut cpu_percent = 0.0;
+    let mut memory_bytes = 0;
+    for pid in crate::instance::process::descendant_pids(&system, &root_pids) {
+        if let Some(process) = system.process(Pid::from_u32(pid)) {
+            cpu_percent += process.cpu_usage();
+            memory_bytes += process.memory();
+        }
+    }
+    InstanceSnapshot {
+        running: true,
+        ready: false,
+        cpu_percent,
+        memory_bytes,
+    }
+}
+
+/// Samples a generic managed server process (V Rising, Palworld, or
+/// Dragonwilds), including descendants such as Proton's Wine processes.
+pub(crate) fn generic_resource_snapshot(
+    state: &AppState,
+    instance: &GenericGameInstance,
 ) -> InstanceSnapshot {
     if !instance.is_running() {
         return InstanceSnapshot::default();
@@ -743,36 +1213,43 @@ pub struct TagsRequest {
     pub tags: Vec<String>,
 }
 
-pub async fn set_tags(
+pub async fn set_tags_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
     Json(req): Json<TagsRequest>,
 ) -> ApiResult<StatusCode> {
-    run_blocking(move || game_instances::set_tags(&state.db, game, &name, &req.tags)).await?;
+    let identity = resolve_instance_id(&state, &id).await?;
+    run_blocking(move || {
+        game_instances::set_tags(&state.db, identity.game, &identity.name, &req.tags)
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn rename_instance(
+pub async fn rename_instance_by_id(
     State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+    Path(id): Path<String>,
     Json(req): Json<super::instances::RenameRequest>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
-    let old = name.clone();
+    let identity = resolve_instance_id(&state, &id).await?;
+    let old_name = identity.name.clone();
+    let game = identity.game;
     let paths = state.paths.clone();
     let db = state.db.clone();
     let view = run_blocking(move || {
-        let instance = game_instances_ops::rename(&paths, &db, game, &name, &req.new_name)?;
+        let instance =
+            game_instances_ops::rename(&paths, &db, game, &identity.name, &req.new_name)?;
         game_instance_view(&paths, &db, instance)
     })
     .await?;
-    state.runtime.remove_game_instance(game, &old);
+    state.runtime.remove_game_instance(game, &old_name);
     Ok(Json(view))
 }
 
-pub async fn clone_rust_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Json(req): Json<CreateGameInstanceRequest>,
+async fn clone_rust_instance_for(
+    state: AppState,
+    name: String,
+    req: CreateGameInstanceRequest,
 ) -> ApiResult<Json<ManagedInstanceView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -788,4 +1265,17 @@ pub async fn clone_rust_instance(
     })
     .await?;
     Ok(Json(view))
+}
+
+/// Clones a Rust instance selected by its durable UUID.
+pub async fn clone_rust_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<CreateGameInstanceRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    clone_rust_instance_for(state, identity.name, req).await
 }

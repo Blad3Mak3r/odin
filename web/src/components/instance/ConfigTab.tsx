@@ -7,15 +7,14 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useConfig, useUpdateConfig } from '@/lib/queries'
-import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
 import type { ConfigView } from '@/lib/types'
 
 const MIN_PORT = 1
 const MAX_PORT = 65535
 
-export function ConfigTab({ name }: { name: string }) {
-  const config = useConfig(name)
-  const updateConfig = useUpdateConfig(name)
+export function ConfigTab({ id }: { id: string }) {
+  const config = useConfig(id)
+  const updateConfig = useUpdateConfig(id)
 
   if (config.isError) {
     return <QueryError error={config.error} />
@@ -37,8 +36,7 @@ export function ConfigTab({ name }: { name: string }) {
   // effect every time `config.data` changes (e.g. on refetch).
   return (
     <div className="flex max-w-md flex-col gap-6">
-      <ConfigForm key={name} initial={config.data} updateConfig={updateConfig} />
-      <UptimeScheduleCard game="valheim" name={name} />
+      <ConfigForm key={id} initial={config.data} updateConfig={updateConfig} />
     </div>
   )
 }

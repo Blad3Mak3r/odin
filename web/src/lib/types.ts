@@ -5,7 +5,7 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
-export type GameId = 'valheim' | 'rust'
+export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds'
 
 export interface GameCapabilities {
   backups: boolean
@@ -47,9 +47,19 @@ export interface RustConfigUpdateRequest {
   auto_restart?: boolean
 }
 
+export interface GenericConfigUpdateRequest {
+  port: number
+  query_port: number | null
+  admin_port: number | null
+  settings: Record<string, unknown>
+  auto_restart: boolean
+}
+
 export interface RconCommandResponse {
   output: string
 }
+
+export type VRisingAccessListKind = 'admin' | 'banned'
 
 export interface ChangelogSection {
   title: string
@@ -283,6 +293,7 @@ export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'cloni
 export type InstanceTransitions = Record<string, InstanceTransition>
 
 export interface GameInstanceTransition {
+  id: string | null
   game: GameId
   name: string
   transition: InstanceTransition
@@ -317,6 +328,7 @@ export interface SaveFileEntry {
 }
 
 export interface InstanceResourceEntry {
+  id: string | null
   game: GameId
   name: string
   running: boolean

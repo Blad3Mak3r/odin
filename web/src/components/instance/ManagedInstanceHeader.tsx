@@ -13,9 +13,9 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
-  const transition = useManagedInstanceTransition(instance.game, instance.name)
+  const transition = useManagedInstanceTransition(instance.id, instance.game, instance.name)
   const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
-  const action = { game: instance.game, name: instance.name }
+  const action = { id: instance.id }
   const port = numberConfig(instance.config, 'port')
   const queryPort = numberConfig(instance.config, 'query_port')
   const rconPort = numberConfig(instance.config, 'rcon_port')
@@ -81,7 +81,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
       </div>
 
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
-        <span>Game: {instance.game === 'rust' ? 'Rust' : 'Valheim'}</span>
+        <span>Game: {gameName(instance.game)}</span>
         {hostname && <span>Hostname: {hostname}</span>}
         {port !== null && <span>Port: {port}</span>}
         {queryPort !== null && <span>Query port: {queryPort}</span>}
@@ -90,6 +90,16 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
       </div>
     </div>
   )
+}
+
+function gameName(game: ManagedInstanceView['game']) {
+  return {
+    valheim: 'Valheim',
+    rust: 'Rust',
+    vrising: 'V Rising',
+    palworld: 'Palworld',
+    'runescape-dragonwilds': 'RuneScape: Dragonwilds',
+  }[game]
 }
 
 function numberConfig(config: Record<string, unknown>, key: string) {

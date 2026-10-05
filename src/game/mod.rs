@@ -6,17 +6,24 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+pub mod generic;
 pub mod instances;
+pub mod palworld;
 pub mod ports;
+pub mod proton_ge;
 pub mod rust;
 pub mod update;
 pub mod valheim;
+pub mod vrising;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameId {
     Valheim,
     Rust,
+    VRising,
+    Palworld,
+    RunescapeDragonwilds,
 }
 
 impl GameId {
@@ -24,6 +31,9 @@ impl GameId {
         match self {
             Self::Valheim => "valheim",
             Self::Rust => "rust",
+            Self::VRising => "vrising",
+            Self::Palworld => "palworld",
+            Self::RunescapeDragonwilds => "runescape-dragonwilds",
         }
     }
 }
@@ -41,6 +51,9 @@ impl FromStr for GameId {
         match value {
             "valheim" => Ok(Self::Valheim),
             "rust" => Ok(Self::Rust),
+            "vrising" => Ok(Self::VRising),
+            "palworld" => Ok(Self::Palworld),
+            "runescape-dragonwilds" => Ok(Self::RunescapeDragonwilds),
             _ => Err(format!("unsupported game '{value}'")),
         }
     }
@@ -76,6 +89,9 @@ pub trait GameDriver: Sync {
 
 struct ValheimDriver;
 struct RustDriver;
+struct VRisingDriver;
+struct PalworldDriver;
+struct RunescapeDragonwildsDriver;
 
 impl GameDriver for ValheimDriver {
     fn id(&self) -> GameId {
@@ -141,18 +157,111 @@ impl GameDriver for RustDriver {
     }
 }
 
+impl GameDriver for VRisingDriver {
+    fn id(&self) -> GameId {
+        GameId::VRising
+    }
+    fn display_name(&self) -> &'static str {
+        "V Rising"
+    }
+    fn steam_app_id(&self) -> &'static str {
+        "1829350"
+    }
+    fn server_binary(&self) -> &'static str {
+        "VRisingServer.exe"
+    }
+    fn capabilities(&self) -> GameCapabilities {
+        GameCapabilities {
+            backups: true,
+            players: false,
+            mods: false,
+            access_lists: true,
+            readiness: false,
+        }
+    }
+    fn port_requirements(&self) -> GamePortRequirements {
+        GamePortRequirements { count: 2 }
+    }
+}
+
+impl GameDriver for PalworldDriver {
+    fn id(&self) -> GameId {
+        GameId::Palworld
+    }
+    fn display_name(&self) -> &'static str {
+        "Palworld"
+    }
+    fn steam_app_id(&self) -> &'static str {
+        "2394010"
+    }
+    fn server_binary(&self) -> &'static str {
+        "PalServer.sh"
+    }
+    fn capabilities(&self) -> GameCapabilities {
+        GameCapabilities {
+            backups: true,
+            players: true,
+            mods: false,
+            access_lists: true,
+            readiness: true,
+        }
+    }
+    fn port_requirements(&self) -> GamePortRequirements {
+        GamePortRequirements { count: 1 }
+    }
+}
+
+impl GameDriver for RunescapeDragonwildsDriver {
+    fn id(&self) -> GameId {
+        GameId::RunescapeDragonwilds
+    }
+    fn display_name(&self) -> &'static str {
+        "RuneScape: Dragonwilds"
+    }
+    fn steam_app_id(&self) -> &'static str {
+        "4019830"
+    }
+    fn server_binary(&self) -> &'static str {
+        "RSDragonwildsServer.sh"
+    }
+    fn capabilities(&self) -> GameCapabilities {
+        GameCapabilities {
+            backups: true,
+            players: false,
+            mods: false,
+            access_lists: true,
+            readiness: false,
+        }
+    }
+    fn port_requirements(&self) -> GamePortRequirements {
+        GamePortRequirements { count: 2 }
+    }
+}
+
 static VALHEIM: ValheimDriver = ValheimDriver;
 static RUST: RustDriver = RustDriver;
+static V_RISING: VRisingDriver = VRisingDriver;
+static PALWORLD: PalworldDriver = PalworldDriver;
+static RUNESCAPE_DRAGONWILDS: RunescapeDragonwildsDriver = RunescapeDragonwildsDriver;
 
 pub fn driver(game: GameId) -> &'static dyn GameDriver {
     match game {
         GameId::Valheim => &VALHEIM,
         GameId::Rust => &RUST,
+        GameId::VRising => &V_RISING,
+        GameId::Palworld => &PALWORLD,
+        GameId::RunescapeDragonwilds => &RUNESCAPE_DRAGONWILDS,
     }
 }
 
-pub fn drivers() -> [&'static dyn GameDriver; 2] {
-    [&VALHEIM, &RUST]
+pub fn drivers() -> [&'static dyn GameDriver; 5] {
+    [
+        &VALHEIM,
+        &RUST,
+        &V_RISING,
+        &PALWORLD,
+        &RUNESCAPE_DRAGONWILDS,
+    ]
 }
 
 #[cfg(test)]

@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::cli::validate_instance_name;
 use crate::game::{GameId, rust};
@@ -58,6 +59,399 @@ impl RustInstance {
     pub fn name(&self) -> &str {
         &self.identity.name
     }
+}
+
+/// Persisted state for a compiled driver whose settings are not part of
+/// Odin's historical Valheim/Rust schemas. Keeping the typed transport fields
+/// separate from `settings` gives the supervisor a stable lifecycle contract
+/// while each driver owns its own configuration document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenericGameConfig {
+    pub port: u16,
+    pub query_port: Option<u16>,
+    pub admin_port: Option<u16>,
+    pub settings: Value,
+    pub auto_restart: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidGenericConfig(pub String);
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GenericGameInstance {
+    #[serde(flatten)]
+    pub identity: GameInstanceIdentity,
+    #[serde(flatten)]
+    pub config: GenericGameConfig,
+    pub pid: Option<u32>,
+    pub pid_started_at: Option<i64>,
+    pub last_started_at: Option<DateTime<Utc>>,
+    pub last_stopped_at: Option<DateTime<Utc>>,
+}
+
+impl GenericGameInstance {
+    pub fn is_running(&self) -> bool {
+        matches!((self.pid, self.pid_started_at), (Some(pid), Some(started_at)) if crate::instance::process::is_alive(pid, started_at))
+    }
+
+    pub fn name(&self) -> &str {
+        &self.identity.name
+    }
+}
+
+pub fn is_generic_game(game: GameId) -> bool {
+    matches!(
+        game,
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds
+    )
+}
+
+pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
+    match game {
+        GameId::VRising => GenericGameConfig {
+            port: 27015,
+            query_port: Some(27016),
+            admin_port: Some(25575),
+            settings: json!({"server_name": name, "max_players": 40, "rcon_enabled": false, "rcon_password": ""}),
+            auto_restart: false,
+        },
+        GameId::Palworld => GenericGameConfig {
+            port: 8211,
+            query_port: None,
+            admin_port: Some(8212),
+            // Do not expose Palworld's administrative API until its operator
+            // has supplied a password. The dashboard can enable it later.
+            settings: json!({"server_name": name, "max_players": 32, "rest_api_enabled": false, "admin_password": ""}),
+            auto_restart: false,
+        },
+        GameId::RunescapeDragonwilds => GenericGameConfig {
+            port: 7777,
+            query_port: Some(8888),
+            admin_port: None,
+            settings: json!({"owner_id": "", "server_name": name, "default_world_name": name, "admin_password": "", "world_password": ""}),
+            auto_restart: false,
+        },
+        _ => unreachable!("only generic games have generic defaults"),
+    }
+}
+
+pub fn list_generic(db: &crate::db::Db, game: GameId) -> Result<Vec<GenericGameInstance>> {
+    anyhow::ensure!(
+        is_generic_game(game),
+        "{game} does not use generic configuration"
+    );
+    let conn = db.conn();
+    let mut statement = conn.prepare(
+        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.config_json, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
+         FROM game_instances g JOIN generic_game_instance_configs c ON c.instance_id = g.id \
+         WHERE g.game = ?1 ORDER BY g.name",
+    )?;
+    statement
+        .query_map(params![game.as_str()], |row| row_to_generic(row, game))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+pub fn load_generic(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+) -> Result<Option<GenericGameInstance>> {
+    anyhow::ensure!(
+        is_generic_game(game),
+        "{game} does not use generic configuration"
+    );
+    let conn = db.conn();
+    conn.query_row(
+        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.config_json, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
+         FROM game_instances g JOIN generic_game_instance_configs c ON c.instance_id = g.id \
+         WHERE g.game = ?1 AND g.name = ?2",
+        params![game.as_str(), name],
+        |row| row_to_generic(row, game),
+    ).optional().map_err(Into::into)
+}
+
+pub fn create_generic(
+    paths: &Paths,
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+) -> Result<GenericGameInstance> {
+    anyhow::ensure!(
+        is_generic_game(game),
+        "{game} does not use generic configuration"
+    );
+    validate_instance_name(name).map_err(|error| anyhow::anyhow!(error))?;
+    if load_generic(db, game, name)?.is_some() {
+        bail!("{game} instance '{name}' already exists");
+    }
+    let mut config = default_generic_config(game, name);
+    let occupied = configured_ports(db)?;
+    while [Some(config.port), config.query_port, config.admin_port]
+        .into_iter()
+        .flatten()
+        .any(|port| occupied.contains(&port))
+    {
+        config.port = config
+            .port
+            .checked_add(10)
+            .context("no port remains for game instance")?;
+        config.query_port = config.query_port.map(|port| port.saturating_add(10));
+        config.admin_port = config.admin_port.map(|port| port.saturating_add(10));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let created_at = Utc::now();
+    std::fs::create_dir_all(paths.game_instance_dir(game, name))?;
+    let mut conn = db.conn();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO game_instances (id, game, name, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![id, game.as_str(), name, created_at],
+    )?;
+    tx.execute("INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port, config_json, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![id, config.port, config.query_port, config.admin_port, serde_json::to_string(&config.settings)?, config.auto_restart])?;
+    tx.commit()?;
+    drop(conn);
+    load_generic(db, game, name)?.context("failed to load newly-created game instance")
+}
+
+/// Every persisted port, including stopped servers. Allocation uses this to
+/// avoid producing a configuration that will conflict as soon as another
+/// instance is started.
+pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
+    let mut ports = HashSet::new();
+    for instance in crate::db::instances::list_all(db)? {
+        ports.extend(crate::game::ports::block(GameId::Valheim, instance.port)?);
+    }
+    for instance in list_rust(db)? {
+        ports.extend([
+            instance.config.port,
+            instance.config.query_port,
+            instance.config.rcon_port,
+        ]);
+    }
+    for game in [
+        GameId::VRising,
+        GameId::Palworld,
+        GameId::RunescapeDragonwilds,
+    ] {
+        for instance in list_generic(db, game)? {
+            ports.extend(
+                [
+                    Some(instance.config.port),
+                    instance.config.query_port,
+                    instance.config.admin_port,
+                ]
+                .into_iter()
+                .flatten(),
+            );
+        }
+    }
+    Ok(ports)
+}
+
+fn row_to_generic(row: &rusqlite::Row<'_>, game: GameId) -> rusqlite::Result<GenericGameInstance> {
+    Ok(GenericGameInstance {
+        identity: GameInstanceIdentity {
+            id: row.get(0)?,
+            game,
+            name: row.get(1)?,
+            created_at: row.get(2)?,
+            tags: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default(),
+        },
+        config: GenericGameConfig {
+            port: row.get(4)?,
+            query_port: row.get(5)?,
+            admin_port: row.get(6)?,
+            settings: serde_json::from_str(&row.get::<_, String>(7)?)
+                .unwrap_or(Value::Object(Default::default())),
+            auto_restart: row.get(8)?,
+        },
+        pid: row.get(9)?,
+        pid_started_at: row.get(10)?,
+        last_started_at: row.get(11)?,
+        last_stopped_at: row.get(12)?,
+    })
+}
+
+pub fn set_generic_pid(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+    pid: u32,
+    pid_started_at: i64,
+    started_at: DateTime<Utc>,
+) -> Result<()> {
+    db.conn().execute(
+        "UPDATE generic_game_instance_configs SET pid = ?3, pid_started_at = ?4, last_started_at = ?5 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+        params![game.as_str(), name, pid, pid_started_at, started_at],
+    )?;
+    Ok(())
+}
+
+pub fn clear_generic_pid(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+    stopped_at: DateTime<Utc>,
+) -> Result<()> {
+    db.conn().execute(
+        "UPDATE generic_game_instance_configs SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?3 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+        params![game.as_str(), name, stopped_at],
+    )?;
+    Ok(())
+}
+
+pub fn delete_generic(db: &crate::db::Db, game: GameId, name: &str) -> Result<()> {
+    db.conn().execute(
+        "DELETE FROM game_instances WHERE game = ?1 AND name = ?2",
+        params![game.as_str(), name],
+    )?;
+    Ok(())
+}
+
+pub fn set_generic_auto_restart(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+    enabled: bool,
+) -> Result<()> {
+    db.conn().execute(
+        "UPDATE generic_game_instance_configs SET auto_restart = ?3 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+        params![game.as_str(), name, enabled],
+    )?;
+    Ok(())
+}
+
+/// Changes a compiled generic driver's transport settings and its
+/// game-owned configuration document. Configuration is deliberately only
+/// mutable while stopped: Dragonwilds discards some live changes and the
+/// other drivers do not provide an atomic live reload contract.
+pub fn update_generic_config(
+    db: &crate::db::Db,
+    game: GameId,
+    name: &str,
+    config: &GenericGameConfig,
+) -> Result<GenericGameInstance> {
+    anyhow::ensure!(
+        is_generic_game(game),
+        "{game} does not use generic configuration"
+    );
+    let current = load_generic(db, game, name)?.context("game instance not found")?;
+    if current.is_running() {
+        bail!(crate::instance::InstanceError::AlreadyRunning(name.into()));
+    }
+    // Secrets are intentionally omitted from API responses. A blank secret
+    // in an update therefore means "leave the stored secret unchanged";
+    // it also allows a newly-created Dragonwilds instance to set one.
+    let settings = merged_generic_settings(&current.config.settings, &config.settings)?;
+    let persisted = GenericGameConfig {
+        settings,
+        ..config.clone()
+    };
+    validate_generic_config(game, &persisted)?;
+    db.conn().execute(
+        "UPDATE generic_game_instance_configs SET port = ?3, query_port = ?4, admin_port = ?5, config_json = ?6, auto_restart = ?7 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+        params![game.as_str(), name, persisted.port, persisted.query_port, persisted.admin_port, serde_json::to_string(&persisted.settings)?, persisted.auto_restart],
+    )?;
+    load_generic(db, game, name)?.context("game instance disappeared while updating configuration")
+}
+
+pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Result<()> {
+    let ports: Vec<_> = [Some(config.port), config.query_port, config.admin_port]
+        .into_iter()
+        .flatten()
+        .collect();
+    if ports.contains(&0) || ports.len() != ports.iter().collect::<HashSet<_>>().len() {
+        bail!(InvalidGenericConfig(
+            "game, query, and administration ports must be different and between 1 and 65535"
+                .into()
+        ));
+    }
+    let Value::Object(settings) = &config.settings else {
+        bail!(InvalidGenericConfig(
+            "game settings must be a JSON object".into()
+        ));
+    };
+    if game == GameId::RunescapeDragonwilds {
+        for key in [
+            "owner_id",
+            "server_name",
+            "default_world_name",
+            "admin_password",
+        ] {
+            if settings
+                .get(key)
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                bail!(InvalidGenericConfig(format!(
+                    "RuneScape: Dragonwilds {key} is required"
+                )));
+            }
+        }
+        if config.query_port.is_none() {
+            bail!(InvalidGenericConfig(
+                "RuneScape: Dragonwilds beacon port is required".into()
+            ));
+        }
+    }
+    if game == GameId::Palworld
+        && settings
+            .get("rest_api_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && settings
+            .get("admin_password")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        bail!(InvalidGenericConfig(
+            "Palworld admin password is required when the REST API is enabled".into()
+        ));
+    }
+    if game == GameId::VRising
+        && settings
+            .get("rcon_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && settings
+            .get("rcon_password")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        bail!(InvalidGenericConfig(
+            "V Rising RCON password is required when RCON is enabled".into()
+        ));
+    }
+    Ok(())
+}
+
+fn merged_generic_settings(stored: &Value, submitted: &Value) -> Result<Value> {
+    let Value::Object(mut submitted) = submitted.clone() else {
+        bail!(InvalidGenericConfig(
+            "game settings must be a JSON object".into()
+        ));
+    };
+    let Value::Object(stored) = stored else {
+        return Ok(Value::Object(submitted));
+    };
+    for key in [
+        "admin_password",
+        "world_password",
+        "rcon_password",
+        "password",
+    ] {
+        if submitted
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(str::is_empty)
+            && let Some(value) = stored.get(key)
+        {
+            submitted.insert(key.to_string(), value.clone());
+        }
+    }
+    Ok(Value::Object(submitted))
 }
 
 pub fn identity(
@@ -465,6 +859,53 @@ mod tests {
         assert_eq!(resolved.name, "rust-server");
         assert!(identity_by_id(&db, "missing").unwrap().is_none());
 
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn dragonwilds_configuration_requires_its_bootstrap_fields_and_keeps_secrets() {
+        let (paths, db) = temp_context("dragonwilds-config");
+        let instance = create_generic(&paths, &db, GameId::RunescapeDragonwilds, "dragon").unwrap();
+        let error = update_generic_config(
+            &db,
+            GameId::RunescapeDragonwilds,
+            "dragon",
+            &instance.config,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("owner_id"));
+
+        let config = GenericGameConfig {
+            settings: json!({
+                "owner_id": "owner-123",
+                "server_name": "Dragon Server",
+                "default_world_name": "MyWorld",
+                "admin_password": "admin-secret",
+                "world_password": "world-secret"
+            }),
+            ..instance.config
+        };
+        update_generic_config(&db, GameId::RunescapeDragonwilds, "dragon", &config).unwrap();
+
+        let submitted_without_passwords = GenericGameConfig {
+            settings: json!({
+                "owner_id": "owner-123",
+                "server_name": "Renamed Server",
+                "default_world_name": "MyWorld",
+                "admin_password": "",
+                "world_password": ""
+            }),
+            ..config
+        };
+        let updated = update_generic_config(
+            &db,
+            GameId::RunescapeDragonwilds,
+            "dragon",
+            &submitted_without_passwords,
+        )
+        .unwrap();
+        assert_eq!(updated.config.settings["admin_password"], "admin-secret");
+        assert_eq!(updated.config.settings["world_password"], "world-secret");
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

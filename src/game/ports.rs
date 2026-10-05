@@ -73,6 +73,35 @@ pub fn ensure_available(
             }
         }
     }
+    for other_game in [
+        GameId::VRising,
+        GameId::Palworld,
+        GameId::RunescapeDragonwilds,
+    ] {
+        for instance in crate::db::game_instances::list_generic(db, other_game)? {
+            if game == other_game && instance.name() == name {
+                continue;
+            }
+            if !instance.is_running() {
+                continue;
+            }
+            for port in [
+                Some(instance.config.port),
+                instance.config.query_port,
+                instance.config.admin_port,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if requested_ports.contains(&port) {
+                    anyhow::bail!(
+                        "port {port} is already in use by running {other_game} instance '{}'",
+                        instance.name()
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -118,6 +147,49 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("28015"));
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn running_generic_servers_reserve_ports_across_games() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-generic-port-check-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = crate::db::Db::open(&paths).unwrap();
+        let palworld = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            GameId::Palworld,
+            "palworld-server",
+        )
+        .unwrap();
+        let config = crate::db::game_instances::GenericGameConfig {
+            port: 28015,
+            ..palworld.config
+        };
+        crate::db::game_instances::update_generic_config(
+            &db,
+            GameId::Palworld,
+            "palworld-server",
+            &config,
+        )
+        .unwrap();
+        crate::db::game_instances::set_generic_pid(
+            &db,
+            GameId::Palworld,
+            "palworld-server",
+            std::process::id(),
+            crate::instance::process::start_time_of(std::process::id()).unwrap(),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+
+        let error = ensure_available(&db, GameId::Rust, "rust-server", [28015]).unwrap_err();
+        assert!(error.to_string().contains("palworld"));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

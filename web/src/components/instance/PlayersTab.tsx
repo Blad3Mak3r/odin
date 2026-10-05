@@ -4,9 +4,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { usePlayerHistory, usePlayers } from '@/lib/queries'
 import { formatRelativeTime } from '@/lib/utils'
 
-export function PlayersTab({ name, running }: { name: string; running: boolean }) {
-  const players = usePlayers(name, running)
-  const history = usePlayerHistory(name)
+export function PlayersTab({ id, running }: { id: string; running: boolean }) {
+  const players = usePlayers(id, running)
+  const history = usePlayerHistory(id)
 
   if (players.isError || history.isError) {
     return <QueryError error={players.error ?? history.error} />

@@ -13,9 +13,6 @@ const GamesPage = lazy(() => import('@/pages/GamesPage').then((m) => ({ default:
 const ManagedInstanceDetailPage = lazy(() =>
   import('@/pages/ManagedInstanceDetailPage').then((m) => ({ default: m.ManagedInstanceDetailPage })),
 )
-const InstanceDetailPage = lazy(() =>
-  import('@/pages/InstanceDetailPage').then((m) => ({ default: m.InstanceDetailPage })),
-)
 const GlobalModsPage = lazy(() =>
   import('@/pages/GlobalModsPage').then((m) => ({ default: m.GlobalModsPage })),
 )
@@ -55,7 +52,8 @@ function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/games" element={<GamesPage />} />
           <Route path="/instances" element={<MultiGameInstancesPage />} />
-          <Route path="/instances/valheim/:name/*" element={<InstanceDetailPage />} />
+          <Route path="/instance/:id/*" element={<ManagedInstanceDetailPage />} />
+          <Route path="/instances/valheim/:name/*" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/:game/:name/*" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/:name/*" element={<LegacyValheimInstanceRedirect />} />
           <Route path="/mods/*" element={<GlobalModsPage />} />

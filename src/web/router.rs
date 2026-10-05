@@ -1,12 +1,12 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
-    instances, jobs, lists, mods, nexus, players, resources, rust_access_lists, saves, settings,
-    uptime_schedules, version, webhooks,
+    instances, jobs, lists, mods, nexus, palworld, players, resources, rust_access_lists, saves,
+    settings, uptime_schedules, version, vrising_access_lists, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -24,21 +24,222 @@ pub fn build_router(state: AppState) -> Router {
         .route("/install", post(install::install_server))
         .route("/install/status", get(install::get_install_status))
         .route("/games", get(games::list_games))
-        .route("/games/instances/bulk/{action}", post(bulk::bulk_games))
-        .route("/games/{game}/instances/{name}/tags", put(games::set_tags))
         .route(
-            "/games/{game}/instances/{name}/uptime-schedule",
-            get(uptime_schedules::get_uptime_schedule).put(uptime_schedules::set_uptime_schedule),
-        )
-        .route(
-            "/games/rust/instances/{name}/clone",
-            post(games::clone_rust_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/rename",
-            post(games::rename_instance),
+            "/instances/bulk/games/{action}",
+            post(bulk::bulk_games_by_id),
         )
         .route("/games/instances", get(games::list_all_instances))
+        // UUID is the public identity contract. The historical bare
+        // `/instances/{name}` routes have been removed; game/name endpoints
+        // below are transitional internal compatibility routes only.
+        .route(
+            "/instances/{id}",
+            get(games::get_instance_by_id).delete(games::delete_instance_by_id),
+        )
+        .route("/instances/{id}/start", post(games::start_instance_by_id))
+        .route("/instances/{id}/stop", post(games::stop_instance_by_id))
+        .route(
+            "/instances/{id}/restart",
+            post(games::restart_instance_by_id),
+        )
+        .route("/instances/{id}/tags", put(games::set_tags_by_id))
+        .route("/instances/{id}/rename", post(games::rename_instance_by_id))
+        .route(
+            "/instances/{id}/uptime-schedule",
+            get(uptime_schedules::get_uptime_schedule_by_id)
+                .put(uptime_schedules::set_uptime_schedule_by_id),
+        )
+        .route(
+            "/instances/{id}/backups",
+            get(games::list_backups_by_id).post(games::create_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backups/{backup_id}/restore",
+            post(games::restore_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backups/jobs",
+            post(backups::create_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backups/{backup_id}/restore/job",
+            post(backups::restore_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backups/{backup_id}",
+            delete(backups::delete_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backup-schedule",
+            get(backups::get_backup_schedule_by_id).put(backups::set_backup_schedule_by_id),
+        )
+        .route(
+            "/instances/{id}/backup-storage",
+            get(backups::get_backup_storage_by_id).put(backups::set_backup_storage_by_id),
+        )
+        .route(
+            "/instances/{id}/config",
+            get(instances::get_config_by_id).put(games::update_config_by_id),
+        )
+        .route("/instances/{id}/logs", get(games::get_logs_by_id))
+        .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
+        .route(
+            "/instances/{id}/valheim/clone",
+            post(instances::clone_instance_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/last-exit",
+            get(diagnostics::get_last_exit_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/players",
+            get(players::get_instance_players_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/players/history",
+            get(players::get_player_history_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/lists/{kind}",
+            get(lists::get_list_by_id)
+                .put(lists::set_list_by_id)
+                .post(lists::add_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/lists/{kind}/{entry_id}",
+            delete(lists::remove_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/bepinex/config",
+            get(config_files::list_config_files_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/bepinex/config/{filename}",
+            get(config_files::get_config_file_by_id).put(config_files::set_config_file_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/bepinex/status",
+            get(bepinex::status_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/bepinex/update",
+            post(bepinex::update_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods",
+            get(mods::list_mods_by_id).post(mods::add_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/update",
+            post(mods::update_mods_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/modpack",
+            get(mods::download_modpack_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/upload",
+            post(mods::upload_mod_by_id).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}",
+            delete(mods::remove_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/enable",
+            post(mods::enable_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/disable",
+            post(mods::disable_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/version",
+            put(mods::select_mod_version_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/pinned",
+            put(mods::set_mod_pinned_by_id),
+        )
+        .route("/instances/{id}/palworld/players", get(palworld::players))
+        .route("/instances/{id}/palworld/metrics", get(palworld::metrics))
+        .route(
+            "/instances/{id}/palworld/announce",
+            post(palworld::announce),
+        )
+        .route("/instances/{id}/palworld/save", post(palworld::save))
+        .route("/instances/{id}/palworld/kick", post(palworld::kick))
+        .route("/instances/{id}/palworld/ban", post(palworld::ban))
+        .route("/instances/{id}/palworld/unban", post(palworld::unban))
+        .route(
+            "/instances/{id}/palworld/shutdown",
+            post(palworld::shutdown),
+        )
+        .route(
+            "/instances/{id}/vrising/rcon",
+            post(games::execute_vrising_rcon_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/rcon",
+            post(games::execute_rust_rcon_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/wipe-map",
+            post(games::wipe_rust_map_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/full-wipe",
+            post(games::full_wipe_rust_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/clone",
+            post(games::clone_rust_instance_by_id),
+        )
+        .route(
+            "/instances/{id}/vrising/lists/{kind}",
+            get(vrising_access_lists::get_list_by_id)
+                .post(vrising_access_lists::add_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/vrising/lists/{kind}/{entry_id}",
+            delete(vrising_access_lists::remove_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/lists/{kind}",
+            get(rust_access_lists::get_list_by_id)
+                .put(rust_access_lists::set_list_by_id)
+                .post(rust_access_lists::add_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/lists/{kind}/{entry_id}",
+            delete(rust_access_lists::remove_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/resources",
+            get(games::get_rust_resources_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/resources/history",
+            get(games::get_rust_resource_history_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/resources/history/export",
+            get(games::export_rust_resource_history_by_id),
+        )
+        .route("/instances/{id}/resources", get(games::get_resources_by_id))
+        .route(
+            "/instances/{id}/resources/history",
+            get(games::get_resource_history_by_id),
+        )
+        .route(
+            "/instances/{id}/resources/history/export",
+            get(games::export_resource_history_by_id),
+        )
+        .route("/instances/{id}/saves", get(saves::list_save_files_by_id))
+        .route(
+            "/instances/{id}/saves/{*path}",
+            get(saves::download_save_file_by_id),
+        )
         .route("/games/{game}/install", post(games::install_game))
         .route(
             "/games/{game}/install/status",
@@ -47,233 +248,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/{game}/instances",
             get(games::list_instances).post(games::create_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}",
-            get(games::get_instance).delete(games::delete_instance),
-        )
-        .route(
-            "/games/rust/instances/{name}/config",
-            put(games::update_rust_config),
-        )
-        .route(
-            "/games/rust/instances/{name}/rcon",
-            post(games::execute_rust_rcon),
-        )
-        .route(
-            "/games/rust/instances/{name}/wipe-map",
-            post(games::wipe_rust_map),
-        )
-        .route(
-            "/games/rust/instances/{name}/full-wipe",
-            post(games::full_wipe_rust),
-        )
-        .route(
-            "/games/rust/instances/{name}/lists/{kind}",
-            get(rust_access_lists::get_list)
-                .put(rust_access_lists::set_list)
-                .post(rust_access_lists::add_list_entry),
-        )
-        .route(
-            "/games/rust/instances/{name}/lists/{kind}/{id}",
-            delete(rust_access_lists::remove_list_entry),
-        )
-        .route(
-            "/games/rust/instances/{name}/resources",
-            get(games::get_rust_resources),
-        )
-        .route(
-            "/games/rust/instances/{name}/resources/history",
-            get(games::get_rust_resource_history),
-        )
-        .route(
-            "/games/rust/instances/{name}/resources/history/export",
-            get(games::export_rust_resource_history),
-        )
-        .route("/games/{game}/instances/{name}/logs", get(games::get_logs))
-        .route(
-            "/games/{game}/instances/{name}/logs/sse",
-            get(sse::game_logs_sse),
-        )
-        .route(
-            "/games/{game}/instances/{name}/saves",
-            get(saves::list_save_files),
-        )
-        .route(
-            "/games/{game}/instances/{name}/saves/{*path}",
-            get(saves::download_save_file),
-        )
-        .route(
-            "/games/{game}/instances/{name}/start",
-            post(games::start_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/stop",
-            post(games::stop_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/restart",
-            post(games::restart_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups",
-            get(games::list_backups).post(games::create_backup),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/{id}/restore",
-            post(games::restore_backup),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/jobs",
-            post(backups::create_backup_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/{id}/restore/job",
-            post(backups::restore_backup_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/{id}",
-            delete(backups::delete_backup_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backup-schedule",
-            get(backups::get_backup_schedule_for_game).put(backups::set_backup_schedule_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backup-storage",
-            get(backups::get_backup_storage_for_game).put(backups::set_backup_storage_for_game),
-        )
-        // Valheim's canonical module routes deliberately reuse the mature
-        // handlers below. The legacy `/instances/...` routes remain aliases
-        // while dashboard links move to `/instances/valheim/...`.
-        .route(
-            "/games/valheim/instances/{name}/clone",
-            post(instances::clone_instance),
-        )
-        .route(
-            "/games/valheim/instances/{name}/status",
-            get(instances::get_instance),
-        )
-        .route(
-            "/games/valheim/instances/{name}/rename",
-            post(instances::rename_instance),
-        )
-        .route(
-            "/games/valheim/instances/{name}/config",
-            get(instances::get_config).put(instances::set_config),
-        )
-        .route(
-            "/games/valheim/instances/{name}/logs/sse",
-            get(sse::logs_sse),
-        )
-        .route(
-            "/games/valheim/instances/{name}/last-exit",
-            get(diagnostics::get_last_exit),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods",
-            get(mods::list_mods).post(mods::add_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/update",
-            post(mods::update_mods),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/status",
-            get(bepinex::status),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/update",
-            post(bepinex::update),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/modpack",
-            get(mods::download_modpack),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/upload",
-            post(mods::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}",
-            delete(mods::remove_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/enable",
-            post(mods::enable_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/disable",
-            post(mods::disable_mod),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/version",
-            put(mods::select_mod_version),
-        )
-        .route(
-            "/games/valheim/instances/{name}/mods/{mod_id}/pinned",
-            put(mods::set_mod_pinned),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backup-schedule",
-            get(backups::get_backup_schedule).put(backups::set_backup_schedule),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backup-storage",
-            get(backups::get_backup_storage).put(backups::set_backup_storage),
-        )
-        // Valheim backups already expose job progress in the dashboard. Keep
-        // that richer contract under the canonical namespace while the
-        // generic backup route remains the synchronous driver operation.
-        .route(
-            "/games/valheim/instances/{name}/backups/jobs",
-            post(backups::create_backup),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backups/{id}/restore/job",
-            post(backups::restore_backup),
-        )
-        .route(
-            "/games/valheim/instances/{name}/backups/{id}",
-            delete(backups::delete_backup),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/config",
-            get(config_files::list_config_files),
-        )
-        .route(
-            "/games/valheim/instances/{name}/bepinex/config/{filename}",
-            get(config_files::get_config_file).put(config_files::set_config_file),
-        )
-        .route(
-            "/games/valheim/instances/{name}/lists/{kind}",
-            get(lists::get_list)
-                .put(lists::set_list)
-                .post(lists::add_list_entry),
-        )
-        .route(
-            "/games/valheim/instances/{name}/lists/{kind}/{id}",
-            delete(lists::remove_list_entry),
-        )
-        .route(
-            "/games/valheim/instances/{name}/resources",
-            get(resources::get_instance_resources),
-        )
-        .route(
-            "/games/valheim/instances/{name}/resources/history",
-            get(resources::get_instance_resources_history),
-        )
-        .route(
-            "/games/valheim/instances/{name}/resources/history/export",
-            get(resources::export_instance_resources_history),
-        )
-        .route(
-            "/games/valheim/instances/{name}/players",
-            get(players::get_instance_players),
-        )
-        .route(
-            "/games/valheim/instances/{name}/players/history",
-            get(players::get_player_history),
         )
         .route(
             "/instances",
@@ -286,88 +260,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/bulk/bepinex/update",
             post(bulk::bulk_update_bepinex),
-        )
-        .route(
-            "/instances/{name}",
-            get(instances::get_instance).delete(instances::delete_instance),
-        )
-        .route("/instances/{name}/clone", post(instances::clone_instance))
-        .route("/instances/{name}/start", post(instances::start_instance))
-        .route("/instances/{name}/stop", post(instances::stop_instance))
-        .route(
-            "/instances/{name}/restart",
-            post(instances::restart_instance),
-        )
-        .route("/instances/{name}/rename", post(instances::rename_instance))
-        .route(
-            "/instances/{name}/config",
-            get(instances::get_config).put(instances::set_config),
-        )
-        .route("/instances/{name}/logs", get(instances::get_logs))
-        .route("/instances/{name}/logs/sse", get(sse::logs_sse))
-        .route(
-            "/instances/{name}/last-exit",
-            get(diagnostics::get_last_exit),
-        )
-        .route(
-            "/instances/{name}/mods",
-            get(mods::list_mods).post(mods::add_mod),
-        )
-        .route("/instances/{name}/mods/update", post(mods::update_mods))
-        .route("/instances/{name}/bepinex/status", get(bepinex::status))
-        .route("/instances/{name}/bepinex/update", post(bepinex::update))
-        .route(
-            "/instances/{name}/mods/modpack",
-            get(mods::download_modpack),
-        )
-        .route(
-            "/instances/{name}/mods/upload",
-            post(mods::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
-        )
-        .route("/instances/{name}/mods/{mod_id}", delete(mods::remove_mod))
-        .route(
-            "/instances/{name}/mods/{mod_id}/enable",
-            post(mods::enable_mod),
-        )
-        .route(
-            "/instances/{name}/mods/{mod_id}/disable",
-            post(mods::disable_mod),
-        )
-        .route(
-            "/instances/{name}/mods/{mod_id}/version",
-            put(mods::select_mod_version),
-        )
-        .route(
-            "/instances/{name}/mods/{mod_id}/pinned",
-            put(mods::set_mod_pinned),
-        )
-        .route(
-            "/instances/{name}/backups",
-            get(backups::list_backups).post(backups::create_backup),
-        )
-        .route(
-            "/instances/{name}/backups/{id}/restore",
-            post(backups::restore_backup),
-        )
-        .route(
-            "/instances/{name}/backups/{id}",
-            delete(backups::delete_backup),
-        )
-        .route(
-            "/instances/{name}/backup-schedule",
-            get(backups::get_backup_schedule).put(backups::set_backup_schedule),
-        )
-        .route(
-            "/instances/{name}/backup-storage",
-            get(backups::get_backup_storage).put(backups::set_backup_storage),
-        )
-        .route(
-            "/instances/{name}/bepinex/config",
-            get(config_files::list_config_files),
-        )
-        .route(
-            "/instances/{name}/bepinex/config/{filename}",
-            get(config_files::get_config_file).put(config_files::set_config_file),
         )
         .route("/mods/search", get(mods::search_mods))
         .route("/mods/nexus/trending", get(nexus::trending_mods))
@@ -387,16 +279,6 @@ pub fn build_router(state: AppState) -> Router {
             "/settings/nexus-api-key",
             put(settings::set_nexus_api_key).delete(settings::clear_nexus_api_key),
         )
-        .route(
-            "/instances/{name}/lists/{kind}",
-            get(lists::get_list)
-                .put(lists::set_list)
-                .post(lists::add_list_entry),
-        )
-        .route(
-            "/instances/{name}/lists/{kind}/{id}",
-            delete(lists::remove_list_entry),
-        )
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))
         .route("/jobs/{id}/sse", get(jobs::job_sse))
@@ -411,22 +293,6 @@ pub fn build_router(state: AppState) -> Router {
             get(resources::export_host_resources_history),
         )
         .route(
-            "/instances/{name}/resources",
-            get(resources::get_instance_resources),
-        )
-        .route(
-            "/instances/{name}/resources/history",
-            get(resources::get_instance_resources_history),
-        )
-        .route(
-            "/instances/{name}/resources/history/export",
-            get(resources::export_instance_resources_history),
-        )
-        .route(
-            "/instances/{name}/players",
-            get(players::get_instance_players),
-        )
-        .route(
             "/webhooks",
             get(webhooks::list_webhooks).post(webhooks::create_webhook),
         )
@@ -437,13 +303,21 @@ pub fn build_router(state: AppState) -> Router {
         .route("/webhooks/{id}/enable", post(webhooks::enable_webhook))
         .route("/webhooks/{id}/disable", post(webhooks::disable_webhook))
         .route("/webhooks/{id}/test", post(webhooks::test_webhook))
+        // Never let the dashboard's SPA fallback turn a retired or misspelled
+        // API URL into a successful HTML response.
+        .fallback(|| async { axum::http::StatusCode::NOT_FOUND })
         .with_state(state);
 
     Router::new()
         .nest("/api", api)
+        .route("/api/{*path}", any(api_not_found))
         .route("/", get(static_files::serve_index))
         .route("/{*path}", get(static_files::serve_asset))
         .layer(TraceLayer::new_for_http())
+}
+
+async fn api_not_found() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
 }
 
 #[cfg(test)]
@@ -481,7 +355,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_valheim_config_route_uses_the_valheim_module_handler() {
+    async fn valheim_config_route_uses_the_durable_uuid() {
         let dir = std::env::temp_dir().join(format!(
             "odin-router-valheim-module-test-{}-{}",
             std::process::id(),
@@ -493,10 +367,17 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        Instance::create(&paths, &db, "meadows").unwrap();
+        let instance = Instance::create(&paths, &db, "meadows").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "meadows",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/valheim/instances/meadows/config")
+            .uri(format!("/api/instances/{id}/config"))
             .body(Body::empty())
             .unwrap();
 
@@ -506,9 +387,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_valheim_status_route_keeps_the_full_dashboard_view() {
+    async fn valheim_instance_route_keeps_the_full_dashboard_view() {
         let dir = std::env::temp_dir().join(format!(
             "odin-router-valheim-status-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = Instance::create(&paths, &db, "meadows").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "meadows",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
+        let app = build_router(AppState::new(paths, db));
+        let request = Request::builder()
+            .uri(format!("/api/instances/{id}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn valheim_game_name_api_routes_are_not_registered() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-valheim-retired-route-test-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
@@ -521,13 +434,16 @@ mod tests {
         Instance::create(&paths, &db, "meadows").unwrap();
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/valheim/instances/meadows/status")
-            .body(Body::empty())
+            .method("POST")
+            .uri("/api/games/valheim/instances/meadows/rename")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"new_name":"mistlands"}"#))
             .unwrap();
 
-        let response = app.oneshot(request).await.unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[tokio::test]
@@ -543,11 +459,14 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("PUT")
-            .uri("/api/games/rust/instances/rusty/config")
+            .uri(format!("/api/instances/{rust_id}/config"))
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"hostname":"Rusty Server","max_players":50,"port":29000,"query_port":30000,"rcon_port":31000,"rcon_password":"rcon-secret"}"#,
@@ -574,15 +493,15 @@ mod tests {
             (r#"{"query_port":29000}"#, StatusCode::BAD_REQUEST),
             (r#"{"rcon_port":29000}"#, StatusCode::BAD_REQUEST),
             (r#"{"rcon_password":"   "}"#, StatusCode::BAD_REQUEST),
-            (r#"{"port":65536}"#, StatusCode::UNPROCESSABLE_ENTITY),
-            (r#"{"query_port":-1}"#, StatusCode::UNPROCESSABLE_ENTITY),
-            (r#"{"rcon_port":29000.5}"#, StatusCode::UNPROCESSABLE_ENTITY),
-            (r#"{"port":29000.5}"#, StatusCode::UNPROCESSABLE_ENTITY),
+            (r#"{"port":65536}"#, StatusCode::BAD_REQUEST),
+            (r#"{"query_port":-1}"#, StatusCode::BAD_REQUEST),
+            (r#"{"rcon_port":29000.5}"#, StatusCode::BAD_REQUEST),
+            (r#"{"port":29000.5}"#, StatusCode::BAD_REQUEST),
             (r#"{"seed":42}"#, StatusCode::OK),
         ] {
             let request = Request::builder()
                 .method("PUT")
-                .uri("/api/games/rust/instances/rusty/config")
+                .uri(format!("/api/instances/{rust_id}/config"))
                 .header("content-type", "application/json")
                 .body(Body::from(body))
                 .unwrap();
@@ -609,7 +528,7 @@ mod tests {
         .unwrap();
         let request = Request::builder()
             .method("PUT")
-            .uri("/api/games/rust/instances/rusty/config")
+            .uri(format!("/api/instances/{rust_id}/config"))
             .header("content-type", "application/json")
             .body(Body::from(r#"{"port":31000}"#))
             .unwrap();
@@ -641,11 +560,14 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db));
         let request = Request::builder()
             .method("POST")
-            .uri("/api/games/rust/instances/rusty/rcon")
+            .uri(format!("/api/instances/{rust_id}/rust/rcon"))
             .header("content-type", "application/json")
             .body(Body::from(r#"{"command":"   "}"#))
             .unwrap();
@@ -670,6 +592,7 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         let instance = crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = instance.identity.id.clone();
         let source = crate::game::rust::backup_source(&paths, &instance);
         std::fs::create_dir_all(&source).unwrap();
         let save = source.join("world.sav");
@@ -682,7 +605,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/games/rust/instances/rusty/wipe-map")
+                    .uri(format!("/api/instances/{rust_id}/rust/wipe-map"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"confirmation":"wrong"}"#))
                     .unwrap(),
@@ -696,7 +619,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/games/rust/instances/rusty/wipe-map")
+                    .uri(format!("/api/instances/{rust_id}/rust/wipe-map"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"confirmation":"rusty"}"#))
                     .unwrap(),
@@ -752,7 +675,10 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db));
 
         let response = app
@@ -760,7 +686,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/games/rust/instances/rusty/lists/owner")
+                    .uri(format!("/api/instances/{rust_id}/rust/lists/owner"))
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":"76561197960287930"}"#))
                     .unwrap(),
@@ -773,7 +699,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/games/rust/instances/rusty/lists/owner")
+                    .uri(format!("/api/instances/{rust_id}/rust/lists/owner"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -791,7 +717,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/games/rust/instances/rusty/lists/invalid")
+                    .uri(format!("/api/instances/{rust_id}/rust/lists/invalid"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -815,11 +741,14 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         Instance::create(&paths, &db, "shared").unwrap();
-        crate::db::game_instances::create_rust(&paths, &db, "shared").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "shared")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("DELETE")
-            .uri("/api/games/rust/instances/shared")
+            .uri(format!("/api/instances/{rust_id}"))
             .body(Body::empty())
             .unwrap();
 
@@ -848,10 +777,13 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/rust/instances/rusty/resources")
+            .uri(format!("/api/instances/{rust_id}/resources"))
             .body(Body::empty())
             .unwrap();
 
@@ -873,10 +805,13 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        crate::db::game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let rust_id = crate::db::game_instances::create_rust(&paths, &db, "rusty")
+            .unwrap()
+            .identity
+            .id;
         let app = build_router(AppState::new(paths, db));
         let request = Request::builder()
-            .uri("/api/games/rust/instances/rusty/resources/history")
+            .uri(format!("/api/instances/{rust_id}/resources/history"))
             .body(Body::empty())
             .unwrap();
 

@@ -83,6 +83,14 @@ pub async fn list_mods(
     Ok(Json(views))
 }
 
+pub async fn list_mods_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<InstalledModView>>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    list_mods(State(state), Path(name)).await
+}
+
 /// Streams a zip of every currently-enabled mod's files for the instance,
 /// ready to extract into a player's client `BepInEx/plugins` folder.
 pub async fn download_modpack(
@@ -104,6 +112,14 @@ pub async fn download_modpack(
         bytes,
     )
         .into_response())
+}
+
+pub async fn download_modpack_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    download_modpack(State(state), Path(name)).await
 }
 
 #[derive(Deserialize)]
@@ -149,6 +165,15 @@ pub async fn add_mod(
     Ok(Json(JobHandle { id }))
 }
 
+pub async fn add_mod_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<AddModRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    add_mod(State(state), Path(name), Json(req)).await
+}
+
 /// Fails fast with a 409 if the instance is running, instead of spawning a
 /// job that's doomed to fail inside `mods::add`/`add_local` once it runs.
 async fn check_not_running(state: &AppState, name: &str) -> ApiResult<()> {
@@ -188,6 +213,14 @@ pub async fn remove_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn remove_mod_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    remove_mod(State(state), Path((name, mod_id))).await
+}
+
 pub async fn enable_mod(
     State(state): State<AppState>,
     Path((name, mod_id)): Path<(String, String)>,
@@ -198,6 +231,14 @@ pub async fn enable_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn enable_mod_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    enable_mod(State(state), Path((name, mod_id))).await
+}
+
 pub async fn disable_mod(
     State(state): State<AppState>,
     Path((name, mod_id)): Path<(String, String)>,
@@ -206,6 +247,14 @@ pub async fn disable_mod(
     let db = state.db.clone();
     run_blocking(move || mods::set_enabled(&paths, &db, &name, &mod_id, false)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn disable_mod_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    disable_mod(State(state), Path((name, mod_id))).await
 }
 
 #[derive(Deserialize)]
@@ -224,6 +273,15 @@ pub async fn select_mod_version(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn select_mod_version_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+    Json(req): Json<SelectVersionRequest>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    select_mod_version(State(state), Path((name, mod_id)), Json(req)).await
+}
+
 #[derive(Deserialize)]
 pub struct SetPinnedRequest {
     pub pinned: bool,
@@ -238,6 +296,15 @@ pub async fn set_mod_pinned(
     let db = state.db.clone();
     run_blocking(move || mods::set_pinned(&paths, &db, &name, &mod_id, req.pinned)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn set_mod_pinned_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+    Json(req): Json<SetPinnedRequest>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    set_mod_pinned(State(state), Path((name, mod_id)), Json(req)).await
 }
 
 /// Spawns the "update mods for one instance" job. Its own function (rather
@@ -282,6 +349,14 @@ pub async fn update_mods(
     Json(JobHandle {
         id: spawn_mod_update_job(&state, name),
     })
+}
+
+pub async fn update_mods_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    Ok(update_mods(State(state), Path(name)).await)
 }
 
 #[derive(Deserialize)]
@@ -421,4 +496,13 @@ pub async fn upload_mod(
         },
     );
     Ok(Json(JobHandle { id }))
+}
+
+pub async fn upload_mod_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    multipart: Multipart,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    upload_mod(State(state), Path(name), multipart).await
 }

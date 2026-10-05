@@ -11,9 +11,11 @@ import { useUploadMod } from '@/lib/queries'
 
 export function UploadModForm({
   name,
+  instanceName = name,
   running = false,
 }: {
   name: string
+  instanceName?: string
   running?: boolean
 }) {
   const [modName, setModName] = useState('')
@@ -30,7 +32,7 @@ export function UploadModForm({
     if (!file) return
     const confirmed = await confirm({
       title: `Upload '${modName}'?`,
-      description: `Install '${file.name}' on '${name}' as a mod named '${modName}'. Only upload mods you trust — the archive is extracted as-is.`,
+      description: `Install '${file.name}' on '${instanceName}' as a mod named '${modName}'. Only upload mods you trust — the archive is extracted as-is.`,
       confirmLabel: 'Upload & install',
     })
     if (!confirmed) return

@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
-use crate::backup::BackupEntry;
 use crate::backup_storage::{BackupStorageConfig, StorageProvider};
 use crate::db::backup_schedules;
 use crate::game::{GameId, instances};
@@ -14,25 +13,14 @@ use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
 use crate::web::state::AppState;
 
-pub async fn list_backups(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<Vec<BackupEntry>>> {
-    list_backups_for_game(State(state), Path((GameId::Valheim, name))).await
-}
-
-pub async fn list_backups_for_game(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<Json<Vec<BackupEntry>>> {
-    let paths = state.paths.clone();
+async fn resolve_instance_id(state: &AppState, id: String) -> ApiResult<(GameId, String)> {
     let db = state.db.clone();
-    let entries = run_blocking(move || {
-        instances::load(&paths, &db, game, &name)?;
-        instances::list_backups(&paths, &db, game, &name)
+    run_blocking(move || {
+        let identity = crate::db::game_instances::identity_by_id(&db, &id)?
+            .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
+        Ok((identity.game, identity.name))
     })
-    .await?;
-    Ok(Json(entries))
+    .await
 }
 
 // See the comment on `mods::add_mod`: spawning a job can't fail
@@ -74,6 +62,17 @@ pub async fn create_backup_for_game(
         },
     );
     Json(JobHandle { id })
+}
+
+pub async fn create_backup_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<JobHandle>> {
+    let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return Ok(create_backup(State(state), Path(name)).await);
+    }
+    Ok(create_backup_for_game(State(state), Path((game, name))).await)
 }
 
 #[derive(Serialize)]
@@ -138,6 +137,17 @@ pub async fn get_backup_storage_for_game(
     })
     .await?;
     Ok(Json(view))
+}
+
+pub async fn get_backup_storage_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<BackupStorageView>> {
+    let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return get_backup_storage(State(state), Path(name)).await;
+    }
+    get_backup_storage_for_game(State(state), Path((game, name))).await
 }
 
 #[derive(Deserialize)]
@@ -222,6 +232,18 @@ pub async fn set_backup_storage_for_game(
     Ok(Json(view))
 }
 
+pub async fn set_backup_storage_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<SetBackupStorageRequest>,
+) -> ApiResult<Json<BackupStorageView>> {
+    let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return set_backup_storage(State(state), Path(name), Json(req)).await;
+    }
+    set_backup_storage_for_game(State(state), Path((game, name)), Json(req)).await
+}
+
 pub async fn restore_backup(
     State(state): State<AppState>,
     Path((name, backup_id)): Path<(String, String)>,
@@ -262,6 +284,17 @@ pub async fn restore_backup_for_game(
     Json(JobHandle { id })
 }
 
+pub async fn restore_backup_by_id(
+    State(state): State<AppState>,
+    Path((id, backup_id)): Path<(String, String)>,
+) -> ApiResult<Json<JobHandle>> {
+    let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return Ok(restore_backup(State(state), Path((name, backup_id))).await);
+    }
+    Ok(restore_backup_for_game(State(state), Path((game, name, backup_id))).await)
+}
+
 pub async fn delete_backup(
     State(state): State<AppState>,
     Path((name, backup_id)): Path<(String, String)>,
@@ -281,6 +314,17 @@ pub async fn delete_backup_for_game(
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn delete_backup_by_id(
+    State(state): State<AppState>,
+    Path((id, backup_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return delete_backup(State(state), Path((name, backup_id))).await;
+    }
+    delete_backup_for_game(State(state), Path((game, name, backup_id))).await
 }
 
 #[derive(Serialize)]
@@ -337,6 +381,17 @@ pub async fn get_backup_schedule_for_game(
     Ok(Json(view))
 }
 
+pub async fn get_backup_schedule_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<BackupScheduleView>> {
+    let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return get_backup_schedule(State(state), Path(name)).await;
+    }
+    get_backup_schedule_for_game(State(state), Path((game, name))).await
+}
+
 #[derive(Deserialize)]
 pub struct SetBackupScheduleRequest {
     pub interval_hours: u32,
@@ -387,4 +442,16 @@ pub async fn set_backup_schedule_for_game(
     })
     .await?;
     Ok(Json(view))
+}
+
+pub async fn set_backup_schedule_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<SetBackupScheduleRequest>,
+) -> ApiResult<Json<BackupScheduleView>> {
+    let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::Valheim {
+        return set_backup_schedule(State(state), Path(name), Json(req)).await;
+    }
+    set_backup_schedule_for_game(State(state), Path((game, name)), Json(req)).await
 }

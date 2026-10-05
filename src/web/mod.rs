@@ -125,6 +125,25 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
             failures.push(format!("rust/{}: {error:#}", rust_instance.name()));
         }
     }
+    for game in [
+        GameId::VRising,
+        GameId::Palworld,
+        GameId::RunescapeDragonwilds,
+    ] {
+        for generic_instance in game_instances::list_generic(&state.db, game)? {
+            if generic_instance.is_running()
+                && let Err(error) = crate::game::generic::stop(
+                    &state.paths,
+                    &state.db,
+                    game,
+                    generic_instance.name(),
+                )
+                .await
+            {
+                failures.push(format!("{game}/{}: {error:#}", generic_instance.name()));
+            }
+        }
+    }
     if !failures.is_empty() {
         bail!(
             "failed to stop one or more instances during shutdown: {}",
@@ -180,6 +199,9 @@ fn spawn_telemetry(state: AppState) {
             for name in tick.crashed_rust_with_auto_restart {
                 attempt_rust_auto_restart(&state, name).await;
             }
+            for (game, name) in tick.crashed_generic_with_auto_restart {
+                attempt_generic_auto_restart(&state, game, name).await;
+            }
 
             tokio::time::sleep(TELEMETRY_INTERVAL).await;
         }
@@ -215,6 +237,29 @@ async fn attempt_rust_auto_restart(state: &AppState, name: String) {
         ),
         Err(error) => {
             tracing::warn!(instance = %name, game = "rust", %error, "automatic restart failed")
+        }
+    }
+}
+
+async fn attempt_generic_auto_restart(state: &AppState, game: GameId, name: String) {
+    tracing::warn!(instance = %name, %game, "instance found dead; attempting automatic restart");
+    let _transition =
+        match state
+            .runtime
+            .begin_game_transition(game, &name, InstanceTransition::Starting)
+        {
+            Ok(transition) => transition,
+            Err(error) => {
+                tracing::debug!(instance = %name, %game, %error, "automatic restart skipped");
+                return;
+            }
+        };
+    match crate::game::instances::start(&state.paths, &state.db, game, &name).await {
+        Ok(_) => state
+            .activity
+            .record_for(game, ActivityKind::InstanceAutoRestarted, Some(name)),
+        Err(error) => {
+            tracing::warn!(instance = %name, %game, %error, "automatic restart failed")
         }
     }
 }
@@ -257,6 +302,7 @@ struct TelemetryTick {
     /// blocking thread pool.
     crashed_with_auto_restart: Vec<String>,
     crashed_rust_with_auto_restart: Vec<String>,
+    crashed_generic_with_auto_restart: Vec<(GameId, String)>,
 }
 
 fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
@@ -284,6 +330,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
     let mut running_names = Vec::new();
     let mut crashed_with_auto_restart = Vec::new();
     let mut crashed_rust_with_auto_restart = Vec::new();
+    let mut crashed_generic_with_auto_restart = Vec::new();
     if let Ok(instances) = instance::list_all(&state.paths, &state.db) {
         for inst in &instances {
             let Ok(snapshot) = compute_instance_snapshot(state, inst) else {
@@ -353,6 +400,10 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 }
             }
             entries.push(InstanceResourceEntry {
+                id: crate::db::game_instances::identity(&state.db, GameId::Valheim, name)
+                    .ok()
+                    .flatten()
+                    .map(|identity| identity.id),
                 game: GameId::Valheim,
                 name: name.clone(),
                 running: snapshot.running,
@@ -420,7 +471,81 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 }
             }
             entries.push(InstanceResourceEntry {
+                id: Some(rust_instance.identity.id.clone()),
                 game: GameId::Rust,
+                name: name.to_string(),
+                running: snapshot.running,
+                ready: false,
+                cpu_percent: snapshot.cpu_percent,
+                memory_bytes: snapshot.memory_bytes,
+                players: Vec::new(),
+                last_saved_at: None,
+            });
+        }
+    }
+
+    for game in [
+        GameId::VRising,
+        GameId::Palworld,
+        GameId::RunescapeDragonwilds,
+    ] {
+        let Ok(generic_instances) = game_instances::list_generic(&state.db, game) else {
+            continue;
+        };
+        for generic_instance in generic_instances {
+            let name = generic_instance.name();
+            let snapshot = routes::games::generic_resource_snapshot(state, &generic_instance);
+            if persist_now && snapshot.running {
+                state.runtime.persist_game_instance_sample(
+                    game,
+                    name,
+                    now,
+                    snapshot.cpu_percent,
+                    snapshot.memory_bytes,
+                );
+            }
+            if state
+                .runtime
+                .push_game_instance_sample(game, name, snapshot)
+            {
+                let kind = if snapshot.running {
+                    ActivityKind::InstanceStarted
+                } else {
+                    ActivityKind::InstanceStopped
+                };
+                state
+                    .activity
+                    .record_for(game, kind, Some(name.to_string()));
+            }
+            if !snapshot.running && generic_instance.pid.is_some() {
+                let _ =
+                    game_instances::clear_generic_pid(&state.db, game, name, chrono::Utc::now());
+                let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
+                    &state.paths,
+                    game,
+                    name,
+                ));
+                let _ = std::fs::remove_file(crate::supervisor::events_sock_path(
+                    &state.paths,
+                    game,
+                    name,
+                ));
+                let _ =
+                    std::fs::remove_file(crate::supervisor::pidfile_path(&state.paths, game, name));
+                if generic_instance.config.auto_restart
+                    && permits_scheduled_uptime(state, game, name)
+                    && state.runtime.should_attempt_game_auto_restart(
+                        game,
+                        name,
+                        AUTO_RESTART_COOLDOWN,
+                    )
+                {
+                    crashed_generic_with_auto_restart.push((game, name.to_string()));
+                }
+            }
+            entries.push(InstanceResourceEntry {
+                id: Some(generic_instance.identity.id.clone()),
+                game,
                 name: name.to_string(),
                 running: snapshot.running,
                 ready: false,
@@ -445,6 +570,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
         running: running_names,
         crashed_with_auto_restart,
         crashed_rust_with_auto_restart,
+        crashed_generic_with_auto_restart,
     }
 }
 

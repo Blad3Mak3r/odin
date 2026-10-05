@@ -5,6 +5,7 @@
 
 use std::convert::Infallible;
 
+use anyhow::Context;
 use async_stream::stream;
 use axum::extract::{Path, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -45,9 +46,10 @@ pub async fn logs_sse(
         .into_response())
 }
 
-pub async fn game_logs_sse(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+async fn game_logs_sse_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> Result<Response, ApiError> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -72,6 +74,21 @@ pub async fn game_logs_sse(
     Ok(Sse::new(file_log_stream(tail, log_file, position))
         .keep_alive(KeepAlive::default())
         .into_response())
+}
+
+pub async fn game_logs_sse_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let db = state.db.clone();
+    let identity = crate::web::error::run_blocking(move || {
+        crate::db::game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")
+    })
+    .await?;
+    if identity.game == GameId::Valheim {
+        return logs_sse(State(state), Path(identity.name)).await;
+    }
+    game_logs_sse_for(state, identity.game, identity.name).await
 }
 
 fn file_log_stream(

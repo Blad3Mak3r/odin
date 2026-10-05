@@ -315,12 +315,11 @@ export function useCreateManagedInstance() {
 export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, game, name }: { id?: string; game: GameId; name: string }) =>
-      api.post<ManagedInstanceView>(id ? `/instances/${id}/${action}` : `/games/${game}/instances/${name}/${action}`),
-    onSuccess: (_instance, variables) => {
+    mutationFn: ({ id }: { id: string }) =>
+      api.post<ManagedInstanceView>(`/instances/${id}/${action}`),
+    onSuccess: (_instance, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
-      if (variables.id) queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
     },
   })
 }
@@ -345,11 +344,10 @@ export function useSetUptimeSchedule(id: string) {
 export function useDeleteManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, game, name, keepBackups }: { id?: string; game: GameId; name: string; keepBackups?: boolean }) =>
-      api.delete<void>(id ? `/instances/${id}${keepBackups ? '?keep_backups=true' : ''}` : `/games/${game}/instances/${name}${keepBackups ? '?keep_backups=true' : ''}`),
-    onSuccess: (_result, { id, game, name }) => {
-      queryClient.removeQueries({ queryKey: ['managed-instances', game, name] })
-      if (id) queryClient.removeQueries({ queryKey: ['managed-instances', id] })
+    mutationFn: ({ id, keepBackups }: { id: string; keepBackups?: boolean }) =>
+      api.delete<void>(`/instances/${id}${keepBackups ? '?keep_backups=true' : ''}`),
+    onSuccess: (_result, { id }) => {
+      queryClient.removeQueries({ queryKey: ['managed-instances', id] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
     },
   })
@@ -358,12 +356,11 @@ export function useDeleteManagedInstance() {
 export function useUpdateRustConfig() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, name, request }: { id?: string; name: string; request: RustConfigUpdateRequest }) =>
-      api.put<ManagedInstanceView>(id ? `/instances/${id}/config` : `/games/rust/instances/${name}/config`, request),
-    onSuccess: (instance, { id, name }) => {
+    mutationFn: ({ id, request }: { id: string; request: RustConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/instances/${id}/config`, request),
+    onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
-      if (id) queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
     },
   })
 }
@@ -371,11 +368,10 @@ export function useUpdateRustConfig() {
 export function useUpdateGenericConfig() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, game, name, request }: { id?: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; name: string; request: GenericConfigUpdateRequest }) =>
-      api.put<ManagedInstanceView>(id ? `/instances/${id}/config` : `/games/${game}/instances/${name}/config`, request),
+    mutationFn: ({ id, request }: { id: string; request: GenericConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/instances/${id}/config`, request),
     onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.game, instance.name] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
     },
   })

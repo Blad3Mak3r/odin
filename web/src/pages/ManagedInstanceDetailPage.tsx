@@ -86,7 +86,7 @@ function asGenericConfig(config: Record<string, unknown>): GenericConfig | null 
   return { port, query_port: queryPort, admin_port: adminPort, settings, auto_restart: config.auto_restart }
 }
 
-function RustConfigForm({ id, name, config, running }: { id: string; name: string; config: RustConfig; running: boolean }) {
+function RustConfigForm({ id, config, running }: { id: string; config: RustConfig; running: boolean }) {
   const update = useUpdateRustConfig()
   const [port, setPort] = useState(String(config.port))
   const [queryPort, setQueryPort] = useState(String(config.queryPort))
@@ -102,7 +102,6 @@ function RustConfigForm({ id, name, config, running }: { id: string; name: strin
   const save = () => update.mutate(
     {
       id,
-      name,
       request: {
         port: Number(port),
         query_port: Number(queryPort),
@@ -178,7 +177,7 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min,
   )
 }
 
-function GenericConfigForm({ id, game, name, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; name: string; config: GenericConfig; running: boolean }) {
+function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; config: GenericConfig; running: boolean }) {
   const update = useUpdateGenericConfig()
   const [port, setPort] = useState(String(config.port))
   const [queryPort, setQueryPort] = useState(config.query_port === null ? '' : String(config.query_port))
@@ -202,8 +201,6 @@ function GenericConfigForm({ id, game, name, config, running }: { id: string; ga
     if (isDragonwilds) Object.assign(settings, { owner_id: ownerId, default_world_name: worldName, admin_password: adminPassword, world_password: worldPassword })
     update.mutate({
       id,
-      game,
-      name,
       request: {
         port: Number(port),
         query_port: queryPort ? Number(queryPort) : null,
@@ -312,9 +309,9 @@ export function ManagedInstanceDetailPage() {
         </TabsContent>
         <TabsContent value="config" className="flex flex-col gap-6">
           {rustConfig
-            ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} name={detail.name} config={rustConfig} running={detail.running} />
+            ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={rustConfig} running={detail.running} />
             : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds')
-              ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} name={detail.name} config={genericConfig} running={detail.running} />
+              ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
           <UptimeScheduleCard id={detail.id} />
           {detail.game === 'rust' && <WipeMapCard id={detail.id} name={detail.name} running={detail.running} />}

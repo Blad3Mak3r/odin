@@ -12,6 +12,7 @@ pub mod ports;
 pub mod rust;
 pub mod update;
 pub mod valheim;
+pub mod vrising;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

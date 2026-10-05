@@ -18,10 +18,9 @@ function isRustListTab(value: string | undefined): value is RustListTab {
   return LIST_TABS.some((tab) => tab === value)
 }
 
-export function RustAccessListsTab({ name, path, running }: { name: string; path: string[]; running: boolean }) {
+export function RustAccessListsTab({ name, path, running, basePath }: { name: string; path: string[]; running: boolean; basePath: string }) {
   const navigate = useNavigate()
   const [tab, ...rest] = path
-  const basePath = `/instances/rust/${name}/lists`
 
   if (!isRustListTab(tab) || rest.length > 0) return <Navigate to={`${basePath}/owner`} replace />
 

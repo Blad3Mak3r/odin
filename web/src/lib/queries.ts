@@ -46,6 +46,7 @@ import type {
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
+  VRisingAccessListKind,
   WebhookView,
 } from './types'
 
@@ -895,6 +896,29 @@ export function useRemoveRustAccessListEntry(name: string, kind: RustAccessListK
     mutationFn: (id: string) =>
       api.delete<void>(`/games/rust/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name, 'lists', kind] }),
+  })
+}
+
+export function useVRisingAccessList(name: string, kind: VRisingAccessListKind) {
+  return useQuery({
+    queryKey: ['managed-instances', 'vrising', name, 'lists', kind],
+    queryFn: () => api.get<ListView>(`/games/vrising/instances/${name}/lists/${kind}`),
+  })
+}
+
+export function useAddVRisingAccessListEntry(name: string, kind: VRisingAccessListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/games/vrising/instances/${name}/lists/${kind}`, { id }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'vrising', name, 'lists', kind] }),
+  })
+}
+
+export function useRemoveVRisingAccessListEntry(name: string, kind: VRisingAccessListKind) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/games/vrising/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'vrising', name, 'lists', kind] }),
   })
 }
 

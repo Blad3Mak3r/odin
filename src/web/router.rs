@@ -6,7 +6,7 @@ use tower_http::trace::TraceLayer;
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
     instances, jobs, lists, mods, nexus, players, resources, rust_access_lists, saves, settings,
-    uptime_schedules, version, webhooks,
+    uptime_schedules, version, vrising_access_lists, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -105,6 +105,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/rust/instances/{name}/lists/{kind}/{id}",
             delete(rust_access_lists::remove_list_entry),
+        )
+        .route(
+            "/games/vrising/instances/{name}/lists/{kind}",
+            get(vrising_access_lists::get_list).post(vrising_access_lists::add_list_entry),
+        )
+        .route(
+            "/games/vrising/instances/{name}/lists/{kind}/{id}",
+            delete(vrising_access_lists::remove_list_entry),
         )
         .route(
             "/games/rust/instances/{name}/resources",

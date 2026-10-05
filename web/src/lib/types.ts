@@ -59,6 +59,8 @@ export interface RconCommandResponse {
   output: string
 }
 
+export type VRisingAccessListKind = 'admin' | 'banned'
+
 export interface ChangelogSection {
   title: string
   changes: string[]

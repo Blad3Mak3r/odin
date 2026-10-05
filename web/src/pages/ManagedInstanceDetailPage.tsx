@@ -1,4 +1,5 @@
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
+import { VRisingAccessListsTab } from '@/components/instance/VRisingAccessListsTab'
 import { RustRconTab } from '@/components/instance/RustRconTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
 import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
@@ -264,6 +265,8 @@ export function ManagedInstanceDetailPage() {
     { id: 'resources', label: 'Resources' },
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
+  const listsBasePath = id ? `/instance/${id}/lists` : `/instances/${detail.game}/${detail.name}/lists`
+  const defaultListTab = detail.game === 'vrising' ? 'admin' : 'owner'
   if (!tab || (tab !== 'lists' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
     return <Navigate replace to={id ? `/instance/${id}/logs` : `/instances/${detail.game}/${detail.name}/logs`} />
   }
@@ -271,7 +274,7 @@ export function ManagedInstanceDetailPage() {
   return (
     <div className="flex flex-col gap-6">
       <ManagedInstanceHeader instance={detail} />
-      <Tabs value={tab} onValueChange={(value) => navigate(id ? (value === 'lists' ? `/instance/${id}/lists/owner` : `/instance/${id}/${value}`) : (value === 'lists' ? `/instances/${detail.game}/${detail.name}/lists/owner` : `/instances/${detail.game}/${detail.name}/${value}`))}>
+      <Tabs value={tab} onValueChange={(value) => navigate(id ? (value === 'lists' ? `/instance/${id}/lists/${defaultListTab}` : `/instance/${id}/${value}`) : (value === 'lists' ? `/instances/${detail.game}/${detail.name}/lists/${defaultListTab}` : `/instances/${detail.game}/${detail.name}/${value}`))}>
         <div className="overflow-x-auto">
           <TabsList className="w-max">
           {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
@@ -305,7 +308,10 @@ export function ManagedInstanceDetailPage() {
           <TabsContent value="backups"><BackupsTab name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
         )}
         {detail.game === 'rust' && tab === 'lists' && (
-          <TabsContent value="lists"><RustAccessListsTab name={detail.name} path={nestedPath} running={detail.running} /></TabsContent>
+          <TabsContent value="lists"><RustAccessListsTab name={detail.name} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabsContent>
+        )}
+        {detail.game === 'vrising' && tab === 'lists' && (
+          <TabsContent value="lists"><VRisingAccessListsTab name={detail.name} path={nestedPath} basePath={listsBasePath} /></TabsContent>
         )}
         <TabsContent value="saves"><SaveFilesTab game={detail.game} name={detail.name} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab name={detail.name} running={detail.running} /></TabsContent>

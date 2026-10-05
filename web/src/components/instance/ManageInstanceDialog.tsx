@@ -17,9 +17,10 @@ export function ManageInstanceDialog({ instance, onNavigate }: { instance: Manag
   const [confirmDelete, setConfirmDelete] = useState(false)
   const client = useQueryClient()
   const base = `/games/${instance.game}/instances/${instance.name}`
+  const byId = `/games/instances/id/${instance.id}`
   const action = useMutation({
     mutationFn: async (operation: 'rename' | 'clone' | 'tags' | 'delete') => {
-      if (operation === 'delete') await api.delete(`${base}?keep_backups=${keepBackups}`)
+      if (operation === 'delete') await api.delete(`${byId}?keep_backups=${keepBackups}`)
       else if (operation === 'tags') await api.put(`${base}/tags`, { tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) })
       else await api.post(`${base}/${operation}`, operation === 'rename' ? { new_name: name.trim() } : { name: name.trim(), world_name: name.trim() })
       return operation
@@ -30,7 +31,8 @@ export function ManageInstanceDialog({ instance, onNavigate }: { instance: Manag
       setOpen(false)
       toast.success('Instance updated')
       if (operation === 'delete') onNavigate?.('/instances')
-      if (operation === 'rename' || operation === 'clone') onNavigate?.(`/instances/${instance.game}/${name.trim()}`)
+      if (operation === 'rename') onNavigate?.(`/instance/${instance.id}`)
+      if (operation === 'clone') onNavigate?.(`/instances/${instance.game}/${name.trim()}`)
     },
     onError: (error) => toast.error(error.message),
   })

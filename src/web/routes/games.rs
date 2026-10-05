@@ -277,10 +277,28 @@ pub async fn delete_instance(
     Path((game, name)): Path<(GameId, String)>,
     Query(query): Query<DeleteGameInstanceQuery>,
 ) -> ApiResult<StatusCode> {
+    delete_instance_for(state, game, name, query.keep_backups).await
+}
+
+pub async fn delete_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<DeleteGameInstanceQuery>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    delete_instance_for(state, identity.game, identity.name, query.keep_backups).await
+}
+
+async fn delete_instance_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    keep_backups: bool,
+) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let instance_name = name.clone();
-    run_blocking(move || game_instances_ops::delete(&paths, &db, game, &name, query.keep_backups))
+    run_blocking(move || game_instances_ops::delete(&paths, &db, game, &name, keep_backups))
         .await?;
     state.runtime.remove_game_instance(game, &instance_name);
     state.activity.record_for(

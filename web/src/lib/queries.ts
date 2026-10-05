@@ -314,10 +314,11 @@ export function useSetUptimeSchedule(game: GameId, name: string) {
 export function useDeleteManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name, keepBackups }: { game: GameId; name: string; keepBackups?: boolean }) =>
-      api.delete<void>(`/games/${game}/instances/${name}${keepBackups ? '?keep_backups=true' : ''}`),
-    onSuccess: (_result, { game, name }) => {
+    mutationFn: ({ id, game, name, keepBackups }: { id?: string; game: GameId; name: string; keepBackups?: boolean }) =>
+      api.delete<void>(id ? `/games/instances/id/${id}${keepBackups ? '?keep_backups=true' : ''}` : `/games/${game}/instances/${name}${keepBackups ? '?keep_backups=true' : ''}`),
+    onSuccess: (_result, { id, game, name }) => {
       queryClient.removeQueries({ queryKey: ['managed-instances', game, name] })
+      if (id) queryClient.removeQueries({ queryKey: ['managed-instances', id] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
     },
   })

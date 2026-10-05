@@ -244,16 +244,6 @@ pub async fn create_instance(
     Ok(Json(view))
 }
 
-pub async fn get_instance(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<Json<ManagedInstanceView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let view = run_blocking(move || load_view(&paths, &db, game, &name)).await?;
-    Ok(Json(view))
-}
-
 /// Resolves the durable instance identity used by dashboard URLs. Names are
 /// deliberately not accepted here: a rename must never invalidate a bookmark
 /// or point a later operation at a different game with the same name.
@@ -270,14 +260,6 @@ pub async fn get_instance_by_id(
     })
     .await?;
     Ok(Json(view))
-}
-
-pub async fn delete_instance(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-    Query(query): Query<DeleteGameInstanceQuery>,
-) -> ApiResult<StatusCode> {
-    delete_instance_for(state, game, name, query.keep_backups).await
 }
 
 pub async fn delete_instance_by_id(
@@ -785,13 +767,6 @@ async fn get_logs_for(
     Ok(Json(crate::web::routes::instances::LogsView { lines }))
 }
 
-pub async fn start_instance(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<Json<ManagedInstanceView>> {
-    start_instance_for(state, game, name).await
-}
-
 pub async fn start_instance_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -821,13 +796,6 @@ async fn start_instance_for(
     Ok(Json(view))
 }
 
-pub async fn stop_instance(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<StatusCode> {
-    stop_instance_for(state, game, name).await
-}
-
 pub async fn stop_instance_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -848,13 +816,6 @@ async fn stop_instance_for(state: AppState, game: GameId, name: String) -> ApiRe
         Some(name),
     );
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn restart_instance(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<Json<ManagedInstanceView>> {
-    restart_instance_for(state, game, name).await
 }
 
 pub async fn restart_instance_by_id(
@@ -900,13 +861,6 @@ async fn resolve_instance_id(state: &AppState, id: &str) -> ApiResult<GameInstan
     .await
 }
 
-pub async fn list_backups(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<Json<Vec<crate::backup::BackupEntry>>> {
-    list_backups_for(state, game, name).await
-}
-
 pub async fn list_backups_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -925,13 +879,6 @@ async fn list_backups_for(
     let backups =
         run_blocking(move || game_instances_ops::list_backups(&paths, &db, game, &name)).await?;
     Ok(Json(backups))
-}
-
-pub async fn create_backup(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<Json<crate::backup::BackupEntry>> {
-    create_backup_for(state, game, name).await
 }
 
 pub async fn create_backup_by_id(
@@ -960,13 +907,6 @@ async fn create_backup_for(
         Some(instance_name),
     );
     Ok(Json(backup))
-}
-
-pub async fn restore_backup(
-    State(state): State<AppState>,
-    Path((game, name, backup_id)): Path<(GameId, String, String)>,
-) -> ApiResult<StatusCode> {
-    restore_backup_for(state, game, name, backup_id).await
 }
 
 pub async fn restore_backup_by_id(

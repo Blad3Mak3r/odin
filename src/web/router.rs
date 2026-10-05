@@ -168,58 +168,6 @@ pub fn build_router(state: AppState) -> Router {
             "/games/{game}/instances",
             get(games::list_instances).post(games::create_instance),
         )
-        .route(
-            "/games/{game}/instances/{name}",
-            get(games::get_instance).delete(games::delete_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/saves",
-            get(saves::list_save_files),
-        )
-        .route(
-            "/games/{game}/instances/{name}/saves/{*path}",
-            get(saves::download_save_file),
-        )
-        .route(
-            "/games/{game}/instances/{name}/start",
-            post(games::start_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/stop",
-            post(games::stop_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/restart",
-            post(games::restart_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups",
-            get(games::list_backups).post(games::create_backup),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/{id}/restore",
-            post(games::restore_backup),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/jobs",
-            post(backups::create_backup_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/{id}/restore/job",
-            post(backups::restore_backup_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backups/{id}",
-            delete(backups::delete_backup_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backup-schedule",
-            get(backups::get_backup_schedule_for_game).put(backups::set_backup_schedule_for_game),
-        )
-        .route(
-            "/games/{game}/instances/{name}/backup-storage",
-            get(backups::get_backup_storage_for_game).put(backups::set_backup_storage_for_game),
-        )
         // Valheim's canonical module routes deliberately reuse the mature
         // handlers below. The legacy `/instances/...` routes remain aliases
         // while dashboard links move to `/instances/valheim/...`.

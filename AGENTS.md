@@ -31,6 +31,33 @@ CLI-only functionality, and don't hold new web-only features back for lack
 of CLI parity. When in doubt about where a capability belongs, it belongs
 in the web API and dashboard.
 
+## Agent workflow and engineering principles
+
+- Prefer the smallest clear change that solves the stated problem. Do not
+  introduce speculative extensibility, new layers, indirection, or dependencies
+  without a concrete current need.
+- Inspect the relevant code before editing it. Reuse and extend existing
+  domain types, helpers, API clients, and UI components where they fit; do not
+  duplicate logic or create parallel implementations of an existing concept.
+  Extract an abstraction only when it removes genuine repeated complexity and
+  leaves the call sites easier to understand.
+- Use the available specialist skills when they match the task:
+  - `ponytail` for repository-aware implementation workflows and task
+    execution.
+  - `rust-best-practices` for Rust design, error handling, async, testing,
+    and idiomatic code decisions.
+  - `vercel-react-best-practices` for dashboard React architecture,
+    rendering, state, and performance decisions.
+  These skills complement this file; repository-specific rules here take
+  precedence.
+- When the Context7 MCP is available, consult it before implementing against
+  third-party libraries or frameworks. Use its version-appropriate
+  documentation rather than relying on memory. If it is unavailable, use the
+  project's installed versions and the upstream primary documentation.
+- Keep changes narrowly scoped. Do not refactor unrelated code merely because
+  it is nearby, and do not change generated files or dependency lockfiles
+  unless the task requires it.
+
 ## Repository layout
 
 - `src/` — the Rust CLI (edition 2024, no workspace, single binary crate).
@@ -55,7 +82,8 @@ Everything is driven through the root `Makefile`:
 - `make test` — `cargo test`.
 - `make lint` — `cargo clippy --all-targets -- -D warnings` (all warnings are errors).
 - `make fmt` / `make fmt-check` — `cargo fmt` / `cargo fmt --check`.
-- `make check` — fmt-check + lint + test; run this before opening a PR.
+- `make check` — fmt-check + lint + test; use for cross-cutting or
+  high-risk changes, release validation, or when explicitly requested.
 - `make web-install` — `npm --prefix web ci`.
 - `make web-build` — installs and builds the frontend only.
 - `make web-dev` — Vite dev server (proxies `/api` to `127.0.0.1:7331`, i.e. a locally running `odin serve`).
@@ -64,9 +92,21 @@ Frontend-only commands (from `web/`): `npm run build` (`tsc -b && vite
 build` — this also typechecks), `npm run lint` (`oxlint`, not
 ESLint/Prettier), `npm run dev`.
 
-There is no CI configured in this repo, so `make check` plus a frontend
-build/typecheck/lint is the only signal an agent gets before a PR is
-reviewed by a human — run all of it.
+There is no CI configured in this repo. Validate changes proportionally
+instead of running the entire suite by habit:
+
+- Test and lint only the affected Rust module(s), test target(s), or frontend
+  package first. For Rust, prefer targeted `cargo test <filter>` invocations
+  when an applicable test filter exists; for frontend-only work, run the
+  relevant `npm run lint` and/or `npm run build` command from `web/`.
+- Run formatting checks for the files you changed. Do not run tests for
+  unrelated modules solely as a routine step.
+- Broaden validation to `make check` and a frontend build/typecheck only
+  when the change crosses subsystem boundaries, changes shared infrastructure
+  or public interfaces, is release-sensitive, or the user explicitly asks for
+  full verification.
+- State exactly which checks were run and any checks intentionally not run,
+  with the reason.
 
 ## Manually running `odin serve` locally
 

@@ -52,6 +52,8 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/restart",
             post(games::restart_instance_by_id),
         )
+        .route("/instances/{id}/tags", put(games::set_tags_by_id))
+        .route("/instances/{id}/rename", post(games::rename_instance_by_id))
         .route(
             "/instances/{id}/backups",
             get(games::list_backups_by_id).post(games::create_backup_by_id),

@@ -16,13 +16,13 @@ export function ManageInstanceDialog({ instance, onNavigate }: { instance: Manag
   const [keepBackups, setKeepBackups] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const client = useQueryClient()
-  const base = `/games/${instance.game}/instances/${instance.name}`
   const byId = `/instances/${instance.id}`
   const action = useMutation({
     mutationFn: async (operation: 'rename' | 'clone' | 'tags' | 'delete') => {
       if (operation === 'delete') await api.delete(`${byId}?keep_backups=${keepBackups}`)
-      else if (operation === 'tags') await api.put(`${base}/tags`, { tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) })
-      else await api.post(`${base}/${operation}`, operation === 'rename' ? { new_name: name.trim() } : { name: name.trim(), world_name: name.trim() })
+      else if (operation === 'tags') await api.put(`${byId}/tags`, { tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) })
+      else if (operation === 'rename') await api.post(`${byId}/rename`, { new_name: name.trim() })
+      else await api.post(`/games/${instance.game}/instances/${instance.name}/clone`, { name: name.trim(), world_name: name.trim() })
       return operation
     },
     onSuccess: (operation) => {

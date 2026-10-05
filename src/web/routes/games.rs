@@ -1077,6 +1077,19 @@ pub async fn set_tags(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn set_tags_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<TagsRequest>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    run_blocking(move || {
+        game_instances::set_tags(&state.db, identity.game, &identity.name, &req.tags)
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn rename_instance(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
@@ -1091,6 +1104,26 @@ pub async fn rename_instance(
     })
     .await?;
     state.runtime.remove_game_instance(game, &old);
+    Ok(Json(view))
+}
+
+pub async fn rename_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<super::instances::RenameRequest>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    let old_name = identity.name.clone();
+    let game = identity.game;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let view = run_blocking(move || {
+        let instance =
+            game_instances_ops::rename(&paths, &db, game, &identity.name, &req.new_name)?;
+        game_instance_view(&paths, &db, instance)
+    })
+    .await?;
+    state.runtime.remove_game_instance(game, &old_name);
     Ok(Json(view))
 }
 

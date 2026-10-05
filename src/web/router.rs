@@ -24,23 +24,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/install", post(install::install_server))
         .route("/install/status", get(install::get_install_status))
         .route("/games", get(games::list_games))
-        .route("/games/instances/bulk/{action}", post(bulk::bulk_games))
         .route(
             "/instances/bulk/games/{action}",
             post(bulk::bulk_games_by_id),
-        )
-        .route("/games/{game}/instances/{name}/tags", put(games::set_tags))
-        .route(
-            "/games/{game}/instances/{name}/uptime-schedule",
-            get(uptime_schedules::get_uptime_schedule).put(uptime_schedules::set_uptime_schedule),
-        )
-        .route(
-            "/games/rust/instances/{name}/clone",
-            post(games::clone_rust_instance),
-        )
-        .route(
-            "/games/{game}/instances/{name}/rename",
-            post(games::rename_instance),
         )
         .route("/games/instances", get(games::list_all_instances))
         // UUID is the public identity contract. The historical bare

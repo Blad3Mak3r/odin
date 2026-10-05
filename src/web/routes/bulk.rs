@@ -142,24 +142,6 @@ pub async fn bulk_update_bepinex(
 }
 
 #[derive(Deserialize)]
-pub struct GameTarget {
-    pub game: crate::game::GameId,
-    pub name: String,
-}
-#[derive(Deserialize)]
-pub struct GameBulkRequest {
-    pub instances: Vec<GameTarget>,
-}
-#[derive(Serialize)]
-pub struct GameBulkResult {
-    pub game: crate::game::GameId,
-    pub name: String,
-    pub ok: bool,
-    pub error: Option<String>,
-    pub job_id: Option<String>,
-}
-
-#[derive(Deserialize)]
 pub struct InstanceIdBulkRequest {
     pub ids: Vec<String>,
 }
@@ -236,59 +218,6 @@ pub async fn bulk_games_by_id(
             id,
             game: Some(identity.game),
             name: Some(identity.name),
-            ok: error.is_none(),
-            error,
-            job_id,
-        });
-    }
-    Ok(Json(results))
-}
-
-pub async fn bulk_games(
-    State(state): State<AppState>,
-    axum::extract::Path(action): axum::extract::Path<String>,
-    Json(req): Json<GameBulkRequest>,
-) -> crate::web::error::ApiResult<Json<Vec<GameBulkResult>>> {
-    use crate::web::routes::games;
-    use axum::extract::Path;
-    if !["start", "stop", "restart", "mods", "bepinex"].contains(&action.as_str())
-        || req.instances.is_empty()
-        || req.instances.len() > 100
-    {
-        return Err(crate::web::error::BadRequest(
-            "Choose an operation and 1–100 instances".into(),
-        )
-        .into());
-    }
-    let mut results = Vec::new();
-    for target in req.instances {
-        let path = || Path((target.game, target.name.clone()));
-        let result = match action.as_str() {
-            "start" => games::start_instance(State(state.clone()), path())
-                .await
-                .map(|_| None),
-            "stop" => games::stop_instance(State(state.clone()), path())
-                .await
-                .map(|_| None),
-            "restart" => games::restart_instance(State(state.clone()), path())
-                .await
-                .map(|_| None),
-            _ if target.game != crate::game::GameId::Valheim => {
-                Err(crate::web::error::BadRequest("This game does not support mods".into()).into())
-            }
-            "mods" => Ok(Some(spawn_mod_update_job(&state, target.name.clone()))),
-            "bepinex" => bepinex::spawn_update(&state, target.name.clone())
-                .await
-                .map(|job| Some(job.id)),
-            _ => unreachable!(),
-        };
-        let (job_id, error) = match result {
-            Ok(id) => (id, None),
-            Err(error) => (None, Some(format!("{:#}", error.0))),
-        };
-        results.push(GameBulkResult {
-            game: target.game,
-            name: target.name,
             ok: error.is_none(),
             error,
             job_id,

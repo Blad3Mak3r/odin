@@ -54,6 +54,22 @@ pub fn prepare_start(
     }
     match game {
         GameId::VRising => {
+            let rcon_enabled = instance
+                .config
+                .settings
+                .get("rcon_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if rcon_enabled
+                && instance
+                    .config
+                    .settings
+                    .get("rcon_password")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            {
+                bail!("V Rising RCON password is required when RCON is enabled");
+            }
             crate::game::proton_ge::ensure(paths)?;
             write_vrising_host_settings(paths, &instance)?;
         }
@@ -94,6 +110,7 @@ fn write_vrising_host_settings(paths: &Paths, instance: &GenericGameInstance) ->
             json!({
                 "Enabled": settings.get("rcon_enabled").and_then(Value::as_bool).unwrap_or(false),
                 "Port": port,
+                "Password": setting_string(settings, "rcon_password", ""),
                 "BindAddress": "127.0.0.1",
             }),
         );
@@ -424,7 +441,7 @@ mod tests {
         };
         let mut instance = generic_instance(
             GameId::VRising,
-            json!({"server_name": "V Rising Test", "max_players": 40, "rcon_enabled": true}),
+            json!({"server_name": "V Rising Test", "max_players": 40, "rcon_enabled": true, "rcon_password": "password"}),
         );
         instance.identity.name = "vrising".into();
         instance.config.port = 27015;
@@ -447,6 +464,7 @@ mod tests {
         assert_eq!(config["QueryPort"], 27016);
         assert_eq!(config["MaxConnectedUsers"], 40);
         assert_eq!(config["Rcon"]["Port"], 25575);
+        assert_eq!(config["Rcon"]["Password"], "password");
         assert_eq!(config["Rcon"]["BindAddress"], "127.0.0.1");
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

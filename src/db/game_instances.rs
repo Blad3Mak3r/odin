@@ -113,7 +113,7 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
             port: 27015,
             query_port: Some(27016),
             admin_port: Some(25575),
-            settings: json!({"server_name": name, "max_players": 40, "rcon_enabled": true}),
+            settings: json!({"server_name": name, "max_players": 40, "rcon_enabled": false, "rcon_password": ""}),
             auto_restart: false,
         },
         GameId::Palworld => GenericGameConfig {
@@ -412,6 +412,20 @@ fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Result<(
     {
         bail!(InvalidGenericConfig(
             "Palworld admin password is required when the REST API is enabled".into()
+        ));
+    }
+    if game == GameId::VRising
+        && settings
+            .get("rcon_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && settings
+            .get("rcon_password")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        bail!(InvalidGenericConfig(
+            "V Rising RCON password is required when RCON is enabled".into()
         ));
     }
     Ok(())

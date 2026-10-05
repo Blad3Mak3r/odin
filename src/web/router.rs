@@ -108,6 +108,15 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/vrising/rcon",
             post(games::execute_vrising_rcon_by_id),
         )
+        .route(
+            "/instances/{id}/vrising/lists/{kind}",
+            get(vrising_access_lists::get_list_by_id)
+                .post(vrising_access_lists::add_list_entry_by_id),
+        )
+        .route(
+            "/instances/{id}/vrising/lists/{kind}/{entry_id}",
+            delete(vrising_access_lists::remove_list_entry_by_id),
+        )
         .route("/instances/{id}/saves", get(saves::list_save_files_by_id))
         .route(
             "/instances/{id}/saves/{*path}",

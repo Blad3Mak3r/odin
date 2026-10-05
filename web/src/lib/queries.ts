@@ -937,26 +937,26 @@ export function useRemoveRustAccessListEntry(name: string, kind: RustAccessListK
   })
 }
 
-export function useVRisingAccessList(name: string, kind: VRisingAccessListKind) {
+export function useVRisingAccessList(id: string, kind: VRisingAccessListKind) {
   return useQuery({
-    queryKey: ['managed-instances', 'vrising', name, 'lists', kind],
-    queryFn: () => api.get<ListView>(`/games/vrising/instances/${name}/lists/${kind}`),
+    queryKey: ['managed-instances', id, 'lists', kind],
+    queryFn: () => api.get<ListView>(`/instances/${id}/vrising/lists/${kind}`),
   })
 }
 
-export function useAddVRisingAccessListEntry(name: string, kind: VRisingAccessListKind) {
+export function useAddVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post<void>(`/games/vrising/instances/${name}/lists/${kind}`, { id }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'vrising', name, 'lists', kind] }),
+    mutationFn: (entryId: string) => api.post<void>(`/instances/${id}/vrising/lists/${kind}`, { id: entryId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
   })
 }
 
-export function useRemoveVRisingAccessListEntry(name: string, kind: VRisingAccessListKind) {
+export function useRemoveVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.delete<void>(`/games/vrising/instances/${name}/lists/${kind}/${encodeURIComponent(id)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', 'vrising', name, 'lists', kind] }),
+    mutationFn: (entryId: string) => api.delete<void>(`/instances/${id}/vrising/lists/${kind}/${encodeURIComponent(entryId)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
   })
 }
 

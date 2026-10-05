@@ -18,7 +18,7 @@ function isVRisingListTab(value: string | undefined): value is VRisingListTab {
   return LIST_TABS.some((tab) => tab === value)
 }
 
-export function VRisingAccessListsTab({ name, path, basePath }: { name: string; path: string[]; basePath: string }) {
+export function VRisingAccessListsTab({ id, path, basePath }: { id: string; path: string[]; basePath: string }) {
   const navigate = useNavigate()
   const [tab, ...rest] = path
   if (!isVRisingListTab(tab) || rest.length > 0) return <Navigate to={`${basePath}/admin`} replace />
@@ -28,17 +28,17 @@ export function VRisingAccessListsTab({ name, path, basePath }: { name: string; 
       <p className="text-sm text-muted-foreground">V Rising reads administrator and ban lists from its isolated persistent-data directory. Changes can be made while the server is running.</p>
       <Tabs value={tab} onValueChange={(value) => navigate(`${basePath}/${value}`)}>
         <TabsList variant="line"><TabsTrigger value="admin">Administrators</TabsTrigger><TabsTrigger value="banned">Banned</TabsTrigger></TabsList>
-        <TabsContent value="admin"><SteamIdListEditor name={name} kind="admin" /></TabsContent>
-        <TabsContent value="banned"><SteamIdListEditor name={name} kind="banned" /></TabsContent>
+        <TabsContent value="admin"><SteamIdListEditor id={id} kind="admin" /></TabsContent>
+        <TabsContent value="banned"><SteamIdListEditor id={id} kind="banned" /></TabsContent>
       </Tabs>
     </div>
   )
 }
 
-function SteamIdListEditor({ name, kind }: { name: string; kind: VRisingAccessListKind }) {
-  const list = useVRisingAccessList(name, kind)
-  const addEntry = useAddVRisingAccessListEntry(name, kind)
-  const removeEntry = useRemoveVRisingAccessListEntry(name, kind)
+function SteamIdListEditor({ id, kind }: { id: string; kind: VRisingAccessListKind }) {
+  const list = useVRisingAccessList(id, kind)
+  const addEntry = useAddVRisingAccessListEntry(id, kind)
+  const removeEntry = useRemoveVRisingAccessListEntry(id, kind)
   const [newId, setNewId] = useState('')
   const { confirm, dialog } = useConfirmDialog()
   if (list.isError) return <QueryError error={list.error} />

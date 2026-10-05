@@ -36,11 +36,11 @@ import {
 import type { GameId, BackupScheduleView, BackupStorageProvider, BackupStorageView } from '@/lib/types'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
 
-export function BackupsTab({ name, running, game = 'valheim' }: { name: string; running: boolean; game?: GameId }) {
-  const backups = useBackups(name, game)
-  const createBackup = useCreateBackup(game)
-  const restoreBackup = useRestoreBackup(game)
-  const deleteBackup = useDeleteBackup(game)
+export function BackupsTab({ id, name, running, game = 'valheim' }: { id: string; name: string; running: boolean; game?: GameId }) {
+  const backups = useBackups(id)
+  const createBackup = useCreateBackup()
+  const restoreBackup = useRestoreBackup()
+  const deleteBackup = useDeleteBackup()
   const [jobId, setJobId] = useState<string | null>(null)
   const job = useJobSocket(jobId)
   const { confirm, dialog } = useConfirmDialog()
@@ -53,7 +53,7 @@ export function BackupsTab({ name, running, game = 'valheim' }: { name: string; 
     })
     if (!confirmed) return
     restoreBackup.mutate(
-      { name, backupId },
+      { id, backupId },
       {
         onSuccess: (handle) => setJobId(handle.id),
         onError: (error) => toast.error(error.message),
@@ -69,7 +69,7 @@ export function BackupsTab({ name, running, game = 'valheim' }: { name: string; 
     })
     if (!confirmed) return
     deleteBackup.mutate(
-      { name, backupId },
+      { id, backupId },
       { onError: (error) => toast.error(error.message) },
     )
   }
@@ -86,7 +86,7 @@ export function BackupsTab({ name, running, game = 'valheim' }: { name: string; 
           variant="outline"
           disabled={createBackup.isPending || (game === 'rust' && running)}
           onClick={() =>
-            createBackup.mutate(name, {
+            createBackup.mutate(id, {
               onSuccess: (handle) => setJobId(handle.id),
               onError: (error) => toast.error(error.message),
             })
@@ -98,8 +98,8 @@ export function BackupsTab({ name, running, game = 'valheim' }: { name: string; 
       </div>
 
       {game === 'rust' && <p className="text-sm text-muted-foreground">Rust backups require a stopped server. Scheduled backups fail safely if it is running.</p>}
-      <BackupScheduleSection game={game} name={name} />
-      <RemoteBackupStorageSection game={game} name={name} />
+      <BackupScheduleSection id={id} />
+      <RemoteBackupStorageSection id={id} />
 
       {running && (
         <p className="text-xs text-muted-foreground">
@@ -171,19 +171,19 @@ export function BackupsTab({ name, running, game = 'valheim' }: { name: string; 
   )
 }
 
-function BackupScheduleSection({ name, game }: { name: string; game: GameId }) {
-  const schedule = useBackupSchedule(name, game)
+function BackupScheduleSection({ id }: { id: string }) {
+  const schedule = useBackupSchedule(id)
 
   if (schedule.isLoading) return <Skeleton className="h-24 w-full" />
   if (schedule.isError) return <QueryError error={schedule.error} />
   if (!schedule.data) return null
 
   const key = `${schedule.data.enabled}-${schedule.data.interval_hours}-${schedule.data.retain_count}-${schedule.data.last_run_at}`
-  return <BackupScheduleForm key={key} game={game} name={name} schedule={schedule.data} />
+  return <BackupScheduleForm key={key} id={id} schedule={schedule.data} />
 }
 
-function BackupScheduleForm({ name, game, schedule }: { name: string; game: GameId; schedule: BackupScheduleView }) {
-  const setSchedule = useSetBackupSchedule(name, game)
+function BackupScheduleForm({ id, schedule }: { id: string; schedule: BackupScheduleView }) {
+  const setSchedule = useSetBackupSchedule(id)
   const [enabled, setEnabled] = useState(schedule.enabled)
   const [intervalHours, setIntervalHours] = useState(String(schedule.interval_hours))
   const [retainCount, setRetainCount] = useState(String(schedule.retain_count))
@@ -259,19 +259,19 @@ function BackupScheduleForm({ name, game, schedule }: { name: string; game: Game
   )
 }
 
-function RemoteBackupStorageSection({ name, game }: { name: string; game: GameId }) {
-  const storage = useBackupStorage(name, game)
+function RemoteBackupStorageSection({ id }: { id: string }) {
+  const storage = useBackupStorage(id)
 
   if (storage.isLoading) return <Skeleton className="h-80 w-full" />
   if (storage.isError) return <QueryError error={storage.error} />
   if (!storage.data) return null
 
   const key = `${storage.data.enabled}-${storage.data.provider}-${storage.data.endpoint}-${storage.data.region}-${storage.data.bucket}-${storage.data.prefix}-${storage.data.access_key_id}-${storage.data.secret_access_key_configured}`
-  return <RemoteBackupStorageForm key={key} game={game} name={name} storage={storage.data} />
+  return <RemoteBackupStorageForm key={key} id={id} storage={storage.data} />
 }
 
-function RemoteBackupStorageForm({ name, game, storage }: { name: string; game: GameId; storage: BackupStorageView }) {
-  const setStorage = useSetBackupStorage(name, game)
+function RemoteBackupStorageForm({ id, storage }: { id: string; storage: BackupStorageView }) {
+  const setStorage = useSetBackupStorage(id)
   const [enabled, setEnabled] = useState(storage.enabled)
   const [provider, setProvider] = useState<BackupStorageProvider>(storage.provider ?? 'aws_s3')
   const [endpoint, setEndpoint] = useState(

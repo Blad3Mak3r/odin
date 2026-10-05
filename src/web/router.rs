@@ -25,6 +25,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/install/status", get(install::get_install_status))
         .route("/games", get(games::list_games))
         .route("/games/instances/bulk/{action}", post(bulk::bulk_games))
+        .route(
+            "/instances/bulk/games/{action}",
+            post(bulk::bulk_games_by_id),
+        )
         .route("/games/{game}/instances/{name}/tags", put(games::set_tags))
         .route(
             "/games/{game}/instances/{name}/uptime-schedule",

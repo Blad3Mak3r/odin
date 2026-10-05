@@ -21,6 +21,7 @@ import { useCreateManagedInstance, useGames, useManagedInstanceAction, useManage
 import type { GameId, GameView, ManagedInstanceView, InstanceResources } from '@/lib/types'
 
 type Filter = 'all' | GameId
+type BulkResult = { id: string; game: GameId | null; name: string | null; ok: boolean; error: string | null; job_id: string | null }
 
 export function MultiGameInstancesPage() {
   const instances = useManagedInstances()
@@ -32,9 +33,9 @@ export function MultiGameInstancesPage() {
   const client = useQueryClient()
   const visible = (instances.data ?? []).filter((instance) => (filter === 'all' || instance.game === filter) && [instance.name, ...instance.tags].join(' ').toLowerCase().includes(search.toLowerCase())).sort((a, b) => sort === 'game' ? a.game.localeCompare(b.game) || a.name.localeCompare(b.name) : sort === 'status' ? Number(b.running) - Number(a.running) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name))
   const targets = (instances.data ?? []).filter((instance) => selected.has(instance.id))
-  const [results, setResults] = useState<{ game: GameId; name: string; ok: boolean; error: string | null }[]>([])
+  const [results, setResults] = useState<BulkResult[]>([])
   const bulk = useMutation({
-    mutationFn: (operation: string) => api.post<typeof results>(`/games/instances/bulk/${operation}`, { instances: targets.map(({ game, name }) => ({ game, name })) }),
+    mutationFn: (operation: string) => api.post<BulkResult[]>(`/instances/bulk/games/${operation}`, { ids: targets.map(({ id }) => id) }),
     onSuccess: (data) => { setResults(data); setSelected(new Set()); client.invalidateQueries({ queryKey: ['managed-instances'] }); client.invalidateQueries({ queryKey: ['jobs'] }) },
     onError: (error) => toast.error(error.message),
   })
@@ -61,7 +62,7 @@ export function MultiGameInstancesPage() {
         {['start', 'stop', 'restart', ...(targets.every((target) => target.capabilities.mods) ? ['mods', 'bepinex'] : [])].map((operation) => <Button key={operation} size="sm" variant="outline" disabled={bulk.isPending || targets.length > 100} onClick={() => bulk.mutate(operation)}>{operation === 'mods' ? 'Update mods' : operation === 'bepinex' ? 'Update BepInEx' : operation}</Button>)}
         <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear selection</Button>
       </div>}
-      {results.length > 0 && <div className="text-sm" role="status">{results.map((result) => <p key={`${result.game}/${result.name}`} className={result.ok ? 'text-muted-foreground' : 'text-destructive'}>{result.game} / {result.name}: {result.ok ? 'Operation accepted' : result.error}</p>)}</div>}
+      {results.length > 0 && <div className="text-sm" role="status">{results.map((result) => <p key={result.id} className={result.ok ? 'text-muted-foreground' : 'text-destructive'}>{result.game ?? 'unknown'} / {result.name ?? result.id}: {result.ok ? 'Operation accepted' : result.error}</p>)}</div>}
       <Table>
         <TableHeader>
           <TableRow>

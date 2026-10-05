@@ -611,6 +611,19 @@ pub async fn get_rust_resources_by_id(
     get_rust_resources(State(state), Path(identity.name)).await
 }
 
+/// Returns the latest resource sample for any managed game instance.
+pub async fn get_resources_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<InstanceSnapshot>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    Ok(Json(
+        state
+            .runtime
+            .game_instance_snapshot(identity.game, &identity.name),
+    ))
+}
+
 pub async fn get_rust_resource_history(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -651,6 +664,33 @@ pub async fn get_rust_resource_history_by_id(
     get_rust_resource_history(State(state), Path(identity.name), Query(query)).await
 }
 
+/// Returns resource history for any managed game instance, addressed by UUID.
+pub async fn get_resource_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    match query.hours {
+        Some(hours) => {
+            let db = state.db.clone();
+            let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+            let game = identity.game;
+            let name = identity.name;
+            let rows = run_blocking(move || {
+                crate::db::resource_samples::range_for_instance(&db, game, &name, since)
+            })
+            .await?;
+            Ok(Json(rows.into_iter().map(Into::into).collect()))
+        }
+        None => Ok(Json(
+            state
+                .runtime
+                .game_instance_history(identity.game, &identity.name),
+        )),
+    }
+}
+
 pub async fn export_rust_resource_history(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -686,6 +726,29 @@ pub async fn export_rust_resource_history_by_id(
         return Err(BadRequest("this API is only available for Rust instances".into()).into());
     }
     export_rust_resource_history(State(state), Path(identity.name), Query(query)).await
+}
+
+/// Exports resource history for any managed game instance, addressed by UUID.
+pub async fn export_resource_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Response> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    let hours = query.hours.unwrap_or(24 * 7);
+    let since = chrono::Utc::now() - chrono::Duration::hours(hours as i64);
+    let db = state.db.clone();
+    let game = identity.game;
+    let name = identity.name.clone();
+    let lookup_name = name.clone();
+    let rows = run_blocking(move || {
+        crate::db::resource_samples::range_for_instance(&db, game, &lookup_name, since)
+    })
+    .await?;
+    Ok(crate::web::routes::resources::csv_response(
+        &format!("{game}-{name}-resources.csv"),
+        &rows,
+    ))
 }
 
 pub async fn get_logs(

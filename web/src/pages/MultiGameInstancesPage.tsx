@@ -92,7 +92,7 @@ function LoadingRows() {
 }
 
 function ManagedInstanceRow({ instance, selected, onToggle }: { instance: ManagedInstanceView; selected: boolean; onToggle: () => void }) {
-  const resources = useQuery({ queryKey: instance.game === 'valheim' ? ['resources', 'instance', instance.name] : ['managed-instances', 'rust', instance.name, 'resources'], queryFn: () => api.get<InstanceResources>(`/games/${instance.game}/instances/${instance.name}/resources`), enabled: instance.running, refetchInterval: 10_000 })
+  const resources = useQuery({ queryKey: ['managed-instances', instance.id, 'resources'], queryFn: () => api.get<InstanceResources>(`/instances/${instance.id}/resources`), enabled: instance.running, refetchInterval: 10_000 })
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')

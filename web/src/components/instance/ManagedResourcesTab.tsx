@@ -4,7 +4,7 @@ import { ResourceMetric, ResourceMetricSkeleton } from '@/components/ResourceMet
 import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent } from '@/components/ui/card'
-import { useManagedRustResourceHistory, useManagedRustResources } from '@/lib/queries'
+import { useManagedResourceHistory, useManagedResources } from '@/lib/queries'
 import { cn, formatBytes } from '@/lib/utils'
 
 const RANGES = [
@@ -16,8 +16,8 @@ const RANGES = [
 
 export function ManagedResourcesTab({ id, running }: { id: string; running: boolean }) {
   const [hours, setHours] = useState<number | undefined>()
-  const resources = useManagedRustResources(id, running)
-  const history = useManagedRustResourceHistory(id, hours, running)
+  const resources = useManagedResources(id, running)
+  const history = useManagedResourceHistory(id, hours, running)
 
   if (!running) return <p className="text-sm text-muted-foreground">Instance is stopped — nothing to measure.</p>
   if (resources.isError) return <QueryError error={resources.error} />
@@ -40,7 +40,7 @@ export function ManagedResourcesTab({ id, running }: { id: string; running: bool
           ))}
         </div>
         <a
-          href={`/api/instances/${id}/rust/resources/history/export${hours ? `?hours=${hours}` : ''}`}
+          href={`/api/instances/${id}/resources/history/export${hours ? `?hours=${hours}` : ''}`}
           download
           className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
         >

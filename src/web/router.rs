@@ -151,6 +151,15 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/rust/resources/history/export",
             get(games::export_rust_resource_history_by_id),
         )
+        .route("/instances/{id}/resources", get(games::get_resources_by_id))
+        .route(
+            "/instances/{id}/resources/history",
+            get(games::get_resource_history_by_id),
+        )
+        .route(
+            "/instances/{id}/resources/history/export",
+            get(games::export_resource_history_by_id),
+        )
         .route("/instances/{id}/saves", get(saves::list_save_files_by_id))
         .route(
             "/instances/{id}/saves/{*path}",

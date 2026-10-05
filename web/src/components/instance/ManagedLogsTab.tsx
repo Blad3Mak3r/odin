@@ -6,16 +6,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useLogSocket } from '@/hooks/useLogSocket'
 import { useManagedInstanceLogs } from '@/lib/queries'
-import type { GameId } from '@/lib/types'
 
 const LINE_OPTIONS = [100, 200, 500, 1000]
 const LIVE_TAIL_LINES = 200
 
-export function ManagedLogsTab({ id, game, name }: { id?: string; game: GameId; name: string }) {
+export function ManagedLogsTab({ id }: { id: string }) {
   const [lineCount, setLineCount] = useState(200)
   const [filter, setFilter] = useState('')
-  const logs = useManagedInstanceLogs(game, name, lineCount, id)
-  const socket = useLogSocket(name, game, id)
+  const logs = useManagedInstanceLogs(id, lineCount)
+  const socket = useLogSocket(id)
   const scrollRef = useRef<HTMLDivElement>(null)
   const showExpandedHistory = lineCount > LIVE_TAIL_LINES
   const live = !showExpandedHistory && (socket.connected || socket.lines.length > 0)

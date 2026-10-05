@@ -1,22 +1,21 @@
 import { useEffect, useState } from 'react'
-import type { GameId } from '@/lib/types'
-
 const MAX_LINES = 1000
 
-export function useLogSocket(instanceName: string, game: GameId = 'valheim', id?: string) {
+export function useLogSocket(id: string) {
   const [lines, setLines] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
 
   // Reset when switching instances. Comparing against the previous name
   // during render (instead of an effect) avoids an extra commit.
-  const [prevInstanceName, setPrevInstanceName] = useState(instanceName)
-  if (instanceName !== prevInstanceName) {
-    setPrevInstanceName(instanceName)
+  const [previousId, setPreviousId] = useState(id)
+  if (id !== previousId) {
+    setPreviousId(id)
     setLines([])
   }
 
   useEffect(() => {
-    const source = new EventSource(id ? `/api/instances/${id}/logs/sse` : `/api/games/${game}/instances/${instanceName}/logs/sse`)
+    if (!id) return
+    const source = new EventSource(`/api/instances/${id}/logs/sse`)
 
     source.onopen = () => setConnected(true)
     source.onerror = () => setConnected(false)
@@ -30,7 +29,7 @@ export function useLogSocket(instanceName: string, game: GameId = 'valheim', id?
     return () => {
       source.close()
     }
-  }, [game, id, instanceName])
+  }, [id])
 
   return { lines, connected }
 }

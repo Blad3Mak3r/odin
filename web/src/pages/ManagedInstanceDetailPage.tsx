@@ -255,8 +255,8 @@ export function ManagedInstanceDetailPage() {
     ? instanceById
     : { data: legacyInstance, isError: managedInstances.isError, error: managedInstances.error }
   const detailForRequests = instance.data
-  const logs = useManagedInstanceLogs(detailForRequests?.game ?? gameId, detailForRequests?.name ?? name ?? '', 200, detailForRequests?.id)
-  const liveLogs = useLogSocket(detailForRequests?.name ?? name ?? '', detailForRequests?.game ?? gameId, detailForRequests?.id)
+  const logs = useManagedInstanceLogs(detailForRequests?.id ?? '', 200)
+  const liveLogs = useLogSocket(detailForRequests?.id ?? '')
   const consoleLines = liveLogs.lines.length > 0 ? liveLogs.lines : (logs.data?.lines ?? [])
   const errorLines = consoleLines.filter(isConsoleError)
   if (!id && (!isGameId(game) || !name)) return null
@@ -300,7 +300,7 @@ export function ManagedInstanceDetailPage() {
           {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
           </TabsList>
         </div>
-        <TabsContent value="logs"><ManagedLogsTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
+        <TabsContent value="logs"><ManagedLogsTab id={detail.id} /></TabsContent>
         {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab id={detail.id} running={detail.running} /></TabsContent>}
         {detail.game === 'vrising' && <TabsContent value="rcon"><VRisingRconTab id={detail.id} running={detail.running} /></TabsContent>}
         <TabsContent value="errors">
@@ -343,7 +343,7 @@ export function ManagedInstanceDetailPage() {
         {detail.game === 'valheim' && tab === 'mods' && (
           <TabsContent value="mods"><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabsContent>
         )}
-        <TabsContent value="saves"><SaveFilesTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
+        <TabsContent value="saves"><SaveFilesTab id={detail.id} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab id={detail.id} running={detail.running} /></TabsContent>
         {detail.game === 'valheim' && <TabsContent value="players"><PlayersTab id={detail.id} running={detail.running} /></TabsContent>}
       </Tabs>

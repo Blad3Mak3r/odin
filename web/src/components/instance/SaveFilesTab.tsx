@@ -3,11 +3,10 @@ import { QueryError } from '@/components/QueryError'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSaveFiles } from '@/lib/queries'
-import type { GameId } from '@/lib/types'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 
-export function SaveFilesTab({ id, game, name }: { id?: string; game: GameId; name: string }) {
-  const files = useSaveFiles(game, name, id)
+export function SaveFilesTab({ id }: { id: string }) {
+  const files = useSaveFiles(id)
 
   if (files.isError) return <QueryError error={files.error} />
   if (files.isLoading) return <Skeleton className="h-28 w-full" />
@@ -29,9 +28,7 @@ export function SaveFilesTab({ id, game, name }: { id?: string; game: GameId; na
         <tbody>
           {files.data.map((file) => {
             const encodedPath = file.path.split('/').map(encodeURIComponent).join('/')
-            const href = id
-              ? `/api/instances/${encodeURIComponent(id)}/saves/${encodedPath}`
-              : `/api/games/${game}/instances/${encodeURIComponent(name)}/saves/${encodedPath}`
+            const href = `/api/instances/${encodeURIComponent(id)}/saves/${encodedPath}`
             return (
               <tr key={file.path} className="border-b last:border-0">
                 <td className="px-3 py-2 font-mono text-xs">

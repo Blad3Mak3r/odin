@@ -149,10 +149,10 @@ export function usePlayerHistory(id: string) {
   })
 }
 
-export function useSaveFiles(game: GameId, name: string, id?: string) {
+export function useSaveFiles(id: string) {
   return useQuery({
-    queryKey: ['save-files', id ?? `${game}/${name}`],
-    queryFn: () => api.get<SaveFileEntry[]>(id ? `/instances/${id}/saves` : `/games/${game}/instances/${name}/saves`),
+    queryKey: ['save-files', id],
+    queryFn: () => api.get<SaveFileEntry[]>(`/instances/${id}/saves`),
   })
 }
 
@@ -240,11 +240,12 @@ export function useManagedInstanceTransition(id: string, game: GameId, name: str
   })
 }
 
-export function useManagedInstanceLogs(game: GameId, name: string, lines = 200, id?: string) {
+export function useManagedInstanceLogs(id: string, lines = 200) {
   return useQuery({
-    queryKey: ['managed-instances', id ?? `${game}/${name}`, 'logs', lines],
-    queryFn: () => api.get<LogsView>(id ? `/instances/${id}/logs?lines=${lines}` : `/games/${game}/instances/${name}/logs?lines=${lines}`),
+    queryKey: ['managed-instances', id, 'logs', lines],
+    queryFn: () => api.get<LogsView>(`/instances/${id}/logs?lines=${lines}`),
     refetchInterval: 5_000,
+    enabled: Boolean(id),
   })
 }
 

@@ -390,14 +390,10 @@ fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Result<(
                 )));
             }
         }
-        let expected_beacon = config
-            .port
-            .checked_add(1111)
-            .context("RuneScape: Dragonwilds game port leaves no room for its beacon port")?;
-        if config.query_port != Some(expected_beacon) {
-            bail!(InvalidGenericConfig(format!(
-                "RuneScape: Dragonwilds beacon port must be game port + 1111 ({expected_beacon})"
-            )));
+        if config.query_port.is_none() {
+            bail!(InvalidGenericConfig(
+                "RuneScape: Dragonwilds beacon port is required".into()
+            ));
         }
     }
     if game == GameId::Palworld

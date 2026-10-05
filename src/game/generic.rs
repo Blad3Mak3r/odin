@@ -345,8 +345,10 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
         GameId::RunescapeDragonwilds => {
             command
                 .arg("-log")
-                .arg("-port")
-                .arg(instance.config.port.to_string());
+                .arg(format!("-port={}", instance.config.port));
+            if let Some(port) = instance.config.query_port {
+                command.arg(format!("-BeaconPort={port}"));
+            }
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
@@ -537,6 +539,26 @@ mod tests {
         .unwrap();
         assert!(settings.contains("OwnerId=owner"));
         assert!(settings.contains("DefaultWorldPassword=join"));
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn dragonwilds_command_passes_both_udp_ports() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-dragon-command-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let instance = generic_instance(
+            GameId::RunescapeDragonwilds,
+            json!({"owner_id": "owner", "server_name": "Dragon", "default_world_name": "world", "admin_password": "secret"}),
+        );
+
+        let command = build_command(&paths, &instance).unwrap();
+        let arguments = format!("{command:?}");
+        assert!(arguments.contains("-port=7777"));
+        assert!(arguments.contains("-BeaconPort=8888"));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

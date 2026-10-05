@@ -328,11 +328,12 @@ export function useDeleteManagedInstance() {
 export function useUpdateRustConfig() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, request }: { name: string; request: RustConfigUpdateRequest }) =>
-      api.put<ManagedInstanceView>(`/games/rust/instances/${name}/config`, request),
-    onSuccess: (_instance, { name }) => {
+    mutationFn: ({ id, name, request }: { id?: string; name: string; request: RustConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(id ? `/games/instances/id/${id}/config` : `/games/rust/instances/${name}/config`, request),
+    onSuccess: (instance, { id, name }) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
+      if (id) queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
     },
   })
 }
@@ -340,8 +341,8 @@ export function useUpdateRustConfig() {
 export function useUpdateGenericConfig() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name, request }: { game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; name: string; request: GenericConfigUpdateRequest }) =>
-      api.put<ManagedInstanceView>(`/games/${game}/instances/${name}/config`, request),
+    mutationFn: ({ id, game, name, request }: { id?: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; name: string; request: GenericConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(id ? `/games/instances/id/${id}/config` : `/games/${game}/instances/${name}/config`, request),
     onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.game, instance.name] })

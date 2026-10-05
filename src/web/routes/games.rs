@@ -314,6 +314,14 @@ pub async fn update_rust_config(
     Path(name): Path<String>,
     Json(request): Json<RustConfigUpdateRequest>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
+    update_rust_config_for(state, name, request).await
+}
+
+async fn update_rust_config_for(
+    state: AppState,
+    name: String,
+    request: RustConfigUpdateRequest,
+) -> ApiResult<Json<ManagedInstanceView>> {
     let db = state.db.clone();
     let paths = state.paths.clone();
     let view = run_blocking(move || {
@@ -363,6 +371,15 @@ pub async fn update_generic_config(
     Path((game, name)): Path<(GameId, String)>,
     Json(request): Json<GenericConfigUpdateRequest>,
 ) -> ApiResult<Json<ManagedInstanceView>> {
+    update_generic_config_for(state, game, name, request).await
+}
+
+async fn update_generic_config_for(
+    state: AppState,
+    game: GameId,
+    name: String,
+    request: GenericConfigUpdateRequest,
+) -> ApiResult<Json<ManagedInstanceView>> {
     if !game_instances::is_generic_game(game) {
         return Err(BadRequest("this game has a dedicated configuration contract".into()).into());
     }
@@ -381,6 +398,33 @@ pub async fn update_generic_config(
     })
     .await?;
     Ok(Json(view))
+}
+
+/// Canonical UUID configuration endpoint. The game-specific request remains
+/// typed after identity resolution, so clients never have to include a game
+/// or mutable name in their URL.
+pub async fn update_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<Value>,
+) -> ApiResult<Json<ManagedInstanceView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    match identity.game {
+        GameId::Rust => {
+            let request = serde_json::from_value(request)
+                .map_err(|error| BadRequest(format!("invalid Rust configuration: {error}")))?;
+            update_rust_config_for(state, identity.name, request).await
+        }
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+            let request = serde_json::from_value(request)
+                .map_err(|error| BadRequest(format!("invalid game configuration: {error}")))?;
+            update_generic_config_for(state, identity.game, identity.name, request).await
+        }
+        GameId::Valheim => Err(BadRequest(
+            "Valheim configuration remains on its dedicated compatibility endpoint".into(),
+        )
+        .into()),
+    }
 }
 
 /// Sends one command to the Rust instance through its private loopback

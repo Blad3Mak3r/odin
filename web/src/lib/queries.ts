@@ -236,14 +236,14 @@ export function useManagedInstanceById(id: string) {
   })
 }
 
-export function useManagedInstanceTransition(game: GameId, name: string) {
+export function useManagedInstanceTransition(id: string, game: GameId, name: string) {
   return useQuery({
     queryKey: ['game-instance-transitions'],
     queryFn: () => Promise.resolve<GameInstanceTransitions>([]),
     initialData: [] as GameInstanceTransitions,
     staleTime: Infinity,
     select: (transitions): InstanceTransition | null => (
-      transitions.find((transition) => transition.game === game && transition.name === name)?.transition ?? null
+      transitions.find((transition) => transition.id === id || (transition.id === null && transition.game === game && transition.name === name))?.transition ?? null
     ),
   })
 }

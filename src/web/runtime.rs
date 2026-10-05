@@ -46,6 +46,9 @@ pub type InstanceTransitions = HashMap<String, InstanceTransition>;
 /// blocking each other.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GameInstanceTransition {
+    /// Resolved by the SSE boundary before this transition reaches clients.
+    /// The runtime itself deliberately remains independent of database I/O.
+    pub id: Option<String>,
     pub game: GameId,
     pub name: String,
     pub transition: InstanceTransition,
@@ -468,6 +471,7 @@ fn game_transition_snapshot(
     let mut snapshot: GameInstanceTransitions = transitions
         .iter()
         .map(|(key, transition)| GameInstanceTransition {
+            id: None,
             game: key.game,
             name: key.name.clone(),
             transition: *transition,

@@ -293,6 +293,7 @@ export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'cloni
 export type InstanceTransitions = Record<string, InstanceTransition>
 
 export interface GameInstanceTransition {
+  id: string | null
   game: GameId
   name: string
   transition: InstanceTransition

@@ -13,7 +13,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
-  const transition = useManagedInstanceTransition(instance.game, instance.name)
+  const transition = useManagedInstanceTransition(instance.id, instance.game, instance.name)
   const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
   const action = { id: instance.id, game: instance.game, name: instance.name }
   const port = numberConfig(instance.config, 'port')

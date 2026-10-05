@@ -143,23 +143,23 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
       cpu_percent: entry.cpu_percent,
       memory_bytes: entry.memory_bytes,
     }
-    if (entry.game === 'rust') {
+    if (entry.id) {
       queryClient.setQueryData<ManagedInstanceView[]>(['managed-instances'], (prev) => {
         if (!prev) return prev
         let changed = false
         const next = prev.map((instance) => {
-          if (instance.game !== entry.game || instance.name !== entry.name || instance.running === entry.running) return instance
+          if (instance.id !== entry.id || instance.running === entry.running) return instance
           changed = true
           return { ...instance, running: entry.running }
         })
         return changed ? next : prev
       })
-      if (entry.id) queryClient.setQueryData<ManagedInstanceView>(['managed-instances', entry.id], (prev) =>
+      queryClient.setQueryData<ManagedInstanceView>(['managed-instances', entry.id], (prev) =>
         prev && prev.running !== entry.running ? { ...prev, running: entry.running } : prev,
       )
-      if (entry.id) queryClient.setQueryData(['managed-instances', entry.id, 'resources'], resources)
+      queryClient.setQueryData(['managed-instances', entry.id, 'resources'], resources)
       if (entry.running) {
-        if (entry.id) queryClient.setQueryData<ResourceSample[]>(
+        queryClient.setQueryData<ResourceSample[]>(
           ['managed-instances', entry.id, 'resource-history'],
           (prev) => appendCapped(
             prev,
@@ -168,9 +168,11 @@ function applyResourcesTick(queryClient: QueryClient, tick: ResourcesTick) {
           ),
         )
       }
-      continue
     }
 
+    // Valheim retains compatibility caches keyed by its historical name.
+    // Multi-game caches above are always UUID-addressed.
+    if (entry.game !== 'valheim') continue
     queryClient.setQueryData(['resources', 'instance', entry.name], resources)
     // Same idea for the player list: keep the previous reference when the
     // set of connected players hasn't changed, so `PlayersBadge` (rendered

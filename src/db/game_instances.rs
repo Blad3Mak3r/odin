@@ -357,7 +357,7 @@ pub fn update_generic_config(
     load_generic(db, game, name)?.context("game instance disappeared while updating configuration")
 }
 
-fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Result<()> {
+pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Result<()> {
     let ports: Vec<_> = [Some(config.port), config.query_port, config.admin_port]
         .into_iter()
         .flatten()

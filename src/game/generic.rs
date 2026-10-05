@@ -24,6 +24,10 @@ pub fn prepare_start(
     if instance.is_running() {
         bail!("instance '{name}' is already running");
     }
+    // Validate persisted settings again at the lifecycle boundary. This
+    // protects instances created with defaults (before their first form
+    // submission) and any data imported from an older Odin version.
+    crate::db::game_instances::validate_generic_config(game, &instance.config)?;
     let requested = [
         Some(instance.config.port),
         instance.config.query_port,
@@ -41,16 +45,6 @@ pub fn prepare_start(
             driver(game).display_name(),
             binary.display()
         );
-    }
-    if game == GameId::RunescapeDragonwilds
-        && instance
-            .config
-            .settings
-            .get("owner_id")
-            .and_then(|value| value.as_str())
-            .is_none_or(str::is_empty)
-    {
-        bail!("RuneScape: Dragonwilds owner ID is required before starting an instance");
     }
     match game {
         GameId::VRising => {

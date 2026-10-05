@@ -218,10 +218,8 @@ impl GameDriver for RunescapeDragonwildsDriver {
     fn steam_app_id(&self) -> &'static str {
         "4019830"
     }
-    // The dedicated-server depot exposes this executable on both supported
-    // platforms. The Linux launcher is selected by Steam's depot metadata.
     fn server_binary(&self) -> &'static str {
-        "RSDragonwilds.exe"
+        "RSDragonwildsServer.sh"
     }
     fn capabilities(&self) -> GameCapabilities {
         GameCapabilities {

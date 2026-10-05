@@ -4,6 +4,7 @@ use std::fs::OpenOptions;
 use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
+use serde_json::{Map, Value, json};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -50,7 +51,61 @@ pub fn prepare_start(
     {
         bail!("RuneScape: Dragonwilds owner ID is required before starting an instance");
     }
+    if game == GameId::VRising {
+        write_vrising_host_settings(paths, &instance)?;
+    }
     Ok(instance)
+}
+
+/// V Rising deliberately supports a per-instance persistent-data directory.
+/// Keep Odin's generated host override there rather than modifying Steam's
+/// install tree, which would couple every managed V Rising instance.
+fn write_vrising_host_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
+    let settings_dir = paths
+        .game_instance_dir(GameId::VRising, instance.name())
+        .join("data/Settings");
+    std::fs::create_dir_all(&settings_dir)?;
+
+    let settings = &instance.config.settings;
+    let mut host = Map::new();
+    host.insert(
+        "Name".into(),
+        Value::String(setting_string(settings, "server_name", instance.name())),
+    );
+    host.insert("Port".into(), json!(instance.config.port));
+    if let Some(port) = instance.config.query_port {
+        host.insert("QueryPort".into(), json!(port));
+    }
+    if let Some(max_players) = setting_u64(settings, "max_players") {
+        host.insert("MaxConnectedUsers".into(), json!(max_players));
+    }
+    if let Some(port) = instance.config.admin_port {
+        host.insert(
+            "Rcon".into(),
+            json!({
+                "Enabled": settings.get("rcon_enabled").and_then(Value::as_bool).unwrap_or(false),
+                "Port": port,
+                "BindAddress": "127.0.0.1",
+            }),
+        );
+    }
+    let file = settings_dir.join("ServerHostSettings.json");
+    std::fs::write(&file, serde_json::to_vec_pretty(&Value::Object(host))?)
+        .with_context(|| format!("failed to write {}", file.display()))?;
+    Ok(())
+}
+
+fn setting_string(settings: &Value, key: &str, fallback: &str) -> String {
+    settings
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn setting_u64(settings: &Value, key: &str) -> Option<u64> {
+    settings.get(key).and_then(Value::as_u64)
 }
 
 pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Command> {
@@ -140,4 +195,60 @@ pub async fn stop(paths: &Paths, db: &crate::db::Db, game: GameId, name: &str) -
         bail!("instance '{name}' did not stop");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::game_instances::{GameInstanceIdentity, GenericGameConfig};
+    use chrono::Utc;
+
+    #[test]
+    fn vrising_host_settings_are_written_to_the_isolated_persistent_data_path() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-vrising-settings-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let instance = GenericGameInstance {
+            identity: GameInstanceIdentity {
+                id: "id".into(),
+                game: GameId::VRising,
+                name: "vrising".into(),
+                created_at: Utc::now(),
+                tags: Vec::new(),
+            },
+            config: GenericGameConfig {
+                port: 27015,
+                query_port: Some(27016),
+                admin_port: Some(25575),
+                settings: json!({"server_name": "V Rising Test", "max_players": 40, "rcon_enabled": true}),
+                auto_restart: false,
+            },
+            pid: None,
+            pid_started_at: None,
+            last_started_at: None,
+            last_stopped_at: None,
+        };
+
+        write_vrising_host_settings(&paths, &instance).unwrap();
+
+        let config: Value = serde_json::from_slice(
+            &std::fs::read(
+                paths
+                    .game_instance_dir(GameId::VRising, "vrising")
+                    .join("data/Settings/ServerHostSettings.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(config["Name"], "V Rising Test");
+        assert_eq!(config["Port"], 27015);
+        assert_eq!(config["QueryPort"], 27016);
+        assert_eq!(config["MaxConnectedUsers"], 40);
+        assert_eq!(config["Rcon"]["Port"], 25575);
+        assert_eq!(config["Rcon"]["BindAddress"], "127.0.0.1");
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
 }

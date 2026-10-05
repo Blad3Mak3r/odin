@@ -53,7 +53,10 @@ pub fn prepare_start(
         bail!("RuneScape: Dragonwilds owner ID is required before starting an instance");
     }
     match game {
-        GameId::VRising => write_vrising_host_settings(paths, &instance)?,
+        GameId::VRising => {
+            crate::game::proton_ge::ensure(paths)?;
+            write_vrising_host_settings(paths, &instance)?;
+        }
         GameId::Palworld | GameId::RunescapeDragonwilds => {
             prepare_native_runtime(paths, &instance)?;
             write_native_settings(paths, &instance)?;
@@ -276,7 +279,7 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
     let binary = runtime_dir.join(driver(game).server_binary());
     let mut command = match game {
         GameId::VRising => {
-            let proton = paths.data_dir.join("runtimes/proton-ge/proton");
+            let proton = crate::game::proton_ge::binary(paths);
             if !proton.is_file() {
                 bail!(
                     "Proton-GE is not installed at {}; install the managed runtime before starting V Rising",

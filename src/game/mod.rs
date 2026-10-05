@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod generic;
 pub mod instances;
 pub mod ports;
+pub mod proton_ge;
 pub mod rust;
 pub mod update;
 pub mod valheim;

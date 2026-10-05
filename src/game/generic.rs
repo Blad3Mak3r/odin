@@ -257,7 +257,7 @@ fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Res
 
 fn write_dragonwilds_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
     let settings_file = native_runtime_dir(paths, instance)
-        .join("RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini");
+        .join("RSDragonwilds/Saved/Config/Linux/DedicatedServer.ini");
     let parent = settings_file
         .parent()
         .expect("Dragonwilds settings has a parent");
@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn dragonwilds_settings_use_the_linux_server_file_and_required_keys() {
+    fn dragonwilds_settings_use_the_linux_file_and_required_keys() {
         let dir =
             std::env::temp_dir().join(format!("odin-dragon-settings-{}", uuid::Uuid::new_v4()));
         let paths = Paths {
@@ -534,7 +534,7 @@ mod tests {
 
         let settings = fs::read_to_string(
             native_runtime_dir(&paths, &instance)
-                .join("RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini"),
+                .join("RSDragonwilds/Saved/Config/Linux/DedicatedServer.ini"),
         )
         .unwrap();
         assert!(settings.contains("OwnerId=owner"));

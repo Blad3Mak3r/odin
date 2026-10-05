@@ -286,19 +286,19 @@ export function usePalworldAction(action: 'announce' | 'save' | 'kick' | 'ban' |
   })
 }
 
-export function useManagedRustResources(name: string, enabled = true) {
+export function useManagedRustResources(id: string, enabled = true) {
   return useQuery({
-    queryKey: ['managed-instances', 'rust', name, 'resources'],
-    queryFn: () => api.get<InstanceResources>(`/games/rust/instances/${name}/resources`),
+    queryKey: ['managed-instances', id, 'resources'],
+    queryFn: () => api.get<InstanceResources>(`/instances/${id}/rust/resources`),
     refetchInterval: 5_000,
     enabled,
   })
 }
 
-export function useManagedRustResourceHistory(name: string, hours?: number, enabled = true) {
+export function useManagedRustResourceHistory(id: string, hours?: number, enabled = true) {
   return useQuery({
-    queryKey: ['managed-instances', 'rust', name, 'resource-history', hours],
-    queryFn: () => api.get<ResourceSample[]>(`/games/rust/instances/${name}/resources/history${hours ? `?hours=${hours}` : ''}`),
+    queryKey: ['managed-instances', id, 'resource-history', hours],
+    queryFn: () => api.get<ResourceSample[]>(`/instances/${id}/rust/resources/history${hours ? `?hours=${hours}` : ''}`),
     enabled,
   })
 }

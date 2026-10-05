@@ -127,6 +127,18 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/rust/lists/{kind}/{entry_id}",
             delete(rust_access_lists::remove_list_entry_by_id),
         )
+        .route(
+            "/instances/{id}/rust/resources",
+            get(games::get_rust_resources_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/resources/history",
+            get(games::get_rust_resource_history_by_id),
+        )
+        .route(
+            "/instances/{id}/rust/resources/history/export",
+            get(games::export_rust_resource_history_by_id),
+        )
         .route("/instances/{id}/saves", get(saves::list_save_files_by_id))
         .route(
             "/instances/{id}/saves/{*path}",

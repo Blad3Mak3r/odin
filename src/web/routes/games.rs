@@ -562,6 +562,17 @@ pub async fn get_rust_resources(
     Ok(Json(rust_resource_snapshot(&state, &instance)))
 }
 
+pub async fn get_rust_resources_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<InstanceSnapshot>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    get_rust_resources(State(state), Path(identity.name)).await
+}
+
 pub async fn get_rust_resource_history(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -590,6 +601,18 @@ pub async fn get_rust_resource_history(
     }
 }
 
+pub async fn get_rust_resource_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Json<Vec<ResourceSample>>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    get_rust_resource_history(State(state), Path(identity.name), Query(query)).await
+}
+
 pub async fn export_rust_resource_history(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -613,6 +636,18 @@ pub async fn export_rust_resource_history(
         &format!("rust-{name}-resources.csv"),
         &rows,
     ))
+}
+
+pub async fn export_rust_resource_history_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<crate::web::routes::resources::HistoryQuery>,
+) -> ApiResult<Response> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Rust {
+        return Err(BadRequest("this API is only available for Rust instances".into()).into());
+    }
+    export_rust_resource_history(State(state), Path(identity.name), Query(query)).await
 }
 
 pub async fn get_logs(

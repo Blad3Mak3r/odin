@@ -735,14 +735,6 @@ pub async fn export_resource_history_by_id(
     ))
 }
 
-pub async fn get_logs(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-    Query(query): Query<crate::web::routes::instances::LogsQuery>,
-) -> ApiResult<Json<crate::web::routes::instances::LogsView>> {
-    get_logs_for(state, game, name, query).await
-}
-
 pub async fn get_logs_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,

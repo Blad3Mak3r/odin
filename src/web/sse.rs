@@ -46,9 +46,10 @@ pub async fn logs_sse(
         .into_response())
 }
 
-pub async fn game_logs_sse(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
+async fn game_logs_sse_for(
+    state: AppState,
+    game: GameId,
+    name: String,
 ) -> Result<Response, ApiError> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -84,7 +85,7 @@ pub async fn game_logs_sse_by_id(
         crate::db::game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")
     })
     .await?;
-    game_logs_sse(State(state), Path((identity.game, identity.name))).await
+    game_logs_sse_for(state, identity.game, identity.name).await
 }
 
 fn file_log_stream(

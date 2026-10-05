@@ -172,11 +172,6 @@ pub fn build_router(state: AppState) -> Router {
             "/games/{game}/instances/{name}",
             get(games::get_instance).delete(games::delete_instance),
         )
-        .route("/games/{game}/instances/{name}/logs", get(games::get_logs))
-        .route(
-            "/games/{game}/instances/{name}/logs/sse",
-            get(sse::game_logs_sse),
-        )
         .route(
             "/games/{game}/instances/{name}/saves",
             get(saves::list_save_files),

@@ -17,13 +17,14 @@ use tokio::process::Command;
 use super::protocol::PROTOCOL_VERSION;
 use super::protocol::{Event, MAX_FRAME_BYTES, Request, Response, read_frame, write_frame};
 use crate::cli::validate_instance_name;
+use crate::db::game_instances::GameInstanceIdentity;
 use crate::game::GameId;
 use crate::paths::Paths;
 
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Spawns `odin run --instance <name>` detached: its own process group
+/// Spawns `odin run --instance-id <uuid>` detached: its own process group
 /// (same mechanism Valheim's command builder already uses for the
 /// Valheim child itself), stdin discarded. stdout/stderr are appended to
 /// `<instance_dir>/logs/supervisor.log` rather than discarded — anything the
@@ -33,7 +34,9 @@ const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// itself a systemd unit journald would capture. The `Child` handle is
 /// dropped immediately; like the Valheim child today, `kill_on_drop`
 /// defaults to `false`, so this does not kill the supervisor.
-pub async fn spawn_detached(paths: &Paths, game: GameId, instance_name: &str) -> Result<()> {
+pub async fn spawn_detached(paths: &Paths, identity: &GameInstanceIdentity) -> Result<()> {
+    let game = identity.game;
+    let instance_name = &identity.name;
     validate_instance_name(instance_name)
         .map_err(|error| anyhow::anyhow!("invalid instance name for supervisor: {error}"))?;
 
@@ -51,18 +54,17 @@ pub async fn spawn_detached(paths: &Paths, game: GameId, instance_name: &str) ->
         .context("failed to duplicate supervisor.log handle for stderr")?;
 
     let mut cmd = Command::new(exe);
-    // Keep the untrusted value out of argv entirely. Clap validates this
-    // internal hand-off with the same instance-name parser in the child.
+    // Keep the UUID out of argv entirely. The child resolves it against the
+    // database before it touches any instance-specific path.
     cmd.arg("run")
-        .env("ODIN_SUPERVISOR_INSTANCE", instance_name)
-        .env("ODIN_SUPERVISOR_GAME", game.as_str())
+        .env("ODIN_SUPERVISOR_INSTANCE_ID", &identity.id)
         .process_group(0)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout_file))
         .stderr(std::process::Stdio::from(stderr_file));
     let child = cmd
         .spawn()
-        .with_context(|| format!("failed to spawn 'odin run --instance {instance_name}'"))?;
+        .with_context(|| format!("failed to spawn supervisor for instance {instance_name}"))?;
     drop(child);
     Ok(())
 }
@@ -339,9 +341,14 @@ mod tests {
     async fn spawn_detached_rejects_invalid_instance_name_before_creating_files() {
         let paths = temp_paths("invalid-spawn");
 
-        let error = spawn_detached(&paths, GameId::Valheim, "server;touch-owned")
-            .await
-            .unwrap_err();
+        let identity = GameInstanceIdentity {
+            tags: Vec::new(),
+            id: uuid::Uuid::new_v4().to_string(),
+            game: GameId::Valheim,
+            name: "server;touch-owned".to_string(),
+            created_at: chrono::Utc::now(),
+        };
+        let error = spawn_detached(&paths, &identity).await.unwrap_err();
 
         assert!(
             error

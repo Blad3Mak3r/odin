@@ -124,14 +124,8 @@ pub enum Command {
     /// not for direct/manual use.
     #[command(hide = true)]
     Run {
-        #[arg(
-            long,
-            value_parser = parse_instance_name,
-            env = "ODIN_SUPERVISOR_INSTANCE"
-        )]
-        instance: String,
-        #[arg(long, env = "ODIN_SUPERVISOR_GAME", default_value = "valheim")]
-        game: crate::game::GameId,
+        #[arg(long, env = "ODIN_SUPERVISOR_INSTANCE_ID")]
+        instance_id: String,
     },
 }
 

@@ -38,8 +38,8 @@ pub async fn start(
 }
 
 async fn start_unlocked(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<RustInstance> {
-    prepare_start(paths, db, name)?;
-    crate::supervisor::client::spawn_detached(paths, crate::game::GameId::Rust, name)
+    let instance = prepare_start(paths, db, name)?;
+    crate::supervisor::client::spawn_detached(paths, &instance.identity)
         .await
         .with_context(|| format!("failed to start Rust instance '{name}'"))?;
     crate::supervisor::client::ping_with_retry(

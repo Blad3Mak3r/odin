@@ -88,6 +88,37 @@ pub fn identity(
     }))
 }
 
+/// Resolves a stable instance UUID to the game and mutable display name it
+/// currently belongs to. The hidden supervisor command uses this rather than
+/// accepting a name from its parent process, so a rename cannot make an
+/// already-spawned hand-off target the wrong instance.
+pub fn identity_by_id(db: &crate::db::Db, id: &str) -> Result<Option<GameInstanceIdentity>> {
+    let conn = db.conn();
+    conn.query_row(
+        "SELECT game, name, created_at, tags FROM game_instances WHERE id = ?1",
+        params![id],
+        |row| {
+            let game: String = row.get(0)?;
+            let game = game.parse().map_err(|error: String| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                )
+            })?;
+            Ok(GameInstanceIdentity {
+                id: id.to_string(),
+                game,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+                tags: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default(),
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 pub fn valheim_identity(db: &crate::db::Db, name: &str) -> Result<GameInstanceIdentity> {
     identity(db, GameId::Valheim, name)?.context("Valheim instance is missing its game identity")
 }
@@ -418,6 +449,21 @@ mod tests {
         assert_eq!(updated.config.world_size, 4000);
         assert_eq!(updated.config.max_players, 100);
         assert!(updated.config.auto_restart);
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn identity_by_id_resolves_the_stable_game_identity() {
+        let (paths, db) = temp_context("identity-by-id");
+        let instance = create_rust(&paths, &db, "rust-server").unwrap();
+
+        let resolved = identity_by_id(&db, &instance.identity.id).unwrap().unwrap();
+
+        assert_eq!(resolved.id, instance.identity.id);
+        assert_eq!(resolved.game, GameId::Rust);
+        assert_eq!(resolved.name, "rust-server");
+        assert!(identity_by_id(&db, "missing").unwrap().is_none());
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

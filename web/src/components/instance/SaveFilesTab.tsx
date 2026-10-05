@@ -30,7 +30,7 @@ export function SaveFilesTab({ id, game, name }: { id?: string; game: GameId; na
           {files.data.map((file) => {
             const encodedPath = file.path.split('/').map(encodeURIComponent).join('/')
             const href = id
-              ? `/api/games/instances/id/${encodeURIComponent(id)}/saves/${encodedPath}`
+              ? `/api/instances/${encodeURIComponent(id)}/saves/${encodedPath}`
               : `/api/games/${game}/instances/${encodeURIComponent(name)}/saves/${encodedPath}`
             return (
               <tr key={file.path} className="border-b last:border-0">

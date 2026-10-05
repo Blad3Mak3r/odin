@@ -1,14 +1,13 @@
 use std::time::Duration;
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
 use crate::db::Db;
 use crate::instance::state::InstanceState;
-use crate::instance::{self, Instance, InstanceError, lifecycle};
+use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
 use crate::supervisor::client;
 use crate::supervisor::protocol::Response;
@@ -145,43 +144,6 @@ pub async fn get_instance(
     Ok(Json(instance_view))
 }
 
-pub async fn start_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<InstanceView>> {
-    let _transition = state
-        .runtime
-        .begin_transition(&name, InstanceTransition::Starting)?;
-    let started = lifecycle::start(&state.paths, &state.db, &name).await?;
-    let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, started)).await?;
-    Ok(Json(instance_view))
-}
-
-pub async fn stop_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<StatusCode> {
-    let _transition = state
-        .runtime
-        .begin_transition(&name, InstanceTransition::Stopping)?;
-    lifecycle::stop(&state.paths, &state.db, &name).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn restart_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<InstanceView>> {
-    let _transition = state
-        .runtime
-        .begin_transition(&name, InstanceTransition::Restarting)?;
-    let restarted = lifecycle::restart(&state.paths, &state.db, &name).await?;
-    let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, restarted)).await?;
-    Ok(Json(instance_view))
-}
-
 #[derive(Deserialize)]
 pub struct RenameRequest {
     pub new_name: String,
@@ -199,35 +161,6 @@ pub async fn rename_instance(
     let paths = state.paths.clone();
     let instance_view = run_blocking(move || view(&paths, renamed)).await?;
     Ok(Json(instance_view))
-}
-
-#[derive(Deserialize)]
-pub struct DeleteQuery {
-    #[serde(default)]
-    pub keep_backups: bool,
-}
-
-pub async fn delete_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Query(query): Query<DeleteQuery>,
-) -> ApiResult<StatusCode> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let activity = state.activity.clone();
-    let delete_name = name.clone();
-    run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &delete_name)?;
-        if lifecycle::is_running(&instance)? {
-            return Err(InstanceError::AlreadyRunning(delete_name).into());
-        }
-        lifecycle::delete(&db, &instance, query.keep_backups)?;
-        activity.record(ActivityKind::InstanceDeleted, Some(delete_name));
-        Ok(())
-    })
-    .await?;
-    state.runtime.remove_instance(&name);
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]
@@ -354,7 +287,7 @@ mod tests {
         let app = crate::web::router::build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("POST")
-            .uri("/api/instances/source/clone")
+            .uri("/api/games/valheim/instances/source/clone")
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"name":"target","world_name":"target-world"}"#,
@@ -391,7 +324,7 @@ mod tests {
         let app = crate::web::router::build_router(state);
         let request = Request::builder()
             .method("POST")
-            .uri("/api/instances/source/clone")
+            .uri("/api/games/valheim/instances/source/clone")
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"name":"target","world_name":"target-world"}"#,
@@ -407,25 +340,4 @@ mod tests {
 #[derive(Serialize)]
 pub struct LogsView {
     pub lines: Vec<String>,
-}
-
-pub async fn get_logs(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Query(query): Query<LogsQuery>,
-) -> ApiResult<Json<LogsView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let tail = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &name)?;
-        let log_file = crate::paths::instance_logs_dir(&instance.dir).join("console.log");
-        if !log_file.is_file() {
-            return Ok(String::new());
-        }
-        Ok(crate::commands::logs::read_tail(&log_file, query.lines)?)
-    })
-    .await?;
-    Ok(Json(LogsView {
-        lines: tail.lines().map(str::to_string).collect(),
-    }))
 }

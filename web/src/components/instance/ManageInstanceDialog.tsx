@@ -17,7 +17,7 @@ export function ManageInstanceDialog({ instance, onNavigate }: { instance: Manag
   const [confirmDelete, setConfirmDelete] = useState(false)
   const client = useQueryClient()
   const base = `/games/${instance.game}/instances/${instance.name}`
-  const byId = `/games/instances/id/${instance.id}`
+  const byId = `/instances/${instance.id}`
   const action = useMutation({
     mutationFn: async (operation: 'rename' | 'clone' | 'tags' | 'delete') => {
       if (operation === 'delete') await api.delete(`${byId}?keep_backups=${keepBackups}`)

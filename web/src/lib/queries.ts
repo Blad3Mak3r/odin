@@ -152,7 +152,7 @@ export function usePlayerHistory(name: string) {
 export function useSaveFiles(game: GameId, name: string, id?: string) {
   return useQuery({
     queryKey: ['save-files', id ?? `${game}/${name}`],
-    queryFn: () => api.get<SaveFileEntry[]>(id ? `/games/instances/id/${id}/saves` : `/games/${game}/instances/${name}/saves`),
+    queryFn: () => api.get<SaveFileEntry[]>(id ? `/instances/${id}/saves` : `/games/${game}/instances/${name}/saves`),
   })
 }
 
@@ -230,7 +230,7 @@ export function useManagedInstance(game: GameId, name: string) {
 export function useManagedInstanceById(id: string) {
   return useQuery({
     queryKey: ['managed-instances', id],
-    queryFn: () => api.get<ManagedInstanceView>(`/games/instances/id/${id}`),
+    queryFn: () => api.get<ManagedInstanceView>(`/instances/${id}`),
     enabled: Boolean(id),
     refetchInterval: 5_000,
   })
@@ -251,7 +251,7 @@ export function useManagedInstanceTransition(game: GameId, name: string) {
 export function useManagedInstanceLogs(game: GameId, name: string, lines = 200, id?: string) {
   return useQuery({
     queryKey: ['managed-instances', id ?? `${game}/${name}`, 'logs', lines],
-    queryFn: () => api.get<LogsView>(id ? `/games/instances/id/${id}/logs?lines=${lines}` : `/games/${game}/instances/${name}/logs?lines=${lines}`),
+    queryFn: () => api.get<LogsView>(id ? `/instances/${id}/logs?lines=${lines}` : `/games/${game}/instances/${name}/logs?lines=${lines}`),
     refetchInterval: 5_000,
   })
 }
@@ -259,7 +259,7 @@ export function useManagedInstanceLogs(game: GameId, name: string, lines = 200, 
 export function usePalworldPlayers(id: string, enabled = true) {
   return useQuery({
     queryKey: ['managed-instances', id, 'palworld', 'players'],
-    queryFn: () => api.get<unknown>(`/games/instances/id/${id}/palworld/players`),
+    queryFn: () => api.get<unknown>(`/instances/${id}/palworld/players`),
     refetchInterval: 10_000,
     enabled: Boolean(id) && enabled,
   })
@@ -268,7 +268,7 @@ export function usePalworldPlayers(id: string, enabled = true) {
 export function usePalworldMetrics(id: string, enabled = true) {
   return useQuery({
     queryKey: ['managed-instances', id, 'palworld', 'metrics'],
-    queryFn: () => api.get<unknown>(`/games/instances/id/${id}/palworld/metrics`),
+    queryFn: () => api.get<unknown>(`/instances/${id}/palworld/metrics`),
     refetchInterval: 10_000,
     enabled: Boolean(id) && enabled,
   })
@@ -278,7 +278,7 @@ export function usePalworldAction(action: 'announce' | 'save' | 'kick' | 'ban' |
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, request }: { id: string; request?: Record<string, unknown> }) =>
-      api.post<unknown>(`/games/instances/id/${id}/palworld/${action}`, request),
+      api.post<unknown>(`/instances/${id}/palworld/${action}`, request),
     onSuccess: (_result, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'palworld'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
@@ -316,7 +316,7 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, game, name }: { id?: string; game: GameId; name: string }) =>
-      api.post<ManagedInstanceView>(id ? `/games/instances/id/${id}/${action}` : `/games/${game}/instances/${name}/${action}`),
+      api.post<ManagedInstanceView>(id ? `/instances/${id}/${action}` : `/games/${game}/instances/${name}/${action}`),
     onSuccess: (_instance, variables) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', variables.game, variables.name] })
@@ -346,7 +346,7 @@ export function useDeleteManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, game, name, keepBackups }: { id?: string; game: GameId; name: string; keepBackups?: boolean }) =>
-      api.delete<void>(id ? `/games/instances/id/${id}${keepBackups ? '?keep_backups=true' : ''}` : `/games/${game}/instances/${name}${keepBackups ? '?keep_backups=true' : ''}`),
+      api.delete<void>(id ? `/instances/${id}${keepBackups ? '?keep_backups=true' : ''}` : `/games/${game}/instances/${name}${keepBackups ? '?keep_backups=true' : ''}`),
     onSuccess: (_result, { id, game, name }) => {
       queryClient.removeQueries({ queryKey: ['managed-instances', game, name] })
       if (id) queryClient.removeQueries({ queryKey: ['managed-instances', id] })
@@ -359,7 +359,7 @@ export function useUpdateRustConfig() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, name, request }: { id?: string; name: string; request: RustConfigUpdateRequest }) =>
-      api.put<ManagedInstanceView>(id ? `/games/instances/id/${id}/config` : `/games/rust/instances/${name}/config`, request),
+      api.put<ManagedInstanceView>(id ? `/instances/${id}/config` : `/games/rust/instances/${name}/config`, request),
     onSuccess: (instance, { id, name }) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', 'rust', name] })
@@ -372,7 +372,7 @@ export function useUpdateGenericConfig() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, game, name, request }: { id?: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; name: string; request: GenericConfigUpdateRequest }) =>
-      api.put<ManagedInstanceView>(id ? `/games/instances/id/${id}/config` : `/games/${game}/instances/${name}/config`, request),
+      api.put<ManagedInstanceView>(id ? `/instances/${id}/config` : `/games/${game}/instances/${name}/config`, request),
     onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.game, instance.name] })
@@ -391,7 +391,7 @@ export function useExecuteRustRcon() {
 export function useExecuteVRisingRcon() {
   return useMutation({
     mutationFn: ({ id, command }: { id: string; command: string }) =>
-      api.post<RconCommandResponse>(`/games/instances/id/${id}/vrising/rcon`, { command }),
+      api.post<RconCommandResponse>(`/instances/${id}/vrising/rcon`, { command }),
   })
 }
 

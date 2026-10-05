@@ -328,12 +328,6 @@ impl RuntimeRegistry {
             .unwrap_or_default()
     }
 
-    /// Drops cached state for an instance that no longer exists, so a
-    /// deleted-then-recreated instance doesn't briefly show stale history.
-    pub fn remove_instance(&self, name: &str) {
-        self.remove_game_instance(GameId::Valheim, name);
-    }
-
     pub fn remove_game_instance(&self, game: GameId, name: &str) {
         self.instances
             .lock()

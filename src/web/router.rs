@@ -39,6 +39,53 @@ pub fn build_router(state: AppState) -> Router {
             post(games::rename_instance),
         )
         .route("/games/instances", get(games::list_all_instances))
+        // UUID is the public identity contract. The historical bare
+        // `/instances/{name}` routes have been removed; game/name endpoints
+        // below are transitional internal compatibility routes only.
+        .route(
+            "/instances/{id}",
+            get(games::get_instance_by_id).delete(games::delete_instance_by_id),
+        )
+        .route("/instances/{id}/start", post(games::start_instance_by_id))
+        .route("/instances/{id}/stop", post(games::stop_instance_by_id))
+        .route(
+            "/instances/{id}/restart",
+            post(games::restart_instance_by_id),
+        )
+        .route(
+            "/instances/{id}/backups",
+            get(games::list_backups_by_id).post(games::create_backup_by_id),
+        )
+        .route(
+            "/instances/{id}/backups/{backup_id}/restore",
+            post(games::restore_backup_by_id),
+        )
+        .route("/instances/{id}/config", put(games::update_config_by_id))
+        .route("/instances/{id}/logs", get(games::get_logs_by_id))
+        .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
+        .route("/instances/{id}/palworld/players", get(palworld::players))
+        .route("/instances/{id}/palworld/metrics", get(palworld::metrics))
+        .route(
+            "/instances/{id}/palworld/announce",
+            post(palworld::announce),
+        )
+        .route("/instances/{id}/palworld/save", post(palworld::save))
+        .route("/instances/{id}/palworld/kick", post(palworld::kick))
+        .route("/instances/{id}/palworld/ban", post(palworld::ban))
+        .route("/instances/{id}/palworld/unban", post(palworld::unban))
+        .route(
+            "/instances/{id}/palworld/shutdown",
+            post(palworld::shutdown),
+        )
+        .route(
+            "/instances/{id}/vrising/rcon",
+            post(games::execute_vrising_rcon_by_id),
+        )
+        .route("/instances/{id}/saves", get(saves::list_save_files_by_id))
+        .route(
+            "/instances/{id}/saves/{*path}",
+            get(saves::download_save_file_by_id),
+        )
         .route(
             "/games/instances/id/{id}",
             get(games::get_instance_by_id).delete(games::delete_instance_by_id),
@@ -381,88 +428,6 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/bulk/bepinex/update",
             post(bulk::bulk_update_bepinex),
         )
-        .route(
-            "/instances/{name}",
-            get(instances::get_instance).delete(instances::delete_instance),
-        )
-        .route("/instances/{name}/clone", post(instances::clone_instance))
-        .route("/instances/{name}/start", post(instances::start_instance))
-        .route("/instances/{name}/stop", post(instances::stop_instance))
-        .route(
-            "/instances/{name}/restart",
-            post(instances::restart_instance),
-        )
-        .route("/instances/{name}/rename", post(instances::rename_instance))
-        .route(
-            "/instances/{name}/config",
-            get(instances::get_config).put(instances::set_config),
-        )
-        .route("/instances/{name}/logs", get(instances::get_logs))
-        .route("/instances/{name}/logs/sse", get(sse::logs_sse))
-        .route(
-            "/instances/{name}/last-exit",
-            get(diagnostics::get_last_exit),
-        )
-        .route(
-            "/instances/{name}/mods",
-            get(mods::list_mods).post(mods::add_mod),
-        )
-        .route("/instances/{name}/mods/update", post(mods::update_mods))
-        .route("/instances/{name}/bepinex/status", get(bepinex::status))
-        .route("/instances/{name}/bepinex/update", post(bepinex::update))
-        .route(
-            "/instances/{name}/mods/modpack",
-            get(mods::download_modpack),
-        )
-        .route(
-            "/instances/{name}/mods/upload",
-            post(mods::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
-        )
-        .route("/instances/{name}/mods/{mod_id}", delete(mods::remove_mod))
-        .route(
-            "/instances/{name}/mods/{mod_id}/enable",
-            post(mods::enable_mod),
-        )
-        .route(
-            "/instances/{name}/mods/{mod_id}/disable",
-            post(mods::disable_mod),
-        )
-        .route(
-            "/instances/{name}/mods/{mod_id}/version",
-            put(mods::select_mod_version),
-        )
-        .route(
-            "/instances/{name}/mods/{mod_id}/pinned",
-            put(mods::set_mod_pinned),
-        )
-        .route(
-            "/instances/{name}/backups",
-            get(backups::list_backups).post(backups::create_backup),
-        )
-        .route(
-            "/instances/{name}/backups/{id}/restore",
-            post(backups::restore_backup),
-        )
-        .route(
-            "/instances/{name}/backups/{id}",
-            delete(backups::delete_backup),
-        )
-        .route(
-            "/instances/{name}/backup-schedule",
-            get(backups::get_backup_schedule).put(backups::set_backup_schedule),
-        )
-        .route(
-            "/instances/{name}/backup-storage",
-            get(backups::get_backup_storage).put(backups::set_backup_storage),
-        )
-        .route(
-            "/instances/{name}/bepinex/config",
-            get(config_files::list_config_files),
-        )
-        .route(
-            "/instances/{name}/bepinex/config/{filename}",
-            get(config_files::get_config_file).put(config_files::set_config_file),
-        )
         .route("/mods/search", get(mods::search_mods))
         .route("/mods/nexus/trending", get(nexus::trending_mods))
         .route("/mods/nexus/lookup", get(nexus::lookup_mod))
@@ -481,16 +446,6 @@ pub fn build_router(state: AppState) -> Router {
             "/settings/nexus-api-key",
             put(settings::set_nexus_api_key).delete(settings::clear_nexus_api_key),
         )
-        .route(
-            "/instances/{name}/lists/{kind}",
-            get(lists::get_list)
-                .put(lists::set_list)
-                .post(lists::add_list_entry),
-        )
-        .route(
-            "/instances/{name}/lists/{kind}/{id}",
-            delete(lists::remove_list_entry),
-        )
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))
         .route("/jobs/{id}/sse", get(jobs::job_sse))
@@ -503,22 +458,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/system/resources/history/export",
             get(resources::export_host_resources_history),
-        )
-        .route(
-            "/instances/{name}/resources",
-            get(resources::get_instance_resources),
-        )
-        .route(
-            "/instances/{name}/resources/history",
-            get(resources::get_instance_resources_history),
-        )
-        .route(
-            "/instances/{name}/resources/history/export",
-            get(resources::export_instance_resources_history),
-        )
-        .route(
-            "/instances/{name}/players",
-            get(players::get_instance_players),
         )
         .route(
             "/webhooks",

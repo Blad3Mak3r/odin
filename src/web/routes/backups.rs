@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
-use crate::backup::BackupEntry;
 use crate::backup_storage::{BackupStorageConfig, StorageProvider};
 use crate::db::backup_schedules;
 use crate::game::{GameId, instances};
@@ -13,27 +12,6 @@ use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
 use crate::web::state::AppState;
-
-pub async fn list_backups(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<Vec<BackupEntry>>> {
-    list_backups_for_game(State(state), Path((GameId::Valheim, name))).await
-}
-
-pub async fn list_backups_for_game(
-    State(state): State<AppState>,
-    Path((game, name)): Path<(GameId, String)>,
-) -> ApiResult<Json<Vec<BackupEntry>>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let entries = run_blocking(move || {
-        instances::load(&paths, &db, game, &name)?;
-        instances::list_backups(&paths, &db, game, &name)
-    })
-    .await?;
-    Ok(Json(entries))
-}
 
 // See the comment on `mods::add_mod`: spawning a job can't fail
 // synchronously, so there's nothing for `ApiResult` to wrap.

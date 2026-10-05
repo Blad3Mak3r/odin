@@ -113,6 +113,50 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/valheim/bepinex/config/{filename}",
             get(config_files::get_config_file_by_id).put(config_files::set_config_file_by_id),
         )
+        .route(
+            "/instances/{id}/valheim/bepinex/status",
+            get(bepinex::status_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/bepinex/update",
+            post(bepinex::update_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods",
+            get(mods::list_mods_by_id).post(mods::add_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/update",
+            post(mods::update_mods_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/modpack",
+            get(mods::download_modpack_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/upload",
+            post(mods::upload_mod_by_id).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}",
+            delete(mods::remove_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/enable",
+            post(mods::enable_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/disable",
+            post(mods::disable_mod_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/version",
+            put(mods::select_mod_version_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/mods/{mod_id}/pinned",
+            put(mods::set_mod_pinned_by_id),
+        )
         .route("/instances/{id}/palworld/players", get(palworld::players))
         .route("/instances/{id}/palworld/metrics", get(palworld::metrics))
         .route(

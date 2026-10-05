@@ -219,14 +219,6 @@ export function useManagedInstances() {
   })
 }
 
-export function useManagedInstance(game: GameId, name: string) {
-  return useQuery({
-    queryKey: ['managed-instances', game, name],
-    queryFn: () => api.get<ManagedInstanceView>(`/games/${game}/instances/${name}`),
-    refetchInterval: 5_000,
-  })
-}
-
 export function useManagedInstanceById(id: string) {
   return useQuery({
     queryKey: ['managed-instances', id],

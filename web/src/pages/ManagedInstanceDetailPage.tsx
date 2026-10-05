@@ -22,8 +22,8 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { QueryError } from '@/components/QueryError'
 import {
-  useManagedInstance,
   useManagedInstanceById,
+  useManagedInstances,
   useManagedInstanceLogs,
   useUpdateGenericConfig,
   useUpdateRustConfig,
@@ -245,8 +245,11 @@ export function ManagedInstanceDetailPage() {
   const navigate = useNavigate()
   const gameId = isGameId(game) ? game : 'valheim'
   const instanceById = useManagedInstanceById(id ?? '')
-  const instanceByName = useManagedInstance(gameId, name ?? '')
-  const instance = id ? instanceById : instanceByName
+  const managedInstances = useManagedInstances()
+  const legacyInstance = managedInstances.data?.find((candidate) => candidate.game === gameId && candidate.name === name)
+  const instance = id
+    ? instanceById
+    : { data: legacyInstance, isError: managedInstances.isError, error: managedInstances.error }
   const detailForRequests = instance.data
   const logs = useManagedInstanceLogs(detailForRequests?.game ?? gameId, detailForRequests?.name ?? name ?? '', 200, detailForRequests?.id)
   const liveLogs = useLogSocket(detailForRequests?.name ?? name ?? '', detailForRequests?.game ?? gameId, detailForRequests?.id)

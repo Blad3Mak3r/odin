@@ -1189,6 +1189,34 @@ pub(crate) fn rust_resource_snapshot(
     }
 }
 
+/// Samples a generic managed server process (V Rising, Palworld, or
+/// Dragonwilds), including descendants such as Proton's Wine processes.
+pub(crate) fn generic_resource_snapshot(
+    state: &AppState,
+    instance: &GenericGameInstance,
+) -> InstanceSnapshot {
+    if !instance.is_running() {
+        return InstanceSnapshot::default();
+    }
+
+    let root_pids: Vec<u32> = instance.pid.into_iter().collect();
+    let system = state.resources.lock().expect("resources lock poisoned");
+    let mut cpu_percent = 0.0;
+    let mut memory_bytes = 0;
+    for pid in crate::instance::process::descendant_pids(&system, &root_pids) {
+        if let Some(process) = system.process(Pid::from_u32(pid)) {
+            cpu_percent += process.cpu_usage();
+            memory_bytes += process.memory();
+        }
+    }
+    InstanceSnapshot {
+        running: true,
+        ready: false,
+        cpu_percent,
+        memory_bytes,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

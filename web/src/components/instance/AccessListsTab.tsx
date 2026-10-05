@@ -9,10 +9,10 @@ function isListTab(value: string | undefined): value is ListTab {
   return LIST_TABS.some((tab) => tab === value)
 }
 
-export function AccessListsTab({ name, path }: { name: string; path: string[] }) {
+export function AccessListsTab({ id, path }: { id: string; path: string[] }) {
   const navigate = useNavigate()
   const [tab, ...rest] = path
-  const basePath = `/instances/valheim/${name}/lists`
+  const basePath = `/instance/${id}/lists`
 
   if (!isListTab(tab) || rest.length > 0) return <Navigate to={`${basePath}/admin`} replace />
 
@@ -29,17 +29,17 @@ export function AccessListsTab({ name, path }: { name: string; path: string[] })
         </TabsList>
         {tab === 'admin' && (
           <TabsContent value="admin">
-            <SteamIdListEditor name={name} kind="admin" />
+            <SteamIdListEditor id={id} kind="admin" />
           </TabsContent>
         )}
         {tab === 'banned' && (
           <TabsContent value="banned">
-            <SteamIdListEditor name={name} kind="banned" />
+            <SteamIdListEditor id={id} kind="banned" />
           </TabsContent>
         )}
         {tab === 'permitted' && (
           <TabsContent value="permitted">
-            <SteamIdListEditor name={name} kind="permitted" />
+            <SteamIdListEditor id={id} kind="permitted" />
           </TabsContent>
         )}
       </Tabs>

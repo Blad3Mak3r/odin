@@ -86,7 +86,7 @@ export function InstanceDetailPage() {
         )}
         {tab === 'config' && (
           <TabsContent value="config">
-            <ConfigTab name={name} />
+            <ConfigTab id={name} />
           </TabsContent>
         )}
         {tab === 'mods' && (
@@ -96,7 +96,7 @@ export function InstanceDetailPage() {
         )}
         {tab === 'lists' && (
           <TabsContent value="lists">
-            <AccessListsTab name={name} path={nestedPath} />
+            <AccessListsTab id={name} path={nestedPath} />
           </TabsContent>
         )}
         {tab === 'backups' && (
@@ -116,7 +116,7 @@ export function InstanceDetailPage() {
         )}
         {tab === 'players' && (
           <TabsContent value="players">
-            <PlayersTab name={name} running={instance.data?.running ?? false} />
+            <PlayersTab id={name} running={instance.data?.running ?? false} />
           </TabsContent>
         )}
       </Tabs>

@@ -5,6 +5,9 @@ import { PalworldAdminTab } from '@/components/instance/PalworldAdminTab'
 import { RustRconTab } from '@/components/instance/RustRconTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
 import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
+import { AccessListsTab } from '@/components/instance/AccessListsTab'
+import { ConfigTab } from '@/components/instance/ConfigTab'
+import { PlayersTab } from '@/components/instance/PlayersTab'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -273,14 +276,15 @@ export function ManagedInstanceDetailPage() {
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
     ...(detail.game === 'palworld' ? [{ id: 'admin', label: 'Admin' }] : []),
-    ...(detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
+    ...((detail.game === 'valheim' || detail.game === 'rust' || detail.game === 'vrising') && detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
     { id: 'saves', label: 'Save files' },
     { id: 'resources', label: 'Resources' },
+    ...(detail.game === 'valheim' && detail.capabilities.players ? [{ id: 'players', label: 'Players' }] : []),
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
   const listsBasePath = `/instance/${id}/lists`
-  const defaultListTab = detail.game === 'vrising' ? 'admin' : 'owner'
+  const defaultListTab = detail.game === 'vrising' || detail.game === 'valheim' ? 'admin' : 'owner'
   if (!tab || (tab !== 'lists' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
     return <Navigate replace to={`/instance/${id}/logs`} />
   }
@@ -311,7 +315,9 @@ export function ManagedInstanceDetailPage() {
           </Card>
         </TabsContent>
         <TabsContent value="config" className="flex flex-col gap-6">
-          {rustConfig
+          {detail.game === 'valheim'
+            ? <ConfigTab id={detail.id} />
+            : rustConfig
             ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={rustConfig} running={detail.running} />
             : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds')
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} />
@@ -329,8 +335,12 @@ export function ManagedInstanceDetailPage() {
         {detail.game === 'vrising' && tab === 'lists' && (
           <TabsContent value="lists"><VRisingAccessListsTab id={detail.id} path={nestedPath} basePath={listsBasePath} /></TabsContent>
         )}
+        {detail.game === 'valheim' && tab === 'lists' && (
+          <TabsContent value="lists"><AccessListsTab id={detail.id} path={nestedPath} /></TabsContent>
+        )}
         <TabsContent value="saves"><SaveFilesTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab id={detail.id} running={detail.running} /></TabsContent>
+        {detail.game === 'valheim' && <TabsContent value="players"><PlayersTab id={detail.id} running={detail.running} /></TabsContent>}
       </Tabs>
     </div>
   )

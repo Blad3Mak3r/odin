@@ -60,8 +60,8 @@ const LIVE_FALLBACK_INTERVAL = 30_000
 // newly published release without needing a manual reload.
 const VERSION_CHECK_INTERVAL = 30 * 60_000
 
-function valheimInstancePath(name: string, suffix = '') {
-  return `/games/valheim/instances/${name}${suffix}`
+function valheimInstancePath(id: string, suffix = '') {
+  return `/instances/${id}/valheim${suffix}`
 }
 
 export function useVersion() {
@@ -105,10 +105,10 @@ export function useHostResourceHistory() {
   })
 }
 
-export function useInstanceResources(name: string, enabled = true) {
+export function useInstanceResources(id: string, enabled = true) {
   return useQuery({
-    queryKey: ['resources', 'instance', name],
-    queryFn: () => api.get<InstanceResources>(valheimInstancePath(name, '/resources')),
+    queryKey: ['resources', 'instance', id],
+    queryFn: () => api.get<InstanceResources>(`/instances/${id}/resources`),
     refetchInterval: LIVE_FALLBACK_INTERVAL,
     enabled,
   })
@@ -119,33 +119,33 @@ export function useInstanceResources(name: string, enabled = true) {
 // A specific `hours` reads a downsampled long-range history straight from
 // the database instead, under its own query key so it doesn't collide with
 // the live one.
-export function useInstanceResourceHistory(name: string, hours?: number, enabled = true) {
+export function useInstanceResourceHistory(id: string, hours?: number, enabled = true) {
   return useQuery({
     queryKey: hours
-      ? ['resource-history', 'instance', name, hours]
-      : ['resource-history', 'instance', name],
+      ? ['resource-history', 'instance', id, hours]
+      : ['resource-history', 'instance', id],
     queryFn: () =>
       api.get<ResourceSample[]>(
-        valheimInstancePath(name, `/resources/history${hours ? `?hours=${hours}` : ''}`),
+        `/instances/${id}/resources/history${hours ? `?hours=${hours}` : ''}`,
       ),
     staleTime: hours ? 60_000 : Infinity,
     enabled,
   })
 }
 
-export function usePlayers(name: string, enabled = true) {
+export function usePlayers(id: string, enabled = true) {
   return useQuery({
-    queryKey: ['players', name],
-    queryFn: () => api.get<PlayerInfo[]>(valheimInstancePath(name, '/players')),
+    queryKey: ['players', id],
+    queryFn: () => api.get<PlayerInfo[]>(valheimInstancePath(id, '/players')),
     staleTime: Infinity,
     enabled,
   })
 }
 
-export function usePlayerHistory(name: string) {
+export function usePlayerHistory(id: string) {
   return useQuery({
-    queryKey: ['players', name, 'history'],
-    queryFn: () => api.get<PlayerSession[]>(valheimInstancePath(name, '/players/history')),
+    queryKey: ['players', id, 'history'],
+    queryFn: () => api.get<PlayerSession[]>(valheimInstancePath(id, '/players/history')),
   })
 }
 
@@ -369,6 +369,18 @@ export function useUpdateGenericConfig() {
   })
 }
 
+export function useUpdateValheimConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, request }: { id: string; request: ConfigUpdateRequest }) =>
+      api.put<ManagedInstanceView>(`/instances/${id}/config`, request),
+    onSuccess: (instance) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
+    },
+  })
+}
+
 export function useExecuteRustRcon() {
   return useMutation({
     mutationFn: ({ id, command }: { id: string; command: string }) =>
@@ -540,20 +552,21 @@ export function useDeleteInstance() {
   })
 }
 
-export function useConfig(name: string) {
+export function useConfig(id: string) {
   return useQuery({
-    queryKey: ['instances', name, 'config'],
-    queryFn: () => api.get<ConfigView>(valheimInstancePath(name, '/config')),
+    queryKey: ['managed-instances', id, 'config'],
+    queryFn: () => api.get<ConfigView>(`/instances/${id}/config`),
   })
 }
 
-export function useUpdateConfig(name: string) {
+export function useUpdateConfig(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (req: ConfigUpdateRequest) => api.put<ConfigView>(valheimInstancePath(name, '/config'), req),
+    mutationFn: (req: ConfigUpdateRequest) => api.put<ManagedInstanceView>(`/instances/${id}/config`, req),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'config'] })
-      queryClient.invalidateQueries({ queryKey: ['instances', name] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'config'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
     },
   })
 }

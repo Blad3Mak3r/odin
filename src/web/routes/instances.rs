@@ -281,11 +281,18 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        Instance::create(&paths, &db, "source").unwrap();
+        let source = Instance::create(&paths, &db, "source").unwrap();
+        let source_id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "source",
+            source.state.created_at,
+        )
+        .unwrap()
+        .id;
         let app = crate::web::router::build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("POST")
-            .uri("/api/games/valheim/instances/source/clone")
+            .uri(format!("/api/instances/{source_id}/valheim/clone"))
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"name":"target","world_name":"target-world"}"#,
@@ -313,7 +320,14 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        Instance::create(&paths, &db, "source").unwrap();
+        let source = Instance::create(&paths, &db, "source").unwrap();
+        let source_id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "source",
+            source.state.created_at,
+        )
+        .unwrap()
+        .id;
         let state = AppState::new(paths, db);
         let _transition = state
             .runtime
@@ -322,7 +336,7 @@ mod tests {
         let app = crate::web::router::build_router(state);
         let request = Request::builder()
             .method("POST")
-            .uri("/api/games/valheim/instances/source/clone")
+            .uri(format!("/api/instances/{source_id}/valheim/clone"))
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"name":"target","world_name":"target-world"}"#,

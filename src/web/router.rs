@@ -493,10 +493,10 @@ mod tests {
             (r#"{"query_port":29000}"#, StatusCode::BAD_REQUEST),
             (r#"{"rcon_port":29000}"#, StatusCode::BAD_REQUEST),
             (r#"{"rcon_password":"   "}"#, StatusCode::BAD_REQUEST),
-            (r#"{"port":65536}"#, StatusCode::UNPROCESSABLE_ENTITY),
-            (r#"{"query_port":-1}"#, StatusCode::UNPROCESSABLE_ENTITY),
-            (r#"{"rcon_port":29000.5}"#, StatusCode::UNPROCESSABLE_ENTITY),
-            (r#"{"port":29000.5}"#, StatusCode::UNPROCESSABLE_ENTITY),
+            (r#"{"port":65536}"#, StatusCode::BAD_REQUEST),
+            (r#"{"query_port":-1}"#, StatusCode::BAD_REQUEST),
+            (r#"{"rcon_port":29000.5}"#, StatusCode::BAD_REQUEST),
+            (r#"{"port":29000.5}"#, StatusCode::BAD_REQUEST),
             (r#"{"seed":42}"#, StatusCode::OK),
         ] {
             let request = Request::builder()

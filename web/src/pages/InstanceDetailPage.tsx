@@ -91,7 +91,7 @@ export function InstanceDetailPage() {
         )}
         {tab === 'mods' && (
           <TabsContent value="mods">
-            <ModsTab name={name} running={instance.data?.running ?? false} path={nestedPath} />
+            <ModsTab id={name} name={name} running={instance.data?.running ?? false} path={nestedPath} />
           </TabsContent>
         )}
         {tab === 'lists' && (

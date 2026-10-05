@@ -8,6 +8,7 @@ import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
 import { AccessListsTab } from '@/components/instance/AccessListsTab'
 import { ConfigTab } from '@/components/instance/ConfigTab'
 import { PlayersTab } from '@/components/instance/PlayersTab'
+import { ModsTab } from '@/components/instance/ModsTab'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -275,6 +276,7 @@ export function ManagedInstanceDetailPage() {
     ...(detail.game === 'vrising' ? [{ id: 'rcon', label: 'RCON' }] : []),
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
+    ...(detail.game === 'valheim' && detail.capabilities.mods ? [{ id: 'mods', label: 'Mods' }] : []),
     ...(detail.game === 'palworld' ? [{ id: 'admin', label: 'Admin' }] : []),
     ...((detail.game === 'valheim' || detail.game === 'rust' || detail.game === 'vrising') && detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
@@ -285,7 +287,7 @@ export function ManagedInstanceDetailPage() {
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
   const listsBasePath = `/instance/${id}/lists`
   const defaultListTab = detail.game === 'vrising' || detail.game === 'valheim' ? 'admin' : 'owner'
-  if (!tab || (tab !== 'lists' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
+  if (!tab || (tab !== 'lists' && tab !== 'mods' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
     return <Navigate replace to={`/instance/${id}/logs`} />
   }
 
@@ -337,6 +339,9 @@ export function ManagedInstanceDetailPage() {
         )}
         {detail.game === 'valheim' && tab === 'lists' && (
           <TabsContent value="lists"><AccessListsTab id={detail.id} path={nestedPath} /></TabsContent>
+        )}
+        {detail.game === 'valheim' && tab === 'mods' && (
+          <TabsContent value="mods"><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabsContent>
         )}
         <TabsContent value="saves"><SaveFilesTab id={detail.id} game={detail.game} name={detail.name} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab id={detail.id} running={detail.running} /></TabsContent>

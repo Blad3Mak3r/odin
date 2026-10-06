@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-06
+
+### What's Changed
+- fix: restore game page navigation by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/104
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.14.0...v0.14.1
+
 ## [0.14.0] - 2026-10-06
 
 ### What's Changed

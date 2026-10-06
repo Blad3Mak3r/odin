@@ -68,7 +68,6 @@ pub struct GenericConfigUpdateRequest {
     pub port: u16,
     pub query_port: Option<u16>,
     pub admin_port: Option<u16>,
-    pub settings: Value,
     pub auto_restart: bool,
 }
 
@@ -399,11 +398,12 @@ async fn update_generic_config_for(
             port: request.port,
             query_port: request.query_port,
             admin_port: request.admin_port,
-            settings: request.settings,
+            settings: Value::Object(Default::default()),
             auto_restart: request.auto_restart,
         };
-        game_instances::update_generic_config(&db, game, &name, &config)
-            .map(|instance| generic_view(&paths, instance))
+        let instance = game_instances::update_generic_config(&db, game, &name, &config)?;
+        crate::game::config_documents::sync_operational(&paths, &instance)?;
+        Ok(generic_view(&paths, instance))
     })
     .await?;
     Ok(Json(view))
@@ -506,6 +506,7 @@ pub async fn execute_vrising_rcon_by_id(
         return Err(BadRequest("this API is only available for V Rising instances".into()).into());
     }
     let db = state.db.clone();
+    let paths = state.paths.clone();
     let name = identity.name;
     let instance = run_blocking(move || {
         game_instances::load_generic(&db, GameId::VRising, &name)?
@@ -513,7 +514,8 @@ pub async fn execute_vrising_rcon_by_id(
     })
     .await?;
     let output =
-        run_blocking(move || crate::game::vrising::execute_rcon(&instance, &command)).await?;
+        run_blocking(move || crate::game::vrising::execute_rcon(&paths, &instance, &command))
+            .await?;
     Ok(Json(RconCommandResponse { output }))
 }
 
@@ -1131,48 +1133,12 @@ fn generic_views(
 fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstanceView {
     let game = instance.identity.game;
     let name = instance.identity.name.clone();
-    let mut config = instance.config.settings.clone();
-    if let Value::Object(values) = &mut config {
-        let mut passwords_configured = serde_json::Map::new();
-        for secret in [
-            "admin_password",
-            "server_password",
-            "telnet_password",
-            "world_password",
-            "rcon_password",
-            "password",
-        ] {
-            passwords_configured.insert(
-                secret.to_string(),
-                Value::Bool(
-                    values
-                        .get(secret)
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.is_empty()),
-                ),
-            );
-            if values.contains_key(secret) {
-                values.insert(secret.to_string(), Value::String(String::new()));
-            }
-        }
-        values.insert(
-            "passwords_configured".into(),
-            Value::Object(passwords_configured),
-        );
-        values.insert("port".into(), serde_json::json!(instance.config.port));
-        values.insert(
-            "query_port".into(),
-            serde_json::json!(instance.config.query_port),
-        );
-        values.insert(
-            "admin_port".into(),
-            serde_json::json!(instance.config.admin_port),
-        );
-        values.insert(
-            "auto_restart".into(),
-            serde_json::json!(instance.config.auto_restart),
-        );
-    }
+    let config = serde_json::json!({
+        "port": instance.config.port,
+        "query_port": instance.config.query_port,
+        "admin_port": instance.config.admin_port,
+        "auto_restart": instance.config.auto_restart,
+    });
     ManagedInstanceView {
         running: instance.is_running(),
         odin_version: supervisor_version(paths, game, &name),
@@ -1264,7 +1230,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_view_redacts_palworld_passwords_and_reports_when_configured() {
+    fn generic_view_exposes_only_odin_owned_runtime_settings() {
         let dir = std::env::temp_dir().join(format!("odin-games-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths {
@@ -1272,17 +1238,15 @@ mod tests {
             config_dir: dir,
         };
         let db = Db::open(&paths).unwrap();
-        let mut instance =
+        let instance =
             game_instances::create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
-        instance.config.settings["admin_password"] = Value::String("admin-secret".into());
-        instance.config.settings["server_password"] = Value::String("join-secret".into());
 
         let view = generic_view(&paths, instance);
 
-        assert_eq!(view.config["admin_password"], "");
-        assert_eq!(view.config["server_password"], "");
-        assert_eq!(view.config["passwords_configured"]["admin_password"], true);
-        assert_eq!(view.config["passwords_configured"]["server_password"], true);
+        assert_eq!(view.config["port"], 8211);
+        assert_eq!(view.config["admin_port"], 8212);
+        assert!(view.config.get("admin_password").is_none());
+        assert!(view.config.get("server_password").is_none());
     }
 
     fn list_all_for_test(paths: &Paths, db: &Db) -> anyhow::Result<Vec<ManagedInstanceView>> {

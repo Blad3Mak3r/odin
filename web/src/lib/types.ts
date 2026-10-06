@@ -51,22 +51,30 @@ export interface GenericConfigUpdateRequest {
   port: number
   query_port: number | null
   admin_port: number | null
-  settings: Record<string, unknown>
   auto_restart: boolean
 }
 
 export interface AdvancedConfigEntry {
   key: string
+  label: string
   value: string
   sensitive: boolean
   configured: boolean
+  managed: boolean
+}
+
+export interface AdvancedConfigSection {
+  id: string
+  label: string
+  entries: AdvancedConfigEntry[]
 }
 
 export interface AdvancedConfigFile {
   id: string
   path: string
   format: string
-  entries: AdvancedConfigEntry[]
+  exists: boolean
+  sections: AdvancedConfigSection[]
 }
 
 export interface AdvancedConfigView {

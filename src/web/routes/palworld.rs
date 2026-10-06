@@ -55,8 +55,9 @@ pub async fn players(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let instance = instance_for_id(&state, id).await?;
+    let paths = state.paths.clone();
     Ok(Json(
-        run_blocking(move || palworld::players(&instance)).await?,
+        run_blocking(move || palworld::players(&paths, &instance)).await?,
     ))
 }
 
@@ -65,8 +66,9 @@ pub async fn metrics(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let instance = instance_for_id(&state, id).await?;
+    let paths = state.paths.clone();
     Ok(Json(
-        run_blocking(move || palworld::metrics(&instance)).await?,
+        run_blocking(move || palworld::metrics(&paths, &instance)).await?,
     ))
 }
 
@@ -77,14 +79,18 @@ pub async fn announce(
 ) -> ApiResult<Json<Value>> {
     let message = validate_message(request.message)?;
     let instance = instance_for_id(&state, id).await?;
+    let paths = state.paths.clone();
     Ok(Json(
-        run_blocking(move || palworld::announce(&instance, &message)).await?,
+        run_blocking(move || palworld::announce(&paths, &instance, &message)).await?,
     ))
 }
 
 pub async fn save(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let instance = instance_for_id(&state, id).await?;
-    Ok(Json(run_blocking(move || palworld::save(&instance)).await?))
+    let paths = state.paths.clone();
+    Ok(Json(
+        run_blocking(move || palworld::save(&paths, &instance)).await?,
+    ))
 }
 
 pub async fn kick(
@@ -94,9 +100,15 @@ pub async fn kick(
 ) -> ApiResult<Json<Value>> {
     let request = validate_player_request(request)?;
     let instance = instance_for_id(&state, id).await?;
+    let paths = state.paths.clone();
     Ok(Json(
         run_blocking(move || {
-            palworld::kick(&instance, &request.user_id, request.message.as_deref())
+            palworld::kick(
+                &paths,
+                &instance,
+                &request.user_id,
+                request.message.as_deref(),
+            )
         })
         .await?,
     ))
@@ -109,9 +121,15 @@ pub async fn ban(
 ) -> ApiResult<Json<Value>> {
     let request = validate_player_request(request)?;
     let instance = instance_for_id(&state, id).await?;
+    let paths = state.paths.clone();
     Ok(Json(
         run_blocking(move || {
-            palworld::ban(&instance, &request.user_id, request.message.as_deref())
+            palworld::ban(
+                &paths,
+                &instance,
+                &request.user_id,
+                request.message.as_deref(),
+            )
         })
         .await?,
     ))
@@ -126,8 +144,9 @@ pub async fn unban(
         return Err(BadRequest("Palworld user ID is required".into()).into());
     }
     let instance = instance_for_id(&state, id).await?;
+    let paths = state.paths.clone();
     Ok(Json(
-        run_blocking(move || palworld::unban(&instance, &request.user_id)).await?,
+        run_blocking(move || palworld::unban(&paths, &instance, &request.user_id)).await?,
     ))
 }
 
@@ -137,9 +156,15 @@ pub async fn shutdown(
     Json(request): Json<ShutdownRequest>,
 ) -> ApiResult<Json<Value>> {
     let instance = instance_for_id(&state, id).await?;
+    let paths = state.paths.clone();
     Ok(Json(
         run_blocking(move || {
-            palworld::shutdown(&instance, request.wait_time, request.message.as_deref())
+            palworld::shutdown(
+                &paths,
+                &instance,
+                request.wait_time,
+                request.message.as_deref(),
+            )
         })
         .await?,
     ))

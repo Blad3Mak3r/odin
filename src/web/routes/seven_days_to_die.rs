@@ -200,13 +200,14 @@ async fn console(
 ) -> ApiResult<Json<seven_days_to_die::ConsoleResponse>> {
     let name = resolve(&state, &id).await?;
     let db = state.db.clone();
+    let paths = state.paths.clone();
     let response = run_blocking(move || {
         let instance = crate::db::game_instances::load_generic(&db, GameId::SevenDaysToDie, &name)?
             .ok_or_else(|| anyhow::anyhow!(InstanceError::NotFound(name)))?;
         if !instance.is_running() {
             anyhow::bail!("start the 7 Days to Die server before using its console");
         }
-        seven_days_to_die::execute_console(&instance, &command)
+        seven_days_to_die::execute_console(&paths, &instance, &command)
     })
     .await?;
     Ok(Json(response))

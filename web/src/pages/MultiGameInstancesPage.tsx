@@ -1,26 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Select } from '@base-ui/react/select'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import { api } from '@/lib/api-client'
-import { formatBytes } from '@/lib/utils'
-import { Checkbox } from '@/components/ui/checkbox'
-import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
+import { ManagedInstancesTable } from '@/components/instance/ManagedInstancesTable'
 import { GameIcon } from '@/components/GameIcon'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/PageHeader'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { QueryError } from '@/components/QueryError'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useCreateManagedInstance, useGames, useManagedInstanceAction, useManagedInstanceTransition, useManagedInstances } from '@/lib/queries'
-import type { GameId, GameView, ManagedInstanceView, InstanceResources } from '@/lib/types'
+import { useCreateManagedInstance, useGames, useManagedInstances } from '@/lib/queries'
+import type { GameId, GameView } from '@/lib/types'
 
 type Filter = 'all' | GameId
 type BulkResult = { id: string; game: GameId | null; name: string | null; ok: boolean; error: string | null; job_id: string | null }
@@ -65,62 +59,24 @@ export function MultiGameInstancesPage() {
         <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear selection</Button>
       </div>}
       {results.length > 0 && <div className="text-sm" role="status">{results.map((result) => <p key={result.id} className={result.ok ? 'text-muted-foreground' : 'text-destructive'}>{result.game ?? 'unknown'} / {result.name ?? result.id}: {result.ok ? 'Operation accepted' : result.error}</p>)}</div>}
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead><Checkbox aria-label="Select visible instances" checked={visible.length > 0 && visible.every((i) => selected.has(i.id))} onCheckedChange={(checked) => setSelected((previous) => { const next = new Set(previous); for (const instance of visible) { if (checked) next.add(instance.id); else next.delete(instance.id) } return next })} /></TableHead><TableHead>Name</TableHead>
-            <TableHead>Game</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead className="hidden sm:table-cell">Port</TableHead>
-            <TableHead className="hidden lg:table-cell">CPU / RAM</TableHead><TableHead className="text-right">Actions</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {instances.isLoading && <LoadingRows />}
-          {instances.isError && <TableRow><TableCell colSpan={7}><QueryError error={instances.error} /></TableCell></TableRow>}
-          {!instances.isLoading && !instances.isError && visible.length === 0 && (
-            <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">No instances for this filter.</TableCell></TableRow>
-          )}
-          {visible.map((instance) => <ManagedInstanceRow key={instance.id} instance={instance} selected={selected.has(instance.id)} onToggle={() => toggle(instance.id)} />)}
-        </TableBody>
-      </Table>
+      <ManagedInstancesTable
+        instances={visible}
+        isLoading={instances.isLoading}
+        error={instances.isError ? instances.error : undefined}
+        emptyMessage="No instances for this filter."
+        selectable
+        selectedIds={selected}
+        onToggle={toggle}
+        onToggleAll={(checked) => setSelected((previous) => {
+          const next = new Set(previous)
+          for (const instance of visible) {
+            if (checked) next.add(instance.id)
+            else next.delete(instance.id)
+          }
+          return next
+        })}
+      />
     </div>
-  )
-}
-
-function LoadingRows() {
-  return Array.from({ length: 3 }, (_, index) => (
-    <TableRow key={index}><TableCell colSpan={7}><Skeleton className="h-5 w-full" /></TableCell></TableRow>
-  ))
-}
-
-function ManagedInstanceRow({ instance, selected, onToggle }: { instance: ManagedInstanceView; selected: boolean; onToggle: () => void }) {
-  const resources = useQuery({ queryKey: ['managed-instances', instance.id, 'resources'], queryFn: () => api.get<InstanceResources>(`/instances/${instance.id}/resources`), enabled: instance.running, refetchInterval: 10_000 })
-  const start = useManagedInstanceAction('start')
-  const stop = useManagedInstanceAction('stop')
-  const restart = useManagedInstanceAction('restart')
-  const transition = useManagedInstanceTransition(instance.id, instance.game, instance.name)
-  const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
-  const port = typeof instance.config.port === 'number' ? instance.config.port : '—'
-  const action = { id: instance.id }
-
-  return (
-    <TableRow>
-      <TableCell><Checkbox aria-label={`Select ${instance.game} / ${instance.name}`} checked={selected} onCheckedChange={onToggle} /></TableCell>
-      <TableCell className="font-medium"><Link className="hover:underline" to={`/instance/${instance.id}`}>{instance.name}</Link><div className="text-xs font-normal text-muted-foreground">Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}</div><div className="flex flex-wrap gap-1">{instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div></TableCell>
-      <TableCell><Badge variant="secondary"><GameIcon game={instance.game} className="size-4 rounded-sm" />{instance.game}</Badge></TableCell>
-      <TableCell><Badge variant={instance.running ? 'default' : 'secondary'}>{instance.running ? 'running' : 'stopped'}</Badge></TableCell>
-      <TableCell className="hidden sm:table-cell">{port}</TableCell>
-      <TableCell className="hidden lg:table-cell">{instance.running && resources.data ? `${resources.data.cpu_percent.toFixed(0)}% · ${formatBytes(resources.data.memory_bytes)}` : '—'}</TableCell>
-      <TableCell className="text-right"><div className="flex flex-wrap justify-end gap-2"><ManageInstanceDialog instance={instance} />
-        {instance.running ? (
-          <div className="flex justify-end gap-2">
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => restart.mutate(action, { onError: (error) => toast.error(error.message) })}>Restart</Button>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => stop.mutate(action, { onError: (error) => toast.error(error.message) })}>Stop</Button>
-          </div>
-        ) : <Button size="sm" disabled={busy} onClick={() => start.mutate(action, { onError: (error) => toast.error(error.message) })}>Start</Button>}
-      </div></TableCell>
-    </TableRow>
   )
 }
 

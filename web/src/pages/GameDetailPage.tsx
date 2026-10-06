@@ -1,6 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { NavLink, Navigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import palworldBanner from '@/assets/game-banners/palworld.webp'
 import runescapeDragonwildsBanner from '@/assets/game-banners/runescape-dragonwilds.webp'
@@ -8,15 +8,16 @@ import rustBanner from '@/assets/game-banners/rust.webp'
 import valheimBanner from '@/assets/game-banners/valheim.webp'
 import vrisingBanner from '@/assets/game-banners/vrising.webp'
 import { GameIcon } from '@/components/GameIcon'
+import { ManagedInstancesTable } from '@/components/instance/ManagedInstancesTable'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
 import { useGameInstallStatus, useGames, useInstallGame, useJobs, useManagedInstances } from '@/lib/queries'
 import type { GameId, GameView } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 const GAME_DESCRIPTIONS: Record<GameId, string> = {
   valheim: 'Build, explore, and survive with a dedicated Valheim server.',
@@ -83,35 +84,65 @@ function GameInstances({ game }: { game: GameView }) {
   const instances = useManagedInstances()
   const gameInstances = instances.data?.filter((instance) => instance.game === game.id) ?? []
 
-  if (instances.isError) return <QueryError error={instances.error} />
-  if (instances.isLoading) return <Skeleton className="h-28" />
-  if (gameInstances.length === 0) {
-    return <p className="text-sm text-muted-foreground">No {game.name} instances yet.</p>
-  }
+  return (
+    <ManagedInstancesTable
+      instances={gameInstances}
+      isLoading={instances.isLoading}
+      error={instances.isError ? instances.error : undefined}
+      emptyMessage={`No ${game.name} instances yet.`}
+      withGame={false}
+    />
+  )
+}
+
+function GameHeader({ game }: { game: GameView }) {
+  return (
+    <section
+      className="relative overflow-hidden rounded-2xl border bg-cover bg-center p-6 sm:p-8"
+      style={{ backgroundImage: `linear-gradient(90deg, var(--card), color-mix(in oklab, var(--card) 72%, transparent), transparent), url(${GAME_BANNERS[game.id]})` }}
+    >
+      <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent" />
+      <div className="relative flex items-center gap-5">
+        <GameIcon game={game.id} className="size-20 rounded-2xl shadow-lg" />
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">{game.name}</h1>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{GAME_DESCRIPTIONS[game.id]}</p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function GameTabs({ game }: { game: GameView }) {
+  const tabs = [
+    { label: 'Overview', to: `/games/${game.id}`, end: true },
+    { label: 'Instances', to: `/games/${game.id}/instances`, end: false },
+    ...(game.capabilities.mods ? [{ label: 'Mods', to: `/games/${game.id}/mods`, end: false }] : []),
+  ]
 
   return (
-    <div className="grid gap-3 md:grid-cols-2">
-      {gameInstances.map((instance) => (
-        <Card key={instance.id}>
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <div>
-              <CardTitle className="text-base">{instance.name}</CardTitle>
-              <CardDescription>Created {new Date(instance.created_at).toLocaleDateString()}</CardDescription>
-            </div>
-            <Badge variant={instance.running ? 'default' : 'secondary'}>{instance.running ? 'Running' : 'Stopped'}</Badge>
-          </CardHeader>
-          <CardContent>
-            <Button size="sm" variant="outline" render={<Link to={`/instance/${instance.id}`} />}>Manage instance</Button>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+    <nav aria-label={`${game.name} sections`} className="overflow-x-auto">
+      <div className="inline-flex h-8 items-center rounded-lg bg-muted p-[3px] text-muted-foreground">
+        {tabs.map((tab) => (
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            end={tab.end}
+            className={({ isActive }) => cn(
+              'inline-flex h-[calc(100%-1px)] items-center justify-center rounded-md px-2.5 py-0.5 text-sm font-medium whitespace-nowrap transition-all',
+              isActive ? 'bg-background text-foreground shadow-sm dark:border dark:border-input dark:bg-input/30' : 'text-foreground/60 hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground',
+            )}
+          >
+            {tab.label}
+          </NavLink>
+        ))}
+      </div>
+    </nav>
   )
 }
 
 export function GameDetailPage() {
   const { game: gameParam, '*': tabPath } = useParams<{ game: string; '*': string }>()
-  const navigate = useNavigate()
   const games = useGames()
   const game = games.data?.find((candidate) => candidate.id === gameParam)
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
@@ -120,41 +151,18 @@ export function GameDetailPage() {
   if (games.isError) return <QueryError error={games.error} />
   if (games.isLoading) return <Skeleton className="h-56" />
   if (!game) return <Navigate replace to="/games" />
+  if (tab === 'overview' && nestedPath.length === 0) return <Navigate replace to={`/games/${game.id}`} />
   if (!['overview', 'instances', 'mods'].includes(activeTab) || (nestedPath.length > 0 && activeTab !== 'mods') || (activeTab === 'mods' && !game.capabilities.mods)) {
     return <Navigate replace to={`/games/${game.id}`} />
   }
 
-  const targetPath = (next: string) => next === 'overview' ? `/games/${game.id}` : `/games/${game.id}/${next}`
-
   return (
     <div className="flex flex-col gap-6">
-      <Tabs value={activeTab} onValueChange={(value) => navigate(targetPath(value))}>
-        <div className="overflow-x-auto">
-          <TabsList className="w-max">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="instances">Instances</TabsTrigger>
-            {game.capabilities.mods && <TabsTrigger value="mods">Mods</TabsTrigger>}
-          </TabsList>
-        </div>
-        <TabsContent value="overview" className="flex flex-col gap-6">
-          <section
-            className="relative overflow-hidden rounded-2xl border bg-cover bg-center p-6 sm:p-8"
-            style={{ backgroundImage: `linear-gradient(90deg, var(--card), color-mix(in oklab, var(--card) 72%, transparent), transparent), url(${GAME_BANNERS[game.id]})` }}
-          >
-            <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent" />
-            <div className="relative flex items-center gap-5">
-              <GameIcon game={game.id} className="size-20 rounded-2xl shadow-lg" />
-              <div>
-                <h1 className="text-3xl font-semibold tracking-tight">{game.name}</h1>
-                <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{GAME_DESCRIPTIONS[game.id]}</p>
-              </div>
-            </div>
-          </section>
-          <InstallStatusCard game={game} />
-        </TabsContent>
-        <TabsContent value="instances"><GameInstances game={game} /></TabsContent>
-        {game.id === 'valheim' && <TabsContent value="mods"><ValheimModsTab path={nestedPath} /></TabsContent>}
-      </Tabs>
+      <GameHeader game={game} />
+      <GameTabs game={game} />
+      {activeTab === 'overview' && <InstallStatusCard game={game} />}
+      {activeTab === 'instances' && <GameInstances game={game} />}
+      {activeTab === 'mods' && game.id === 'valheim' && <ValheimModsTab path={nestedPath} />}
     </div>
   )
 }

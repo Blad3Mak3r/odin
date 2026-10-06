@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { ManagedInstanceHeader } from '@/components/instance/ManagedInstanceHeader'
 import { ManagedLogsTab } from '@/components/instance/ManagedLogsTab'
 import { ManagedResourcesTab } from '@/components/instance/ManagedResourcesTab'
+import { ResourceLimitsTab } from '@/components/instance/ResourceLimitsTab'
 import { LiveLogOutput } from '@/components/instance/LiveLogOutput'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -296,6 +297,7 @@ export function ManagedInstanceDetailPage() {
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
     { id: 'saves', label: 'Save files' },
     { id: 'resources', label: 'Resources' },
+    { id: 'limits', label: 'Limits' },
     ...(detail.game === 'valheim' && detail.capabilities.players ? [{ id: 'players', label: 'Players' }] : []),
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
@@ -359,6 +361,7 @@ export function ManagedInstanceDetailPage() {
         )}
         <TabsContent value="saves"><SaveFilesTab id={detail.id} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab id={detail.id} running={detail.running} /></TabsContent>
+        <TabsContent value="limits"><ResourceLimitsTab id={detail.id} /></TabsContent>
         {detail.game === 'valheim' && <TabsContent value="players"><PlayersTab id={detail.id} running={detail.running} /></TabsContent>}
       </Tabs>
     </div>

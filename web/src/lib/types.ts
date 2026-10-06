@@ -55,6 +55,11 @@ export interface GenericConfigUpdateRequest {
   auto_restart: boolean
 }
 
+export interface ResourceLimits {
+  cpu_percent: number | null
+  memory_max_bytes: number | null
+}
+
 export interface RconCommandResponse {
   output: string
 }

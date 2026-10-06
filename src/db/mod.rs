@@ -24,6 +24,7 @@ pub mod jobs;
 pub mod lists;
 mod migrations;
 pub mod player_sessions;
+pub mod resource_limits;
 pub mod resource_samples;
 pub mod settings;
 pub mod uptime_schedules;

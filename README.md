@@ -377,7 +377,18 @@ odin serve --bind 0.0.0.0 --port 8080  # or pick your own address/port
 It covers dependency status, fleet search, tags, bulk lifecycle actions,
 instance create/start/stop/restart/rename/clone/delete, game-specific
 configuration, live logs, downloadable save files, scheduled backups, and
-live plus historical CPU/RAM usage with CSV export. Global settings define
+live plus historical CPU/RAM usage with CSV export. Each instance also has a
+**Limits** tab for optional CPU and memory ceilings: CPU is expressed as a
+percentage of one core (so `200%` permits two full cores), and memory is
+entered in GiB. Limits take effect on the next start, including an automatic
+restart. Memory pressure begins at 90% of the selected maximum; at 100% the
+kernel may terminate a game process to enforce the hard limit. Leaving either
+field empty leaves that resource unlimited.
+
+Resource limits require cgroup v2 and systemd 254 or newer. Packaged installs
+configure the required delegation automatically; if an installation cannot
+enforce a configured limit, Odin refuses to start that instance rather than
+running it without the requested protection. Global settings define
 automatic restart and backup defaults for every newly created game server.
 
 ### Instance API identity

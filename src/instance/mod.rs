@@ -178,7 +178,8 @@ pub fn clone_configuration(
         .iter()
         .map(|(kind, ids)| (kind.db_value(), ids.as_slice()))
         .collect();
-    if let Err(error) = crate::db::instances::save_clone(db, &target.state, &db_lists) {
+    if let Err(error) = crate::db::instances::save_clone(db, &target.state, source_name, &db_lists)
+    {
         let _ = std::fs::remove_dir_all(&target_dir);
         return Err(error);
     }
@@ -392,6 +393,14 @@ mod tests {
     fn clone_copies_operational_configuration_but_not_world_data() {
         let (paths, db) = temp_context("complete");
         let source = configured_source(&paths, &db);
+        let source_id = crate::db::game_instances::valheim_identity(&db, "source")
+            .unwrap()
+            .id;
+        let source_limits = crate::db::resource_limits::ResourceLimits {
+            cpu_percent: Some(175.0),
+            memory_max_bytes: Some(3 * 1024 * 1024 * 1024),
+        };
+        crate::db::resource_limits::save(&db, &source_id, &source_limits).unwrap();
 
         let target = clone_configuration(
             &paths,
@@ -444,6 +453,13 @@ mod tests {
         assert_eq!(save_entries.len(), 3);
         assert!(!target.dir.join("backups").exists());
         assert!(!target.dir.join("logs").exists());
+        let target_id = crate::db::game_instances::valheim_identity(&db, "season-two")
+            .unwrap()
+            .id;
+        assert_eq!(
+            crate::db::resource_limits::load(&db, &target_id).unwrap(),
+            source_limits
+        );
     }
 
     #[test]

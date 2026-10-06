@@ -40,6 +40,14 @@ pub async fn spawn_detached(paths: &Paths, identity: &GameInstanceIdentity) -> R
     validate_instance_name(instance_name)
         .map_err(|error| anyhow::anyhow!("invalid instance name for supervisor: {error}"))?;
 
+    // Validate this in the caller's cgroup before detaching. Otherwise a
+    // missing service delegation would make the caller wait for a supervisor
+    // socket that can never come up, hiding the actionable configuration
+    // error in supervisor.log.
+    let db = crate::db::Db::open(paths)?;
+    let limits = crate::db::resource_limits::load(&db, &identity.id)?;
+    crate::cgroup::validate_environment(&limits)?;
+
     let exe = std::env::current_exe().context("failed to resolve odin's own executable path")?;
 
     let (stdout_file, stderr_file) = open_supervisor_log(paths, identity)?;

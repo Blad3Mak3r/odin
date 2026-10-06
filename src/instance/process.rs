@@ -15,7 +15,21 @@ use tokio::process::{Child, Command};
 /// redirections intact at the kernel level. This is the detail that makes
 /// instances survive `systemctl restart odin`; never call `.kill()` on a
 /// `Child` obtained this way except as part of an explicit `stop()`.
+#[cfg(test)]
 pub async fn spawn(mut cmd: Command) -> Result<Child> {
+    cmd.spawn().context("failed to spawn game server process")
+}
+
+/// Like [`spawn`], but moves the game process into a prepared cgroup before
+/// it execs. The cgroup move is optional so unrestricted instances keep the
+/// exact existing spawn path.
+pub async fn spawn_with_cgroup(
+    mut cmd: Command,
+    cgroup: Option<&crate::cgroup::GameCgroup>,
+) -> Result<Child> {
+    if let Some(cgroup) = cgroup {
+        cgroup.attach_to(&mut cmd);
+    }
     cmd.spawn().context("failed to spawn game server process")
 }
 

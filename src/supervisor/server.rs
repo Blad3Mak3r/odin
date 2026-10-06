@@ -110,6 +110,7 @@ struct SharedHandles {
 /// in-place restart.
 struct SpawnedChild {
     child: tokio::process::Child,
+    cgroup: Option<crate::cgroup::GameCgroup>,
     pid: u32,
     pid_started_at: i64,
     started_at: chrono::DateTime<Utc>,
@@ -221,17 +222,31 @@ impl SupervisedInstance {
 async fn spawn_child(
     instance: &SupervisedInstance,
     paths: &Paths,
+    db: &Db,
+    instance_id: &str,
     instance_name: &str,
 ) -> Result<SpawnedChild> {
     let cmd = instance.command(paths)?;
-    let child = process::spawn(cmd)
-        .await
-        .with_context(|| format!("failed to start instance '{instance_name}'"))?;
+    let limits = crate::db::resource_limits::load(db, instance_id)?;
+    let mut cgroup = crate::cgroup::GameCgroup::prepare(instance_id, &limits)?;
+    let child = match process::spawn_with_cgroup(cmd, cgroup.as_ref()).await {
+        Ok(child) => child,
+        Err(error) => {
+            if let Some(cgroup) = cgroup.take()
+                && let Err(cleanup_error) = cgroup.remove()
+            {
+                tracing::warn!(instance = instance_name, error = %cleanup_error, "failed to clean up cgroup after spawn failure");
+            }
+            return Err(error)
+                .with_context(|| format!("failed to start instance '{instance_name}'"));
+        }
+    };
     let pid = child.id().context("spawned child has no pid")?;
     let pid_started_at = process::start_time_of(pid)?;
     let started_at = Utc::now();
     Ok(SpawnedChild {
         child,
+        cgroup,
         pid,
         pid_started_at,
         started_at,
@@ -252,6 +267,7 @@ pub async fn run_instance(paths: Paths, instance_id: String) -> Result<()> {
         .context("supervisor instance UUID does not exist")?;
     let game = identity.game;
     let instance_name = identity.name;
+    let resource_instance_id = identity.id;
     let instance = SupervisedInstance::prepare(&paths, &db, game, &instance_name)?;
 
     let run_dir = paths.runtime_dir();
@@ -271,8 +287,16 @@ pub async fn run_instance(paths: Paths, instance_id: String) -> Result<()> {
     };
     write_pidfile(&pidfile)?;
 
-    let spawned = spawn_child(&instance, &paths, &instance_name).await?;
+    let spawned = spawn_child(
+        &instance,
+        &paths,
+        &db,
+        &resource_instance_id,
+        &instance_name,
+    )
+    .await?;
     let mut child = spawned.child;
+    let mut cgroup = spawned.cgroup;
     let mut pid = spawned.pid;
     let mut pid_started_at = spawned.pid_started_at;
     let mut started_at = spawned.started_at;
@@ -343,9 +367,16 @@ pub async fn run_instance(paths: Paths, instance_id: String) -> Result<()> {
                     ?code,
                     "instance exited unexpectedly; attempting automatic restart"
                 );
-                match spawn_child(&instance, &paths, &instance_name).await {
+                match spawn_child(&instance, &paths, &db, &resource_instance_id, &instance_name).await {
                     Ok(respawned) => {
                         child = respawned.child;
+                        if respawned.cgroup.is_none()
+                            && let Some(previous_cgroup) = cgroup.take()
+                            && let Err(error) = previous_cgroup.remove()
+                        {
+                            tracing::warn!(instance = instance_name, error = %error, "failed to clean up disabled game cgroup");
+                        }
+                        cgroup = respawned.cgroup;
                         pid = respawned.pid;
                         pid_started_at = respawned.pid_started_at;
                         started_at = respawned.started_at;
@@ -406,8 +437,13 @@ pub async fn run_instance(paths: Paths, instance_id: String) -> Result<()> {
     log_poller.abort();
     stats_refresher.abort();
     let _ = events_tx.send(Event::Exited { code: exit_code });
-    instance.clear_pid(&db, &instance_name, Utc::now())?;
     cleanup(&control_path, &events_path, &pidfile);
+    if let Some(cgroup) = cgroup
+        && let Err(error) = cgroup.remove()
+    {
+        tracing::warn!(instance = instance_name, error = %error, "failed to clean up game cgroup");
+    }
+    instance.clear_pid(&db, &instance_name, Utc::now())?;
 
     tracing::info!(instance = instance_name, ?exit_code, "supervisor exiting");
     Ok(())

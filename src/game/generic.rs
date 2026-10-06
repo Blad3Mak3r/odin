@@ -148,6 +148,16 @@ fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<
     ] {
         set_xml_property(&mut contents, name, &value)?;
     }
+    // SandboxCode encodes the complete V3 game-rule set. Leave the installed
+    // template's value intact until the operator explicitly supplies one: the
+    // game's defaults and encoding can change between stable releases.
+    if let Some(code) = settings
+        .get("sandbox_code")
+        .and_then(Value::as_str)
+        .filter(|code| !code.is_empty())
+    {
+        set_xml_property(&mut contents, "SandboxCode", code)?;
+    }
     fs::create_dir_all(instance_dir.join("Saves"))?;
     fs::create_dir_all(instance_dir.join("Mods"))?;
     fs::write(&config, contents).with_context(|| format!("failed to write {}", config.display()))
@@ -728,6 +738,7 @@ mod tests {
                 "game_name": "OdinWorld",
                 "world_gen_seed": "seed",
                 "world_gen_size": 8192,
+                "sandbox_code": "AAAJABJACJADJARFBNC",
             }),
         );
         instance.identity.name = "undead".into();
@@ -742,6 +753,7 @@ mod tests {
         assert!(settings.contains("ServerPort\" value=\"26900"));
         assert!(settings.contains(&format!("UserDataFolder\" value=\"{}", root.display())));
         assert!(settings.contains("TelnetEnabled\" value=\"false"));
+        assert!(settings.contains("SandboxCode\" value=\"AAAJABJACJADJARFBNC"));
         assert!(root.join("Saves").is_dir());
         assert!(root.join("Mods").is_dir());
         fs::remove_dir_all(paths.data_dir).ok();

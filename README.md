@@ -509,6 +509,11 @@ UDP ports `26900–26902` by default and load user-uploaded ZIP mods from each
 instance's own `Mods/` directory. Odin requires a stopped 7D2D server before
 creating a backup or changing mods.
 
+On 7 Days to Die V3 and later, gameplay rules are represented by the game's
+single `SandboxCode` value rather than individual XML properties. Odin exposes
+that complete value in the instance configuration form; copy it from the
+game's Sandbox Options screen or a generator for the same server version.
+
 On the first start after upgrading, Odin automatically moves the legacy
 single-version mod store into this layout and repoints every existing instance;
 no migration command or dashboard action is required.

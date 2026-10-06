@@ -219,13 +219,19 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
   const [gameName, setGameName] = useState(typeof config.settings.game_name === 'string' ? config.settings.game_name : '')
   const [worldSeed, setWorldSeed] = useState(typeof config.settings.world_gen_seed === 'string' ? config.settings.world_gen_seed : '')
   const [worldSize, setWorldSize] = useState(typeof config.settings.world_gen_size === 'number' ? String(config.settings.world_gen_size) : '6144')
+  const [sandboxCode, setSandboxCode] = useState(typeof config.settings.sandbox_code === 'string' ? config.settings.sandbox_code : '')
 
   const save = () => {
     const settings: Record<string, unknown> = { ...config.settings, server_name: serverName }
     if (game === 'vrising') Object.assign(settings, { max_players: Number(maxPlayers), rcon_enabled: rconEnabled, rcon_password: rconPassword })
     if (game === 'palworld') Object.assign(settings, { max_players: Number(maxPlayers), rest_api_enabled: restEnabled, admin_password: adminPassword, server_password: serverPassword })
     if (isDragonwilds) Object.assign(settings, { owner_id: ownerId, default_world_name: worldName, admin_password: adminPassword, world_password: worldPassword })
-    if (isSevenDays) Object.assign(settings, { server_description: description, server_password: serverPassword, visibility: Number(visibility), max_players: Number(maxPlayers), game_world: gameWorld, game_name: gameName, world_gen_seed: worldSeed, world_gen_size: Number(worldSize) })
+    if (isSevenDays) {
+      Object.assign(settings, { server_description: description, server_password: serverPassword, visibility: Number(visibility), max_players: Number(maxPlayers), game_world: gameWorld, game_name: gameName, world_gen_seed: worldSeed, world_gen_size: Number(worldSize) })
+      const code = sandboxCode.trim()
+      if (code) settings.sandbox_code = code
+      else delete settings.sandbox_code
+    }
     update.mutate({
       id,
       request: {
@@ -267,6 +273,11 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
           <ConfigInput id="7d2d-game-name" label="Save name" value={gameName} disabled={running} onChange={setGameName} />
           <ConfigInput id="7d2d-seed" label="RWG seed" value={worldSeed} disabled={running} onChange={setWorldSeed} />
           <ConfigInput id="7d2d-size" label="RWG size" type="number" value={worldSize} disabled={running} onChange={setWorldSize} />
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <Label htmlFor="7d2d-sandbox-code">Sandbox code</Label>
+            <Input id="7d2d-sandbox-code" value={sandboxCode} disabled={running} placeholder="Paste a code copied from 7 Days to Die" onChange={(event) => setSandboxCode(event.target.value)} />
+            <p className="text-xs text-muted-foreground">This code carries all sandbox rules, including difficulty, XP, loot, day length, zombie behavior, blood moons, drops, and resource rates. Leave it empty to preserve the installed server default.</p>
+          </div>
         </>}
       </div>
       {game === 'vrising' && <div className="flex items-center justify-between rounded-xl border p-3"><Label htmlFor="vrising-rcon">Enable local RCON</Label><Switch id="vrising-rcon" checked={rconEnabled} disabled={running} onCheckedChange={setRconEnabled} /></div>}

@@ -475,6 +475,19 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
                 "7 Days to Die max_players must be positive".into()
             ));
         }
+        if let Some(code) = settings.get("sandbox_code") {
+            let Some(code) = code.as_str() else {
+                bail!(InvalidGenericConfig(
+                    "7 Days to Die SandboxCode must be text".into()
+                ));
+            };
+            if code.len() > 4096 || code.chars().any(char::is_whitespace) {
+                bail!(InvalidGenericConfig(
+                    "7 Days to Die SandboxCode must be a single value no longer than 4096 characters"
+                        .into(),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -994,6 +1007,46 @@ mod tests {
 
         assert_eq!(updated.config.settings["admin_password"], "admin-secret");
         assert_eq!(updated.config.settings["server_password"], "join-secret");
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn seven_days_configuration_persists_a_complete_sandbox_code() {
+        let (paths, db) = temp_context("7d2d-sandbox-code");
+        let instance = create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+        let config = GenericGameConfig {
+            settings: json!({
+                "server_name": "Undead",
+                "server_description": "",
+                "server_password": "",
+                "visibility": 2,
+                "max_players": 8,
+                "game_world": "Navezgane",
+                "game_name": "undead",
+                "world_gen_seed": "undead",
+                "world_gen_size": 6144,
+                "sandbox_code": "AAAJABJACJADJARFBNC"
+            }),
+            ..instance.config
+        };
+        let updated =
+            update_generic_config(&db, GameId::SevenDaysToDie, "undead", &config).unwrap();
+        assert_eq!(
+            updated.config.settings["sandbox_code"],
+            "AAAJABJACJADJARFBNC"
+        );
+
+        let invalid = GenericGameConfig {
+            settings: json!({
+                "server_name": "Undead",
+                "game_world": "Navezgane",
+                "game_name": "undead",
+                "max_players": 8,
+                "sandbox_code": "not a code"
+            }),
+            ..config
+        };
+        assert!(update_generic_config(&db, GameId::SevenDaysToDie, "undead", &invalid).is_err());
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

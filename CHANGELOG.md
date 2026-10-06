@@ -4,6 +4,16 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-06
+
+### What's Changed
+- fix: preserve Palworld passwords on config save by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/101
+- feature: add game product pages by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/102
+- Add per-instance resource limits by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/103
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.13.2...v0.14.0
+
 ## [0.13.2] - 2026-10-06
 
 ### What's Changed

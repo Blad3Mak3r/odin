@@ -15,6 +15,7 @@ pub mod mods;
 pub mod nexus;
 pub mod palworld;
 pub mod players;
+pub mod resource_limits;
 pub mod resources;
 pub mod rust_access_lists;
 pub mod saves;

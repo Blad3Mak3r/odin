@@ -18,6 +18,11 @@ RestartSec=5
 # restart/deploy; the default KillMode=control-group would kill it and its
 # Valheim child too, since they inherit this unit's cgroup.
 KillMode=process
+# Give Odin a private cgroup v2 subtree for per-instance CPU and memory
+# limits. The main process lives in `manager`, keeping the unit's cgroup an
+# empty internal node from which Odin can create `games/<instance-id>` leaves.
+Delegate=cpu memory
+DelegateSubgroup=manager
 ProtectSystem=strict
 ReadWritePaths=/var/lib/odin
 ProtectHome=true

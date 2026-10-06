@@ -24,6 +24,7 @@ pub fn save(db: &Db, state: &InstanceState) -> Result<()> {
 pub fn save_clone(
     db: &Db,
     state: &InstanceState,
+    source_name: &str,
     access_lists: &[(&str, &[String])],
 ) -> Result<()> {
     let mut conn = db.conn();
@@ -31,6 +32,15 @@ pub fn save_clone(
         .transaction()
         .context("failed to start clone transaction")?;
     save_in_tx(&tx, state)?;
+    tx.execute(
+        "INSERT INTO instance_resource_limits (instance_id, cpu_percent, memory_max_bytes) \
+         SELECT target.id, source_limits.cpu_percent, source_limits.memory_max_bytes \
+         FROM instance_resource_limits source_limits \
+         JOIN game_instances source ON source.id = source_limits.instance_id \
+         JOIN game_instances target ON target.game = 'valheim' AND target.name = ?1 \
+         WHERE source.game = 'valheim' AND source.name = ?2",
+        params![state.name, source_name],
+    )?;
     for (kind, ids) in access_lists {
         for id in *ids {
             tx.execute(

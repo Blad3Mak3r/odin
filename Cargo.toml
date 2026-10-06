@@ -48,6 +48,7 @@ async-stream = "0.3"
 regex = "1"
 rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }
 sha2 = "0.11"
+libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

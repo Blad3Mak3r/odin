@@ -5,8 +5,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
-    instances, jobs, lists, mods, nexus, palworld, players, resources, rust_access_lists, saves,
-    settings, uptime_schedules, version, vrising_access_lists, webhooks,
+    instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
+    rust_access_lists, saves, settings, uptime_schedules, version, vrising_access_lists, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -43,6 +43,10 @@ pub fn build_router(state: AppState) -> Router {
             post(games::restart_instance_by_id),
         )
         .route("/instances/{id}/tags", put(games::set_tags_by_id))
+        .route(
+            "/instances/{id}/resource-limits",
+            get(resource_limits::get_resource_limits).put(resource_limits::set_resource_limits),
+        )
         .route("/instances/{id}/rename", post(games::rename_instance_by_id))
         .route(
             "/instances/{id}/uptime-schedule",

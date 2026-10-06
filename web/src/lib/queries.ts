@@ -39,6 +39,7 @@ import type {
   PlayerSession,
   ResourceSample,
   RconCommandResponse,
+  ResourceLimits,
   RustAccessListKind,
   RustConfigUpdateRequest,
   SaveFileEntry,
@@ -366,6 +367,26 @@ export function useUpdateGenericConfig() {
     onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
+    },
+  })
+}
+
+export function useResourceLimits(id: string) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'resource-limits'],
+    queryFn: () => api.get<ResourceLimits>(`/instances/${id}/resource-limits`),
+    enabled: Boolean(id),
+  })
+}
+
+export function useSetResourceLimits(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (limits: ResourceLimits) => api.put<ResourceLimits>(`/instances/${id}/resource-limits`, limits),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'resource-limits'] })
     },
   })
 }

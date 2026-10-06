@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-06
+
+### What's Changed
+- fix: create supervisor log directories by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/97
+- Fix managed instance UI controls by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/98
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.13.0...v0.13.1
+
 ## [0.13.0] - 2026-10-05
 
 ### What's Changed

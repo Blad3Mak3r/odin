@@ -5,6 +5,7 @@
 //! `LogTailRegistry` event bridge are wired into Valheim's lifecycle. Rust
 //! v1 does not expose this Valheim-specific socket/event contract.
 
+use std::fs::{File, OpenOptions};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -35,23 +36,13 @@ const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// dropped immediately; like the Valheim child today, `kill_on_drop`
 /// defaults to `false`, so this does not kill the supervisor.
 pub async fn spawn_detached(paths: &Paths, identity: &GameInstanceIdentity) -> Result<()> {
-    let game = identity.game;
     let instance_name = &identity.name;
     validate_instance_name(instance_name)
         .map_err(|error| anyhow::anyhow!("invalid instance name for supervisor: {error}"))?;
 
     let exe = std::env::current_exe().context("failed to resolve odin's own executable path")?;
 
-    let log_path = crate::paths::instance_logs_dir(&paths.game_instance_dir(game, instance_name))
-        .join("supervisor.log");
-    let stdout_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .with_context(|| format!("failed to open {}", log_path.display()))?;
-    let stderr_file = stdout_file
-        .try_clone()
-        .context("failed to duplicate supervisor.log handle for stderr")?;
+    let (stdout_file, stderr_file) = open_supervisor_log(paths, identity)?;
 
     let mut cmd = Command::new(exe);
     // Keep the UUID out of argv entirely. The child resolves it against the
@@ -67,6 +58,23 @@ pub async fn spawn_detached(paths: &Paths, identity: &GameInstanceIdentity) -> R
         .with_context(|| format!("failed to spawn supervisor for instance {instance_name}"))?;
     drop(child);
     Ok(())
+}
+
+fn open_supervisor_log(paths: &Paths, identity: &GameInstanceIdentity) -> Result<(File, File)> {
+    let log_dir =
+        crate::paths::instance_logs_dir(&paths.game_instance_dir(identity.game, &identity.name));
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("failed to create {}", log_dir.display()))?;
+    let log_path = log_dir.join("supervisor.log");
+    let stdout_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open {}", log_path.display()))?;
+    let stderr_file = stdout_file
+        .try_clone()
+        .context("failed to duplicate supervisor.log handle for stderr")?;
+    Ok((stdout_file, stderr_file))
 }
 
 /// Sends `Ping` over a fresh connection to `instance_name`'s control
@@ -356,6 +364,28 @@ mod tests {
                 .contains("invalid instance name for supervisor")
         );
         assert!(!paths.data_dir.join("servers").exists());
+        std::fs::remove_dir_all(&paths.data_dir).ok();
+    }
+
+    #[test]
+    fn opening_palworld_supervisor_log_creates_missing_log_directory() {
+        let paths = temp_paths("palworld-supervisor-log");
+        let identity = GameInstanceIdentity {
+            tags: Vec::new(),
+            id: uuid::Uuid::new_v4().to_string(),
+            game: GameId::Palworld,
+            name: "palermo".to_string(),
+            created_at: chrono::Utc::now(),
+        };
+
+        let (_stdout, _stderr) = open_supervisor_log(&paths, &identity).unwrap();
+
+        assert!(
+            paths
+                .game_instance_dir(GameId::Palworld, "palermo")
+                .join("logs/supervisor.log")
+                .is_file()
+        );
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 

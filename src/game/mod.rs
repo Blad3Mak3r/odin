@@ -261,10 +261,10 @@ impl GameDriver for SevenDaysToDieDriver {
     fn capabilities(&self) -> GameCapabilities {
         GameCapabilities {
             backups: true,
-            players: false,
+            players: true,
             mods: true,
             access_lists: false,
-            readiness: false,
+            readiness: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {

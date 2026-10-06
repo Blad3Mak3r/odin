@@ -29,6 +29,8 @@ pub struct AdvancedConfigFile {
 pub struct AdvancedConfigEntry {
     pub key: String,
     pub value: String,
+    pub sensitive: bool,
+    pub configured: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -171,6 +173,13 @@ pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<Advance
             let contents = read_document(paths, instance, *spec)?;
             let mut entries = parse(spec.format, &contents)?;
             entries.retain(|entry| !spec.managed.contains(&entry.key.as_str()));
+            for entry in &mut entries {
+                entry.sensitive = is_sensitive_key(&entry.key);
+                entry.configured = !entry.value.is_empty();
+                if entry.sensitive {
+                    entry.value.clear();
+                }
+            }
             Ok(AdvancedConfigFile {
                 id: spec.id.into(),
                 path: spec.path.into(),
@@ -215,6 +224,11 @@ pub fn apply(
             }
             if !keys.contains_key(change.key.as_str()) {
                 bail!("{} does not exist in {}", change.key, spec.id);
+            }
+            // A blank secret from the redacted dashboard means "keep the
+            // current value", matching Odin's primary configuration forms.
+            if is_sensitive_key(&change.key) && change.value.is_empty() {
+                continue;
             }
             updated = set(spec.format, &updated, &change.key, &change.value)?;
         }
@@ -269,17 +283,28 @@ fn format_name(format: Format) -> &'static str {
     }
 }
 
+fn is_sensitive_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.contains("password")
+        || key.contains("secret")
+        || key.contains("token")
+        || key.ends_with("key")
+}
+
 fn parse(format: Format, contents: &str) -> Result<Vec<AdvancedConfigEntry>> {
     match format {
         Format::XmlProperties => {
-            let pattern = regex::Regex::new(
-                r#"(?is)<property\s+name\s*=\s*\"([^\"]+)\"[^>]*?value\s*=\s*\"([^\"]*)\"[^>]*/?>"#,
-            )?;
+            let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
             Ok(pattern
-                .captures_iter(contents)
-                .map(|capture| AdvancedConfigEntry {
-                    key: capture[1].into(),
-                    value: html_unescape(&capture[2]),
+                .find_iter(contents)
+                .filter_map(|tag| {
+                    let tag = tag.as_str();
+                    Some(AdvancedConfigEntry {
+                        key: xml_attribute(tag, "name")?,
+                        value: html_unescape(&xml_attribute(tag, "value")?),
+                        sensitive: false,
+                        configured: false,
+                    })
                 })
                 .collect())
         }
@@ -310,14 +335,20 @@ fn flatten_json(prefix: &str, value: &Value, entries: &mut Vec<AdvancedConfigEnt
         Value::Array(_) => entries.push(AdvancedConfigEntry {
             key: prefix.into(),
             value: value.to_string(),
+            sensitive: false,
+            configured: false,
         }),
         Value::String(value) => entries.push(AdvancedConfigEntry {
             key: prefix.into(),
             value: value.clone(),
+            sensitive: false,
+            configured: false,
         }),
         _ => entries.push(AdvancedConfigEntry {
             key: prefix.into(),
             value: value.to_string(),
+            sensitive: false,
+            configured: false,
         }),
     }
 }
@@ -339,6 +370,8 @@ fn parse_ini(contents: &str) -> Vec<AdvancedConfigEntry> {
                     format!("{section}.{}", key.trim())
                 },
                 value: value.trim().into(),
+                sensitive: false,
+                configured: false,
             });
         }
     }
@@ -360,6 +393,8 @@ fn parse_palworld(contents: &str) -> Vec<AdvancedConfigEntry> {
                 .map(|(key, value)| AdvancedConfigEntry {
                     key: key.trim().into(),
                     value: value.trim().trim_matches('"').into(),
+                    sensitive: false,
+                    configured: false,
                 })
         })
         .collect()
@@ -402,17 +437,31 @@ fn set(format: Format, contents: &str, key: &str, value: &str) -> Result<String>
 }
 
 fn set_xml(contents: &str, key: &str, value: &str) -> Result<String> {
-    let expression = format!(
-        r#"(?is)(<property\s+name\s*=\s*\"{}\"[^>]*?value\s*=\s*\")[^\"]*(\"[^>]*/?>)"#,
-        regex::escape(key)
-    );
-    let pattern = regex::Regex::new(&expression)?;
-    if !pattern.is_match(contents) {
-        bail!("XML property {key} does not exist");
+    let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
+    for tag in pattern.find_iter(contents) {
+        if xml_attribute(tag.as_str(), "name").as_deref() == Some(key) {
+            let replacement = format!(r#"<property name="{key}" value="{}"/>"#, xml_escape(value));
+            let mut output = String::with_capacity(contents.len() + replacement.len());
+            output.push_str(&contents[..tag.start()]);
+            output.push_str(&replacement);
+            output.push_str(&contents[tag.end()..]);
+            return Ok(output);
+        }
     }
-    Ok(pattern
-        .replace(contents, format!("${{1}}{}${{2}}", xml_escape(value)))
-        .into_owned())
+    bail!("XML property {key} does not exist")
+}
+
+fn xml_attribute(tag: &str, name: &str) -> Option<String> {
+    let expression = format!(
+        r#"(?is)\b{}\s*=\s*(?:"([^"]*)"|'([^']*)')"#,
+        regex::escape(name)
+    );
+    let pattern = regex::Regex::new(&expression).ok()?;
+    let captures = pattern.captures(tag)?;
+    captures
+        .get(1)
+        .or_else(|| captures.get(2))
+        .map(|value| value.as_str().into())
 }
 
 fn set_json(contents: &str, key: &str, value: &str) -> Result<String> {
@@ -520,6 +569,20 @@ mod tests {
         assert_eq!(
             set_xml(input, "Known", "new").unwrap(),
             "<ServerSettings><property name=\"Known\" value=\"new\"/><property name=\"Other\" value=\"yes\"/></ServerSettings>"
+        );
+    }
+
+    #[test]
+    fn xml_properties_accept_reordered_single_quoted_attributes() {
+        let entries = parse(
+            Format::XmlProperties,
+            "<ServerSettings><property value='old' name='Known'/></ServerSettings>",
+        )
+        .unwrap();
+        assert_eq!(entries[0].key, "Known");
+        assert_eq!(
+            set_xml("<property value='old' name='Known'/>", "Known", "new").unwrap(),
+            "<property name=\"Known\" value=\"new\"/>"
         );
     }
     #[test]

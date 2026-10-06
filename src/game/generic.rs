@@ -86,22 +86,32 @@ fn xml_escape(value: &str) -> String {
 }
 
 fn set_xml_property(contents: &mut String, name: &str, value: &str) -> Result<()> {
-    let expression = format!(
-        r#"(?s)<property\s+name\s*=\s*"{}"[^>]*>"#,
-        regex::escape(name)
-    );
     let replacement = format!(r#"<property name="{name}" value="{}"/>"#, xml_escape(value));
-    let pattern = regex::Regex::new(&expression)?;
-    if pattern.is_match(contents) {
-        *contents = pattern
-            .replace(contents, |_: &regex::Captures<'_>| replacement.clone())
-            .into_owned();
+    let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
+    if let Some(tag) = pattern
+        .find_iter(contents)
+        .find(|tag| xml_property_attribute(tag.as_str(), "name").as_deref() == Some(name))
+    {
+        contents.replace_range(tag.range(), &replacement);
     } else if let Some(index) = contents.rfind("</ServerSettings>") {
         contents.insert_str(index, &format!("    {replacement}\n"));
     } else {
         bail!("serverconfig.xml has no ServerSettings element");
     }
     Ok(())
+}
+
+fn xml_property_attribute(tag: &str, name: &str) -> Option<String> {
+    let expression = format!(
+        r#"(?is)\b{}\s*=\s*(?:"([^"]*)"|'([^']*)')"#,
+        regex::escape(name)
+    );
+    let pattern = regex::Regex::new(&expression).ok()?;
+    let captures = pattern.captures(tag)?;
+    captures
+        .get(1)
+        .or_else(|| captures.get(2))
+        .map(|value| value.as_str().into())
 }
 
 fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
@@ -142,7 +152,23 @@ fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<
             "SaveGameFolder",
             instance_dir.join("Saves").display().to_string(),
         ),
-        ("TelnetEnabled", "false".into()),
+        (
+            "TelnetEnabled",
+            if settings
+                .get("telnet_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "true".into()
+            } else {
+                "false".into()
+            },
+        ),
+        (
+            "TelnetPort",
+            instance.config.admin_port.unwrap_or(26903).to_string(),
+        ),
+        ("TelnetPassword", string("telnet_password", "")),
         ("ControlPanelEnabled", "false".into()),
         ("WebDashboardEnabled", "false".into()),
     ] {

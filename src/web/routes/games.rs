@@ -1137,6 +1137,7 @@ fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstance
         for secret in [
             "admin_password",
             "server_password",
+            "telnet_password",
             "world_password",
             "rcon_password",
             "password",

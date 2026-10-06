@@ -165,6 +165,22 @@ pub fn build_router(state: AppState) -> Router {
             post(seven_days_to_die::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
         )
         .route(
+            "/instances/{id}/7d2d/console",
+            post(seven_days_to_die::execute_console),
+        )
+        .route(
+            "/instances/{id}/7d2d/players",
+            get(seven_days_to_die::list_players),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/kick",
+            post(seven_days_to_die::kick_player),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/ban",
+            post(seven_days_to_die::ban_player),
+        )
+        .route(
             "/instances/{id}/valheim/mods/{mod_id}",
             delete(mods::remove_mod_by_id),
         )

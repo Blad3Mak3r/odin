@@ -135,7 +135,11 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
         GameId::SevenDaysToDie => GenericGameConfig {
             port: 26900,
             query_port: None,
-            admin_port: None,
+            // 7D2D reserves its game UDP block at 26900–26902. Keep the
+            // password-protected console on the immediately following port;
+            // allocation moves the complete group together for later
+            // instances.
+            admin_port: Some(26903),
             settings: json!({
                 "server_name": name,
                 "server_description": "",
@@ -145,7 +149,9 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
                 "game_world": "Navezgane",
                 "game_name": name,
                 "world_gen_seed": name,
-                "world_gen_size": 6144
+                "world_gen_size": 6144,
+                "telnet_enabled": false,
+                "telnet_password": ""
             }),
             auto_restart: false,
         },
@@ -446,6 +452,11 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
         ));
     }
     if game == GameId::SevenDaysToDie {
+        if config.admin_port.is_none() {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die console port is required".into(),
+            ));
+        }
         for key in ["server_name", "game_world", "game_name"] {
             if settings
                 .get(key)
@@ -488,6 +499,19 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
                 ));
             }
         }
+        if settings
+            .get("telnet_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && settings
+                .get("telnet_password")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.len() < 12)
+        {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die console password must contain at least 12 characters".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -506,6 +530,7 @@ fn merged_generic_settings(stored: &Value, submitted: &Value) -> Result<Value> {
         "server_password",
         "world_password",
         "rcon_password",
+        "telnet_password",
         "password",
     ] {
         if submitted

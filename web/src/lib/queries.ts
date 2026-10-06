@@ -45,6 +45,7 @@ import type {
   RustAccessListKind,
   RustConfigUpdateRequest,
   SaveFileEntry,
+  SevenDaysPlayer,
   SettingsView,
   UptimeScheduleRequest,
   UptimeScheduleView,
@@ -665,6 +666,24 @@ export function useUploadSevenDaysMod() {
       return api.upload<JobHandle>(`/instances/${id}/7d2d/mods/upload`, form)
     },
     onSuccess: (_result, { id }) => { queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'mods'] }); queryClient.invalidateQueries({ queryKey: ['jobs'] }) },
+  })
+}
+
+export function useExecuteSevenDaysConsole() {
+  return useMutation({
+    mutationFn: ({ id, command }: { id: string; command: string }) => api.post<RconCommandResponse>(`/instances/${id}/7d2d/console`, { command }),
+  })
+}
+
+export function useSevenDaysPlayers(id: string, enabled: boolean) {
+  return useQuery({ queryKey: ['managed-instances', id, '7d2d', 'players'], queryFn: () => api.get<SevenDaysPlayer[]>(`/instances/${id}/7d2d/players`), enabled, refetchInterval: enabled ? 15_000 : false })
+}
+
+export function useSevenDaysPlayerAction(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ player, action, reason }: { player: string; action: 'kick' | 'ban'; reason: string }) => api.post<void>(`/instances/${id}/7d2d/players/${encodeURIComponent(player)}/${action}`, { reason }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'players'] }),
   })
 }
 

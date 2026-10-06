@@ -58,6 +58,8 @@ export interface GenericConfigUpdateRequest {
 export interface AdvancedConfigEntry {
   key: string
   value: string
+  sensitive: boolean
+  configured: boolean
 }
 
 export interface AdvancedConfigFile {
@@ -83,7 +85,13 @@ export interface ResourceLimits {
 }
 
 export interface RconCommandResponse {
-  output: string
+    output: string
+}
+
+export interface SevenDaysPlayer {
+  entity_id: string
+  name: string
+  platform_id: string | null
 }
 
 export type VRisingAccessListKind = 'admin' | 'banned'

@@ -1,5 +1,7 @@
 use axum::Json;
 use axum::extract::{Multipart, Path, State};
+use axum::http::StatusCode;
+use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::activity::ActivityKind;
@@ -153,4 +155,106 @@ pub async fn upload_mod(
         },
     );
     Ok(Json(JobHandle { id }))
+}
+
+#[derive(Deserialize)]
+pub struct ConsoleCommandRequest {
+    pub command: String,
+}
+
+#[derive(Deserialize)]
+pub struct PlayerActionRequest {
+    #[serde(default)]
+    pub reason: String,
+}
+
+fn player_target(target: &str) -> Result<&str, BadRequest> {
+    if target.is_empty()
+        || target.len() > 128
+        || !target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(BadRequest(
+            "player identifier may only contain letters, numbers, '_' or '-'".into(),
+        ));
+    }
+    Ok(target)
+}
+
+fn command_reason(reason: &str) -> Result<String, BadRequest> {
+    let reason = reason.trim();
+    if reason.len() > 256 || reason.contains(['\r', '\n', '"']) {
+        return Err(BadRequest(
+            "reason must be a single line no longer than 256 characters".into(),
+        ));
+    }
+    Ok(reason.to_string())
+}
+
+async fn console(
+    state: AppState,
+    id: String,
+    command: String,
+) -> ApiResult<Json<seven_days_to_die::ConsoleResponse>> {
+    let name = resolve(&state, &id).await?;
+    let db = state.db.clone();
+    let response = run_blocking(move || {
+        let instance = crate::db::game_instances::load_generic(&db, GameId::SevenDaysToDie, &name)?
+            .ok_or_else(|| anyhow::anyhow!(InstanceError::NotFound(name)))?;
+        if !instance.is_running() {
+            anyhow::bail!("start the 7 Days to Die server before using its console");
+        }
+        seven_days_to_die::execute_console(&instance, &command)
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+pub async fn execute_console(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<ConsoleCommandRequest>,
+) -> ApiResult<Json<seven_days_to_die::ConsoleResponse>> {
+    console(state, id, request.command).await
+}
+
+pub async fn list_players(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<seven_days_to_die::Player>>> {
+    let output = console(state, id, "lpi".into()).await?.0.output;
+    Ok(Json(seven_days_to_die::parse_players(&output)))
+}
+
+pub async fn kick_player(
+    State(state): State<AppState>,
+    Path((id, player)): Path<(String, String)>,
+    Json(request): Json<PlayerActionRequest>,
+) -> ApiResult<StatusCode> {
+    let player = player_target(&player)?;
+    let reason = command_reason(&request.reason)?;
+    let command = if reason.is_empty() {
+        format!("kick {player}")
+    } else {
+        format!("kick {player} {reason}")
+    };
+    let _ = console(state, id, command).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn ban_player(
+    State(state): State<AppState>,
+    Path((id, player)): Path<(String, String)>,
+    Json(request): Json<PlayerActionRequest>,
+) -> ApiResult<StatusCode> {
+    let player = player_target(&player)?;
+    let reason = command_reason(&request.reason)?;
+    let command = if reason.is_empty() {
+        format!("ban add {player} 0")
+    } else {
+        format!("ban add {player} 0 {reason}")
+    };
+    let _ = console(state, id, command).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

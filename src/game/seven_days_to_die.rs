@@ -3,17 +3,132 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::game::GameId;
 use crate::paths::Paths;
 
 pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 pub const MAX_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const CONSOLE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONSOLE_RESPONSE: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConsoleResponse {
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Player {
+    pub entity_id: String,
+    pub name: String,
+    pub platform_id: Option<String>,
+}
+
+/// Executes one 7D2D console command through the instance's password-protected
+/// Telnet-compatible raw TCP endpoint. The dashboard never receives the
+/// password, and Odin always connects to loopback; operators must still keep
+/// the game port protected by their host firewall because the game itself does
+/// not expose a bind-address setting for this endpoint.
+pub fn execute_console(
+    instance: &crate::db::game_instances::GenericGameInstance,
+    command: &str,
+) -> Result<ConsoleResponse> {
+    let command = command.trim();
+    if command.is_empty() || command.len() > 16 * 1024 || command.contains(['\r', '\n']) {
+        bail!("console command must be one non-empty line no longer than 16 KiB");
+    }
+    if !instance
+        .config
+        .settings
+        .get("telnet_enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        bail!("7 Days to Die console is disabled for this instance");
+    }
+    let password = instance
+        .config
+        .settings
+        .get("telnet_password")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("7 Days to Die console requires a password")?;
+    let port = instance
+        .config
+        .admin_port
+        .context("7 Days to Die console port is not configured")?;
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let mut stream = TcpStream::connect_timeout(&address.into(), CONSOLE_TIMEOUT)
+        .with_context(|| format!("failed to connect to 7 Days to Die console at {address}"))?;
+    stream.set_read_timeout(Some(Duration::from_millis(250)))?;
+    stream.set_write_timeout(Some(CONSOLE_TIMEOUT))?;
+    // The game uses a line-oriented raw TCP service, despite its Telnet name.
+    // It prints a greeting first, then accepts the configured password.
+    let _ = read_available(&mut stream)?;
+    stream.write_all(password.as_bytes())?;
+    stream.write_all(b"\n")?;
+    let authentication = read_available(&mut stream)?;
+    if authentication.to_ascii_lowercase().contains("incorrect")
+        || authentication.to_ascii_lowercase().contains("failed")
+    {
+        bail!("7 Days to Die console authentication failed");
+    }
+    stream.write_all(command.as_bytes())?;
+    stream.write_all(b"\n")?;
+    let output = read_available(&mut stream)?;
+    Ok(ConsoleResponse { output })
+}
+
+fn read_available(stream: &mut TcpStream) -> Result<String> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                bytes.extend_from_slice(&buffer[..read]);
+                if bytes.len() > MAX_CONSOLE_RESPONSE {
+                    bail!("7 Days to Die console response exceeds 256 KiB");
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(String::from_utf8_lossy(&bytes).trim().to_string())
+}
+
+/// Best-effort parser for `lpi` / `listplayerids`. The server has changed the
+/// surrounding headings over releases, but each player row begins with an
+/// entity id and contains the displayed name and optional platform id.
+pub fn parse_players(output: &str) -> Vec<Player> {
+    let expression = Regex::new(
+        r"(?m)^\s*(\d+)\s*[,|:\t]\s*([^,|\t]+?)(?:\s*[,|:\t]\s*([A-Za-z0-9_:-]{8,}))?\s*$",
+    )
+    .expect("player expression is valid");
+    expression
+        .captures_iter(output)
+        .map(|capture| Player {
+            entity_id: capture[1].trim().into(),
+            name: capture[2].trim().into(),
+            platform_id: capture.get(3).map(|value| value.as_str().trim().into()),
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModInfo {
@@ -226,6 +341,21 @@ pub fn install(
     let _ = fs::remove_dir_all(&staging);
     result?;
     Ok(info)
+}
+
+#[cfg(test)]
+mod console_tests {
+    use super::*;
+
+    #[test]
+    fn parses_player_rows_from_console_output() {
+        let players =
+            parse_players("EntityID, PlayerName, PlatformId\n42, Ada, EOS_abc12345\n77, Bob");
+        assert_eq!(players.len(), 2);
+        assert_eq!(players[0].entity_id, "42");
+        assert_eq!(players[0].name, "Ada");
+        assert_eq!(players[0].platform_id.as_deref(), Some("EOS_abc12345"));
+    }
 }
 
 #[cfg(test)]

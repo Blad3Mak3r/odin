@@ -1,14 +1,19 @@
 import type { ComponentPropsWithoutRef } from 'react'
 import { Gamepad2 } from 'lucide-react'
+import palworldIcon from '@/assets/games/palworld.png'
+import runescapeDragonwildsIcon from '@/assets/games/runescape-dragonwilds.png'
+import rustIcon from '@/assets/games/rust.png'
+import valheimIcon from '@/assets/games/valheim.png'
+import vrisingIcon from '@/assets/games/vrising.png'
 import type { GameId } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const GAME_ICON_SOURCES: Partial<Record<GameId, string>> = {
-  valheim: '/games/valheim.png',
-  rust: '/games/rust.png',
-  vrising: '/games/vrising.png',
-  palworld: '/games/palworld.png',
-  'runescape-dragonwilds': '/games/runescape-dragonwilds.png',
+const GAME_ICON_SOURCES: Record<GameId, string> = {
+  valheim: valheimIcon,
+  rust: rustIcon,
+  vrising: vrisingIcon,
+  palworld: palworldIcon,
+  'runescape-dragonwilds': runescapeDragonwildsIcon,
 }
 
 export function GameIcon({

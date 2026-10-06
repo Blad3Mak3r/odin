@@ -101,6 +101,19 @@ fn set_xml_property(contents: &mut String, name: &str, value: &str) -> Result<()
     Ok(())
 }
 
+fn remove_xml_property(contents: &mut String, name: &str) -> Result<()> {
+    let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
+    let ranges = pattern
+        .find_iter(contents)
+        .filter(|tag| xml_property_attribute(tag.as_str(), "name").as_deref() == Some(name))
+        .map(|tag| tag.range())
+        .collect::<Vec<_>>();
+    for range in ranges.into_iter().rev() {
+        contents.replace_range(range, "");
+    }
+    Ok(())
+}
+
 fn xml_property_attribute(tag: &str, name: &str) -> Option<String> {
     let expression = format!(
         r#"(?is)\b{}\s*=\s*(?:"([^"]*)"|'([^']*)')"#,
@@ -149,10 +162,6 @@ fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<
         ("WorldGenSize", number("world_gen_size", 6144)),
         ("UserDataFolder", instance_dir.display().to_string()),
         (
-            "SaveGameFolder",
-            instance_dir.join("Saves").display().to_string(),
-        ),
-        (
             "TelnetEnabled",
             if settings
                 .get("telnet_enabled")
@@ -174,6 +183,10 @@ fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<
     ] {
         set_xml_property(&mut contents, name, &value)?;
     }
+    // SaveGameFolder was removed in 7 Days to Die V1. Saves now derive from
+    // UserDataFolder, so strip the obsolete property from old templates and
+    // instance configurations before the server parses them.
+    remove_xml_property(&mut contents, "SaveGameFolder")?;
     // SandboxCode encodes the complete V3 game-rule set. Leave the installed
     // template's value intact until the operator explicitly supplies one: the
     // game's defaults and encoding can change between stable releases.
@@ -840,7 +853,7 @@ mod tests {
         fs::create_dir_all(&install).unwrap();
         fs::write(
             install.join("serverconfig.xml"),
-            "<ServerSettings>\n  <property name=\"UnmanagedSetting\" value=\"keep\"/>\n</ServerSettings>\n",
+            "<ServerSettings>\n  <property name=\"UnmanagedSetting\" value=\"keep\"/>\n  <property name=\"SaveGameFolder\" value=\"obsolete\"/>\n</ServerSettings>\n",
         )
         .unwrap();
         let mut instance = generic_instance(
@@ -869,6 +882,7 @@ mod tests {
         assert!(settings.contains("ServerName\" value=\"Undead Test"));
         assert!(settings.contains("ServerPort\" value=\"26900"));
         assert!(settings.contains(&format!("UserDataFolder\" value=\"{}", root.display())));
+        assert!(!settings.contains("SaveGameFolder"));
         assert!(settings.contains("TelnetEnabled\" value=\"false"));
         assert!(settings.contains("SandboxCode\" value=\"AAAJABJACJADJARFBNC"));
         assert!(root.join("Saves").is_dir());

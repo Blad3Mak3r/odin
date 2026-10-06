@@ -190,6 +190,7 @@ export type JobKindDescr =
   | { kind: 'backup_restore'; game: GameId; instance: string; backup_id: string }
   | { kind: 'map_wipe'; instance: string }
   | { kind: 'full_wipe'; instance: string }
+  | { kind: 'bepinex_install'; instance: string; to_version: string }
   | { kind: 'bepinex_update'; instance: string; from_version: string | null; to_version: string }
 
 export interface GlobalModInstanceEntry {

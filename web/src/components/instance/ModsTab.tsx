@@ -1,430 +1,90 @@
-import { Download, Loader2 } from 'lucide-react'
-import { useQueryClient } from '@tanstack/react-query'
-import { lazy, Suspense, useEffect, useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Download } from 'lucide-react'
+import { lazy, Suspense } from 'react'
+import { Navigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { JobProgress } from '@/components/JobProgress'
 import { ModIcon } from '@/components/ModIcon'
-import { ModSearch } from '@/components/ModSearch'
-import { NexusModSearch } from '@/components/NexusModSearch'
-import { UploadModForm } from '@/components/UploadModForm'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent } from '@/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { useConfirmDialog } from '@/components/ConfirmDialog'
-import { useJobSocket } from '@/hooks/useJobSocket'
 import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
-import {
-  useAddMod,
-  useBepInExStatus,
-  useMods,
-  useRemoveMod,
-  useSelectModVersion,
-  useSetModEnabled,
-  useSetModPinned,
-  useUpdateMods,
-  useUpdateBepInEx,
-} from '@/lib/queries'
-import type { InstalledMod } from '@/lib/types'
+import { useMods, useSetModEnabled } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 
 const ModConfigFiles = lazy(() =>
   import('./ModConfigFiles').then((m) => ({ default: m.ModConfigFiles })),
 )
 
-const MOD_TABS = ['installed', 'marketplace'] as const
-const MOD_SOURCES = ['thunderstore', 'nexus', 'upload'] as const
-type ModTab = (typeof MOD_TABS)[number]
-type ModSource = (typeof MOD_SOURCES)[number]
-
-function isModTab(value: string | undefined): value is ModTab {
-  return MOD_TABS.some((tab) => tab === value)
-}
-
-function isModSource(value: string | undefined): value is ModSource {
-  return MOD_SOURCES.some((source) => source === value)
-}
-
 export function ModsTab({ id, name, running, path }: { id: string; name: string; running: boolean; path: string[] }) {
-  const navigate = useNavigate()
-  const [tab, source, ...rest] = path
-  const basePath = `/instance/${id}/mods`
-  const activeSource = isModSource(source) ? source : null
-
-  if (!isModTab(tab) || rest.length > 0 || (tab === 'installed' && source)) {
-    return <Navigate to={`${basePath}/installed`} replace />
-  }
-  if (tab === 'marketplace' && activeSource === null) {
-    return <Navigate to={`${basePath}/marketplace/thunderstore`} replace />
+  if (path.length > 0 && !(path.length === 1 && path[0] === 'installed')) {
+    return <Navigate to={`/instance/${id}/mods`} replace />
   }
 
   return (
-    <Tabs
-      value={tab}
-      onValueChange={(value) =>
-        navigate(value === 'marketplace' ? `${basePath}/marketplace/thunderstore` : `${basePath}/installed`)
-      }
-    >
-      <TabsList variant="line">
-        <TabsTrigger value="installed">Installed</TabsTrigger>
-        <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
-      </TabsList>
-      {tab === 'installed' && (
-        <TabsContent value="installed">
-          <div className="flex flex-col gap-8">
-            <BepInExCard id={id} name={name} running={running} />
-            <InstalledMods id={id} name={name} running={running} />
-            <Suspense fallback={<Loader2 className="size-4 animate-spin text-muted-foreground" />}>
-              <ModConfigFiles id={id} />
-            </Suspense>
-          </div>
-        </TabsContent>
-      )}
-      {tab === 'marketplace' && (
-        <TabsContent value="marketplace">
-          <ModInstallSearch id={id} name={name} running={running} source={activeSource ?? 'thunderstore'} />
-        </TabsContent>
-      )}
-    </Tabs>
-  )
-}
-
-function BepInExCard({ id, name, running }: { id: string; name: string; running: boolean }) {
-  const status = useBepInExStatus(id)
-  const update = useUpdateBepInEx()
-  const queryClient = useQueryClient()
-  const [jobId, setJobId] = useState<string | null>(null)
-  const job = useJobSocket(jobId)
-
-  useEffect(() => {
-    if (job.status?.status !== 'succeeded' && job.status?.status !== 'failed') return
-    queryClient.invalidateQueries({ queryKey: ['instances', id, 'bepinex-status'] })
-    queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
-    queryClient.invalidateQueries({ queryKey: ['instances'] })
-    queryClient.invalidateQueries({ queryKey: ['jobs'] })
-    queryClient.invalidateQueries({ queryKey: ['activity-feed'] })
-  }, [id, job.status?.status, queryClient])
-
-  const active = update.isPending || job.status?.status === 'queued' || job.status?.status === 'running'
-  const installed = status.data?.installed
-  const unknown = installed && !status.data?.installed_version
-  const canUpdate = unknown || status.data?.update_available
-
-  return (
-    <Card>
-      <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="font-medium">BepInEx</h2>
-            {installed && !canUpdate && <Badge variant="secondary">Up to date</Badge>}
-            {status.isError && <Badge variant="destructive">Check failed</Badge>}
-          </div>
-          {!installed && !status.isLoading && !status.isError && (
-            <p className="text-sm text-muted-foreground">
-              Not installed. Odin installs BepInEx automatically when you add the first mod.
-            </p>
-          )}
-          {installed && (
-            <p className="text-sm text-muted-foreground">
-              Installed: {status.data?.installed_version ? `v${status.data.installed_version}` : 'unknown version'}
-              {status.data?.update_available && status.data.latest_version
-                ? ` · Latest: v${status.data.latest_version}`
-                : ''}
-            </p>
-          )}
-          {status.isError && (
-            <p className="text-sm text-destructive">
-              Could not check Thunderstore. Local version information is unchanged.
-            </p>
-          )}
-          {running && installed && canUpdate && (
-            <p className="text-xs text-muted-foreground">Stop '{name}' before updating BepInEx.</p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {status.isError && (
-            <Button size="sm" variant="outline" onClick={() => status.refetch()}>
-              Retry
-            </Button>
-          )}
-          {installed && canUpdate && !status.isError && (
-            <Button
-              size="sm"
-              disabled={running || active}
-              onClick={() =>
-                update.mutate(id, {
-                  onSuccess: (handle) => setJobId(handle.id),
-                  onError: (error) => toast.error(error.message),
-                })
-              }
-            >
-              {active && <Loader2 className="size-4 animate-spin" />}
-              {unknown ? 'Install latest' : 'Update BepInEx'}
-            </Button>
-          )}
-        </div>
-      </CardContent>
-      {jobId && (
-        <CardContent>
-          <JobProgress log={job.log} status={job.status} connected={job.connected} />
-        </CardContent>
-      )}
-    </Card>
+    <div className="flex flex-col gap-8">
+      <InstalledMods id={id} name={name} running={running} />
+      <Suspense fallback={<span className="text-sm text-muted-foreground">Loading configuration files…</span>}>
+        <ModConfigFiles id={id} />
+      </Suspense>
+    </div>
   )
 }
 
 function InstalledMods({ id, name, running }: { id: string; name: string; running: boolean }) {
   const mods = useMods(id)
   const setEnabled = useSetModEnabled()
-  const removeMod = useRemoveMod()
-  const updateMods = useUpdateMods()
-  const setPinned = useSetModPinned()
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [versionMod, setVersionMod] = useState<InstalledMod | null>(null)
-  const job = useJobSocket(jobId)
-  const { confirm, dialog } = useConfirmDialog()
-
-  const handleRemove = async (modId: string) => {
-    const confirmed = await confirm({
-      title: `Remove '${modId}'?`,
-      description: `Remove '${modId}' from '${name}'? You can reinstall it later from the shared store.`,
-      confirmLabel: 'Remove',
-    })
-    if (!confirmed) return
-    removeMod.mutate({ name: id, modId }, { onError: (e) => toast.error(e.message) })
-  }
 
   return (
-    <div className="flex flex-col gap-3">
-      {dialog}
+    <section className="flex flex-col gap-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Installed mods
-        </h2>
-        <div className="flex items-center gap-2">
-          <a
-            href={`/api/instances/${id}/valheim/mods/modpack`}
-            download
-            className={cn(
-              buttonVariants({ variant: 'outline', size: 'sm' }),
-              !mods.data?.some((m) => m.enabled) && 'pointer-events-none opacity-50',
-            )}
-          >
-            <Download className="size-4" />
-            Download ModPack
-          </a>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={updateMods.isPending}
-            onClick={() =>
-              updateMods.mutate(id, {
-                onSuccess: (handle) => setJobId(handle.id),
-                onError: (e) => toast.error(e.message),
-              })
-            }
-          >
-            {updateMods.isPending && <Loader2 className="size-4 animate-spin" />}
-            Update all
-          </Button>
+        <div>
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Installed mods</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Install, update, and remove mods from the Valheim game page.</p>
         </div>
+        <a
+          href={`/api/instances/${id}/valheim/mods/modpack`}
+          download
+          className={cn(
+            buttonVariants({ variant: 'outline', size: 'sm' }),
+            !mods.data?.some((mod) => mod.enabled) && 'pointer-events-none opacity-50',
+          )}
+        >
+          <Download className="size-4" />
+          Download ModPack
+        </a>
       </div>
 
-      {mods.data?.length === 0 && (
-        <p className="text-sm text-muted-foreground">No mods installed yet.</p>
-      )}
-
-      {running && (
-        <p className="text-xs text-muted-foreground">
-          Mods can't be changed while '{name}' is running — stop it first.
-        </p>
-      )}
+      {mods.data?.length === 0 && <p className="text-sm text-muted-foreground">No mods installed yet.</p>}
+      {running && <p className="text-xs text-muted-foreground">Stop '{name}' before enabling or disabling mods.</p>}
 
       <div className="grid gap-2 xl:grid-cols-2 2xl:grid-cols-3">
-        {mods.data?.map((m) => (
-          <Card key={m.mod_id} size="sm">
-            <CardContent className="flex flex-col gap-2">
-              <div className="flex items-center gap-3">
-                <ModIcon src={m.icon} />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium">{m.mod_id}</p>
-                    <Badge variant="outline">{MOD_SOURCE_LABEL[getModSource(m.mod_id)]}</Badge>
+        {mods.data?.map((mod) => (
+          <Card key={mod.mod_id} size="sm">
+            <CardContent className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <ModIcon src={mod.icon} />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-medium">{mod.mod_id}</p>
+                    <Badge variant="outline">{MOD_SOURCE_LABEL[getModSource(mod.mod_id)]}</Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">v{m.version}</p>
-                  {m.pinned && <Badge variant="secondary">pinned</Badge>}
+                  <p className="text-xs text-muted-foreground">v{mod.version}</p>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {m.available_versions.length > 1 && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={running}
-                    onClick={() => setVersionMod(m)}
-                  >
-                    Change version
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={setPinned.isPending}
-                  onClick={() =>
-                    setPinned.mutate(
-                      { name: id, modId: m.mod_id, pinned: !m.pinned },
-                      { onError: (e) => toast.error(e.message) },
-                    )
-                  }
-                >
-                  {m.pinned ? 'Allow updates' : 'Pin version'}
-                </Button>
-                <Switch
-                  checked={m.enabled}
-                  disabled={running || setEnabled.isPending}
-                  onCheckedChange={(enabled) =>
-                    setEnabled.mutate(
-                      { name: id, modId: m.mod_id, enabled },
-                      { onError: (e) => toast.error(e.message) },
-                    )
-                  }
-                />
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  disabled={running}
-                  onClick={() => handleRemove(m.mod_id)}
-                >
-                  Remove
-                </Button>
-              </div>
+              <Switch
+                aria-label={`${mod.enabled ? 'Disable' : 'Enable'} ${mod.mod_id}`}
+                checked={mod.enabled}
+                disabled={running || setEnabled.isPending}
+                onCheckedChange={(enabled) =>
+                  setEnabled.mutate(
+                    { name: id, modId: mod.mod_id, enabled },
+                    { onError: (error) => toast.error(error.message) },
+                  )}
+              />
             </CardContent>
           </Card>
         ))}
       </div>
-
-      {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
-      <VersionDialog
-        id={id}
-        mod={versionMod}
-        open={versionMod !== null}
-        onOpenChange={(open) => !open && setVersionMod(null)}
-      />
-    </div>
-  )
-}
-
-function VersionDialog({
-  id,
-  mod,
-  open,
-  onOpenChange,
-}: {
-  id: string
-  mod: InstalledMod | null
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const selectVersion = useSelectModVersion()
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Choose version</DialogTitle>
-          <DialogDescription>
-            Switching versions pins this mod. Allow updates again when you want it to follow the
-            latest release.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-2">
-          {mod?.available_versions.map((version) => (
-            <Button
-              key={version}
-              variant={version === mod.version ? 'secondary' : 'outline'}
-              disabled={selectVersion.isPending}
-              onClick={() =>
-                selectVersion.mutate(
-                  { name: id, modId: mod.mod_id, version },
-                  {
-                    onSuccess: () => {
-                      toast.success(`Using ${mod.mod_id} v${version}`)
-                      onOpenChange(false)
-                    },
-                    onError: (e) => toast.error(e.message),
-                  },
-                )
-              }
-            >
-              v{version}
-              {version === mod.version ? ' (current)' : ''}
-            </Button>
-          ))}
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function ModInstallSearch({ id, name, running, source }: { id: string; name: string; running: boolean; source: ModSource }) {
-  const addMod = useAddMod()
-  const navigate = useNavigate()
-  const [jobId, setJobId] = useState<string | null>(null)
-  const job = useJobSocket(jobId)
-
-  const handleSelect = (mod: { mod_id: string }) =>
-    addMod.mutate(
-      { name: id, modId: mod.mod_id },
-      {
-        onSuccess: (handle) => setJobId(handle.id),
-        onError: (e) => toast.error(e.message),
-      },
-    )
-
-  return (
-    <div className="flex flex-col gap-3">
-      <Tabs
-        value={source}
-        onValueChange={(value) =>
-          navigate(`/instance/${id}/mods/marketplace/${value}`)
-        }
-      >
-        <TabsList variant="line">
-          <TabsTrigger value="thunderstore">Thunderstore</TabsTrigger>
-          <TabsTrigger value="nexus">Nexus Mods</TabsTrigger>
-          <TabsTrigger value="upload">Upload</TabsTrigger>
-        </TabsList>
-        {source === 'thunderstore' && (
-          <TabsContent value="thunderstore">
-            <ModSearch selectDisabled={() => running || addMod.isPending} onSelect={handleSelect} />
-          </TabsContent>
-        )}
-        {source === 'nexus' && (
-          <TabsContent value="nexus">
-            <NexusModSearch
-              selectDisabled={() => running || addMod.isPending}
-              onSelect={handleSelect}
-            />
-          </TabsContent>
-        )}
-        {source === 'upload' && (
-          <TabsContent value="upload">
-            <UploadModForm name={id} instanceName={name} running={running} />
-          </TabsContent>
-        )}
-      </Tabs>
-
-      {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
-    </div>
+    </section>
   )
 }

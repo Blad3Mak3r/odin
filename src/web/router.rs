@@ -126,6 +126,10 @@ pub fn build_router(state: AppState) -> Router {
             post(bepinex::update_by_id),
         )
         .route(
+            "/instances/{id}/valheim/bepinex/install",
+            post(bepinex::install_by_id),
+        )
+        .route(
             "/instances/{id}/valheim/mods",
             get(mods::list_mods_by_id).post(mods::add_mod_by_id),
         )
@@ -330,6 +334,7 @@ mod tests {
     use crate::db::Db;
     use crate::instance::Instance;
     use crate::paths::Paths;
+    use std::process::Command;
     use std::sync::Arc;
 
     // `Router::route` panics at registration time if two routes' path
@@ -416,6 +421,81 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bepinex_install_route_rejects_a_running_valheim_instance() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-bepinex-install-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = Instance::create(&paths, &db, "meadows").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "meadows",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
+        let mut child = Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id();
+        let started_at = crate::instance::process::start_time_of(pid).unwrap();
+        crate::db::instances::set_pid(&db, "meadows", pid, started_at, chrono::Utc::now()).unwrap();
+
+        let app = build_router(AppState::new(paths.clone(), db));
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/instances/{id}/valheim/bepinex/install"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bepinex_install_route_rejects_an_existing_installation() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-bepinex-existing-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = Instance::create(&paths, &db, "meadows").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "meadows",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
+        crate::db::instances::set_bepinex(&db, "meadows", true, Some("5.4.0")).unwrap();
+
+        let app = build_router(AppState::new(paths.clone(), db));
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/instances/{id}/valheim/bepinex/install"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 
     #[tokio::test]

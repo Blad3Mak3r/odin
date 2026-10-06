@@ -79,6 +79,62 @@ pub async fn update_by_id(
     update(State(state), Path(name)).await
 }
 
+pub async fn install_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    Ok(Json(spawn_install(&state, name).await?))
+}
+
+pub async fn spawn_install(state: &AppState, name: String) -> ApiResult<JobHandle> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let check_name = name.clone();
+    let to_version = run_blocking(move || {
+        let instance = Instance::load_existing(&paths, &db, &check_name)?;
+        if instance.state.bepinex_installed {
+            return Err(
+                BadRequest(format!("BepInEx is already installed on '{check_name}'")).into(),
+            );
+        }
+        if crate::instance::lifecycle::is_running(&instance)? {
+            return Err(InstanceError::ModsLocked(check_name).into());
+        }
+        Ok(bepinex::latest_version(&db)?.version_number)
+    })
+    .await?;
+
+    let transition = state
+        .runtime
+        .begin_transition(&name, InstanceTransition::UpdatingBepInEx)?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let activity = state.activity.clone();
+    let job_name = name.clone();
+    let id = state.jobs.spawn(
+        JobKindDescr::BepInExInstall {
+            instance: name,
+            to_version,
+        },
+        move |logger| {
+            let _transition = transition;
+            logger.line(format!("installing BepInEx on '{job_name}'"));
+            let installed_version = crate::mods::install_bepinex(&paths, &db, &job_name)?;
+            logger.line("done");
+            activity.record(
+                ActivityKind::BepInExUpdated {
+                    from_version: None,
+                    to_version: installed_version,
+                },
+                Some(job_name),
+            );
+            Ok(())
+        },
+    );
+    Ok(JobHandle { id })
+}
+
 pub async fn spawn_update(state: &AppState, name: String) -> ApiResult<JobHandle> {
     let paths = state.paths.clone();
     let db = state.db.clone();

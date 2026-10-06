@@ -521,8 +521,26 @@ export function useBepInExStatus(name: string) {
 export function useUpdateBepInEx() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<JobHandle>(valheimInstancePath(name, '/bepinex/update')),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+    mutationFn: (id: string) => api.post<JobHandle>(valheimInstancePath(id, '/bepinex/update')),
+    onSuccess: (_job, id) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', id, 'bepinex-status'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useInstallBepInEx() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<JobHandle>(valheimInstancePath(id, '/bepinex/install')),
+    onSuccess: (_job, id) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', id, 'bepinex-status'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
   })
 }
 
@@ -672,9 +690,9 @@ export function useSetModPinned() {
 export function useUpdateMods() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) => api.post<JobHandle>(valheimInstancePath(name, '/mods/update')),
-    onSuccess: (_data, name) => {
-      queryClient.invalidateQueries({ queryKey: ['instances', name, 'mods'] })
+    mutationFn: (id: string) => api.post<JobHandle>(valheimInstancePath(id, '/mods/update')),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ['instances', id, 'mods'] })
       queryClient.invalidateQueries({ queryKey: ['mods', 'global'] })
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
     },

@@ -16,6 +16,8 @@ export function describeJobKind(kind: JobKindDescr): string {
       return `Wipe map for Rust / ${kind.instance}`
     case 'full_wipe':
       return `Fully wipe Rust / ${kind.instance}`
+    case 'bepinex_install':
+      return `Install BepInEx on ${kind.instance}: ${kind.to_version}`
     case 'bepinex_update':
       return `Update BepInEx on ${kind.instance}: ${kind.from_version ?? 'unknown'} → ${kind.to_version}`
     default:

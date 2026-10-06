@@ -69,6 +69,11 @@ pub enum JobKindDescr {
         from_version: Option<String>,
         to_version: String,
     },
+    #[serde(rename = "bepinex_install")]
+    BepInExInstall {
+        instance: String,
+        to_version: String,
+    },
 }
 
 const fn valheim_game() -> GameId {

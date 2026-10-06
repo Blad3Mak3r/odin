@@ -10,11 +10,11 @@ const MultiGameInstancesPage = lazy(() =>
   import('@/pages/MultiGameInstancesPage').then((m) => ({ default: m.MultiGameInstancesPage })),
 )
 const GamesPage = lazy(() => import('@/pages/GamesPage').then((m) => ({ default: m.GamesPage })))
+const GameDetailPage = lazy(() =>
+  import('@/pages/GameDetailPage').then((m) => ({ default: m.GameDetailPage })),
+)
 const ManagedInstanceDetailPage = lazy(() =>
   import('@/pages/ManagedInstanceDetailPage').then((m) => ({ default: m.ManagedInstanceDetailPage })),
-)
-const GlobalModsPage = lazy(() =>
-  import('@/pages/GlobalModsPage').then((m) => ({ default: m.GlobalModsPage })),
 )
 const JobsPage = lazy(() => import('@/pages/JobsPage').then((m) => ({ default: m.JobsPage })))
 const WebhooksPage = lazy(() =>
@@ -25,6 +25,9 @@ const SettingsPage = lazy(() =>
 )
 const ChangelogPage = lazy(() =>
   import('@/pages/ChangelogPage').then((m) => ({ default: m.ChangelogPage })),
+)
+const NotFoundPage = lazy(() =>
+  import('@/pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
 )
 
 function RouteFallback() {
@@ -51,16 +54,17 @@ function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/games" element={<GamesPage />} />
+          <Route path="/games/:game/*" element={<GameDetailPage />} />
           <Route path="/instances" element={<MultiGameInstancesPage />} />
           <Route path="/instance/:id/*" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/valheim/:name/*" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/:game/:name/*" element={<ManagedInstanceDetailPage />} />
           <Route path="/instances/:name/*" element={<LegacyValheimInstanceRedirect />} />
-          <Route path="/mods/*" element={<GlobalModsPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/webhooks" element={<WebhooksPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/changelog" element={<ChangelogPage />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Suspense>
     </AppShell>

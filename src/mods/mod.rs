@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::Serialize;
 
@@ -229,6 +229,20 @@ fn ensure_bepinex(db: &Db, instance: &mut Instance) -> Result<()> {
         instance.save(db)?;
     }
     Ok(())
+}
+
+/// Installs the Valheim BepInEx bootstrap without adding a mod. This is used
+/// by the dashboard's game-level mod administration page.
+pub fn install_bepinex(paths: &Paths, db: &Db, server_name: &str) -> Result<String> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
+    if lifecycle::is_running(&instance)? {
+        return Err(InstanceError::ModsLocked(server_name.to_string()).into());
+    }
+    if instance.state.bepinex_installed {
+        bail!("BepInEx is already installed on '{server_name}'");
+    }
+    ensure_bepinex(db, &mut instance)?;
+    Ok(instance.state.bepinex_version.unwrap_or_default())
 }
 
 /// Reads the configured Nexus Mods API key, or a clear error if none has

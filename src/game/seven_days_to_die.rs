@@ -234,6 +234,27 @@ mod tests {
 
     const MOD_INFO: &str = r#"<xml><Name value="Example_Mod"/><DisplayName value="Example Mod"/><Version value="1.2.3"/><Author value="Odin"/></xml>"#;
 
+    fn temporary_paths(label: &str) -> Paths {
+        let data_dir =
+            std::env::temp_dir().join(format!("odin-7d2d-{label}-{}", uuid::Uuid::new_v4()));
+        Paths {
+            data_dir: data_dir.clone(),
+            config_dir: data_dir,
+        }
+    }
+
+    fn write_archive(path: &Path, entries: &[(&str, &str)]) {
+        let file = fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        for (name, contents) in entries {
+            archive
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(contents.as_bytes()).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+
     #[test]
     fn parses_required_v2_metadata() {
         let info = parse_mod_info(MOD_INFO).unwrap();
@@ -255,17 +276,88 @@ mod tests {
     #[test]
     fn inspects_single_root_mod_archive() {
         let path = std::env::temp_dir().join(format!("odin-7d2d-mod-{}.zip", uuid::Uuid::new_v4()));
-        let file = fs::File::create(&path).unwrap();
-        let mut archive = zip::ZipWriter::new(file);
-        archive
-            .start_file(
-                "Example_Mod/ModInfo.xml",
-                zip::write::SimpleFileOptions::default(),
-            )
-            .unwrap();
-        archive.write_all(MOD_INFO.as_bytes()).unwrap();
-        archive.finish().unwrap();
+        write_archive(&path, &[("Example_Mod/ModInfo.xml", MOD_INFO)]);
         assert_eq!(inspect_archive(&path).unwrap().name, "Example_Mod");
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_without_a_root_mod_info() {
+        let path =
+            std::env::temp_dir().join(format!("odin-7d2d-invalid-{}.zip", uuid::Uuid::new_v4()));
+        write_archive(&path, &[("Example_Mod/Config/items.xml", "<items/>")]);
+        assert!(inspect_archive(&path).is_err());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_archives_with_multiple_mod_roots() {
+        let path =
+            std::env::temp_dir().join(format!("odin-7d2d-multiple-{}.zip", uuid::Uuid::new_v4()));
+        write_archive(
+            &path,
+            &[
+                ("First/ModInfo.xml", MOD_INFO),
+                ("Second/ModInfo.xml", MOD_INFO),
+            ],
+        );
+        assert!(inspect_archive(&path).is_err());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn replacement_uses_internal_name_and_keeps_the_previous_mod_on_failure() {
+        let paths = temporary_paths("replace");
+        let db = crate::db::Db::open(&paths).unwrap();
+        crate::db::game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead")
+            .unwrap();
+        let first = paths.data_dir.join("first.zip");
+        let second = paths.data_dir.join("second.zip");
+        let invalid = paths.data_dir.join("invalid.zip");
+        write_archive(
+            &first,
+            &[
+                ("UnrelatedFolder/ModInfo.xml", MOD_INFO),
+                ("UnrelatedFolder/payload.txt", "first"),
+            ],
+        );
+        let version_two = MOD_INFO.replace("1.2.3", "2.0.0");
+        write_archive(
+            &second,
+            &[
+                ("DifferentArchiveName/ModInfo.xml", &version_two),
+                ("DifferentArchiveName/payload.txt", "second"),
+            ],
+        );
+        write_archive(&invalid, &[("broken/not-mod-info.xml", "<xml/>")]);
+
+        install(&paths, &db, "undead", &first, false).unwrap();
+        let target = paths
+            .game_instance_dir(GameId::SevenDaysToDie, "undead")
+            .join("Mods/Example_Mod");
+        assert_eq!(
+            fs::read_to_string(target.join("payload.txt")).unwrap(),
+            "first"
+        );
+
+        assert!(install(&paths, &db, "undead", &second, false).is_err());
+        assert_eq!(
+            fs::read_to_string(target.join("payload.txt")).unwrap(),
+            "first"
+        );
+
+        install(&paths, &db, "undead", &second, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(target.join("payload.txt")).unwrap(),
+            "second"
+        );
+        assert!(install(&paths, &db, "undead", &invalid, true).is_err());
+        assert_eq!(
+            fs::read_to_string(target.join("payload.txt")).unwrap(),
+            "second"
+        );
+
+        drop(db);
+        fs::remove_dir_all(paths.data_dir).ok();
     }
 }

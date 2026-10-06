@@ -438,7 +438,6 @@ fn merged_generic_settings(stored: &Value, submitted: &Value) -> Result<Value> {
     };
     for key in [
         "admin_password",
-        "server_password",
         "world_password",
         "rcon_password",
         "password",
@@ -911,7 +910,7 @@ mod tests {
     }
 
     #[test]
-    fn palworld_configuration_keeps_empty_password_fields_secret() {
+    fn palworld_configuration_allows_clearing_the_server_password() {
         let (paths, db) = temp_context("palworld-config");
         let instance = create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
         let config = GenericGameConfig {
@@ -941,7 +940,7 @@ mod tests {
                 .unwrap();
 
         assert_eq!(updated.config.settings["admin_password"], "admin-secret");
-        assert_eq!(updated.config.settings["server_password"], "join-secret");
+        assert_eq!(updated.config.settings["server_password"], "");
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

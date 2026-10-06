@@ -221,7 +221,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
 
   return (
     <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}>
-      <p className="text-sm text-muted-foreground">Stop this server before changing its configuration. Empty password fields keep their existing value.</p>
+      <p className="text-sm text-muted-foreground">Stop this server before changing its configuration. Empty passwords keep their existing value, except for Palworld's server password, which removes the join requirement.</p>
       <div className="grid gap-4 sm:grid-cols-2">
         <ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />
         {config.query_port !== null && <ConfigInput id="generic-query-port" label={isDragonwilds ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}

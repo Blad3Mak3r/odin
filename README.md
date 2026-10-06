@@ -2,7 +2,7 @@
 
 **Odin** is a self-hosted web service for orchestrating dedicated game
 servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/),
-Rust, V Rising, Palworld, and RuneScape: Dragonwilds from one binary and one
+Rust, V Rising, Palworld, RuneScape: Dragonwilds, and 7 Days to Die from one binary and one
 web dashboard. In Norse mythology, Odin is
 the All-Father who watches over the nine realms; this Odin watches over your
 game servers — installing and updating them, running and supervising named
@@ -41,7 +41,7 @@ Rust v1 otherwise focuses on core operation.
   SteamCMD and a handful of OS shared libraries — no Python, no Docker, no
   terminal multiplexer required.
 - **Multiple games and UUID-addressed instances.** Orchestrate Valheim, Rust,
-  V Rising, Palworld, and RuneScape: Dragonwilds side by side on one host.
+  V Rising, Palworld, RuneScape: Dragonwilds, and 7 Days to Die side by side on one host.
   Each instance has a persistent UUID for dashboard navigation and API calls;
   names remain editable labels and may be reused by another game without
   sharing data or ports.
@@ -481,6 +481,11 @@ In both modes, the data dir is resolved in this order:
   games/rust/
     install/                     # Rust Dedicated Server binaries
     instances/<name>/            # Rust configuration, identity, logs, and backups
+  games/7d2d/
+    install/                     # shared 7 Days to Die Dedicated Server binaries
+    instances/<name>/
+      Mods/<mod-name>/ModInfo.xml # instance-local uploaded 7D2D mods
+      Saves/                      # isolated 7D2D saves
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
 
@@ -498,6 +503,11 @@ its exact version. Updating one instance creates or reuses the newer payload
 and only repoints that instance; pinned instances remain unchanged. The
 dashboard can switch back to any cached version and prune versions no longer
 used by an instance.
+
+7 Days to Die uses the internal game identifier `7d2d`. Its instances reserve
+UDP ports `26900–26902` by default and load user-uploaded ZIP mods from each
+instance's own `Mods/` directory. Odin requires a stopped 7D2D server before
+creating a backup or changing mods.
 
 On the first start after upgrading, Odin automatically moves the legacy
 single-version mod store into this layout and repoints every existing instance;

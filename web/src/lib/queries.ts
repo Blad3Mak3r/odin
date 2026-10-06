@@ -634,6 +634,21 @@ export function useMods(name: string) {
   })
 }
 
+export type SevenDaysModInfo = { name: string; display_name: string; version: string; description: string | null; author: string | null; website: string | null }
+export function useSevenDaysMods(id: string) {
+  return useQuery({ queryKey: ['managed-instances', id, '7d2d', 'mods'], queryFn: () => api.get<SevenDaysModInfo[]>(`/instances/${id}/7d2d/mods`) })
+}
+export function useUploadSevenDaysMod() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, file, replace }: { id: string; file: File; replace: boolean }) => {
+      const form = new FormData(); form.set('file', file); if (replace) form.set('replace', 'true')
+      return api.upload<JobHandle>(`/instances/${id}/7d2d/mods/upload`, form)
+    },
+    onSuccess: (_result, { id }) => { queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'mods'] }); queryClient.invalidateQueries({ queryKey: ['jobs'] }) },
+  })
+}
+
 export function useModSearch(query: string) {
   return useQuery({
     queryKey: ['mods', 'search', query],

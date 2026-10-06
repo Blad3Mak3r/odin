@@ -69,6 +69,19 @@ pub async fn create_backup_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<JobHandle>> {
     let (game, name) = resolve_instance_id(&state, id).await?;
+    if game == GameId::SevenDaysToDie {
+        let paths = state.paths.clone();
+        let db = state.db.clone();
+        let check_name = name.clone();
+        run_blocking(move || {
+            anyhow::ensure!(
+                !instances::is_running(&paths, &db, game, &check_name)?,
+                "7 Days to Die backups require a stopped server"
+            );
+            Ok(())
+        })
+        .await?;
+    }
     if game == GameId::Valheim {
         return Ok(create_backup(State(state), Path(name)).await);
     }

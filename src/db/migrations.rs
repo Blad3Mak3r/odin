@@ -60,7 +60,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         // 0021 replaces the parent identity table in order to widen its
         // SQLite CHECK constraint. SQLite only permits that operation with
         // foreign keys disabled before a transaction begins.
-        if version == 21 {
+        if version == 21 || version == 23 {
             conn.pragma_update(None, "foreign_keys", "OFF")?;
             let result = conn
                 .execute_batch(sql)

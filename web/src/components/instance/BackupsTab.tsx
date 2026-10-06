@@ -84,7 +84,7 @@ export function BackupsTab({ id, name, running, game = 'valheim' }: { id: string
         <Button
           size="sm"
           variant="outline"
-          disabled={createBackup.isPending || (game === 'rust' && running)}
+          disabled={createBackup.isPending || ((game === 'rust' || game === '7d2d') && running)}
           onClick={() =>
             createBackup.mutate(id, {
               onSuccess: (handle) => setJobId(handle.id),
@@ -97,7 +97,7 @@ export function BackupsTab({ id, name, running, game = 'valheim' }: { id: string
         </Button>
       </div>
 
-      {game === 'rust' && <p className="text-sm text-muted-foreground">Rust backups require a stopped server. Scheduled backups fail safely if it is running.</p>}
+      {(game === 'rust' || game === '7d2d') && <p className="text-sm text-muted-foreground">{game === '7d2d' ? '7 Days to Die' : 'Rust'} backups require a stopped server. Scheduled backups wait until it stops.</p>}
       <BackupScheduleSection id={id} />
       <RemoteBackupStorageSection id={id} />
 

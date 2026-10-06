@@ -28,13 +28,7 @@ pub fn prepare_start(
     // protects instances created with defaults (before their first form
     // submission) and any data imported from an older Odin version.
     crate::db::game_instances::validate_generic_config(game, &instance.config)?;
-    let requested = [
-        Some(instance.config.port),
-        instance.config.query_port,
-        instance.config.admin_port,
-    ]
-    .into_iter()
-    .flatten();
+    let requested = crate::db::game_instances::claimed_ports(game, &instance.config)?;
     crate::game::ports::ensure_available(db, game, name, requested)?;
     let binary = paths
         .game_install_dir(game)
@@ -71,9 +65,92 @@ pub fn prepare_start(
             prepare_native_runtime(paths, &instance)?;
             write_native_settings(paths, &instance)?;
         }
+        GameId::SevenDaysToDie => write_7d2d_settings(paths, &instance)?,
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
     Ok(instance)
+}
+
+fn seven_d2d_config_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
+    paths
+        .game_instance_dir(GameId::SevenDaysToDie, instance.name())
+        .join("config/serverconfig.xml")
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn set_xml_property(contents: &mut String, name: &str, value: &str) -> Result<()> {
+    let expression = format!(
+        r#"(?s)<property\s+name\s*=\s*"{}"[^>]*>"#,
+        regex::escape(name)
+    );
+    let replacement = format!(r#"<property name="{name}" value="{}"/>"#, xml_escape(value));
+    let pattern = regex::Regex::new(&expression)?;
+    if pattern.is_match(contents) {
+        *contents = pattern
+            .replace(contents, |_: &regex::Captures<'_>| replacement.clone())
+            .into_owned();
+    } else if let Some(index) = contents.rfind("</ServerSettings>") {
+        contents.insert_str(index, &format!("    {replacement}\n"));
+    } else {
+        bail!("serverconfig.xml has no ServerSettings element");
+    }
+    Ok(())
+}
+
+fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
+    let instance_dir = paths.game_instance_dir(GameId::SevenDaysToDie, instance.name());
+    let config = seven_d2d_config_path(paths, instance);
+    if let Some(parent) = config.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut contents = if config.is_file() {
+        fs::read_to_string(&config)?
+    } else {
+        let template = paths
+            .game_install_dir(GameId::SevenDaysToDie)
+            .join("serverconfig.xml");
+        if template.is_file() {
+            fs::read_to_string(template)?
+        } else {
+            "<?xml version=\"1.0\"?>\n<ServerSettings>\n</ServerSettings>\n".into()
+        }
+    };
+    let settings = &instance.config.settings;
+    let string = |key: &str, fallback: &str| setting_string(settings, key, fallback);
+    let number =
+        |key: &str, fallback: u64| setting_u64(settings, key).unwrap_or(fallback).to_string();
+    for (name, value) in [
+        ("ServerName", string("server_name", instance.name())),
+        ("ServerDescription", string("server_description", "")),
+        ("ServerPassword", string("server_password", "")),
+        ("ServerVisibility", number("visibility", 2)),
+        ("ServerMaxPlayerCount", number("max_players", 8)),
+        ("ServerPort", instance.config.port.to_string()),
+        ("GameWorld", string("game_world", "Navezgane")),
+        ("GameName", string("game_name", instance.name())),
+        ("WorldGenSeed", string("world_gen_seed", instance.name())),
+        ("WorldGenSize", number("world_gen_size", 6144)),
+        ("UserDataFolder", instance_dir.display().to_string()),
+        (
+            "SaveGameFolder",
+            instance_dir.join("Saves").display().to_string(),
+        ),
+        ("TelnetEnabled", "false".into()),
+        ("ControlPanelEnabled", "false".into()),
+        ("WebDashboardEnabled", "false".into()),
+    ] {
+        set_xml_property(&mut contents, name, &value)?;
+    }
+    fs::create_dir_all(instance_dir.join("Saves"))?;
+    fs::create_dir_all(instance_dir.join("Mods"))?;
+    fs::write(&config, contents).with_context(|| format!("failed to write {}", config.display()))
 }
 
 /// V Rising deliberately supports a per-instance persistent-data directory.
@@ -146,7 +223,7 @@ fn prepare_native_runtime(paths: &Paths, instance: &GenericGameInstance) -> Resu
     let saved = match instance.identity.game {
         GameId::Palworld => destination.join("Pal/Saved"),
         GameId::RunescapeDragonwilds => destination.join("RSDragonwilds/Saved"),
-        GameId::Valheim | GameId::Rust | GameId::VRising => unreachable!(),
+        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => unreachable!(),
     };
     fs::create_dir_all(saved)?;
     Ok(())
@@ -190,7 +267,7 @@ fn is_instance_data_path(game: GameId, relative: &Path) -> bool {
     match game {
         GameId::Palworld => relative.starts_with("Pal/Saved"),
         GameId::RunescapeDragonwilds => relative.starts_with("RSDragonwilds/Saved"),
-        GameId::Valheim | GameId::Rust | GameId::VRising => false,
+        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => false,
     }
 }
 
@@ -211,7 +288,7 @@ fn write_native_settings(paths: &Paths, instance: &GenericGameInstance) -> Resul
     match instance.identity.game {
         GameId::Palworld => write_palworld_settings(paths, instance),
         GameId::RunescapeDragonwilds => write_dragonwilds_settings(paths, instance),
-        GameId::Valheim | GameId::Rust | GameId::VRising => unreachable!(),
+        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => unreachable!(),
     }
 }
 
@@ -295,7 +372,9 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
     let stderr = stdout.try_clone()?;
     let runtime_dir = match game {
         GameId::Palworld | GameId::RunescapeDragonwilds => native_runtime_dir(paths, instance),
-        GameId::Valheim | GameId::Rust | GameId::VRising => install_dir.clone(),
+        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => {
+            install_dir.clone()
+        }
     };
     let binary = runtime_dir.join(driver(game).server_binary());
     let mut command = match game {
@@ -314,7 +393,9 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
                 .env("STEAM_COMPAT_DATA_PATH", instance_dir.join("proton-prefix"));
             command
         }
-        GameId::Palworld | GameId::RunescapeDragonwilds => Command::new(binary),
+        GameId::Palworld | GameId::RunescapeDragonwilds | GameId::SevenDaysToDie => {
+            Command::new(binary)
+        }
         GameId::Valheim | GameId::Rust => unreachable!("generic command called for typed driver"),
     };
     command
@@ -348,6 +429,21 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
             if let Some(port) = instance.config.query_port {
                 command.arg(format!("-BeaconPort={port}"));
             }
+        }
+        GameId::SevenDaysToDie => {
+            command
+                .arg(format!(
+                    "-configfile={}",
+                    seven_d2d_config_path(paths, instance).display()
+                ))
+                .arg(format!(
+                    "-logfile={}",
+                    log_dir.join("console.log").display()
+                ))
+                .arg("-quit")
+                .arg("-batchmode")
+                .arg("-nographics")
+                .arg("-dedicated");
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
@@ -604,5 +700,50 @@ mod tests {
         assert!(arguments.contains("-port=7777"));
         assert!(arguments.contains("-BeaconPort=8888"));
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn seven_days_settings_preserve_the_template_and_isolate_data() {
+        let dir = std::env::temp_dir().join(format!("odin-7d2d-settings-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let install = paths.game_install_dir(GameId::SevenDaysToDie);
+        fs::create_dir_all(&install).unwrap();
+        fs::write(
+            install.join("serverconfig.xml"),
+            "<ServerSettings>\n  <property name=\"UnmanagedSetting\" value=\"keep\"/>\n</ServerSettings>\n",
+        )
+        .unwrap();
+        let mut instance = generic_instance(
+            GameId::SevenDaysToDie,
+            json!({
+                "server_name": "Undead Test",
+                "server_description": "Private test server",
+                "server_password": "secret",
+                "visibility": 0,
+                "max_players": 12,
+                "game_world": "RWG",
+                "game_name": "OdinWorld",
+                "world_gen_seed": "seed",
+                "world_gen_size": 8192,
+            }),
+        );
+        instance.identity.name = "undead".into();
+        instance.config.port = 26900;
+
+        write_7d2d_settings(&paths, &instance).unwrap();
+
+        let root = paths.game_instance_dir(GameId::SevenDaysToDie, "undead");
+        let settings = fs::read_to_string(root.join("config/serverconfig.xml")).unwrap();
+        assert!(settings.contains("UnmanagedSetting\" value=\"keep"));
+        assert!(settings.contains("ServerName\" value=\"Undead Test"));
+        assert!(settings.contains("ServerPort\" value=\"26900"));
+        assert!(settings.contains(&format!("UserDataFolder\" value=\"{}", root.display())));
+        assert!(settings.contains("TelnetEnabled\" value=\"false"));
+        assert!(root.join("Saves").is_dir());
+        assert!(root.join("Mods").is_dir());
+        fs::remove_dir_all(paths.data_dir).ok();
     }
 }

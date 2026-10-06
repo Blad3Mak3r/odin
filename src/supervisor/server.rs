@@ -127,7 +127,10 @@ impl SupervisedInstance {
         match game {
             GameId::Valheim => lifecycle::prepare_start(paths, db, name).map(Self::Valheim),
             GameId::Rust => crate::game::rust::prepare_start(paths, db, name).map(Self::Rust),
-            GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+            GameId::VRising
+            | GameId::Palworld
+            | GameId::RunescapeDragonwilds
+            | GameId::SevenDaysToDie => {
                 crate::game::generic::prepare_start(paths, db, game, name).map(Self::Generic)
             }
         }

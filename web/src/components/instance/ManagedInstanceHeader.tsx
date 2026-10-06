@@ -102,6 +102,7 @@ function gameName(game: ManagedInstanceView['game']) {
     vrising: 'V Rising',
     palworld: 'Palworld',
     'runescape-dragonwilds': 'RuneScape: Dragonwilds',
+    '7d2d': '7 Days to Die',
   }[game]
 }
 

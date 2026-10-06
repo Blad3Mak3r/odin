@@ -5,7 +5,7 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
-export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds'
+export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'
 
 export interface GameCapabilities {
   backups: boolean

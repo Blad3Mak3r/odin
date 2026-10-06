@@ -6,7 +6,8 @@ use tower_http::trace::TraceLayer;
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
     instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
-    rust_access_lists, saves, settings, uptime_schedules, version, vrising_access_lists, webhooks,
+    rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, version,
+    vrising_access_lists, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -14,7 +15,7 @@ use crate::web::{sse, static_files};
 /// Ceiling for an uploaded mod `.zip` — generous enough for a real modpack
 /// while still bounding memory/disk from a runaway or malicious upload.
 /// Axum's own default body limit (2 MiB) applies to every other route.
-const MOD_UPLOAD_BODY_LIMIT: usize = 500 * 1024 * 1024;
+const MOD_UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024;
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -24,6 +25,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/install", post(install::install_server))
         .route("/install/status", get(install::get_install_status))
         .route("/games", get(games::list_games))
+        .route("/games/7d2d/worlds", get(games::list_seven_days_worlds))
         .route(
             "/instances/bulk/games/{action}",
             post(bulk::bulk_games_by_id),
@@ -148,6 +150,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{id}/valheim/mods/upload",
             post(mods::upload_mod_by_id).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
+        )
+        .route(
+            "/instances/{id}/7d2d/mods",
+            get(seven_days_to_die::list_mods),
+        )
+        .route(
+            "/instances/{id}/7d2d/mods/upload",
+            post(seven_days_to_die::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
         )
         .route(
             "/instances/{id}/valheim/mods/{mod_id}",

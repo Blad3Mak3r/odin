@@ -103,7 +103,7 @@ impl GenericGameInstance {
 pub fn is_generic_game(game: GameId) -> bool {
     matches!(
         game,
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds | GameId::SevenDaysToDie
     )
 }
 
@@ -130,6 +130,23 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
             query_port: Some(8888),
             admin_port: None,
             settings: json!({"owner_id": "", "server_name": name, "default_world_name": name, "admin_password": "", "world_password": ""}),
+            auto_restart: false,
+        },
+        GameId::SevenDaysToDie => GenericGameConfig {
+            port: 26900,
+            query_port: None,
+            admin_port: None,
+            settings: json!({
+                "server_name": name,
+                "server_description": "",
+                "server_password": "",
+                "visibility": 2,
+                "max_players": 8,
+                "game_world": "Navezgane",
+                "game_name": name,
+                "world_gen_seed": name,
+                "world_gen_size": 6144
+            }),
             auto_restart: false,
         },
         _ => unreachable!("only generic games have generic defaults"),
@@ -188,9 +205,8 @@ pub fn create_generic(
     }
     let mut config = default_generic_config(game, name);
     let occupied = configured_ports(db)?;
-    while [Some(config.port), config.query_port, config.admin_port]
+    while claimed_ports(game, &config)?
         .into_iter()
-        .flatten()
         .any(|port| occupied.contains(&port))
     {
         config.port = config
@@ -234,19 +250,24 @@ pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
         GameId::VRising,
         GameId::Palworld,
         GameId::RunescapeDragonwilds,
+        GameId::SevenDaysToDie,
     ] {
         for instance in list_generic(db, game)? {
-            ports.extend(
-                [
-                    Some(instance.config.port),
-                    instance.config.query_port,
-                    instance.config.admin_port,
-                ]
-                .into_iter()
-                .flatten(),
-            );
+            ports.extend(claimed_ports(game, &instance.config)?);
         }
     }
+    Ok(ports)
+}
+
+pub fn claimed_ports(game: GameId, config: &GenericGameConfig) -> Result<Vec<u16>> {
+    let mut ports = if game == GameId::SevenDaysToDie {
+        crate::game::ports::block(game, config.port)?
+    } else {
+        vec![config.port]
+    };
+    ports.extend([config.query_port, config.admin_port].into_iter().flatten());
+    ports.sort_unstable();
+    ports.dedup();
     Ok(ports)
 }
 
@@ -423,6 +444,37 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
         bail!(InvalidGenericConfig(
             "V Rising RCON password is required when RCON is enabled".into()
         ));
+    }
+    if game == GameId::SevenDaysToDie {
+        for key in ["server_name", "game_world", "game_name"] {
+            if settings
+                .get(key)
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                bail!(InvalidGenericConfig(format!(
+                    "7 Days to Die {key} is required"
+                )));
+            }
+        }
+        let visibility = settings
+            .get("visibility")
+            .and_then(Value::as_u64)
+            .unwrap_or(2);
+        if !matches!(visibility, 0..=2) {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die visibility must be 0, 1, or 2".into()
+            ));
+        }
+        if settings
+            .get("max_players")
+            .and_then(Value::as_u64)
+            .is_none_or(|value| value == 0)
+        {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die max_players must be positive".into()
+            ));
+        }
     }
     Ok(())
 }

@@ -12,6 +12,7 @@ pub mod palworld;
 pub mod ports;
 pub mod proton_ge;
 pub mod rust;
+pub mod seven_days_to_die;
 pub mod update;
 pub mod valheim;
 pub mod vrising;
@@ -24,6 +25,8 @@ pub enum GameId {
     VRising,
     Palworld,
     RunescapeDragonwilds,
+    #[serde(rename = "7d2d")]
+    SevenDaysToDie,
 }
 
 impl GameId {
@@ -34,6 +37,7 @@ impl GameId {
             Self::VRising => "vrising",
             Self::Palworld => "palworld",
             Self::RunescapeDragonwilds => "runescape-dragonwilds",
+            Self::SevenDaysToDie => "7d2d",
         }
     }
 }
@@ -54,6 +58,7 @@ impl FromStr for GameId {
             "vrising" => Ok(Self::VRising),
             "palworld" => Ok(Self::Palworld),
             "runescape-dragonwilds" => Ok(Self::RunescapeDragonwilds),
+            "7d2d" => Ok(Self::SevenDaysToDie),
             _ => Err(format!("unsupported game '{value}'")),
         }
     }
@@ -92,6 +97,7 @@ struct RustDriver;
 struct VRisingDriver;
 struct PalworldDriver;
 struct RunescapeDragonwildsDriver;
+struct SevenDaysToDieDriver;
 
 impl GameDriver for ValheimDriver {
     fn id(&self) -> GameId {
@@ -238,11 +244,39 @@ impl GameDriver for RunescapeDragonwildsDriver {
     }
 }
 
+impl GameDriver for SevenDaysToDieDriver {
+    fn id(&self) -> GameId {
+        GameId::SevenDaysToDie
+    }
+    fn display_name(&self) -> &'static str {
+        "7 Days to Die"
+    }
+    fn steam_app_id(&self) -> &'static str {
+        "294420"
+    }
+    fn server_binary(&self) -> &'static str {
+        "7DaysToDieServer.x86_64"
+    }
+    fn capabilities(&self) -> GameCapabilities {
+        GameCapabilities {
+            backups: true,
+            players: false,
+            mods: true,
+            access_lists: false,
+            readiness: false,
+        }
+    }
+    fn port_requirements(&self) -> GamePortRequirements {
+        GamePortRequirements { count: 3 }
+    }
+}
+
 static VALHEIM: ValheimDriver = ValheimDriver;
 static RUST: RustDriver = RustDriver;
 static V_RISING: VRisingDriver = VRisingDriver;
 static PALWORLD: PalworldDriver = PalworldDriver;
 static RUNESCAPE_DRAGONWILDS: RunescapeDragonwildsDriver = RunescapeDragonwildsDriver;
+static SEVEN_DAYS_TO_DIE: SevenDaysToDieDriver = SevenDaysToDieDriver;
 
 pub fn driver(game: GameId) -> &'static dyn GameDriver {
     match game {
@@ -251,16 +285,18 @@ pub fn driver(game: GameId) -> &'static dyn GameDriver {
         GameId::VRising => &V_RISING,
         GameId::Palworld => &PALWORLD,
         GameId::RunescapeDragonwilds => &RUNESCAPE_DRAGONWILDS,
+        GameId::SevenDaysToDie => &SEVEN_DAYS_TO_DIE,
     }
 }
 
-pub fn drivers() -> [&'static dyn GameDriver; 5] {
+pub fn drivers() -> [&'static dyn GameDriver; 6] {
     [
         &VALHEIM,
         &RUST,
         &V_RISING,
         &PALWORLD,
         &RUNESCAPE_DRAGONWILDS,
+        &SEVEN_DAYS_TO_DIE,
     ]
 }
 
@@ -271,5 +307,15 @@ mod tests {
     #[test]
     fn rust_driver_has_the_dedicated_server_app_id() {
         assert_eq!(driver(GameId::Rust).steam_app_id(), "258550");
+    }
+
+    #[test]
+    fn seven_days_to_die_driver_uses_the_short_public_id() {
+        assert_eq!(GameId::SevenDaysToDie.as_str(), "7d2d");
+        assert_eq!(
+            serde_json::to_string(&GameId::SevenDaysToDie).unwrap(),
+            "\"7d2d\""
+        );
+        assert_eq!(driver(GameId::SevenDaysToDie).steam_app_id(), "294420");
     }
 }

@@ -14,6 +14,7 @@ const GAME_ICON_SOURCES: Record<GameId, string> = {
   vrising: vrisingIcon,
   palworld: palworldIcon,
   'runescape-dragonwilds': runescapeDragonwildsIcon,
+  '7d2d': '',
 }
 
 export function GameIcon({

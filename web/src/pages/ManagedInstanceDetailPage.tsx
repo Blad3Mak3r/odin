@@ -9,6 +9,7 @@ import { AccessListsTab } from '@/components/instance/AccessListsTab'
 import { ConfigTab } from '@/components/instance/ConfigTab'
 import { PlayersTab } from '@/components/instance/PlayersTab'
 import { ModsTab } from '@/components/instance/ModsTab'
+import { SevenDaysModsTab } from '@/components/instance/SevenDaysModsTab'
 import { useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -41,7 +42,7 @@ function isConsoleError(line: string) {
 }
 
 function isGameId(value: string | undefined): value is GameId {
-  return value === 'valheim' || value === 'rust' || value === 'vrising' || value === 'palworld' || value === 'runescape-dragonwilds'
+  return value === 'valheim' || value === 'rust' || value === 'vrising' || value === 'palworld' || value === 'runescape-dragonwilds' || value === '7d2d'
 }
 
 type RustConfig = {
@@ -194,7 +195,7 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min,
   )
 }
 
-function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds'>; config: GenericConfig; running: boolean }) {
+function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'>; config: GenericConfig; running: boolean }) {
   const update = useUpdateGenericConfig()
   const [port, setPort] = useState(String(config.port))
   const [queryPort, setQueryPort] = useState(config.query_port === null ? '' : String(config.query_port))
@@ -211,12 +212,20 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
   const [rconEnabled, setRconEnabled] = useState(config.settings.rcon_enabled === true)
   const [restEnabled, setRestEnabled] = useState(config.settings.rest_api_enabled === true)
   const isDragonwilds = game === 'runescape-dragonwilds'
+  const isSevenDays = game === '7d2d'
+  const [description, setDescription] = useState(typeof config.settings.server_description === 'string' ? config.settings.server_description : '')
+  const [visibility, setVisibility] = useState(typeof config.settings.visibility === 'number' ? String(config.settings.visibility) : '2')
+  const [gameWorld, setGameWorld] = useState(typeof config.settings.game_world === 'string' ? config.settings.game_world : 'Navezgane')
+  const [gameName, setGameName] = useState(typeof config.settings.game_name === 'string' ? config.settings.game_name : '')
+  const [worldSeed, setWorldSeed] = useState(typeof config.settings.world_gen_seed === 'string' ? config.settings.world_gen_seed : '')
+  const [worldSize, setWorldSize] = useState(typeof config.settings.world_gen_size === 'number' ? String(config.settings.world_gen_size) : '6144')
 
   const save = () => {
     const settings: Record<string, unknown> = { ...config.settings, server_name: serverName }
     if (game === 'vrising') Object.assign(settings, { max_players: Number(maxPlayers), rcon_enabled: rconEnabled, rcon_password: rconPassword })
     if (game === 'palworld') Object.assign(settings, { max_players: Number(maxPlayers), rest_api_enabled: restEnabled, admin_password: adminPassword, server_password: serverPassword })
     if (isDragonwilds) Object.assign(settings, { owner_id: ownerId, default_world_name: worldName, admin_password: adminPassword, world_password: worldPassword })
+    if (isSevenDays) Object.assign(settings, { server_description: description, server_password: serverPassword, visibility: Number(visibility), max_players: Number(maxPlayers), game_world: gameWorld, game_name: gameName, world_gen_seed: worldSeed, world_gen_size: Number(worldSize) })
     update.mutate({
       id,
       request: {
@@ -249,6 +258,15 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
           <ConfigInput id="dragonwilds-world" label="Default world" value={worldName} disabled={running} onChange={setWorldName} />
           <ConfigInput id="dragonwilds-admin-password" label="Administration password" type="password" value={adminPassword} disabled={running} onChange={setAdminPassword} required={false} />
           <ConfigInput id="dragonwilds-world-password" label="World password" type="password" value={worldPassword} disabled={running} onChange={setWorldPassword} required={false} />
+        </>}
+        {isSevenDays && <>
+          <ConfigInput id="7d2d-description" label="Description" value={description} disabled={running} onChange={setDescription} />
+          <ConfigInput id="7d2d-password" label="Server password" type="password" value={serverPassword} disabled={running} onChange={setServerPassword} placeholder={config.configuredPasswords.server_password ? '••••••••' : undefined} />
+          <ConfigInput id="7d2d-visibility" label="Visibility (0 hidden, 2 public)" type="number" min={0} max={2} value={visibility} disabled={running} onChange={setVisibility} />
+          <ConfigInput id="7d2d-world" label="World (Navezgane or RWG)" value={gameWorld} disabled={running} onChange={setGameWorld} />
+          <ConfigInput id="7d2d-game-name" label="Save name" value={gameName} disabled={running} onChange={setGameName} />
+          <ConfigInput id="7d2d-seed" label="RWG seed" value={worldSeed} disabled={running} onChange={setWorldSeed} />
+          <ConfigInput id="7d2d-size" label="RWG size" type="number" value={worldSize} disabled={running} onChange={setWorldSize} />
         </>}
       </div>
       {game === 'vrising' && <div className="flex items-center justify-between rounded-xl border p-3"><Label htmlFor="vrising-rcon">Enable local RCON</Label><Switch id="vrising-rcon" checked={rconEnabled} disabled={running} onCheckedChange={setRconEnabled} /></div>}
@@ -284,14 +302,14 @@ export function ManagedInstanceDetailPage() {
     return <Navigate replace to={`/instance/${detail.id}${tabPath ? `/${tabPath}` : ''}`} />
   }
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
-  const genericConfig = detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds' ? asGenericConfig(detail.config) : null
+  const genericConfig = detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds' || detail.game === '7d2d' ? asGenericConfig(detail.config) : null
   const tabs = [
     { id: 'logs', label: 'Logs' },
     ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
     ...(detail.game === 'vrising' ? [{ id: 'rcon', label: 'RCON' }] : []),
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
-    ...(detail.game === 'valheim' && detail.capabilities.mods ? [{ id: 'mods', label: 'Mods' }] : []),
+    ...((detail.game === 'valheim' || detail.game === '7d2d') && detail.capabilities.mods ? [{ id: 'mods', label: 'Mods' }] : []),
     ...(detail.game === 'palworld' ? [{ id: 'admin', label: 'Admin' }] : []),
     ...((detail.game === 'valheim' || detail.game === 'rust' || detail.game === 'vrising') && detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
@@ -337,7 +355,7 @@ export function ManagedInstanceDetailPage() {
             ? <ConfigTab id={detail.id} />
             : rustConfig
             ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={rustConfig} running={detail.running} />
-            : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds')
+            : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds' || detail.game === '7d2d')
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
           <UptimeScheduleCard id={detail.id} />
@@ -359,6 +377,7 @@ export function ManagedInstanceDetailPage() {
         {detail.game === 'valheim' && tab === 'mods' && (
           <TabsContent value="mods"><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabsContent>
         )}
+        {detail.game === '7d2d' && tab === 'mods' && <TabsContent value="mods"><SevenDaysModsTab id={detail.id} running={detail.running} /></TabsContent>}
         <TabsContent value="saves"><SaveFilesTab id={detail.id} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab id={detail.id} running={detail.running} /></TabsContent>
         <TabsContent value="limits"><ResourceLimitsTab id={detail.id} /></TabsContent>

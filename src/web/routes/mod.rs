@@ -20,6 +20,7 @@ pub mod resources;
 pub mod rust_access_lists;
 pub mod saves;
 pub mod settings;
+pub mod seven_days_to_die;
 pub mod uptime_schedules;
 pub mod version;
 pub mod vrising_access_lists;

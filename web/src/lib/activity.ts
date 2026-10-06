@@ -36,7 +36,7 @@ export function describeActivity(kind: ActivityKind, game: GameId): string {
     case 'server_installed':
       return 'Server files installed/updated'
     case 'server_update_available':
-      return `${game === 'rust' ? 'Rust' : 'Valheim'} server update available: build ${kind.installed_build_id} → ${kind.latest_build_id}`
+      return `${gameLabel(game)} server update available: build ${kind.installed_build_id} → ${kind.latest_build_id}`
     case 'mod_installed':
       return `Mod installed: ${kind.mod_id}`
     case 'mod_removed':
@@ -60,6 +60,10 @@ export function describeActivity(kind: ActivityKind, game: GameId): string {
     case 'player_left':
       return `${kind.name} left`
   }
+}
+
+function gameLabel(game: GameId) {
+  return { valheim: 'Valheim', rust: 'Rust', vrising: 'V Rising', palworld: 'Palworld', 'runescape-dragonwilds': 'RuneScape: Dragonwilds', '7d2d': '7 Days to Die' }[game]
 }
 
 // Short, payload-independent labels for picking which activity kinds a

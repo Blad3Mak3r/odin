@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Select } from '@base-ui/react/select'
+import { Check, ChevronsUpDown } from 'lucide-react'
 import { api } from '@/lib/api-client'
 import { formatBytes } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -144,10 +146,32 @@ function CreateManagedInstanceDialog({ games }: { games: GameView[] }) {
         <DialogHeader><DialogTitle>Create instance</DialogTitle></DialogHeader>
         <FieldGroup>
           <Field>
-            <FieldLabel>Game</FieldLabel>
-            <ToggleGroup value={selectedGame ? [selectedGame] : []} onValueChange={(value) => value[0] && setGame(value[0] as GameId)} variant="outline" spacing={0}>
-              {games.map((availableGame) => <ToggleGroupItem key={availableGame.id} value={availableGame.id}><GameIcon game={availableGame.id} />{availableGame.name}</ToggleGroupItem>)}
-            </ToggleGroup>
+            <Select.Root value={selectedGame} onValueChange={(value) => value && setGame(value as GameId)}>
+              <Select.Label className="text-sm font-medium">Game</Select.Label>
+              <Select.Trigger className="flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm outline-none hover:bg-accent focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                <Select.Value className="flex items-center gap-2">
+                  {(value: GameId | null) => {
+                    const selected = games.find(({ id }) => id === value)
+                    return selected ? <><GameIcon game={selected.id} />{selected.name}</> : 'Select a game'
+                  }}
+                </Select.Value>
+                <Select.Icon><ChevronsUpDown className="size-4 text-muted-foreground" /></Select.Icon>
+              </Select.Trigger>
+              <Select.Portal>
+                <Select.Positioner sideOffset={4} className="z-50">
+                  <Select.Popup className="min-w-[var(--anchor-width)] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
+                    <Select.List>
+                      {games.map((availableGame) => (
+                        <Select.Item key={availableGame.id} value={availableGame.id} className="grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground">
+                          <Select.ItemIndicator><Check className="size-4" /></Select.ItemIndicator>
+                          <Select.ItemText className="flex items-center gap-2"><GameIcon game={availableGame.id} />{availableGame.name}</Select.ItemText>
+                        </Select.Item>
+                      ))}
+                    </Select.List>
+                  </Select.Popup>
+                </Select.Positioner>
+              </Select.Portal>
+            </Select.Root>
           </Field>
           <Field>
             <FieldLabel htmlFor="managed-instance-name">Name</FieldLabel>

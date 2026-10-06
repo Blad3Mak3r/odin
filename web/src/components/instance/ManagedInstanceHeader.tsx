@@ -47,10 +47,11 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
           {instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {instance.running ? (
             <>
               <Button
+                size="sm"
                 variant="outline"
                 disabled={busy}
                 onClick={() => restart.mutate(action, { onError: (error) => toast.error(error.message) })}
@@ -59,6 +60,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
                 Restart
               </Button>
               <Button
+                size="sm"
                 variant="outline"
                 disabled={busy}
                 onClick={() => stop.mutate(action, { onError: (error) => toast.error(error.message) })}
@@ -69,6 +71,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
             </>
           ) : (
             <Button
+              size="sm"
               disabled={busy}
               onClick={() => start.mutate(action, { onError: (error) => toast.error(error.message) })}
             >

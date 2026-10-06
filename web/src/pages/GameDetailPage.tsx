@@ -2,6 +2,7 @@ import { Loader2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { NavLink, Navigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import sevenDaysBanner from '@/assets/game-banners/7d2d.webp'
 import palworldBanner from '@/assets/game-banners/palworld.webp'
 import runescapeDragonwildsBanner from '@/assets/game-banners/runescape-dragonwilds.webp'
 import rustBanner from '@/assets/game-banners/rust.webp'
@@ -34,7 +35,7 @@ const GAME_BANNERS: Record<GameId, string> = {
   vrising: vrisingBanner,
   palworld: palworldBanner,
   'runescape-dragonwilds': runescapeDragonwildsBanner,
-  '7d2d': '',
+  '7d2d': sevenDaysBanner,
 }
 
 function InstallStatusCard({ game }: { game: GameView }) {

@@ -1,4 +1,4 @@
-import { GameInstallCard } from '@/components/GameInstallCard'
+import { GameCard } from '@/components/GameInstallCard'
 import { PageHeader } from '@/components/PageHeader'
 import { QueryError } from '@/components/QueryError'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -19,7 +19,7 @@ export function GamesPage() {
       )}
       {games.data && (
         <section className="grid gap-4 md:grid-cols-2">
-          {games.data.map((game) => <GameInstallCard key={game.id} game={game} />)}
+          {games.data.map((game) => <GameCard key={game.id} game={game} />)}
         </section>
       )}
     </div>

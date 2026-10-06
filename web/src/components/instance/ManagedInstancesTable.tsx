@@ -66,7 +66,7 @@ export function ManagedInstancesTable({
       </TableHeader>
       <TableBody>
         {isLoading && <LoadingRows columnCount={columnCount} />}
-        {error && <TableRow><TableCell colSpan={columnCount}><QueryError error={error} /></TableCell></TableRow>}
+        {Boolean(error) && <TableRow><TableCell colSpan={columnCount}><QueryError error={error} /></TableCell></TableRow>}
         {!isLoading && !error && instances.length === 0 && (
           <TableRow><TableCell colSpan={columnCount} className="text-center text-muted-foreground">{emptyMessage}</TableCell></TableRow>
         )}

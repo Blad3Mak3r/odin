@@ -520,16 +520,18 @@ creating a backup or changing mods.
 
 On 7 Days to Die V3 and later, gameplay rules are represented by the game's
 single `SandboxCode` value rather than individual XML properties. Odin exposes
-that complete value in the instance configuration form; copy it from the
-game's Sandbox Options screen or a generator for the same server version.
+the complete value and a small visual editor for common V3 rules; it preserves
+unrecognised encoded rules. Copy the complete code from the game's Sandbox
+Options screen when using a newer or otherwise different game schema.
 
 Odin can also enable 7D2D's password-protected console for an instance. It
 uses a separate instance port and Odin connects to it through `127.0.0.1`; the
 password is never returned by the API. Keep that port blocked from external
 networks because the game does not provide Odin with a console bind-address
 setting. Once enabled, the dashboard Console and Players tabs can run server
-commands, list connected players, and kick or permanently ban a player. The
-dashboard also reports a 7D2D instance as *ready* only after a game-start log
+commands, show version/build and memory information, list connected players,
+record recent sessions, and manage bans, administrators, and the whitelist.
+The dashboard also reports a 7D2D instance as *ready* only after a game-start log
 line, rather than merely when the process exists.
 
 On the first start after upgrading, Odin automatically moves the legacy

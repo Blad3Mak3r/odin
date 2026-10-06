@@ -9,10 +9,11 @@ export function SevenDaysConsoleTab({ id, running }: { id: string; running: bool
   const execute = useExecuteSevenDaysConsole()
   const [command, setCommand] = useState('')
   const [output, setOutput] = useState('')
-  const submit = () => {
-    const value = command.trim()
+  const run = (commandToRun: string) => {
+    const value = commandToRun.trim()
     if (!value) return
     execute.mutate({ id, command: value }, { onSuccess: (response) => setOutput(response.output), onError: (error) => toast.error(error.message) })
   }
-  return <Card><CardHeader><CardTitle>Server console</CardTitle><CardDescription>Commands are sent from Odin to the password-protected local 7 Days to Die console. Use <code>help</code> to inspect commands available on this server.</CardDescription></CardHeader><CardContent className="flex flex-col gap-3"><div className="flex gap-2"><Input value={command} disabled={!running || execute.isPending} placeholder="say Server restart in five minutes" onChange={(event) => setCommand(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); submit() } }} /><Button disabled={!running || execute.isPending || !command.trim()} onClick={submit}>Run</Button></div>{!running && <p className="text-sm text-muted-foreground">Start the server before using its console.</p>}{output && <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">{output}</pre>}</CardContent></Card>
+  const submit = () => run(command)
+  return <Card><CardHeader><CardTitle>Server console</CardTitle><CardDescription>Commands are sent from Odin to the password-protected local 7 Days to Die console. Use <code>help</code> to inspect commands available on this server.</CardDescription></CardHeader><CardContent className="flex flex-col gap-3"><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" disabled={!running || execute.isPending} onClick={() => run('version')}>Version and build</Button><Button type="button" size="sm" variant="outline" disabled={!running || execute.isPending} onClick={() => run('mem')}>Memory usage</Button><Button type="button" size="sm" variant="outline" disabled={!running || execute.isPending} onClick={() => run('lpi')}>Player identifiers</Button></div><div className="flex gap-2"><Input value={command} disabled={!running || execute.isPending} placeholder="say Server restart in five minutes" onChange={(event) => setCommand(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); submit() } }} /><Button disabled={!running || execute.isPending || !command.trim()} onClick={submit}>Run</Button></div>{!running && <p className="text-sm text-muted-foreground">Start the server before using its console.</p>}{output && <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">{output}</pre>}</CardContent></Card>
 }

@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::{Multipart, Path, State};
 use axum::http::StatusCode;
+use chrono::Utc;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
@@ -223,8 +224,38 @@ pub async fn list_players(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Vec<seven_days_to_die::Player>>> {
-    let output = console(state, id, "lpi".into()).await?.0.output;
-    Ok(Json(seven_days_to_die::parse_players(&output)))
+    let name = resolve(&state, &id).await?;
+    let output = console(state.clone(), id, "lpi".into()).await?.0.output;
+    let players = seven_days_to_die::parse_players(&output);
+    let db = state.db.clone();
+    let tracked = players
+        .iter()
+        .map(|player| (player.name.clone(), player.platform_id.clone()))
+        .collect::<Vec<_>>();
+    run_blocking(move || {
+        crate::db::player_sessions::sync_for_game(
+            &db,
+            GameId::SevenDaysToDie,
+            &name,
+            &tracked,
+            Utc::now(),
+        )
+    })
+    .await?;
+    Ok(Json(players))
+}
+
+pub async fn player_history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<crate::db::player_sessions::PlayerSession>>> {
+    let name = resolve(&state, &id).await?;
+    let db = state.db.clone();
+    run_blocking(move || {
+        crate::db::player_sessions::recent_for_game(&db, GameId::SevenDaysToDie, &name, 200)
+    })
+    .await
+    .map(Json)
 }
 
 pub async fn kick_player(
@@ -257,4 +288,62 @@ pub async fn ban_player(
     };
     let _ = console(state, id, command).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn unban_player(
+    State(state): State<AppState>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let player = player_target(&player)?;
+    let _ = console(state, id, format!("ban remove {player}")).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn add_admin(
+    State(state): State<AppState>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let player = player_target(&player)?;
+    let _ = console(state, id, format!("admin add {player} 0")).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn add_to_whitelist(
+    State(state): State<AppState>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let player = player_target(&player)?;
+    let _ = console(state, id, format!("whitelist add {player}")).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn remove_admin(
+    State(state): State<AppState>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let player = player_target(&player)?;
+    let _ = console(state, id, format!("admin remove {player}")).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn remove_from_whitelist(
+    State(state): State<AppState>,
+    Path((id, player)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let player = player_target(&player)?;
+    let _ = console(state, id, format!("whitelist remove {player}")).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn access_list(
+    State(state): State<AppState>,
+    Path((id, kind)): Path<(String, String)>,
+) -> ApiResult<Json<seven_days_to_die::ConsoleResponse>> {
+    let command = match kind.as_str() {
+        "bans" => "ban list",
+        "admins" => "admin list",
+        "whitelist" => "whitelist list",
+        _ => return Err(BadRequest("unknown 7 Days to Die access list".into()).into()),
+    };
+    console(state, id, command.into()).await
 }

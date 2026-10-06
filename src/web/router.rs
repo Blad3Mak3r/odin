@@ -173,12 +173,40 @@ pub fn build_router(state: AppState) -> Router {
             get(seven_days_to_die::list_players),
         )
         .route(
+            "/instances/{id}/7d2d/players/history",
+            get(seven_days_to_die::player_history),
+        )
+        .route(
             "/instances/{id}/7d2d/players/{player}/kick",
             post(seven_days_to_die::kick_player),
         )
         .route(
             "/instances/{id}/7d2d/players/{player}/ban",
             post(seven_days_to_die::ban_player),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/unban",
+            post(seven_days_to_die::unban_player),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/admin",
+            post(seven_days_to_die::add_admin),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/whitelist",
+            post(seven_days_to_die::add_to_whitelist),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/admin/remove",
+            post(seven_days_to_die::remove_admin),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/whitelist/remove",
+            post(seven_days_to_die::remove_from_whitelist),
+        )
+        .route(
+            "/instances/{id}/7d2d/access/{kind}",
+            get(seven_days_to_die::access_list),
         )
         .route(
             "/instances/{id}/valheim/mods/{mod_id}",

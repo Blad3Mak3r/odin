@@ -679,11 +679,24 @@ export function useSevenDaysPlayers(id: string, enabled: boolean) {
   return useQuery({ queryKey: ['managed-instances', id, '7d2d', 'players'], queryFn: () => api.get<SevenDaysPlayer[]>(`/instances/${id}/7d2d/players`), enabled, refetchInterval: enabled ? 15_000 : false })
 }
 
+export function useSevenDaysPlayerHistory(id: string, enabled: boolean) {
+  return useQuery({ queryKey: ['managed-instances', id, '7d2d', 'players', 'history'], queryFn: () => api.get<PlayerSession[]>(`/instances/${id}/7d2d/players/history`), enabled, refetchInterval: enabled ? 15_000 : false })
+}
+
 export function useSevenDaysPlayerAction(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ player, action, reason }: { player: string; action: 'kick' | 'ban'; reason: string }) => api.post<void>(`/instances/${id}/7d2d/players/${encodeURIComponent(player)}/${action}`, { reason }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'players'] }),
+    mutationFn: ({ player, action, reason }: { player: string; action: 'kick' | 'ban' | 'unban' | 'admin' | 'whitelist' | 'remove-admin' | 'remove-whitelist'; reason?: string }) => {
+      const path = action === 'remove-admin' ? 'admin/remove' : action === 'remove-whitelist' ? 'whitelist/remove' : action
+      return api.post<void>(`/instances/${id}/7d2d/players/${encodeURIComponent(player)}/${path}`, reason === undefined ? undefined : { reason })
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'players'] }); queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'players', 'history'] }) },
+  })
+}
+
+export function useSevenDaysAccessList(id: string) {
+  return useMutation({
+    mutationFn: (kind: 'bans' | 'admins' | 'whitelist') => api.get<RconCommandResponse>(`/instances/${id}/7d2d/access/${kind}`),
   })
 }
 

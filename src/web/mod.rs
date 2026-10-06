@@ -133,7 +133,7 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
     ] {
         for generic_instance in game_instances::list_generic(&state.db, game)? {
             if generic_instance.is_running()
-                && let Err(error) = crate::game::generic::stop(
+                && let Err(error) = crate::game::instances::stop(
                     &state.paths,
                     &state.db,
                     game,

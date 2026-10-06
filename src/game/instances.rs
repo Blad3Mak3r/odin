@@ -130,10 +130,18 @@ pub async fn stop(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()
             };
             rust::stop(paths, db, &instance).await
         }
-        GameId::VRising
-        | GameId::Palworld
-        | GameId::RunescapeDragonwilds
-        | GameId::SevenDaysToDie => generic::stop(paths, db, game, name).await,
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+            generic::stop(paths, db, game, name).await
+        }
+        GameId::SevenDaysToDie => {
+            generic::stop(paths, db, game, name).await?;
+            crate::db::player_sessions::close_active_for_game(
+                db,
+                GameId::SevenDaysToDie,
+                name,
+                chrono::Utc::now(),
+            )
+        }
     }
 }
 
@@ -157,6 +165,14 @@ pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
         | GameId::SevenDaysToDie => {
             if is_running(paths, db, game, name)? {
                 generic::stop(paths, db, game, name).await?;
+                if game == GameId::SevenDaysToDie {
+                    crate::db::player_sessions::close_active_for_game(
+                        db,
+                        GameId::SevenDaysToDie,
+                        name,
+                        chrono::Utc::now(),
+                    )?;
+                }
             }
             generic::start(paths, db, game, name)
                 .await

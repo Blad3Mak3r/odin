@@ -87,6 +87,11 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/config",
             get(instances::get_config_by_id).put(games::update_config_by_id),
         )
+        .route(
+            "/instances/{id}/config/advanced",
+            get(config_files::list_advanced_config_by_id)
+                .put(config_files::set_advanced_config_by_id),
+        )
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
         .route(

@@ -173,7 +173,17 @@ fn write_vrising_host_settings(paths: &Paths, instance: &GenericGameInstance) ->
     std::fs::create_dir_all(&settings_dir)?;
 
     let settings = &instance.config.settings;
-    let mut host = Map::new();
+    // Preserve keys added by the game in newer releases.  Odin only owns the
+    // small lifecycle contract below; the advanced editor exposes the rest.
+    let file = settings_dir.join("ServerHostSettings.json");
+    let mut host = if file.is_file() {
+        serde_json::from_slice::<Value>(&std::fs::read(&file)?)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default()
+    } else {
+        Map::new()
+    };
     host.insert(
         "Name".into(),
         Value::String(setting_string(settings, "server_name", instance.name())),
@@ -196,7 +206,6 @@ fn write_vrising_host_settings(paths: &Paths, instance: &GenericGameInstance) ->
             }),
         );
     }
-    let file = settings_dir.join("ServerHostSettings.json");
     std::fs::write(&file, serde_json::to_vec_pretty(&Value::Object(host))?)
         .with_context(|| format!("failed to write {}", file.display()))?;
     Ok(())
@@ -332,11 +341,33 @@ fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Res
         "server_password",
         "",
     ));
-    let contents = format!(
-        "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},AdminPassword=\"{admin_password}\",ServerPassword=\"{server_password}\",RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
-        instance.config.port,
-        if rest_enabled { "True" } else { "False" },
-    );
+    let mut contents = if settings_file.is_file() {
+        fs::read_to_string(&settings_file)?
+    } else {
+        format!(
+            "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},AdminPassword=\"{admin_password}\",ServerPassword=\"{server_password}\",RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
+            instance.config.port,
+            if rest_enabled { "True" } else { "False" },
+        )
+    };
+    for (key, value) in [
+        ("ServerName", format!("\"{server_name}\"")),
+        ("ServerPlayerMaxNum", max_players.to_string()),
+        ("PublicPort", instance.config.port.to_string()),
+        ("AdminPassword", format!("\"{admin_password}\"")),
+        ("ServerPassword", format!("\"{server_password}\"")),
+        (
+            "RESTAPIEnabled",
+            if rest_enabled {
+                "True".into()
+            } else {
+                "False".into()
+            },
+        ),
+        ("RESTAPIPort", rest_port.to_string()),
+    ] {
+        set_palworld_option(&mut contents, key, &value)?;
+    }
     fs::write(&settings_file, contents)
         .with_context(|| format!("failed to write {}", settings_file.display()))
 }
@@ -349,24 +380,84 @@ fn write_dragonwilds_settings(paths: &Paths, instance: &GenericGameInstance) -> 
         .expect("Dragonwilds settings has a parent");
     fs::create_dir_all(parent)?;
     let settings = &instance.config.settings;
-    let contents = format!(
-        "[/Script/Dominion.DedicatedServerSettings]\nOwnerId={}\nServerName={}\nDefaultWorldName={}\nAdminPassword={}\nDefaultWorldPassword={}\n",
-        ini_string(&setting_string(settings, "owner_id", "")),
-        ini_string(&setting_string(settings, "server_name", instance.name())),
-        ini_string(&setting_string(
-            settings,
-            "default_world_name",
-            instance.name()
-        )),
-        ini_string(&setting_string(settings, "admin_password", "")),
-        ini_string(&setting_string(settings, "world_password", "")),
-    );
+    let mut contents = if settings_file.is_file() {
+        fs::read_to_string(&settings_file)?
+    } else {
+        format!(
+            "[/Script/Dominion.DedicatedServerSettings]\nOwnerId={}\nServerName={}\nDefaultWorldName={}\nAdminPassword={}\nDefaultWorldPassword={}\n",
+            ini_string(&setting_string(settings, "owner_id", "")),
+            ini_string(&setting_string(settings, "server_name", instance.name())),
+            ini_string(&setting_string(
+                settings,
+                "default_world_name",
+                instance.name()
+            )),
+            ini_string(&setting_string(settings, "admin_password", "")),
+            ini_string(&setting_string(settings, "world_password", "")),
+        )
+    };
+    for (key, value) in [
+        (
+            "OwnerId",
+            ini_string(&setting_string(settings, "owner_id", "")),
+        ),
+        (
+            "ServerName",
+            ini_string(&setting_string(settings, "server_name", instance.name())),
+        ),
+        (
+            "DefaultWorldName",
+            ini_string(&setting_string(
+                settings,
+                "default_world_name",
+                instance.name(),
+            )),
+        ),
+        (
+            "AdminPassword",
+            ini_string(&setting_string(settings, "admin_password", "")),
+        ),
+        (
+            "DefaultWorldPassword",
+            ini_string(&setting_string(settings, "world_password", "")),
+        ),
+    ] {
+        set_ini_option(&mut contents, key, &value)?;
+    }
     fs::write(&settings_file, contents)
         .with_context(|| format!("failed to write {}", settings_file.display()))
 }
 
 fn ini_string(value: &str) -> String {
     value.replace(['\r', '\n'], "").replace('"', "\\\"")
+}
+
+fn set_ini_option(contents: &mut String, key: &str, value: &str) -> Result<()> {
+    let expression = format!(r"(?m)^(\s*{}\s*=\s*).*$", regex::escape(key));
+    let pattern = regex::Regex::new(&expression)?;
+    if pattern.is_match(contents) {
+        *contents = pattern
+            .replace(contents, format!("${{1}}{value}"))
+            .into_owned();
+    } else {
+        contents.push_str(&format!("{key}={value}\n"));
+    }
+    Ok(())
+}
+
+fn set_palworld_option(contents: &mut String, key: &str, value: &str) -> Result<()> {
+    let expression = format!(r#"({}=)(\"[^\"]*\"|[^,\)]*)"#, regex::escape(key));
+    let pattern = regex::Regex::new(&expression)?;
+    if pattern.is_match(contents) {
+        *contents = pattern
+            .replace(contents, format!("${{1}}{value}"))
+            .into_owned();
+    } else if let Some(index) = contents.find(")\n") {
+        contents.insert_str(index, &format!(",{key}={value}"));
+    } else {
+        bail!("PalWorldSettings.ini has no OptionSettings tuple");
+    }
+    Ok(())
 }
 
 pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Command> {

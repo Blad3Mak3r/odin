@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api-client'
 import type {
   ActivityEvent,
+  AdvancedConfigChange,
+  AdvancedConfigView,
   BackupEntry,
   BackupScheduleView,
   BackupStorageRequest,
@@ -368,6 +370,23 @@ export function useUpdateGenericConfig() {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
     },
+  })
+}
+
+export function useAdvancedConfig(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'advanced-config'],
+    queryFn: () => api.get<AdvancedConfigView>(`/instances/${id}/config/advanced`),
+    enabled,
+  })
+}
+
+export function useUpdateAdvancedConfig(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (changes: AdvancedConfigChange[]) =>
+      api.put<void>(`/instances/${id}/config/advanced`, { changes }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] }),
   })
 }
 

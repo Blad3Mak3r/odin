@@ -55,6 +55,28 @@ export interface GenericConfigUpdateRequest {
   auto_restart: boolean
 }
 
+export interface AdvancedConfigEntry {
+  key: string
+  value: string
+}
+
+export interface AdvancedConfigFile {
+  id: string
+  path: string
+  format: string
+  entries: AdvancedConfigEntry[]
+}
+
+export interface AdvancedConfigView {
+  files: AdvancedConfigFile[]
+}
+
+export interface AdvancedConfigChange {
+  file: string
+  key: string
+  value: string
+}
+
 export interface ResourceLimits {
   cpu_percent: number | null
   memory_max_bytes: number | null

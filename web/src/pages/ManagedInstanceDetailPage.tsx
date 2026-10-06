@@ -10,7 +10,7 @@ import { ConfigTab } from '@/components/instance/ConfigTab'
 import { PlayersTab } from '@/components/instance/PlayersTab'
 import { ModsTab } from '@/components/instance/ModsTab'
 import { SevenDaysModsTab } from '@/components/instance/SevenDaysModsTab'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
@@ -33,8 +33,10 @@ import {
   useManagedInstanceLogs,
   useUpdateGenericConfig,
   useUpdateRustConfig,
+  useAdvancedConfig,
+  useUpdateAdvancedConfig,
 } from '@/lib/queries'
-import type { GameId, GenericConfigUpdateRequest } from '@/lib/types'
+import type { AdvancedConfigChange, GameId, GenericConfigUpdateRequest } from '@/lib/types'
 import { useLogSocket } from '@/hooks/useLogSocket'
 
 function isConsoleError(line: string) {
@@ -195,6 +197,29 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min,
   )
 }
 
+function AdvancedConfigSection({ id, running }: { id: string; running: boolean }) {
+  const config = useAdvancedConfig(id, true)
+  const update = useUpdateAdvancedConfig(id)
+  const [values, setValues] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const initial: Record<string, string> = {}
+    for (const file of config.data?.files ?? []) for (const entry of file.entries) initial[`${file.id}:${entry.key}`] = entry.value
+    setValues(initial)
+  }, [config.data])
+  if (config.isLoading || config.isError) return null
+  const files = config.data?.files ?? []
+  if (files.every((file) => file.entries.length === 0)) return null
+  const save = () => {
+    const changes: AdvancedConfigChange[] = []
+    for (const file of files) for (const entry of file.entries) {
+      const value = values[`${file.id}:${entry.key}`] ?? entry.value
+      if (value !== entry.value) changes.push({ file: file.id, key: entry.key, value })
+    }
+    if (changes.length > 0) update.mutate(changes, { onSuccess: () => toast.success('Advanced configuration saved'), onError: (error) => toast.error(error.message) })
+  }
+  return <details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-medium">Advanced configuration</summary><p className="mt-2 text-xs text-muted-foreground">Settings found in declared server files. Stop the server before saving.</p><div className="mt-4 flex flex-col gap-5">{files.filter((file) => file.entries.length > 0).map((file) => <div key={file.id} className="flex flex-col gap-3"><div><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="grid gap-3 sm:grid-cols-2">{file.entries.map((entry) => <div key={entry.key} className="flex flex-col gap-1"><Label htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.key}</Label><Input id={`advanced-${file.id}-${entry.key}`} value={values[`${file.id}:${entry.key}`] ?? entry.value} disabled={running} onChange={(event) => setValues((current) => ({ ...current, [`${file.id}:${entry.key}`]: event.target.value }))} /></div>)}</div></div>)}<Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save advanced configuration</Button></div></details>
+}
+
 function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'>; config: GenericConfig; running: boolean }) {
   const update = useUpdateGenericConfig()
   const [port, setPort] = useState(String(config.port))
@@ -284,6 +309,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
       {game === 'palworld' && <div className="flex items-center justify-between rounded-xl border p-3"><Label htmlFor="palworld-rest">Enable local REST API</Label><Switch id="palworld-rest" checked={restEnabled} disabled={running} onCheckedChange={setRestEnabled} /></div>}
       <div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div>
       <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save configuration</Button>
+      <AdvancedConfigSection id={id} running={running} />
     </form>
   )
 }

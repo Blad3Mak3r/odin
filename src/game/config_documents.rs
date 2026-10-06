@@ -68,7 +68,6 @@ const SEVEN_DAYS_MANAGED: &[&str] = &[
     "WorldGenSeed",
     "WorldGenSize",
     "UserDataFolder",
-    "SaveGameFolder",
     "TelnetEnabled",
     "ControlPanelEnabled",
     "WebDashboardEnabled",

@@ -36,7 +36,7 @@ function encodedValue(code: string, rule: SandboxRule) {
 function updateRule(code: string, rule: SandboxRule, value: string) {
   const index = rule.values.indexOf(value)
   if (index < 0) return code
-  const blocks = (isValidCode(code) ? code.slice(1).match(/.{3}/g) ?? [])
+  const blocks = (isValidCode(code) ? code.slice(1).match(/.{3}/g) ?? [] : [])
     .filter((entry) => entry.slice(0, 2) !== rule.code)
   blocks.push(`${rule.code}${String.fromCharCode(65 + index)}`)
   return `A${blocks.sort().join('')}`

@@ -369,18 +369,34 @@ pub async fn stop(paths: &Paths, db: &crate::db::Db, game: GameId, name: &str) -
         bail!("instance '{name}' is not running");
     };
     // Palworld's REST shutdown tells the server to flush its world and exit
-    // itself. Wait for that first; if it is unavailable or times out, retain
-    // the normal supervisor stop as a bounded fallback.
+    // itself. Wait for that first, but retain the normal supervisor stop as a
+    // bounded fallback if the REST API is unavailable or rejects the request.
     if game == GameId::Palworld && crate::game::palworld::rest_enabled(&instance) {
         let palworld = instance.clone();
-        tokio::task::spawn_blocking(move || {
+        let rest_shutdown = tokio::task::spawn_blocking(move || {
             crate::game::palworld::shutdown(&palworld, Some(0), None)
         })
-        .await
-        .context("Palworld shutdown task panicked")??;
-        if crate::instance::process::wait_until_gone(pid, started_at, Duration::from_secs(40)).await
-        {
-            return Ok(());
+        .await;
+        match rest_shutdown {
+            Ok(result) => {
+                if palworld_rest_shutdown_accepted(result, name)
+                    && crate::instance::process::wait_until_gone(
+                        pid,
+                        started_at,
+                        Duration::from_secs(40),
+                    )
+                    .await
+                {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    instance = name,
+                    error = %error,
+                    "Palworld REST shutdown task panicked; falling back to the supervisor"
+                );
+            }
         }
     }
     crate::supervisor::client::stop(paths, game, name, 30).await?;
@@ -388,6 +404,20 @@ pub async fn stop(paths: &Paths, db: &crate::db::Db, game: GameId, name: &str) -
         bail!("instance '{name}' did not stop");
     }
     Ok(())
+}
+
+fn palworld_rest_shutdown_accepted(result: Result<Value>, name: &str) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(
+                instance = name,
+                error = %error,
+                "Palworld REST shutdown failed; falling back to the supervisor"
+            );
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -425,6 +455,16 @@ mod tests {
             last_started_at: None,
             last_stopped_at: None,
         }
+    }
+
+    #[test]
+    fn failed_palworld_rest_shutdown_is_not_terminal() {
+        assert!(!palworld_rest_shutdown_accepted(
+            Err(anyhow::anyhow!(
+                "400 Bad Request: waittime is larger than 1"
+            )),
+            "palworld",
+        ));
     }
 
     #[test]

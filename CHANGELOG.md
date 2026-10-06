@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-06
+
+### What's Changed
+- fix: fall back to supervisor after Palworld REST failure by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/99
+- fix: support Palworld server passwords by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/100
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.13.1...v0.13.2
+
 ## [0.13.1] - 2026-10-06
 
 ### What's Changed

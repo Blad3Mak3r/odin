@@ -6,8 +6,6 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
-#[cfg(test)]
-use serde_json::{Map, json};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -66,200 +64,6 @@ fn seven_d2d_config_path(paths: &Paths, instance: &GenericGameInstance) -> PathB
     paths
         .game_instance_dir(GameId::SevenDaysToDie, instance.name())
         .join("config/serverconfig.xml")
-}
-
-#[cfg(test)]
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-#[cfg(test)]
-fn set_xml_property(contents: &mut String, name: &str, value: &str) -> Result<()> {
-    let replacement = format!(r#"<property name="{name}" value="{}"/>"#, xml_escape(value));
-    let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
-    if let Some(tag) = pattern
-        .find_iter(contents)
-        .find(|tag| xml_property_attribute(tag.as_str(), "name").as_deref() == Some(name))
-    {
-        contents.replace_range(tag.range(), &replacement);
-    } else if let Some(index) = contents.rfind("</ServerSettings>") {
-        contents.insert_str(index, &format!("    {replacement}\n"));
-    } else {
-        bail!("serverconfig.xml has no ServerSettings element");
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn remove_xml_property(contents: &mut String, name: &str) -> Result<()> {
-    let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
-    let ranges = pattern
-        .find_iter(contents)
-        .filter(|tag| xml_property_attribute(tag.as_str(), "name").as_deref() == Some(name))
-        .map(|tag| tag.range())
-        .collect::<Vec<_>>();
-    for range in ranges.into_iter().rev() {
-        contents.replace_range(range, "");
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn xml_property_attribute(tag: &str, name: &str) -> Option<String> {
-    let expression = format!(
-        r#"(?is)\b{}\s*=\s*(?:"([^"]*)"|'([^']*)')"#,
-        regex::escape(name)
-    );
-    let pattern = regex::Regex::new(&expression).ok()?;
-    let captures = pattern.captures(tag)?;
-    captures
-        .get(1)
-        .or_else(|| captures.get(2))
-        .map(|value| value.as_str().into())
-}
-
-#[cfg(test)]
-fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    let instance_dir = paths.game_instance_dir(GameId::SevenDaysToDie, instance.name());
-    let config = seven_d2d_config_path(paths, instance);
-    if let Some(parent) = config.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut contents = if config.is_file() {
-        fs::read_to_string(&config)?
-    } else {
-        let template = paths
-            .game_install_dir(GameId::SevenDaysToDie)
-            .join("serverconfig.xml");
-        if template.is_file() {
-            fs::read_to_string(template)?
-        } else {
-            "<?xml version=\"1.0\"?>\n<ServerSettings>\n</ServerSettings>\n".into()
-        }
-    };
-    let settings = &instance.config.settings;
-    let string = |key: &str, fallback: &str| setting_string(settings, key, fallback);
-    let number =
-        |key: &str, fallback: u64| setting_u64(settings, key).unwrap_or(fallback).to_string();
-    for (name, value) in [
-        ("ServerName", string("server_name", instance.name())),
-        ("ServerDescription", string("server_description", "")),
-        ("ServerPassword", string("server_password", "")),
-        ("ServerVisibility", number("visibility", 2)),
-        ("ServerMaxPlayerCount", number("max_players", 8)),
-        ("ServerPort", instance.config.port.to_string()),
-        ("GameWorld", string("game_world", "Navezgane")),
-        ("GameName", string("game_name", instance.name())),
-        ("WorldGenSeed", string("world_gen_seed", instance.name())),
-        ("WorldGenSize", number("world_gen_size", 6144)),
-        ("UserDataFolder", instance_dir.display().to_string()),
-        (
-            "TelnetEnabled",
-            if settings
-                .get("telnet_enabled")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                "true".into()
-            } else {
-                "false".into()
-            },
-        ),
-        (
-            "TelnetPort",
-            instance.config.admin_port.unwrap_or(26903).to_string(),
-        ),
-        ("TelnetPassword", string("telnet_password", "")),
-        ("ControlPanelEnabled", "false".into()),
-        ("WebDashboardEnabled", "false".into()),
-    ] {
-        set_xml_property(&mut contents, name, &value)?;
-    }
-    // SaveGameFolder was removed in 7 Days to Die V1. Saves now derive from
-    // UserDataFolder, so strip the obsolete property from old templates and
-    // instance configurations before the server parses them.
-    remove_xml_property(&mut contents, "SaveGameFolder")?;
-    // SandboxCode encodes the complete V3 game-rule set. Leave the installed
-    // template's value intact until the operator explicitly supplies one: the
-    // game's defaults and encoding can change between stable releases.
-    if let Some(code) = settings
-        .get("sandbox_code")
-        .and_then(Value::as_str)
-        .filter(|code| !code.is_empty())
-    {
-        set_xml_property(&mut contents, "SandboxCode", code)?;
-    }
-    fs::create_dir_all(instance_dir.join("Saves"))?;
-    fs::create_dir_all(instance_dir.join("Mods"))?;
-    fs::write(&config, contents).with_context(|| format!("failed to write {}", config.display()))
-}
-
-/// V Rising deliberately supports a per-instance persistent-data directory.
-/// Keep Odin's generated host override there rather than modifying Steam's
-/// install tree, which would couple every managed V Rising instance.
-#[cfg(test)]
-fn write_vrising_host_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    let settings_dir = paths
-        .game_instance_dir(GameId::VRising, instance.name())
-        .join("data/Settings");
-    std::fs::create_dir_all(&settings_dir)?;
-
-    let settings = &instance.config.settings;
-    // Preserve keys added by the game in newer releases.  Odin only owns the
-    // small lifecycle contract below; the advanced editor exposes the rest.
-    let file = settings_dir.join("ServerHostSettings.json");
-    let mut host = if file.is_file() {
-        serde_json::from_slice::<Value>(&std::fs::read(&file)?)
-            .ok()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default()
-    } else {
-        Map::new()
-    };
-    host.insert(
-        "Name".into(),
-        Value::String(setting_string(settings, "server_name", instance.name())),
-    );
-    host.insert("Port".into(), json!(instance.config.port));
-    if let Some(port) = instance.config.query_port {
-        host.insert("QueryPort".into(), json!(port));
-    }
-    if let Some(max_players) = setting_u64(settings, "max_players") {
-        host.insert("MaxConnectedUsers".into(), json!(max_players));
-    }
-    if let Some(port) = instance.config.admin_port {
-        host.insert(
-            "Rcon".into(),
-            json!({
-                "Enabled": settings.get("rcon_enabled").and_then(Value::as_bool).unwrap_or(false),
-                "Port": port,
-                "Password": setting_string(settings, "rcon_password", ""),
-                "BindAddress": "127.0.0.1",
-            }),
-        );
-    }
-    std::fs::write(&file, serde_json::to_vec_pretty(&Value::Object(host))?)
-        .with_context(|| format!("failed to write {}", file.display()))?;
-    Ok(())
-}
-
-#[cfg(test)]
-fn setting_string(settings: &Value, key: &str, fallback: &str) -> String {
-    settings
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(fallback)
-        .to_string()
-}
-
-#[cfg(test)]
-fn setting_u64(settings: &Value, key: &str) -> Option<u64> {
-    settings.get(key).and_then(Value::as_u64)
 }
 
 fn native_runtime_dir(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
@@ -338,169 +142,6 @@ fn replace_with_symlink(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     std::os::unix::fs::symlink(fs::read_link(source)?, destination)?;
-    Ok(())
-}
-
-#[cfg(test)]
-fn write_native_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    match instance.identity.game {
-        GameId::Palworld => write_palworld_settings(paths, instance),
-        GameId::RunescapeDragonwilds => write_dragonwilds_settings(paths, instance),
-        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => unreachable!(),
-    }
-}
-
-#[cfg(test)]
-fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    let settings_file = native_runtime_dir(paths, instance)
-        .join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini");
-    let parent = settings_file
-        .parent()
-        .expect("Palworld settings has a parent");
-    fs::create_dir_all(parent)?;
-    let server_name = ini_string(&setting_string(
-        &instance.config.settings,
-        "server_name",
-        instance.name(),
-    ));
-    let max_players = setting_u64(&instance.config.settings, "max_players").unwrap_or(32);
-    let rest_enabled = instance
-        .config
-        .settings
-        .get("rest_api_enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let rest_port = instance.config.admin_port.unwrap_or(8212);
-    let admin_password = ini_string(&setting_string(
-        &instance.config.settings,
-        "admin_password",
-        "",
-    ));
-    let server_password = ini_string(&setting_string(
-        &instance.config.settings,
-        "server_password",
-        "",
-    ));
-    let mut contents = if settings_file.is_file() {
-        fs::read_to_string(&settings_file)?
-    } else {
-        format!(
-            "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},AdminPassword=\"{admin_password}\",ServerPassword=\"{server_password}\",RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
-            instance.config.port,
-            if rest_enabled { "True" } else { "False" },
-        )
-    };
-    for (key, value) in [
-        ("ServerName", format!("\"{server_name}\"")),
-        ("ServerPlayerMaxNum", max_players.to_string()),
-        ("PublicPort", instance.config.port.to_string()),
-        ("AdminPassword", format!("\"{admin_password}\"")),
-        ("ServerPassword", format!("\"{server_password}\"")),
-        (
-            "RESTAPIEnabled",
-            if rest_enabled {
-                "True".into()
-            } else {
-                "False".into()
-            },
-        ),
-        ("RESTAPIPort", rest_port.to_string()),
-    ] {
-        set_palworld_option(&mut contents, key, &value)?;
-    }
-    fs::write(&settings_file, contents)
-        .with_context(|| format!("failed to write {}", settings_file.display()))
-}
-
-#[cfg(test)]
-fn write_dragonwilds_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    let settings_file = native_runtime_dir(paths, instance)
-        .join("RSDragonwilds/Saved/Config/Linux/DedicatedServer.ini");
-    let parent = settings_file
-        .parent()
-        .expect("Dragonwilds settings has a parent");
-    fs::create_dir_all(parent)?;
-    let settings = &instance.config.settings;
-    let mut contents = if settings_file.is_file() {
-        fs::read_to_string(&settings_file)?
-    } else {
-        format!(
-            "[/Script/Dominion.DedicatedServerSettings]\nOwnerId={}\nServerName={}\nDefaultWorldName={}\nAdminPassword={}\nDefaultWorldPassword={}\n",
-            ini_string(&setting_string(settings, "owner_id", "")),
-            ini_string(&setting_string(settings, "server_name", instance.name())),
-            ini_string(&setting_string(
-                settings,
-                "default_world_name",
-                instance.name()
-            )),
-            ini_string(&setting_string(settings, "admin_password", "")),
-            ini_string(&setting_string(settings, "world_password", "")),
-        )
-    };
-    for (key, value) in [
-        (
-            "OwnerId",
-            ini_string(&setting_string(settings, "owner_id", "")),
-        ),
-        (
-            "ServerName",
-            ini_string(&setting_string(settings, "server_name", instance.name())),
-        ),
-        (
-            "DefaultWorldName",
-            ini_string(&setting_string(
-                settings,
-                "default_world_name",
-                instance.name(),
-            )),
-        ),
-        (
-            "AdminPassword",
-            ini_string(&setting_string(settings, "admin_password", "")),
-        ),
-        (
-            "DefaultWorldPassword",
-            ini_string(&setting_string(settings, "world_password", "")),
-        ),
-    ] {
-        set_ini_option(&mut contents, key, &value)?;
-    }
-    fs::write(&settings_file, contents)
-        .with_context(|| format!("failed to write {}", settings_file.display()))
-}
-
-#[cfg(test)]
-fn ini_string(value: &str) -> String {
-    value.replace(['\r', '\n'], "").replace('"', "\\\"")
-}
-
-#[cfg(test)]
-fn set_ini_option(contents: &mut String, key: &str, value: &str) -> Result<()> {
-    let expression = format!(r"(?m)^(\s*{}\s*=\s*).*$", regex::escape(key));
-    let pattern = regex::Regex::new(&expression)?;
-    if pattern.is_match(contents) {
-        *contents = pattern
-            .replace(contents, format!("${{1}}{value}"))
-            .into_owned();
-    } else {
-        contents.push_str(&format!("{key}={value}\n"));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn set_palworld_option(contents: &mut String, key: &str, value: &str) -> Result<()> {
-    let expression = format!(r#"({}=)(\"[^\"]*\"|[^,\)]*)"#, regex::escape(key));
-    let pattern = regex::Regex::new(&expression)?;
-    if pattern.is_match(contents) {
-        *contents = pattern
-            .replace(contents, format!("${{1}}{value}"))
-            .into_owned();
-    } else if let Some(index) = contents.find(")\n") {
-        contents.insert_str(index, &format!(",{key}={value}"));
-    } else {
-        bail!("PalWorldSettings.ini has no OptionSettings tuple");
-    }
     Ok(())
 }
 
@@ -680,7 +321,7 @@ mod tests {
     use crate::db::game_instances::{GameInstanceIdentity, GenericGameConfig};
     use chrono::Utc;
 
-    fn generic_instance(game: GameId, settings: Value) -> GenericGameInstance {
+    fn generic_instance(game: GameId) -> GenericGameInstance {
         GenericGameInstance {
             identity: GameInstanceIdentity {
                 id: "id".into(),
@@ -701,7 +342,7 @@ mod tests {
                 } else {
                     None
                 },
-                settings,
+                settings: Value::Object(Default::default()),
                 auto_restart: false,
             },
             pid: None,
@@ -722,44 +363,6 @@ mod tests {
     }
 
     #[test]
-    fn vrising_host_settings_are_written_to_the_isolated_persistent_data_path() {
-        let dir =
-            std::env::temp_dir().join(format!("odin-vrising-settings-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir.clone(),
-        };
-        let mut instance = generic_instance(
-            GameId::VRising,
-            json!({"server_name": "V Rising Test", "max_players": 40, "rcon_enabled": true, "rcon_password": "password"}),
-        );
-        instance.identity.name = "vrising".into();
-        instance.config.port = 27015;
-        instance.config.query_port = Some(27016);
-        instance.config.admin_port = Some(25575);
-
-        write_vrising_host_settings(&paths, &instance).unwrap();
-
-        let config: Value = serde_json::from_slice(
-            &std::fs::read(
-                paths
-                    .game_instance_dir(GameId::VRising, "vrising")
-                    .join("data/Settings/ServerHostSettings.json"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(config["Name"], "V Rising Test");
-        assert_eq!(config["Port"], 27015);
-        assert_eq!(config["QueryPort"], 27016);
-        assert_eq!(config["MaxConnectedUsers"], 40);
-        assert_eq!(config["Rcon"]["Port"], 25575);
-        assert_eq!(config["Rcon"]["Password"], "password");
-        assert_eq!(config["Rcon"]["BindAddress"], "127.0.0.1");
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
     fn palworld_runtime_keeps_saved_data_isolated_while_refreshing_steam_files() {
         let dir =
             std::env::temp_dir().join(format!("odin-palworld-runtime-{}", uuid::Uuid::new_v4()));
@@ -771,13 +374,9 @@ mod tests {
         fs::create_dir_all(install.join("Pal/Saved")).unwrap();
         fs::write(install.join("PalServer.sh"), "server-v1").unwrap();
         fs::write(install.join("Pal/Saved/shared.txt"), "must-not-copy").unwrap();
-        let instance = generic_instance(
-            GameId::Palworld,
-            json!({"server_name": "Pals", "max_players": 24, "rest_api_enabled": true, "server_password": "join-secret"}),
-        );
+        let instance = generic_instance(GameId::Palworld);
 
         prepare_native_runtime(&paths, &instance).unwrap();
-        write_native_settings(&paths, &instance).unwrap();
         let runtime = native_runtime_dir(&paths, &instance);
         assert_eq!(
             fs::read_to_string(runtime.join("PalServer.sh")).unwrap(),
@@ -785,14 +384,9 @@ mod tests {
         );
         assert!(!runtime.join("Pal/Saved/shared.txt").exists());
         assert!(
-            fs::read_to_string(runtime.join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"))
-                .unwrap()
-                .contains("ServerName=\"Pals\"")
-        );
-        assert!(
-            fs::read_to_string(runtime.join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"))
-                .unwrap()
-                .contains("ServerPassword=\"join-secret\"")
+            !runtime
+                .join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini")
+                .exists()
         );
 
         fs::create_dir_all(runtime.join("Pal/Saved/SaveGames")).unwrap();
@@ -811,31 +405,6 @@ mod tests {
     }
 
     #[test]
-    fn dragonwilds_settings_use_the_linux_file_and_required_keys() {
-        let dir =
-            std::env::temp_dir().join(format!("odin-dragon-settings-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir.clone(),
-        };
-        let instance = generic_instance(
-            GameId::RunescapeDragonwilds,
-            json!({"owner_id": "owner", "server_name": "Dragon", "default_world_name": "World", "admin_password": "admin", "world_password": "join"}),
-        );
-
-        write_dragonwilds_settings(&paths, &instance).unwrap();
-
-        let settings = fs::read_to_string(
-            native_runtime_dir(&paths, &instance)
-                .join("RSDragonwilds/Saved/Config/Linux/DedicatedServer.ini"),
-        )
-        .unwrap();
-        assert!(settings.contains("OwnerId=owner"));
-        assert!(settings.contains("DefaultWorldPassword=join"));
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
     fn dragonwilds_command_passes_both_udp_ports() {
         let dir =
             std::env::temp_dir().join(format!("odin-dragon-command-{}", uuid::Uuid::new_v4()));
@@ -843,10 +412,7 @@ mod tests {
             data_dir: dir.clone(),
             config_dir: dir.clone(),
         };
-        let instance = generic_instance(
-            GameId::RunescapeDragonwilds,
-            json!({"owner_id": "owner", "server_name": "Dragon", "default_world_name": "world", "admin_password": "secret"}),
-        );
+        let instance = generic_instance(GameId::RunescapeDragonwilds);
 
         let command = build_command(&paths, &instance).unwrap();
         let arguments = format!("{command:?}");
@@ -856,50 +422,25 @@ mod tests {
     }
 
     #[test]
-    fn seven_days_settings_preserve_the_template_and_isolate_data() {
+    fn seven_days_command_uses_instance_specific_paths_without_creating_config() {
         let dir = std::env::temp_dir().join(format!("odin-7d2d-settings-{}", uuid::Uuid::new_v4()));
         let paths = Paths {
             data_dir: dir.clone(),
             config_dir: dir.clone(),
         };
-        let install = paths.game_install_dir(GameId::SevenDaysToDie);
-        fs::create_dir_all(&install).unwrap();
-        fs::write(
-            install.join("serverconfig.xml"),
-            "<ServerSettings>\n  <property name=\"UnmanagedSetting\" value=\"keep\"/>\n  <property name=\"SaveGameFolder\" value=\"obsolete\"/>\n</ServerSettings>\n",
-        )
-        .unwrap();
-        let mut instance = generic_instance(
-            GameId::SevenDaysToDie,
-            json!({
-                "server_name": "Undead Test",
-                "server_description": "Private test server",
-                "server_password": "secret",
-                "visibility": 0,
-                "max_players": 12,
-                "game_world": "RWG",
-                "game_name": "OdinWorld",
-                "world_gen_seed": "seed",
-                "world_gen_size": 8192,
-                "sandbox_code": "AAAJABJACJADJARFBNC",
-            }),
-        );
+        let mut instance = generic_instance(GameId::SevenDaysToDie);
         instance.identity.name = "undead".into();
         instance.config.port = 26900;
 
-        write_7d2d_settings(&paths, &instance).unwrap();
-
         let root = paths.game_instance_dir(GameId::SevenDaysToDie, "undead");
-        let settings = fs::read_to_string(root.join("config/serverconfig.xml")).unwrap();
-        assert!(settings.contains("UnmanagedSetting\" value=\"keep"));
-        assert!(settings.contains("ServerName\" value=\"Undead Test"));
-        assert!(settings.contains("ServerPort\" value=\"26900"));
-        assert!(settings.contains(&format!("UserDataFolder\" value=\"{}", root.display())));
-        assert!(!settings.contains("SaveGameFolder"));
-        assert!(settings.contains("TelnetEnabled\" value=\"false"));
-        assert!(settings.contains("SandboxCode\" value=\"AAAJABJACJADJARFBNC"));
-        assert!(root.join("Saves").is_dir());
-        assert!(root.join("Mods").is_dir());
+        let command = build_command(&paths, &instance).unwrap();
+        let arguments = format!("{command:?}");
+        assert!(arguments.contains(&format!(
+            "-configfile={}",
+            root.join("config/serverconfig.xml").display()
+        )));
+        assert!(arguments.contains(&format!("-UserDataFolder={}", root.display())));
+        assert!(!root.join("config/serverconfig.xml").exists());
         fs::remove_dir_all(paths.data_dir).ok();
     }
 }

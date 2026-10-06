@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::ops::Range;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -193,43 +194,45 @@ pub fn apply(
         }
         writes.push((path, updated));
     }
-    // Write every temporary first.  Once that succeeds, rename each into
-    // place; retain the old contents so a later rename error can be rolled
-    // back instead of leaving a partially applied batch.
-    let mut temps = Vec::new();
-    for (path, contents) in &writes {
-        let _parent = path.parent().context("configuration path has no parent")?;
-        let temp = path.with_extension(format!("odin-{}.tmp", uuid::Uuid::new_v4()));
-        fs::write(&temp, contents)?;
-        temps.push((path.clone(), temp));
-    }
-    let mut previous = Vec::new();
-    for ((path, temp), (_, contents)) in temps.iter().zip(writes.iter()) {
-        let old = if path.is_file() {
-            Some(fs::read(path)?)
-        } else {
-            None
-        };
-        if let Err(error) = fs::rename(temp, path) {
-            for (rollback_path, rollback) in previous.into_iter().rev() {
-                match rollback {
-                    Some(bytes) => {
-                        let _ = fs::write(rollback_path, bytes);
-                    }
-                    None => {
-                        let _ = fs::remove_file(rollback_path);
-                    }
-                }
-            }
-            for (_, pending) in &temps {
-                let _ = fs::remove_file(pending);
-            }
-            return Err(error.into());
-        }
-        let _ = contents;
-        previous.push((path.clone(), old));
+    for (path, contents) in writes {
+        write_atomically(&path, &contents)?;
     }
     Ok(())
+}
+
+/// Replaces an existing game-owned document without exposing a partially
+/// written file. Its permissions remain unchanged so servers that run under a
+/// dedicated account continue to own the same access contract.
+fn write_atomically(path: &std::path::Path, contents: &str) -> Result<()> {
+    let permissions = fs::metadata(path)
+        .with_context(|| format!("failed to read metadata for {}", path.display()))?
+        .permissions();
+    let parent = path.parent().context("configuration path has no parent")?;
+    let filename = path
+        .file_name()
+        .context("configuration path has no filename")?;
+    let temporary = parent.join(format!(
+        ".{}.odin-{}.tmp",
+        filename.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| {
+        fs::write(&temporary, contents)
+            .with_context(|| format!("failed to write {}", temporary.display()))?;
+        fs::set_permissions(&temporary, permissions)
+            .with_context(|| format!("failed to set permissions on {}", temporary.display()))?;
+        fs::rename(&temporary, path).with_context(|| {
+            format!(
+                "failed to replace {} with {}",
+                path.display(),
+                temporary.display()
+            )
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn format_name(format: Format) -> &'static str {
@@ -322,7 +325,7 @@ fn parse(format: Format, contents: &str) -> Result<Vec<ParsedEntry>> {
             Ok(entries)
         }
         Format::Ini => Ok(parse_ini(contents)),
-        Format::PalworldOptions => Ok(parse_palworld(contents)),
+        Format::PalworldOptions => parse_palworld(contents),
     }
 }
 
@@ -394,22 +397,12 @@ fn parse_ini(contents: &str) -> Vec<ParsedEntry> {
     entries
 }
 
-fn parse_palworld(contents: &str) -> Vec<ParsedEntry> {
-    let Some(start) = contents.find("OptionSettings=(") else {
-        return Vec::new();
+fn parse_palworld(contents: &str) -> Result<Vec<ParsedEntry>> {
+    let Some((ini_section, range)) = palworld_option_settings(contents)? else {
+        return Ok(Vec::new());
     };
-    let tail = &contents[start + "OptionSettings=(".len()..];
-    let Some(end) = tail.find(')') else {
-        return Vec::new();
-    };
-    let ini_section = contents[..start]
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| line.starts_with('[') && line.ends_with(']'))
-        .unwrap_or("General");
     let section_label = format!("{ini_section} / OptionSettings");
-    split_option_pairs(&tail[..end])
+    Ok(split_option_pairs(&contents[range])
         .into_iter()
         .filter_map(|part| {
             part.split_once('=').map(|(key, value)| ParsedEntry {
@@ -420,12 +413,20 @@ fn parse_palworld(contents: &str) -> Vec<ParsedEntry> {
                 value: value.trim().trim_matches('"').into(),
             })
         })
-        .collect()
+        .collect())
 }
 
 fn split_option_pairs(input: &str) -> Vec<&str> {
+    option_pair_ranges(input)
+        .into_iter()
+        .map(|range| &input[range])
+        .collect()
+}
+
+fn option_pair_ranges(input: &str) -> Vec<Range<usize>> {
     let mut quoted = false;
     let mut escaped = false;
+    let mut nesting = 0_usize;
     let mut start = 0;
     let mut pairs = Vec::new();
     for (index, character) in input.char_indices() {
@@ -441,13 +442,72 @@ fn split_option_pairs(input: &str) -> Vec<&str> {
             quoted = !quoted;
             continue;
         }
-        if character == ',' && !quoted {
-            pairs.push(&input[start..index]);
+        if !quoted && character == '(' {
+            nesting += 1;
+            continue;
+        }
+        if !quoted && character == ')' {
+            nesting = nesting.saturating_sub(1);
+            continue;
+        }
+        if character == ',' && !quoted && nesting == 0 {
+            pairs.push(start..index);
             start = index + 1;
         }
     }
-    pairs.push(&input[start..]);
+    pairs.push(start..input.len());
     pairs
+}
+
+fn palworld_option_settings(contents: &str) -> Result<Option<(&str, Range<usize>)>> {
+    let assignment = regex::Regex::new(r"(?m)^\s*OptionSettings\s*=\s*\(")?;
+    let Some(found) = assignment.find(contents) else {
+        return Ok(None);
+    };
+    let opening = found.end() - 1;
+    let closing = matching_parenthesis(contents, opening)
+        .context("Palworld OptionSettings has an unclosed parenthesis")?;
+    let ini_section = contents[..found.start()]
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with('[') && line.ends_with(']'))
+        .unwrap_or("General");
+    Ok(Some((ini_section, opening + 1..closing)))
+}
+
+fn matching_parenthesis(contents: &str, opening: usize) -> Option<usize> {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut nesting = 0_u32;
+    for (offset, character) in contents[opening..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quoted {
+            escaped = true;
+            continue;
+        }
+        if character == '"' {
+            quoted = !quoted;
+            continue;
+        }
+        if quoted {
+            continue;
+        }
+        match character {
+            '(' => nesting += 1,
+            ')' => {
+                nesting = nesting.checked_sub(1)?;
+                if nesting == 0 {
+                    return Some(opening + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Reads a game-generated configuration value without exposing it through the
@@ -515,7 +575,7 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
         }
     }
     if changed {
-        fs::write(document_path(paths, instance, spec), contents)?;
+        write_atomically(&document_path(paths, instance, spec), &contents)?;
     }
     Ok(())
 }
@@ -536,7 +596,7 @@ pub fn remove_legacy_control_panel(paths: &Paths, instance: &GenericGameInstance
     )?;
     let updated = pattern.replace_all(&contents, "");
     if updated != contents {
-        fs::write(&path, updated.as_ref())
+        write_atomically(&path, updated.as_ref())
             .with_context(|| format!("failed to repair {}", path.display()))?;
     }
     Ok(())
@@ -649,15 +709,30 @@ fn set_ini(contents: &str, key: &str, value: &str) -> Result<String> {
 }
 
 fn set_palworld(contents: &str, key: &str, value: &str) -> Result<String> {
-    let expression = format!(r#"({}=)(\"[^\"]*\"|[^,\)]*)"#, regex::escape(key));
-    let pattern = regex::Regex::new(&expression)?;
-    if !pattern.is_match(contents) {
-        bail!("Palworld option {key} does not exist");
-    }
+    let Some((_, settings)) = palworld_option_settings(contents)? else {
+        bail!("Palworld configuration has no OptionSettings tuple");
+    };
+    let options = &contents[settings.clone()];
+    let pair = option_pair_ranges(options)
+        .into_iter()
+        .find(|range| {
+            options[range.clone()]
+                .split_once('=')
+                .is_some_and(|(existing, _)| existing.trim() == key)
+        })
+        .with_context(|| format!("Palworld option {key} does not exist"))?;
+    let equal = options[pair.clone()]
+        .find('=')
+        .expect("option pair was checked for equals");
+    let value_start = settings.start + pair.start + equal + 1;
+    let value_end = settings.start + pair.end;
     let quoted = format!("\"{}\"", value.replace('"', "\\\""));
-    Ok(pattern
-        .replace(contents, format!("${{1}}{quoted}"))
-        .into_owned())
+    Ok(format!(
+        "{}{}{}",
+        &contents[..value_start],
+        quoted,
+        &contents[value_end..]
+    ))
 }
 
 fn xml_escape(value: &str) -> String {
@@ -718,9 +793,46 @@ mod tests {
 
     #[test]
     fn palworld_parser_keeps_commas_inside_quoted_values() {
-        let entries = parse_palworld("OptionSettings=(Known=1,Message=\"one, two\",Other=True)");
+        let entries =
+            parse_palworld("OptionSettings=(Known=1,Message=\"one, two\",Other=True)").unwrap();
         assert_eq!(entries[1].key, "Message");
         assert_eq!(entries[1].value, "one, two");
+    }
+
+    #[test]
+    fn palworld_options_handle_parentheses_and_only_update_the_option_tuple() {
+        let input = "[/Script/Pal.PalGameWorldSettings]\nServerName=outside\nOptionSettings=(ServerName=\"The (best), server\",Nested=(One,Two),Other=True)\n";
+        let entries = parse_palworld(input).unwrap();
+        assert_eq!(entries[0].value, "The (best), server");
+        assert_eq!(entries[1].key, "Nested");
+
+        let output = set_palworld(input, "ServerName", "Updated").unwrap();
+        assert!(output.contains("ServerName=outside"));
+        assert!(
+            output.contains("OptionSettings=(ServerName=\"Updated\",Nested=(One,Two),Other=True)")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory =
+            std::env::temp_dir().join(format!("odin-config-write-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("serverconfig.xml");
+        fs::write(&file, "before").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
+
+        write_atomically(&file, "after").unwrap();
+
+        assert_eq!(fs::read_to_string(&file).unwrap(), "after");
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

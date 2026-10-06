@@ -343,7 +343,7 @@ pub fn update_generic_config(
     }
     // Secrets are intentionally omitted from API responses. A blank secret
     // in an update therefore means "leave the stored secret unchanged";
-    // it also allows a newly-created Dragonwilds instance to set one.
+    // a non-empty value replaces it.
     let settings = merged_generic_settings(&current.config.settings, &config.settings)?;
     let persisted = GenericGameConfig {
         settings,
@@ -438,6 +438,7 @@ fn merged_generic_settings(stored: &Value, submitted: &Value) -> Result<Value> {
     };
     for key in [
         "admin_password",
+        "server_password",
         "world_password",
         "rcon_password",
         "password",
@@ -910,14 +911,14 @@ mod tests {
     }
 
     #[test]
-    fn palworld_configuration_allows_clearing_the_server_password() {
+    fn palworld_configuration_keeps_redacted_passwords() {
         let (paths, db) = temp_context("palworld-config");
         let instance = create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
         let config = GenericGameConfig {
             settings: json!({
                 "server_name": "Pals",
                 "max_players": 32,
-                "rest_api_enabled": false,
+                "rest_api_enabled": true,
                 "admin_password": "admin-secret",
                 "server_password": "join-secret"
             }),
@@ -929,7 +930,7 @@ mod tests {
             settings: json!({
                 "server_name": "Renamed Pals",
                 "max_players": 32,
-                "rest_api_enabled": false,
+                "rest_api_enabled": true,
                 "admin_password": "",
                 "server_password": ""
             }),
@@ -940,7 +941,7 @@ mod tests {
                 .unwrap();
 
         assert_eq!(updated.config.settings["admin_password"], "admin-secret");
-        assert_eq!(updated.config.settings["server_password"], "");
+        assert_eq!(updated.config.settings["server_password"], "join-secret");
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

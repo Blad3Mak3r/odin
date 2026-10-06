@@ -56,7 +56,7 @@ type RustConfig = {
   autoRestart: boolean
 }
 
-type GenericConfig = GenericConfigUpdateRequest
+type GenericConfig = GenericConfigUpdateRequest & { configuredPasswords: Record<string, boolean> }
 
 function asRustConfig(config: Record<string, unknown>): RustConfig | null {
   const port = config.port
@@ -81,13 +81,24 @@ function asGenericConfig(config: Record<string, unknown>): GenericConfig | null 
   const port = config.port
   const queryPort = config.query_port
   const adminPort = config.admin_port
+  const configuredPasswords = config.passwords_configured
   const settings = { ...config }
   delete settings.port
   delete settings.query_port
   delete settings.admin_port
   delete settings.auto_restart
+  delete settings.passwords_configured
   if (typeof port !== 'number' || (typeof queryPort !== 'number' && queryPort !== null) || (typeof adminPort !== 'number' && adminPort !== null) || typeof config.auto_restart !== 'boolean') return null
-  return { port, query_port: queryPort, admin_port: adminPort, settings, auto_restart: config.auto_restart }
+  return {
+    port,
+    query_port: queryPort,
+    admin_port: adminPort,
+    settings,
+    auto_restart: config.auto_restart,
+    configuredPasswords: configuredPasswords !== null && typeof configuredPasswords === 'object' && !Array.isArray(configuredPasswords)
+      ? Object.fromEntries(Object.entries(configuredPasswords).filter(([, value]) => typeof value === 'boolean')) as Record<string, boolean>
+      : {},
+  }
 }
 
 function RustConfigForm({ id, config, running }: { id: string; config: RustConfig; running: boolean }) {
@@ -162,7 +173,7 @@ function RustConfigForm({ id, config, running }: { id: string; config: RustConfi
   )
 }
 
-function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min, max, required = true }: {
+function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min, max, placeholder, required = true }: {
   id: string
   label: string
   type?: 'text' | 'number' | 'password'
@@ -171,12 +182,13 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min,
   onChange: (value: string) => void
   min?: number
   max?: number
+  placeholder?: string
   required?: boolean
 }) {
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
-      <Input id={id} type={type} min={min} max={max} required={required} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <Input id={id} type={type} min={min} max={max} placeholder={placeholder} required={required} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
     </div>
   )
 }
@@ -221,7 +233,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
 
   return (
     <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}>
-      <p className="text-sm text-muted-foreground">Stop this server before changing its configuration. Empty passwords keep their existing value, except for Palworld's server password, which removes the join requirement.</p>
+      <p className="text-sm text-muted-foreground">Stop this server before changing its configuration. Dots indicate an existing password; leave the field unchanged to keep it.</p>
       <div className="grid gap-4 sm:grid-cols-2">
         <ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />
         {config.query_port !== null && <ConfigInput id="generic-query-port" label={isDragonwilds ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}
@@ -229,8 +241,8 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
         <ConfigInput id="generic-server-name" label="Server name" value={serverName} disabled={running} onChange={setServerName} />
         {!isDragonwilds && <ConfigInput id="generic-max-players" label="Max players" type="number" min={1} value={maxPlayers} disabled={running} onChange={setMaxPlayers} />}
         {game === 'vrising' && <ConfigInput id="vrising-rcon-password" label="RCON password" type="password" value={rconPassword} disabled={running} onChange={setRconPassword} required={rconEnabled} />}
-        {game === 'palworld' && <ConfigInput id="palworld-admin-password" label="REST API password" type="password" value={adminPassword} disabled={running} onChange={setAdminPassword} required={restEnabled} />}
-        {game === 'palworld' && <ConfigInput id="palworld-server-password" label="Server password" type="password" value={serverPassword} disabled={running} onChange={setServerPassword} />}
+        {game === 'palworld' && <ConfigInput id="palworld-admin-password" label="REST API password" type="password" value={adminPassword} disabled={running} onChange={setAdminPassword} placeholder={config.configuredPasswords.admin_password ? '••••••••' : undefined} required={false} />}
+        {game === 'palworld' && <ConfigInput id="palworld-server-password" label="Server password" type="password" value={serverPassword} disabled={running} onChange={setServerPassword} placeholder={config.configuredPasswords.server_password ? '••••••••' : undefined} />}
         {isDragonwilds && <>
           <ConfigInput id="dragonwilds-owner-id" label="Owner ID" value={ownerId} disabled={running} onChange={setOwnerId} />
           <ConfigInput id="dragonwilds-world" label="Default world" value={worldName} disabled={running} onChange={setWorldName} />

@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-10-06
+
+### What's Changed
+- feature: use game-generated configuration files by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/108
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.14.3...v0.14.4
+
 ## [0.14.3] - 2026-10-06
 
 ### What's Changed

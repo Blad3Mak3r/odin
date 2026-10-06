@@ -1,6 +1,6 @@
 [package]
 name = "odin"
-version = "0.14.3"
+version = "0.14.4"
 edition = "2024"
 description = "Self-hosted orchestration for Valheim and Rust dedicated game servers."
 license = "MIT"

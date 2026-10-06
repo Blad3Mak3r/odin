@@ -191,6 +191,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
   const [ownerId, setOwnerId] = useState(typeof config.settings.owner_id === 'string' ? config.settings.owner_id : '')
   const [worldName, setWorldName] = useState(typeof config.settings.default_world_name === 'string' ? config.settings.default_world_name : '')
   const [adminPassword, setAdminPassword] = useState(typeof config.settings.admin_password === 'string' ? config.settings.admin_password : '')
+  const [serverPassword, setServerPassword] = useState(typeof config.settings.server_password === 'string' ? config.settings.server_password : '')
   const [worldPassword, setWorldPassword] = useState(typeof config.settings.world_password === 'string' ? config.settings.world_password : '')
   const [rconPassword, setRconPassword] = useState(typeof config.settings.rcon_password === 'string' ? config.settings.rcon_password : '')
   const [autoRestart, setAutoRestart] = useState(config.auto_restart)
@@ -201,7 +202,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
   const save = () => {
     const settings: Record<string, unknown> = { ...config.settings, server_name: serverName }
     if (game === 'vrising') Object.assign(settings, { max_players: Number(maxPlayers), rcon_enabled: rconEnabled, rcon_password: rconPassword })
-    if (game === 'palworld') Object.assign(settings, { max_players: Number(maxPlayers), rest_api_enabled: restEnabled, admin_password: adminPassword })
+    if (game === 'palworld') Object.assign(settings, { max_players: Number(maxPlayers), rest_api_enabled: restEnabled, admin_password: adminPassword, server_password: serverPassword })
     if (isDragonwilds) Object.assign(settings, { owner_id: ownerId, default_world_name: worldName, admin_password: adminPassword, world_password: worldPassword })
     update.mutate({
       id,
@@ -229,6 +230,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
         {!isDragonwilds && <ConfigInput id="generic-max-players" label="Max players" type="number" min={1} value={maxPlayers} disabled={running} onChange={setMaxPlayers} />}
         {game === 'vrising' && <ConfigInput id="vrising-rcon-password" label="RCON password" type="password" value={rconPassword} disabled={running} onChange={setRconPassword} required={rconEnabled} />}
         {game === 'palworld' && <ConfigInput id="palworld-admin-password" label="REST API password" type="password" value={adminPassword} disabled={running} onChange={setAdminPassword} required={restEnabled} />}
+        {game === 'palworld' && <ConfigInput id="palworld-server-password" label="Server password" type="password" value={serverPassword} disabled={running} onChange={setServerPassword} />}
         {isDragonwilds && <>
           <ConfigInput id="dragonwilds-owner-id" label="Owner ID" value={ownerId} disabled={running} onChange={setOwnerId} />
           <ConfigInput id="dragonwilds-world" label="Default world" value={worldName} disabled={running} onChange={setWorldName} />

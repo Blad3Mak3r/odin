@@ -1089,6 +1089,7 @@ fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstance
     if let Value::Object(values) = &mut config {
         for secret in [
             "admin_password",
+            "server_password",
             "world_password",
             "rcon_password",
             "password",
@@ -1199,6 +1200,24 @@ mod tests {
         game_instances::create_rust(&paths, &db, "shared").unwrap();
 
         assert_eq!(list_all_for_test(&paths, &db).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn generic_view_redacts_palworld_server_password() {
+        let dir = std::env::temp_dir().join(format!("odin-games-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Db::open(&paths).unwrap();
+        let mut instance =
+            game_instances::create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
+        instance.config.settings["server_password"] = Value::String("join-secret".into());
+
+        let view = generic_view(&paths, instance);
+
+        assert_eq!(view.config["server_password"], "");
     }
 
     fn list_all_for_test(paths: &Paths, db: &Db) -> anyhow::Result<Vec<ManagedInstanceView>> {

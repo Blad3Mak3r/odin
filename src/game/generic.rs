@@ -240,8 +240,13 @@ fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Res
         "admin_password",
         "",
     ));
+    let server_password = ini_string(&setting_string(
+        &instance.config.settings,
+        "server_password",
+        "",
+    ));
     let contents = format!(
-        "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},AdminPassword=\"{admin_password}\",RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
+        "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(ServerName=\"{server_name}\",ServerPlayerMaxNum={max_players},PublicPort={},AdminPassword=\"{admin_password}\",ServerPassword=\"{server_password}\",RESTAPIEnabled={},RESTAPIPort={rest_port})\n",
         instance.config.port,
         if rest_enabled { "True" } else { "False" },
     );
@@ -479,7 +484,7 @@ mod tests {
         fs::write(install.join("Pal/Saved/shared.txt"), "must-not-copy").unwrap();
         let instance = generic_instance(
             GameId::Palworld,
-            json!({"server_name": "Pals", "max_players": 24, "rest_api_enabled": true}),
+            json!({"server_name": "Pals", "max_players": 24, "rest_api_enabled": true, "server_password": "join-secret"}),
         );
 
         prepare_native_runtime(&paths, &instance).unwrap();
@@ -494,6 +499,11 @@ mod tests {
             fs::read_to_string(runtime.join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"))
                 .unwrap()
                 .contains("ServerName=\"Pals\"")
+        );
+        assert!(
+            fs::read_to_string(runtime.join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini"))
+                .unwrap()
+                .contains("ServerPassword=\"join-secret\"")
         );
 
         fs::create_dir_all(runtime.join("Pal/Saved/SaveGames")).unwrap();

@@ -122,7 +122,7 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
             admin_port: Some(8212),
             // Do not expose Palworld's administrative API until its operator
             // has supplied a password. The dashboard can enable it later.
-            settings: json!({"server_name": name, "max_players": 32, "rest_api_enabled": false, "admin_password": ""}),
+            settings: json!({"server_name": name, "max_players": 32, "rest_api_enabled": false, "admin_password": "", "server_password": ""}),
             auto_restart: false,
         },
         GameId::RunescapeDragonwilds => GenericGameConfig {
@@ -438,6 +438,7 @@ fn merged_generic_settings(stored: &Value, submitted: &Value) -> Result<Value> {
     };
     for key in [
         "admin_password",
+        "server_password",
         "world_password",
         "rcon_password",
         "password",
@@ -906,6 +907,41 @@ mod tests {
         .unwrap();
         assert_eq!(updated.config.settings["admin_password"], "admin-secret");
         assert_eq!(updated.config.settings["world_password"], "world-secret");
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn palworld_configuration_keeps_empty_password_fields_secret() {
+        let (paths, db) = temp_context("palworld-config");
+        let instance = create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
+        let config = GenericGameConfig {
+            settings: json!({
+                "server_name": "Pals",
+                "max_players": 32,
+                "rest_api_enabled": false,
+                "admin_password": "admin-secret",
+                "server_password": "join-secret"
+            }),
+            ..instance.config
+        };
+        update_generic_config(&db, GameId::Palworld, "pals", &config).unwrap();
+
+        let submitted_without_passwords = GenericGameConfig {
+            settings: json!({
+                "server_name": "Renamed Pals",
+                "max_players": 32,
+                "rest_api_enabled": false,
+                "admin_password": "",
+                "server_password": ""
+            }),
+            ..config
+        };
+        let updated =
+            update_generic_config(&db, GameId::Palworld, "pals", &submitted_without_passwords)
+                .unwrap();
+
+        assert_eq!(updated.config.settings["admin_password"], "admin-secret");
+        assert_eq!(updated.config.settings["server_password"], "join-secret");
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

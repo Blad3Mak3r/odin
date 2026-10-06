@@ -2,6 +2,11 @@ import { Loader2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import palworldBanner from '@/assets/game-banners/palworld.webp'
+import runescapeDragonwildsBanner from '@/assets/game-banners/runescape-dragonwilds.webp'
+import rustBanner from '@/assets/game-banners/rust.webp'
+import valheimBanner from '@/assets/game-banners/valheim.webp'
+import vrisingBanner from '@/assets/game-banners/vrising.webp'
 import { GameIcon } from '@/components/GameIcon'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +24,14 @@ const GAME_DESCRIPTIONS: Record<GameId, string> = {
   vrising: 'Run your V Rising server and manage its world.',
   palworld: 'Operate your Palworld dedicated server from one place.',
   'runescape-dragonwilds': 'Host your RuneScape: Dragonwilds server.',
+}
+
+const GAME_BANNERS: Record<GameId, string> = {
+  valheim: valheimBanner,
+  rust: rustBanner,
+  vrising: vrisingBanner,
+  palworld: palworldBanner,
+  'runescape-dragonwilds': runescapeDragonwildsBanner,
 }
 
 function InstallStatusCard({ game }: { game: GameView }) {
@@ -124,8 +137,11 @@ export function GameDetailPage() {
           </TabsList>
         </div>
         <TabsContent value="overview" className="flex flex-col gap-6">
-          <section className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/20 via-card to-card p-6 sm:p-8">
-            <div className="absolute -right-10 -bottom-12 size-56 rounded-full bg-primary/15 blur-3xl" />
+          <section
+            className="relative overflow-hidden rounded-2xl border bg-cover bg-center p-6 sm:p-8"
+            style={{ backgroundImage: `linear-gradient(90deg, var(--card), color-mix(in oklab, var(--card) 72%, transparent), transparent), url(${GAME_BANNERS[game.id]})` }}
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent" />
             <div className="relative flex items-center gap-5">
               <GameIcon game={game.id} className="size-20 rounded-2xl shadow-lg" />
               <div>

@@ -523,6 +523,15 @@ single `SandboxCode` value rather than individual XML properties. Odin exposes
 that complete value in the instance configuration form; copy it from the
 game's Sandbox Options screen or a generator for the same server version.
 
+Odin can also enable 7D2D's password-protected console for an instance. It
+uses a separate instance port and Odin connects to it through `127.0.0.1`; the
+password is never returned by the API. Keep that port blocked from external
+networks because the game does not provide Odin with a console bind-address
+setting. Once enabled, the dashboard Console and Players tabs can run server
+commands, list connected players, and kick or permanently ban a player. The
+dashboard also reports a 7D2D instance as *ready* only after a game-start log
+line, rather than merely when the process exists.
+
 On the first start after upgrading, Odin automatically moves the legacy
 single-version mod store into this layout and repoints every existing instance;
 no migration command or dashboard action is required.

@@ -12,6 +12,7 @@ import { ModsTab } from '@/components/instance/ModsTab'
 import { SevenDaysModsTab } from '@/components/instance/SevenDaysModsTab'
 import { SevenDaysConsoleTab } from '@/components/instance/SevenDaysConsoleTab'
 import { SevenDaysPlayersTab } from '@/components/instance/SevenDaysPlayersTab'
+import { SevenDaysSandboxCodeEditor } from '@/components/instance/SevenDaysSandboxCodeEditor'
 import { useEffect, useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -302,11 +303,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
           <ConfigInput id="7d2d-game-name" label="Save name" value={gameName} disabled={running} onChange={setGameName} />
           <ConfigInput id="7d2d-seed" label="RWG seed" value={worldSeed} disabled={running} onChange={setWorldSeed} />
           <ConfigInput id="7d2d-size" label="RWG size" type="number" value={worldSize} disabled={running} onChange={setWorldSize} />
-          <div className="flex flex-col gap-2 sm:col-span-2">
-            <Label htmlFor="7d2d-sandbox-code">Sandbox code</Label>
-            <Input id="7d2d-sandbox-code" value={sandboxCode} disabled={running} placeholder="Paste a code copied from 7 Days to Die" onChange={(event) => setSandboxCode(event.target.value)} />
-            <p className="text-xs text-muted-foreground">This code carries all sandbox rules, including difficulty, XP, loot, day length, zombie behavior, blood moons, drops, and resource rates. Leave it empty to preserve the installed server default.</p>
-          </div>
+          <SevenDaysSandboxCodeEditor value={sandboxCode} disabled={running} onChange={setSandboxCode} />
           <div className="flex flex-col gap-2 sm:col-span-2"><Label htmlFor="7d2d-console-password">Local console password</Label><Input id="7d2d-console-password" type="password" value={telnetPassword} disabled={running || !telnetEnabled} placeholder={config.configuredPasswords.telnet_password ? '••••••••••••' : 'At least 12 characters'} onChange={(event) => setTelnetPassword(event.target.value)} /><p className="text-xs text-muted-foreground">Odin connects to this password-protected console through loopback. Keep its port blocked from external networks.</p></div>
         </>}
       </div>

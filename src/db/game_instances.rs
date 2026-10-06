@@ -498,6 +498,14 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
                         .into(),
                 ));
             }
+            if !code.bytes().all(|byte| byte.is_ascii_uppercase())
+                || !code.starts_with('A')
+                || !(code.len() - 1).is_multiple_of(3)
+            {
+                bail!(InvalidGenericConfig(
+                    "7 Days to Die SandboxCode must be a V3 uppercase code with a header and three-character settings".into(),
+                ));
+            }
         }
         if settings
             .get("telnet_enabled")

@@ -5,7 +5,7 @@ import { GameIcon } from '@/components/GameIcon'
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useManagedInstanceAction, useManagedInstanceTransition } from '@/lib/queries'
+import { useManagedInstanceAction, useManagedInstanceTransition, useManagedResources } from '@/lib/queries'
 import type { ManagedInstanceView } from '@/lib/types'
 
 export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceView }) {
@@ -14,6 +14,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
   const transition = useManagedInstanceTransition(instance.id, instance.game, instance.name)
+  const resources = useManagedResources(instance.id, instance.running && instance.capabilities.readiness)
   const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
   const action = { id: instance.id }
   const port = numberConfig(instance.config, 'port')
@@ -44,6 +45,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
           <Badge variant={instance.running ? 'default' : 'secondary'}>
             {transition.data ?? (instance.running ? 'running' : 'stopped')}
           </Badge>
+          {instance.running && instance.capabilities.readiness && resources.data && <Badge variant={resources.data.ready ? 'default' : 'secondary'}>{resources.data.ready ? 'ready' : 'starting'}</Badge>}
           {instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}
         </div>
 
@@ -102,6 +104,7 @@ function gameName(game: ManagedInstanceView['game']) {
     vrising: 'V Rising',
     palworld: 'Palworld',
     'runescape-dragonwilds': 'RuneScape: Dragonwilds',
+    '7d2d': '7 Days to Die',
   }[game]
 }
 

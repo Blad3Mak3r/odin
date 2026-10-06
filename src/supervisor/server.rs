@@ -123,11 +123,21 @@ enum SupervisedInstance {
 }
 
 impl SupervisedInstance {
+    fn game(&self) -> GameId {
+        match self {
+            Self::Valheim(_) => GameId::Valheim,
+            Self::Rust(_) => GameId::Rust,
+            Self::Generic(instance) => instance.identity.game,
+        }
+    }
     fn prepare(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<Self> {
         match game {
             GameId::Valheim => lifecycle::prepare_start(paths, db, name).map(Self::Valheim),
             GameId::Rust => crate::game::rust::prepare_start(paths, db, name).map(Self::Rust),
-            GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+            GameId::VRising
+            | GameId::Palworld
+            | GameId::RunescapeDragonwilds
+            | GameId::SevenDaysToDie => {
                 crate::game::generic::prepare_start(paths, db, game, name).map(Self::Generic)
             }
         }
@@ -311,6 +321,7 @@ pub async fn run_instance(paths: Paths, instance_id: String) -> Result<()> {
     let last_exit: LastExitHandle = Arc::new(Mutex::new(None));
     let log_poller = tokio::spawn(poll_console_log(
         console_log,
+        instance.game(),
         events_tx.clone(),
         players.clone(),
         last_saved.clone(),
@@ -646,6 +657,7 @@ async fn handle_events_connection(mut stream: UnixStream, mut rx: broadcast::Rec
 /// into `Request::LastExit`'s diagnostics whenever the child exits.
 async fn poll_console_log(
     log_file: PathBuf,
+    game: GameId,
     events_tx: broadcast::Sender<Event>,
     players: PlayersHandle,
     last_saved: SavedHandle,
@@ -684,7 +696,7 @@ async fn poll_console_log(
                 *last_saved.lock().expect("last saved lock poisoned") = Some(at);
                 let _ = events_tx.send(Event::WorldSaved { at });
             }
-            if crate::readiness_events::is_ready_line(line) {
+            if crate::readiness_events::is_ready_line(game, line) {
                 *ready.lock().expect("ready lock poisoned") = true;
             }
             {
@@ -800,6 +812,7 @@ mod tests {
             Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
+            GameId::Valheim,
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),
@@ -880,6 +893,7 @@ mod tests {
             Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
+            GameId::Valheim,
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),
@@ -937,6 +951,7 @@ mod tests {
             Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let poller = tokio::spawn(poll_console_log(
             log_file.clone(),
+            GameId::Valheim,
             events_tx.clone(),
             players.clone(),
             last_saved.clone(),

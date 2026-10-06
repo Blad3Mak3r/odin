@@ -6,7 +6,8 @@ use tower_http::trace::TraceLayer;
 use crate::web::routes::{
     backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
     instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
-    rust_access_lists, saves, settings, uptime_schedules, version, vrising_access_lists, webhooks,
+    rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, version,
+    vrising_access_lists, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -14,7 +15,7 @@ use crate::web::{sse, static_files};
 /// Ceiling for an uploaded mod `.zip` — generous enough for a real modpack
 /// while still bounding memory/disk from a runaway or malicious upload.
 /// Axum's own default body limit (2 MiB) applies to every other route.
-const MOD_UPLOAD_BODY_LIMIT: usize = 500 * 1024 * 1024;
+const MOD_UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024;
 
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
@@ -24,6 +25,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/install", post(install::install_server))
         .route("/install/status", get(install::get_install_status))
         .route("/games", get(games::list_games))
+        .route("/games/7d2d/worlds", get(games::list_seven_days_worlds))
         .route(
             "/instances/bulk/games/{action}",
             post(bulk::bulk_games_by_id),
@@ -84,6 +86,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{id}/config",
             get(instances::get_config_by_id).put(games::update_config_by_id),
+        )
+        .route(
+            "/instances/{id}/config/advanced",
+            get(config_files::list_advanced_config_by_id)
+                .put(config_files::set_advanced_config_by_id),
         )
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
@@ -148,6 +155,58 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{id}/valheim/mods/upload",
             post(mods::upload_mod_by_id).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
+        )
+        .route(
+            "/instances/{id}/7d2d/mods",
+            get(seven_days_to_die::list_mods),
+        )
+        .route(
+            "/instances/{id}/7d2d/mods/upload",
+            post(seven_days_to_die::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
+        )
+        .route(
+            "/instances/{id}/7d2d/console",
+            post(seven_days_to_die::execute_console),
+        )
+        .route(
+            "/instances/{id}/7d2d/players",
+            get(seven_days_to_die::list_players),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/history",
+            get(seven_days_to_die::player_history),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/kick",
+            post(seven_days_to_die::kick_player),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/ban",
+            post(seven_days_to_die::ban_player),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/unban",
+            post(seven_days_to_die::unban_player),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/admin",
+            post(seven_days_to_die::add_admin),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/whitelist",
+            post(seven_days_to_die::add_to_whitelist),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/admin/remove",
+            post(seven_days_to_die::remove_admin),
+        )
+        .route(
+            "/instances/{id}/7d2d/players/{player}/whitelist/remove",
+            post(seven_days_to_die::remove_from_whitelist),
+        )
+        .route(
+            "/instances/{id}/7d2d/access/{kind}",
+            get(seven_days_to_die::access_list),
         )
         .route(
             "/instances/{id}/valheim/mods/{mod_id}",
@@ -338,8 +397,34 @@ mod tests {
     use crate::db::Db;
     use crate::instance::Instance;
     use crate::paths::Paths;
+    use std::io::{Cursor, Write};
     use std::process::Command;
     use std::sync::Arc;
+
+    fn seven_days_mod_zip() -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut archive = zip::ZipWriter::new(cursor);
+        archive
+            .start_file(
+                "Example_Mod/ModInfo.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive
+            .write_all(b"<xml><Name value=\"Example_Mod\"/><DisplayName value=\"Example Mod\"/><Version value=\"1.0.0\"/></xml>")
+            .unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    fn multipart_file_body(boundary: &str, bytes: Vec<u8>) -> Vec<u8> {
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"mod.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend(bytes);
+        body.extend(format!("\r\n--{boundary}--\r\n").as_bytes());
+        body
+    }
 
     // `Router::route` panics at registration time if two routes' path
     // shapes are ambiguous — e.g. a literal segment landing where another
@@ -393,6 +478,129 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn seven_days_mod_routes_list_mods_and_clean_up_conflicting_uploads() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-7d2d-mods-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::SevenDaysToDie,
+            "undead",
+        )
+        .unwrap();
+        let installed = paths
+            .game_instance_dir(crate::game::GameId::SevenDaysToDie, "undead")
+            .join("Mods/Example_Mod");
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(
+            installed.join("ModInfo.xml"),
+            "<xml><Name value=\"Example_Mod\"/><DisplayName value=\"Example Mod\"/><Version value=\"1.0.0\"/></xml>",
+        )
+        .unwrap();
+        let active = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::SevenDaysToDie,
+            "active-undead",
+        )
+        .unwrap();
+        let pid = std::process::id();
+        crate::db::game_instances::set_generic_pid(
+            &db,
+            crate::game::GameId::SevenDaysToDie,
+            "active-undead",
+            pid,
+            crate::instance::process::start_time_of(pid).unwrap(),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let app = build_router(AppState::new(paths.clone(), db));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/instances/{}/7d2d/mods", instance.identity.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()[0]["name"],
+            "Example_Mod"
+        );
+
+        let boundary = "odin-test-boundary";
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/instances/{}/7d2d/mods/upload",
+                        instance.identity.id
+                    ))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart_file_body(
+                        boundary,
+                        seven_days_mod_zip(),
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(
+            std::fs::read_dir(installed.parent().unwrap())
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".odin-upload-"))
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/instances/{}/7d2d/mods/upload",
+                        active.identity.id
+                    ))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart_file_body(
+                        boundary,
+                        seven_days_mod_zip(),
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[tokio::test]

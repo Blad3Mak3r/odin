@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api-client'
 import type {
   ActivityEvent,
+  AdvancedConfigChange,
+  AdvancedConfigView,
   BackupEntry,
   BackupScheduleView,
   BackupStorageRequest,
@@ -43,6 +45,7 @@ import type {
   RustAccessListKind,
   RustConfigUpdateRequest,
   SaveFileEntry,
+  SevenDaysPlayer,
   SettingsView,
   UptimeScheduleRequest,
   UptimeScheduleView,
@@ -371,6 +374,23 @@ export function useUpdateGenericConfig() {
   })
 }
 
+export function useAdvancedConfig(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'advanced-config'],
+    queryFn: () => api.get<AdvancedConfigView>(`/instances/${id}/config/advanced`),
+    enabled,
+  })
+}
+
+export function useUpdateAdvancedConfig(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (changes: AdvancedConfigChange[]) =>
+      api.put<void>(`/instances/${id}/config/advanced`, { changes }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] }),
+  })
+}
+
 export function useResourceLimits(id: string) {
   return useQuery({
     queryKey: ['managed-instances', id, 'resource-limits'],
@@ -631,6 +651,52 @@ export function useMods(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'mods'],
     queryFn: () => api.get(valheimInstancePath(name, '/mods')) as Promise<InstanceView['installed_mods']>,
+  })
+}
+
+export type SevenDaysModInfo = { name: string; display_name: string; version: string; description: string | null; author: string | null; website: string | null }
+export function useSevenDaysMods(id: string) {
+  return useQuery({ queryKey: ['managed-instances', id, '7d2d', 'mods'], queryFn: () => api.get<SevenDaysModInfo[]>(`/instances/${id}/7d2d/mods`) })
+}
+export function useUploadSevenDaysMod() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, file, replace }: { id: string; file: File; replace: boolean }) => {
+      const form = new FormData(); form.set('file', file); if (replace) form.set('replace', 'true')
+      return api.upload<JobHandle>(`/instances/${id}/7d2d/mods/upload`, form)
+    },
+    onSuccess: (_result, { id }) => { queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'mods'] }); queryClient.invalidateQueries({ queryKey: ['jobs'] }) },
+  })
+}
+
+export function useExecuteSevenDaysConsole() {
+  return useMutation({
+    mutationFn: ({ id, command }: { id: string; command: string }) => api.post<RconCommandResponse>(`/instances/${id}/7d2d/console`, { command }),
+  })
+}
+
+export function useSevenDaysPlayers(id: string, enabled: boolean) {
+  return useQuery({ queryKey: ['managed-instances', id, '7d2d', 'players'], queryFn: () => api.get<SevenDaysPlayer[]>(`/instances/${id}/7d2d/players`), enabled, refetchInterval: enabled ? 15_000 : false })
+}
+
+export function useSevenDaysPlayerHistory(id: string, enabled: boolean) {
+  return useQuery({ queryKey: ['managed-instances', id, '7d2d', 'players', 'history'], queryFn: () => api.get<PlayerSession[]>(`/instances/${id}/7d2d/players/history`), enabled, refetchInterval: enabled ? 15_000 : false })
+}
+
+export function useSevenDaysPlayerAction(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ player, action, reason }: { player: string; action: 'kick' | 'ban' | 'unban' | 'admin' | 'whitelist' | 'remove-admin' | 'remove-whitelist'; reason?: string }) => {
+      const path = action === 'remove-admin' ? 'admin/remove' : action === 'remove-whitelist' ? 'whitelist/remove' : action
+      return api.post<void>(`/instances/${id}/7d2d/players/${encodeURIComponent(player)}/${path}`, reason === undefined ? undefined : { reason })
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'players'] }); queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'players', 'history'] }) },
+  })
+}
+
+export function useSevenDaysAccessList(id: string) {
+  return useMutation({
+    mutationFn: (kind: 'bans' | 'admins' | 'whitelist') => api.get<RconCommandResponse>(`/instances/${id}/7d2d/access/${kind}`),
   })
 }
 

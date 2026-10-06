@@ -77,6 +77,7 @@ pub fn ensure_available(
         GameId::VRising,
         GameId::Palworld,
         GameId::RunescapeDragonwilds,
+        GameId::SevenDaysToDie,
     ] {
         for instance in crate::db::game_instances::list_generic(db, other_game)? {
             if game == other_game && instance.name() == name {
@@ -85,14 +86,7 @@ pub fn ensure_available(
             if !instance.is_running() {
                 continue;
             }
-            for port in [
-                Some(instance.config.port),
-                instance.config.query_port,
-                instance.config.admin_port,
-            ]
-            .into_iter()
-            .flatten()
-            {
+            for port in crate::db::game_instances::claimed_ports(other_game, &instance.config)? {
                 if requested_ports.contains(&port) {
                     anyhow::bail!(
                         "port {port} is already in use by running {other_game} instance '{}'",
@@ -119,6 +113,10 @@ mod tests {
         assert_eq!(
             block(GameId::Rust, 28015).unwrap(),
             vec![28015, 28016, 28017]
+        );
+        assert_eq!(
+            block(GameId::SevenDaysToDie, 26900).unwrap(),
+            vec![26900, 26901, 26902]
         );
     }
 

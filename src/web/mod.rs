@@ -129,10 +129,11 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
         GameId::VRising,
         GameId::Palworld,
         GameId::RunescapeDragonwilds,
+        GameId::SevenDaysToDie,
     ] {
         for generic_instance in game_instances::list_generic(&state.db, game)? {
             if generic_instance.is_running()
-                && let Err(error) = crate::game::generic::stop(
+                && let Err(error) = crate::game::instances::stop(
                     &state.paths,
                     &state.db,
                     game,
@@ -488,6 +489,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
         GameId::VRising,
         GameId::Palworld,
         GameId::RunescapeDragonwilds,
+        GameId::SevenDaysToDie,
     ] {
         let Ok(generic_instances) = game_instances::list_generic(&state.db, game) else {
             continue;

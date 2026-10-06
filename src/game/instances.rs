@@ -26,6 +26,7 @@ fn generic_save_dir(paths: &Paths, instance: &GenericGameInstance) -> std::path:
         GameId::VRising => root.join("data/Saves"),
         GameId::Palworld => root.join("runtime/Pal/Saved/SaveGames"),
         GameId::RunescapeDragonwilds => root.join("runtime/RSDragonwilds/Saved/Savegames"),
+        GameId::SevenDaysToDie => root.join("Saves"),
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
 }
@@ -35,7 +36,10 @@ pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameIn
     let instance = match game {
         GameId::Valheim => Instance::create(paths, db, name).map(GameInstance::Valheim),
         GameId::Rust => game_instances::create_rust(paths, db, name).map(GameInstance::Rust),
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+        GameId::VRising
+        | GameId::Palworld
+        | GameId::RunescapeDragonwilds
+        | GameId::SevenDaysToDie => {
             game_instances::create_generic(paths, db, game, name).map(GameInstance::Generic)
         }
     }?;
@@ -73,11 +77,12 @@ pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInst
         GameId::Rust => game_instances::load_rust(db, name)?
             .map(GameInstance::Rust)
             .context("Rust instance does not exist"),
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
-            game_instances::load_generic(db, game, name)?
-                .map(GameInstance::Generic)
-                .context("game instance does not exist")
-        }
+        GameId::VRising
+        | GameId::Palworld
+        | GameId::RunescapeDragonwilds
+        | GameId::SevenDaysToDie => game_instances::load_generic(db, game, name)?
+            .map(GameInstance::Generic)
+            .context("game instance does not exist"),
     }
 }
 
@@ -106,11 +111,12 @@ pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<G
                 .await
                 .map(GameInstance::Rust)
         }
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
-            generic::start(paths, db, game, name)
-                .await
-                .map(GameInstance::Generic)
-        }
+        GameId::VRising
+        | GameId::Palworld
+        | GameId::RunescapeDragonwilds
+        | GameId::SevenDaysToDie => generic::start(paths, db, game, name)
+            .await
+            .map(GameInstance::Generic),
     }
 }
 
@@ -126,6 +132,15 @@ pub async fn stop(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()
         }
         GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
             generic::stop(paths, db, game, name).await
+        }
+        GameId::SevenDaysToDie => {
+            generic::stop(paths, db, game, name).await?;
+            crate::db::player_sessions::close_active_for_game(
+                db,
+                GameId::SevenDaysToDie,
+                name,
+                chrono::Utc::now(),
+            )
         }
     }
 }
@@ -144,9 +159,20 @@ pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
                 .await
                 .map(GameInstance::Rust)
         }
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+        GameId::VRising
+        | GameId::Palworld
+        | GameId::RunescapeDragonwilds
+        | GameId::SevenDaysToDie => {
             if is_running(paths, db, game, name)? {
                 generic::stop(paths, db, game, name).await?;
+                if game == GameId::SevenDaysToDie {
+                    crate::db::player_sessions::close_active_for_game(
+                        db,
+                        GameId::SevenDaysToDie,
+                        name,
+                        chrono::Utc::now(),
+                    )?;
+                }
             }
             generic::start(paths, db, game, name)
                 .await
@@ -160,6 +186,9 @@ pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bo
         GameInstance::Valheim(instance) => lifecycle::delete(db, &instance, keep_backups),
         GameInstance::Rust(instance) => rust::delete(paths, db, &instance, keep_backups),
         GameInstance::Generic(instance) => {
+            if instance.identity.game == GameId::SevenDaysToDie && instance.is_running() {
+                anyhow::bail!("7 Days to Die backups require a stopped server");
+            }
             anyhow::ensure!(
                 !instance.is_running(),
                 crate::instance::InstanceError::AlreadyRunning(instance.identity.name)

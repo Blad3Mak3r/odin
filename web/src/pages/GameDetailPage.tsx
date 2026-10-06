@@ -25,6 +25,7 @@ const GAME_DESCRIPTIONS: Record<GameId, string> = {
   vrising: 'Run your V Rising server and manage its world.',
   palworld: 'Operate your Palworld dedicated server from one place.',
   'runescape-dragonwilds': 'Host your RuneScape: Dragonwilds server.',
+  '7d2d': 'Run and manage your 7 Days to Die dedicated servers.',
 }
 
 const GAME_BANNERS: Record<GameId, string> = {
@@ -33,6 +34,7 @@ const GAME_BANNERS: Record<GameId, string> = {
   vrising: vrisingBanner,
   palworld: palworldBanner,
   'runescape-dragonwilds': runescapeDragonwildsBanner,
+  '7d2d': '',
 }
 
 function InstallStatusCard({ game }: { game: GameView }) {

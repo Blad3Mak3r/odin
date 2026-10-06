@@ -1,13 +1,15 @@
-import type { JobKindDescr, JobStatus } from './types'
+import type { GameId, JobKindDescr, JobStatus } from './types'
 
 export function describeJobKind(kind: JobKindDescr): string {
   switch (kind.kind) {
     case 'steamcmd_install':
-      return `Install/update ${kind.game === 'rust' ? 'Rust' : 'Valheim'} server files`
+      return `Install/update ${gameLabel(kind.game)} server files`
     case 'mod_add':
       return `Install mod ${kind.mod_id} on ${kind.instance}`
     case 'mod_update':
       return `Update mods on ${kind.instance}`
+    case 'mod_upload':
+      return `Upload mod ${kind.name} on ${kind.instance}`
     case 'backup_create':
       return `Back up ${kind.game} / ${kind.instance}`
     case 'backup_restore':
@@ -23,6 +25,10 @@ export function describeJobKind(kind: JobKindDescr): string {
     default:
       return (kind as { kind: string }).kind
   }
+}
+
+function gameLabel(game: GameId) {
+  return { valheim: 'Valheim', rust: 'Rust', vrising: 'V Rising', palworld: 'Palworld', 'runescape-dragonwilds': 'RuneScape: Dragonwilds', '7d2d': '7 Days to Die' }[game]
 }
 
 export function jobStatusVariant(status: JobStatus): 'destructive' | 'secondary' {

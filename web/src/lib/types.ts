@@ -5,7 +5,7 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
-export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds'
+export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'
 
 export interface GameCapabilities {
   backups: boolean
@@ -55,13 +55,43 @@ export interface GenericConfigUpdateRequest {
   auto_restart: boolean
 }
 
+export interface AdvancedConfigEntry {
+  key: string
+  value: string
+  sensitive: boolean
+  configured: boolean
+}
+
+export interface AdvancedConfigFile {
+  id: string
+  path: string
+  format: string
+  entries: AdvancedConfigEntry[]
+}
+
+export interface AdvancedConfigView {
+  files: AdvancedConfigFile[]
+}
+
+export interface AdvancedConfigChange {
+  file: string
+  key: string
+  value: string
+}
+
 export interface ResourceLimits {
   cpu_percent: number | null
   memory_max_bytes: number | null
 }
 
 export interface RconCommandResponse {
-  output: string
+    output: string
+}
+
+export interface SevenDaysPlayer {
+  entity_id: string
+  name: string
+  platform_id: string | null
 }
 
 export type VRisingAccessListKind = 'admin' | 'banned'

@@ -102,6 +102,37 @@ pub async fn list_games() -> Json<Vec<GameView>> {
 }
 
 #[derive(Serialize)]
+pub struct SevenDaysWorldsView {
+    pub worlds: Vec<String>,
+}
+
+pub async fn list_seven_days_worlds(State(state): State<AppState>) -> Json<SevenDaysWorldsView> {
+    let directory = state
+        .paths
+        .game_install_dir(GameId::SevenDaysToDie)
+        .join("Data/Worlds");
+    let mut worlds = std::fs::read_dir(directory)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            entry
+                .file_type()
+                .ok()?
+                .is_dir()
+                .then(|| entry.file_name().to_string_lossy().to_string())
+        })
+        .collect::<Vec<_>>();
+    if !worlds.iter().any(|world| world == "Navezgane") {
+        worlds.push("Navezgane".into());
+    }
+    worlds.sort();
+    worlds.dedup();
+    Json(SevenDaysWorldsView { worlds })
+}
+
+#[derive(Serialize)]
 pub struct GameInstallStatusView {
     pub installed: bool,
     pub installed_build_id: Option<u64>,
@@ -158,6 +189,16 @@ pub async fn install_game(
                     }
                 }
                 GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {}
+                GameId::SevenDaysToDie => {
+                    let running = game_instances::list_generic(&db, game)?
+                        .into_iter()
+                        .any(|instance| instance.is_running());
+                    if running {
+                        anyhow::bail!(
+                            "refusing to update 7 Days to Die while an instance is running"
+                        );
+                    }
+                }
             }
             let driver = game::driver(game);
             let install_dir = paths.game_install_dir(game);
@@ -196,6 +237,7 @@ pub async fn list_all_instances(
             GameId::VRising,
             GameId::Palworld,
             GameId::RunescapeDragonwilds,
+            GameId::SevenDaysToDie,
         ] {
             views.extend(generic_views(&paths, &db, game)?);
         }
@@ -215,9 +257,10 @@ pub async fn list_instances(
     let views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
         GameId::Rust => rust_views(&paths, &db),
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
-            generic_views(&paths, &db, game)
-        }
+        GameId::VRising
+        | GameId::Palworld
+        | GameId::RunescapeDragonwilds
+        | GameId::SevenDaysToDie => generic_views(&paths, &db, game),
     })
     .await?;
     Ok(Json(views))
@@ -381,7 +424,10 @@ pub async fn update_config_by_id(
                 .map_err(|error| BadRequest(format!("invalid Rust configuration: {error}")))?;
             update_rust_config_for(state, identity.name, request).await
         }
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
+        GameId::VRising
+        | GameId::Palworld
+        | GameId::RunescapeDragonwilds
+        | GameId::SevenDaysToDie => {
             let request = serde_json::from_value(request)
                 .map_err(|error| BadRequest(format!("invalid game configuration: {error}")))?;
             update_generic_config_for(state, identity.game, identity.name, request).await
@@ -1091,6 +1137,7 @@ fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstance
         for secret in [
             "admin_password",
             "server_password",
+            "telnet_password",
             "world_password",
             "rcon_password",
             "password",

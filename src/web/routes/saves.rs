@@ -164,6 +164,7 @@ fn save_root(
         GameId::RunescapeDragonwilds => Ok(paths
             .game_instance_dir(game, name)
             .join("runtime/RSDragonwilds/Saved/Savegames")),
+        GameId::SevenDaysToDie => Ok(paths.game_instance_dir(game, name).join("Saves")),
     }
 }
 

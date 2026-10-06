@@ -103,7 +103,7 @@ impl GenericGameInstance {
 pub fn is_generic_game(game: GameId) -> bool {
     matches!(
         game,
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds
+        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds | GameId::SevenDaysToDie
     )
 }
 
@@ -130,6 +130,29 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
             query_port: Some(8888),
             admin_port: None,
             settings: json!({"owner_id": "", "server_name": name, "default_world_name": name, "admin_password": "", "world_password": ""}),
+            auto_restart: false,
+        },
+        GameId::SevenDaysToDie => GenericGameConfig {
+            port: 26900,
+            query_port: None,
+            // 7D2D reserves its game UDP block at 26900–26902. Keep the
+            // password-protected console on the immediately following port;
+            // allocation moves the complete group together for later
+            // instances.
+            admin_port: Some(26903),
+            settings: json!({
+                "server_name": name,
+                "server_description": "",
+                "server_password": "",
+                "visibility": 2,
+                "max_players": 8,
+                "game_world": "Navezgane",
+                "game_name": name,
+                "world_gen_seed": name,
+                "world_gen_size": 6144,
+                "telnet_enabled": false,
+                "telnet_password": ""
+            }),
             auto_restart: false,
         },
         _ => unreachable!("only generic games have generic defaults"),
@@ -188,9 +211,8 @@ pub fn create_generic(
     }
     let mut config = default_generic_config(game, name);
     let occupied = configured_ports(db)?;
-    while [Some(config.port), config.query_port, config.admin_port]
+    while claimed_ports(game, &config)?
         .into_iter()
-        .flatten()
         .any(|port| occupied.contains(&port))
     {
         config.port = config
@@ -234,19 +256,24 @@ pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
         GameId::VRising,
         GameId::Palworld,
         GameId::RunescapeDragonwilds,
+        GameId::SevenDaysToDie,
     ] {
         for instance in list_generic(db, game)? {
-            ports.extend(
-                [
-                    Some(instance.config.port),
-                    instance.config.query_port,
-                    instance.config.admin_port,
-                ]
-                .into_iter()
-                .flatten(),
-            );
+            ports.extend(claimed_ports(game, &instance.config)?);
         }
     }
+    Ok(ports)
+}
+
+pub fn claimed_ports(game: GameId, config: &GenericGameConfig) -> Result<Vec<u16>> {
+    let mut ports = if game == GameId::SevenDaysToDie {
+        crate::game::ports::block(game, config.port)?
+    } else {
+        vec![config.port]
+    };
+    ports.extend([config.query_port, config.admin_port].into_iter().flatten());
+    ports.sort_unstable();
+    ports.dedup();
     Ok(ports)
 }
 
@@ -424,6 +451,76 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
             "V Rising RCON password is required when RCON is enabled".into()
         ));
     }
+    if game == GameId::SevenDaysToDie {
+        if config.admin_port.is_none() {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die console port is required".into(),
+            ));
+        }
+        for key in ["server_name", "game_world", "game_name"] {
+            if settings
+                .get(key)
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                bail!(InvalidGenericConfig(format!(
+                    "7 Days to Die {key} is required"
+                )));
+            }
+        }
+        let visibility = settings
+            .get("visibility")
+            .and_then(Value::as_u64)
+            .unwrap_or(2);
+        if !matches!(visibility, 0..=2) {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die visibility must be 0, 1, or 2".into()
+            ));
+        }
+        if settings
+            .get("max_players")
+            .and_then(Value::as_u64)
+            .is_none_or(|value| value == 0)
+        {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die max_players must be positive".into()
+            ));
+        }
+        if let Some(code) = settings.get("sandbox_code") {
+            let Some(code) = code.as_str() else {
+                bail!(InvalidGenericConfig(
+                    "7 Days to Die SandboxCode must be text".into()
+                ));
+            };
+            if code.len() > 4096 || code.chars().any(char::is_whitespace) {
+                bail!(InvalidGenericConfig(
+                    "7 Days to Die SandboxCode must be a single value no longer than 4096 characters"
+                        .into(),
+                ));
+            }
+            if !code.bytes().all(|byte| byte.is_ascii_uppercase())
+                || !code.starts_with('A')
+                || !(code.len() - 1).is_multiple_of(3)
+            {
+                bail!(InvalidGenericConfig(
+                    "7 Days to Die SandboxCode must be a V3 uppercase code with a header and three-character settings".into(),
+                ));
+            }
+        }
+        if settings
+            .get("telnet_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && settings
+                .get("telnet_password")
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.len() < 12)
+        {
+            bail!(InvalidGenericConfig(
+                "7 Days to Die console password must contain at least 12 characters".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -441,6 +538,7 @@ fn merged_generic_settings(stored: &Value, submitted: &Value) -> Result<Value> {
         "server_password",
         "world_password",
         "rcon_password",
+        "telnet_password",
         "password",
     ] {
         if submitted
@@ -942,6 +1040,46 @@ mod tests {
 
         assert_eq!(updated.config.settings["admin_password"], "admin-secret");
         assert_eq!(updated.config.settings["server_password"], "join-secret");
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn seven_days_configuration_persists_a_complete_sandbox_code() {
+        let (paths, db) = temp_context("7d2d-sandbox-code");
+        let instance = create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+        let config = GenericGameConfig {
+            settings: json!({
+                "server_name": "Undead",
+                "server_description": "",
+                "server_password": "",
+                "visibility": 2,
+                "max_players": 8,
+                "game_world": "Navezgane",
+                "game_name": "undead",
+                "world_gen_seed": "undead",
+                "world_gen_size": 6144,
+                "sandbox_code": "AAAJABJACJADJARFBNC"
+            }),
+            ..instance.config
+        };
+        let updated =
+            update_generic_config(&db, GameId::SevenDaysToDie, "undead", &config).unwrap();
+        assert_eq!(
+            updated.config.settings["sandbox_code"],
+            "AAAJABJACJADJARFBNC"
+        );
+
+        let invalid = GenericGameConfig {
+            settings: json!({
+                "server_name": "Undead",
+                "game_world": "Navezgane",
+                "game_name": "undead",
+                "max_players": 8,
+                "sandbox_code": "not a code"
+            }),
+            ..config
+        };
+        assert!(update_generic_config(&db, GameId::SevenDaysToDie, "undead", &invalid).is_err());
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

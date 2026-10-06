@@ -38,6 +38,20 @@ fn run_tick(state: &AppState) {
     };
 
     for schedule in due {
+        if schedule.game == crate::game::GameId::SevenDaysToDie
+            && matches!(
+                instances::is_running(
+                    &state.paths,
+                    &state.db,
+                    schedule.game,
+                    &schedule.instance_name
+                ),
+                Ok(true)
+            )
+        {
+            tracing::debug!(instance = %schedule.instance_name, "7 Days to Die backup remains due until the server stops");
+            continue;
+        }
         // Mark the schedule as run *before* the backup job finishes, not
         // after — a backup can take a while, and this check only runs once
         // a minute, so marking it late would let a slow job get

@@ -353,8 +353,8 @@ fn parse_palworld(contents: &str) -> Vec<AdvancedConfigEntry> {
     let Some(end) = tail.find(')') else {
         return Vec::new();
     };
-    tail[..end]
-        .split(',')
+    split_option_pairs(&tail[..end])
+        .into_iter()
         .filter_map(|part| {
             part.split_once('=')
                 .map(|(key, value)| AdvancedConfigEntry {
@@ -363,6 +363,33 @@ fn parse_palworld(contents: &str) -> Vec<AdvancedConfigEntry> {
                 })
         })
         .collect()
+}
+
+fn split_option_pairs(input: &str) -> Vec<&str> {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut start = 0;
+    let mut pairs = Vec::new();
+    for (index, character) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quoted {
+            escaped = true;
+            continue;
+        }
+        if character == '"' {
+            quoted = !quoted;
+            continue;
+        }
+        if character == ',' && !quoted {
+            pairs.push(&input[start..index]);
+            start = index + 1;
+        }
+    }
+    pairs.push(&input[start..]);
+    pairs
 }
 
 fn set(format: Format, contents: &str, key: &str, value: &str) -> Result<String> {
@@ -425,15 +452,36 @@ fn parse_scalar(value: &str, old: &Value) -> Value {
 }
 
 fn set_ini(contents: &str, key: &str, value: &str) -> Result<String> {
-    let (_, bare) = key.rsplit_once('.').unwrap_or(("", key));
-    let expression = format!(r"(?m)^(\s*{}\s*=\s*).*$", regex::escape(bare));
-    let pattern = regex::Regex::new(&expression)?;
-    if !pattern.is_match(contents) {
+    let (wanted_section, bare) = key.rsplit_once('.').unwrap_or(("", key));
+    let mut section = "";
+    let mut found = false;
+    let mut output = String::with_capacity(contents.len());
+    for raw_line in contents.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
+        let ending = &raw_line[line.len()..];
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section = trimmed;
+            output.push_str(raw_line);
+            continue;
+        }
+        if section == wanted_section
+            && let Some((existing, _)) = line.split_once('=')
+            && existing.trim() == bare
+        {
+            let prefix = &line[..line.find('=').expect("split_once found equals") + 1];
+            output.push_str(prefix);
+            output.push_str(value);
+            output.push_str(ending);
+            found = true;
+            continue;
+        }
+        output.push_str(raw_line);
+    }
+    if !found {
         bail!("INI key {key} does not exist");
     }
-    Ok(pattern
-        .replace(contents, format!("${{1}}{value}"))
-        .into_owned())
+    Ok(output)
 }
 
 fn set_palworld(contents: &str, key: &str, value: &str) -> Result<String> {
@@ -480,5 +528,20 @@ mod tests {
         let parsed: Value = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed["a"]["b"], 2);
         assert_eq!(parsed["other"], true);
+    }
+
+    #[test]
+    fn ini_round_trip_preserves_other_sections() {
+        let input = "[Server]\nKnown=old\n[Other]\nKnown=other\n";
+        let output = set_ini(input, "[Server].Known", "new").unwrap();
+        assert!(output.contains("Known=new"));
+        assert!(output.contains("[Other]\nKnown=other"));
+    }
+
+    #[test]
+    fn palworld_parser_keeps_commas_inside_quoted_values() {
+        let entries = parse_palworld("OptionSettings=(Known=1,Message=\"one, two\",Other=True)");
+        assert_eq!(entries[1].key, "Message");
+        assert_eq!(entries[1].value, "one, two");
     }
 }

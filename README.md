@@ -409,6 +409,15 @@ the game discards live edits; its game and beacon UDP ports are configured
 independently. Creating a Dragonwilds configuration requires an owner ID,
 server name, default world, and administration password before it can start.
 
+For games with a declared server configuration document (7 Days to Die, V
+Rising, Palworld, and Dragonwilds), the Configuration tab also has a collapsed
+**Advanced configuration** section. It reads only Odin-declared XML, JSON, or
+INI files, separates settings Odin manages from settings supplied by the game,
+and lets an operator change existing unmanaged values while the instance is
+stopped. Odin validates the complete change set and writes it atomically; it
+does not discover arbitrary files, mod configuration, or permit adding and
+deleting keys.
+
 Rust access lists manage owners, moderators, and bans while the server is
 stopped. Valheim adds Thunderstore mod management, BepInEx update checks,
 live players, and recent player-session history. Every instance's Backups tab

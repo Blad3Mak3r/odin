@@ -57,6 +57,7 @@ pub async fn set_advanced_config_by_id(
         let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
             .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
         crate::game::config_documents::apply(&paths, &instance, &request.changes)
+            .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)

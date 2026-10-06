@@ -1,10 +1,11 @@
 import type { ComponentPropsWithoutRef } from 'react'
 import { Gamepad2 } from 'lucide-react'
-import palworldIcon from '@/assets/games/palworld.png'
-import runescapeDragonwildsIcon from '@/assets/games/runescape-dragonwilds.png'
-import rustIcon from '@/assets/games/rust.png'
-import valheimIcon from '@/assets/games/valheim.png'
-import vrisingIcon from '@/assets/games/vrising.png'
+import sevenDaysIcon from '@/assets/games/7d2d.webp'
+import palworldIcon from '@/assets/games/palworld.webp'
+import runescapeDragonwildsIcon from '@/assets/games/runescape_dragonwilds.webp'
+import rustIcon from '@/assets/games/rust.webp'
+import valheimIcon from '@/assets/games/valheim.webp'
+import vrisingIcon from '@/assets/games/v_rising.webp'
 import type { GameId } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -14,7 +15,7 @@ const GAME_ICON_SOURCES: Record<GameId, string> = {
   vrising: vrisingIcon,
   palworld: palworldIcon,
   'runescape-dragonwilds': runescapeDragonwildsIcon,
-  '7d2d': '',
+  '7d2d': sevenDaysIcon,
 }
 
 export function GameIcon({

@@ -1087,6 +1087,7 @@ fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstance
     let name = instance.identity.name.clone();
     let mut config = instance.config.settings.clone();
     if let Value::Object(values) = &mut config {
+        let mut passwords_configured = serde_json::Map::new();
         for secret in [
             "admin_password",
             "server_password",
@@ -1094,10 +1095,23 @@ fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstance
             "rcon_password",
             "password",
         ] {
+            passwords_configured.insert(
+                secret.to_string(),
+                Value::Bool(
+                    values
+                        .get(secret)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.is_empty()),
+                ),
+            );
             if values.contains_key(secret) {
                 values.insert(secret.to_string(), Value::String(String::new()));
             }
         }
+        values.insert(
+            "passwords_configured".into(),
+            Value::Object(passwords_configured),
+        );
         values.insert("port".into(), serde_json::json!(instance.config.port));
         values.insert(
             "query_port".into(),
@@ -1203,7 +1217,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_view_redacts_palworld_server_password() {
+    fn generic_view_redacts_palworld_passwords_and_reports_when_configured() {
         let dir = std::env::temp_dir().join(format!("odin-games-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths {
@@ -1213,11 +1227,15 @@ mod tests {
         let db = Db::open(&paths).unwrap();
         let mut instance =
             game_instances::create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
+        instance.config.settings["admin_password"] = Value::String("admin-secret".into());
         instance.config.settings["server_password"] = Value::String("join-secret".into());
 
         let view = generic_view(&paths, instance);
 
+        assert_eq!(view.config["admin_password"], "");
         assert_eq!(view.config["server_password"], "");
+        assert_eq!(view.config["passwords_configured"]["admin_password"], true);
+        assert_eq!(view.config["passwords_configured"]["server_password"], true);
     }
 
     fn list_all_for_test(paths: &Paths, db: &Db) -> anyhow::Result<Vec<ManagedInstanceView>> {

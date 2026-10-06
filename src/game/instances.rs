@@ -225,7 +225,7 @@ pub fn create_backup(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
             // not a useful backup. Its local REST endpoint owns the save
             // operation, so ask it to flush before taking the snapshot.
             if instance.identity.game == GameId::Palworld && instance.is_running() {
-                crate::game::palworld::save(&instance)?;
+                crate::game::palworld::save(paths, &instance)?;
             }
             crate::backup::create_at(
                 db,

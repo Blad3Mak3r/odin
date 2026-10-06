@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Map, Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::{Map, json};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -24,9 +26,7 @@ pub fn prepare_start(
     if instance.is_running() {
         bail!("instance '{name}' is already running");
     }
-    // Validate persisted settings again at the lifecycle boundary. This
-    // protects instances created with defaults (before their first form
-    // submission) and any data imported from an older Odin version.
+    // Validate the transport contract again at the lifecycle boundary.
     crate::db::game_instances::validate_generic_config(game, &instance.config)?;
     let requested = crate::db::game_instances::claimed_ports(game, &instance.config)?;
     crate::game::ports::ensure_available(db, game, name, requested)?;
@@ -42,30 +42,21 @@ pub fn prepare_start(
     }
     match game {
         GameId::VRising => {
-            let rcon_enabled = instance
-                .config
-                .settings
-                .get("rcon_enabled")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if rcon_enabled
-                && instance
-                    .config
-                    .settings
-                    .get("rcon_password")
-                    .and_then(Value::as_str)
-                    .is_none_or(str::is_empty)
-            {
-                bail!("V Rising RCON password is required when RCON is enabled");
-            }
             crate::game::proton_ge::ensure(paths)?;
-            write_vrising_host_settings(paths, &instance)?;
         }
         GameId::Palworld | GameId::RunescapeDragonwilds => {
             prepare_native_runtime(paths, &instance)?;
-            write_native_settings(paths, &instance)?;
         }
-        GameId::SevenDaysToDie => write_7d2d_settings(paths, &instance)?,
+        GameId::SevenDaysToDie => {
+            let instance_dir = paths.game_instance_dir(GameId::SevenDaysToDie, instance.name());
+            let config = seven_d2d_config_path(paths, &instance);
+            if let Some(parent) = config.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::create_dir_all(instance_dir.join("Saves"))?;
+            fs::create_dir_all(instance_dir.join("Mods"))?;
+            crate::game::config_documents::remove_legacy_control_panel(paths, &instance)?;
+        }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
     Ok(instance)
@@ -77,6 +68,7 @@ fn seven_d2d_config_path(paths: &Paths, instance: &GenericGameInstance) -> PathB
         .join("config/serverconfig.xml")
 }
 
+#[cfg(test)]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -85,6 +77,7 @@ fn xml_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+#[cfg(test)]
 fn set_xml_property(contents: &mut String, name: &str, value: &str) -> Result<()> {
     let replacement = format!(r#"<property name="{name}" value="{}"/>"#, xml_escape(value));
     let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
@@ -101,6 +94,7 @@ fn set_xml_property(contents: &mut String, name: &str, value: &str) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
 fn remove_xml_property(contents: &mut String, name: &str) -> Result<()> {
     let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
     let ranges = pattern
@@ -114,6 +108,7 @@ fn remove_xml_property(contents: &mut String, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn xml_property_attribute(tag: &str, name: &str) -> Option<String> {
     let expression = format!(
         r#"(?is)\b{}\s*=\s*(?:"([^"]*)"|'([^']*)')"#,
@@ -127,6 +122,7 @@ fn xml_property_attribute(tag: &str, name: &str) -> Option<String> {
         .map(|value| value.as_str().into())
 }
 
+#[cfg(test)]
 fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
     let instance_dir = paths.game_instance_dir(GameId::SevenDaysToDie, instance.name());
     let config = seven_d2d_config_path(paths, instance);
@@ -205,6 +201,7 @@ fn write_7d2d_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<
 /// V Rising deliberately supports a per-instance persistent-data directory.
 /// Keep Odin's generated host override there rather than modifying Steam's
 /// install tree, which would couple every managed V Rising instance.
+#[cfg(test)]
 fn write_vrising_host_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
     let settings_dir = paths
         .game_instance_dir(GameId::VRising, instance.name())
@@ -250,6 +247,7 @@ fn write_vrising_host_settings(paths: &Paths, instance: &GenericGameInstance) ->
     Ok(())
 }
 
+#[cfg(test)]
 fn setting_string(settings: &Value, key: &str, fallback: &str) -> String {
     settings
         .get(key)
@@ -259,6 +257,7 @@ fn setting_string(settings: &Value, key: &str, fallback: &str) -> String {
         .to_string()
 }
 
+#[cfg(test)]
 fn setting_u64(settings: &Value, key: &str) -> Option<u64> {
     settings.get(key).and_then(Value::as_u64)
 }
@@ -342,6 +341,7 @@ fn replace_with_symlink(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn write_native_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
     match instance.identity.game {
         GameId::Palworld => write_palworld_settings(paths, instance),
@@ -350,6 +350,7 @@ fn write_native_settings(paths: &Paths, instance: &GenericGameInstance) -> Resul
     }
 }
 
+#[cfg(test)]
 fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
     let settings_file = native_runtime_dir(paths, instance)
         .join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini");
@@ -411,6 +412,7 @@ fn write_palworld_settings(paths: &Paths, instance: &GenericGameInstance) -> Res
         .with_context(|| format!("failed to write {}", settings_file.display()))
 }
 
+#[cfg(test)]
 fn write_dragonwilds_settings(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
     let settings_file = native_runtime_dir(paths, instance)
         .join("RSDragonwilds/Saved/Config/Linux/DedicatedServer.ini");
@@ -467,10 +469,12 @@ fn write_dragonwilds_settings(paths: &Paths, instance: &GenericGameInstance) -> 
         .with_context(|| format!("failed to write {}", settings_file.display()))
 }
 
+#[cfg(test)]
 fn ini_string(value: &str) -> String {
     value.replace(['\r', '\n'], "").replace('"', "\\\"")
 }
 
+#[cfg(test)]
 fn set_ini_option(contents: &mut String, key: &str, value: &str) -> Result<()> {
     let expression = format!(r"(?m)^(\s*{}\s*=\s*).*$", regex::escape(key));
     let pattern = regex::Regex::new(&expression)?;
@@ -484,6 +488,7 @@ fn set_ini_option(contents: &mut String, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn set_palworld_option(contents: &mut String, key: &str, value: &str) -> Result<()> {
     let expression = format!(r#"({}=)(\"[^\"]*\"|[^,\)]*)"#, regex::escape(key));
     let pattern = regex::Regex::new(&expression)?;
@@ -576,14 +581,19 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
                     "-configfile={}",
                     seven_d2d_config_path(paths, instance).display()
                 ))
+                .arg(format!("-UserDataFolder={}", instance_dir.display()))
+                .arg(format!("-ServerPort={}", instance.config.port))
                 .arg(format!(
                     "-logfile={}",
                     log_dir.join("console.log").display()
                 ))
                 .arg("-quit")
                 .arg("-batchmode")
-                .arg("-nographics")
-                .arg("-dedicated");
+                .arg("-nographics");
+            if let Some(port) = instance.config.admin_port {
+                command.arg(format!("-TelnetPort={port}"));
+            }
+            command.arg("-dedicated");
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
@@ -612,10 +622,13 @@ pub async fn stop(paths: &Paths, db: &crate::db::Db, game: GameId, name: &str) -
     // Palworld's REST shutdown tells the server to flush its world and exit
     // itself. Wait for that first, but retain the normal supervisor stop as a
     // bounded fallback if the REST API is unavailable or rejects the request.
-    if game == GameId::Palworld && crate::game::palworld::rest_enabled(&instance) {
+    if game == GameId::Palworld
+        && crate::game::palworld::rest_enabled(paths, &instance).unwrap_or(false)
+    {
         let palworld = instance.clone();
+        let palworld_paths = paths.clone();
         let rest_shutdown = tokio::task::spawn_blocking(move || {
-            crate::game::palworld::shutdown(&palworld, Some(0), None)
+            crate::game::palworld::shutdown(&palworld_paths, &palworld, Some(0), None)
         })
         .await;
         match rest_shutdown {

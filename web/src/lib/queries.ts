@@ -370,6 +370,7 @@ export function useUpdateGenericConfig() {
     onSuccess: (instance) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', instance.id, 'advanced-config'] })
     },
   })
 }

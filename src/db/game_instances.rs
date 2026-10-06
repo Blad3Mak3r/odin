@@ -6,7 +6,9 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use crate::cli::validate_instance_name;
 use crate::game::{GameId, rust};
@@ -107,29 +109,27 @@ pub fn is_generic_game(game: GameId) -> bool {
     )
 }
 
-pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
+pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
     match game {
         GameId::VRising => GenericGameConfig {
             port: 27015,
             query_port: Some(27016),
             admin_port: Some(25575),
-            settings: json!({"server_name": name, "max_players": 40, "rcon_enabled": false, "rcon_password": ""}),
+            settings: Value::Object(Default::default()),
             auto_restart: false,
         },
         GameId::Palworld => GenericGameConfig {
             port: 8211,
             query_port: None,
             admin_port: Some(8212),
-            // Do not expose Palworld's administrative API until its operator
-            // has supplied a password. The dashboard can enable it later.
-            settings: json!({"server_name": name, "max_players": 32, "rest_api_enabled": false, "admin_password": "", "server_password": ""}),
+            settings: Value::Object(Default::default()),
             auto_restart: false,
         },
         GameId::RunescapeDragonwilds => GenericGameConfig {
             port: 7777,
             query_port: Some(8888),
             admin_port: None,
-            settings: json!({"owner_id": "", "server_name": name, "default_world_name": name, "admin_password": "", "world_password": ""}),
+            settings: Value::Object(Default::default()),
             auto_restart: false,
         },
         GameId::SevenDaysToDie => GenericGameConfig {
@@ -140,19 +140,7 @@ pub fn default_generic_config(game: GameId, name: &str) -> GenericGameConfig {
             // allocation moves the complete group together for later
             // instances.
             admin_port: Some(26903),
-            settings: json!({
-                "server_name": name,
-                "server_description": "",
-                "server_password": "",
-                "visibility": 2,
-                "max_players": 8,
-                "game_world": "Navezgane",
-                "game_name": name,
-                "world_gen_seed": name,
-                "world_gen_size": 6144,
-                "telnet_enabled": false,
-                "telnet_password": ""
-            }),
+            settings: Value::Object(Default::default()),
             auto_restart: false,
         },
         _ => unreachable!("only generic games have generic defaults"),
@@ -368,12 +356,10 @@ pub fn update_generic_config(
     if current.is_running() {
         bail!(crate::instance::InstanceError::AlreadyRunning(name.into()));
     }
-    // Secrets are intentionally omitted from API responses. A blank secret
-    // in an update therefore means "leave the stored secret unchanged";
-    // a non-empty value replaces it.
-    let settings = merged_generic_settings(&current.config.settings, &config.settings)?;
     let persisted = GenericGameConfig {
-        settings,
+        // Keep legacy JSON intact for compatibility, but game-owned files are
+        // now the source of truth for these values.
+        settings: current.config.settings,
         ..config.clone()
     };
     validate_generic_config(game, &persisted)?;
@@ -395,162 +381,17 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
                 .into()
         ));
     }
-    let Value::Object(settings) = &config.settings else {
+    if game == GameId::RunescapeDragonwilds && config.query_port.is_none() {
         bail!(InvalidGenericConfig(
-            "game settings must be a JSON object".into()
-        ));
-    };
-    if game == GameId::RunescapeDragonwilds {
-        for key in [
-            "owner_id",
-            "server_name",
-            "default_world_name",
-            "admin_password",
-        ] {
-            if settings
-                .get(key)
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-            {
-                bail!(InvalidGenericConfig(format!(
-                    "RuneScape: Dragonwilds {key} is required"
-                )));
-            }
-        }
-        if config.query_port.is_none() {
-            bail!(InvalidGenericConfig(
-                "RuneScape: Dragonwilds beacon port is required".into()
-            ));
-        }
-    }
-    if game == GameId::Palworld
-        && settings
-            .get("rest_api_enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        && settings
-            .get("admin_password")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-    {
-        bail!(InvalidGenericConfig(
-            "Palworld admin password is required when the REST API is enabled".into()
+            "RuneScape: Dragonwilds beacon port is required".into()
         ));
     }
-    if game == GameId::VRising
-        && settings
-            .get("rcon_enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        && settings
-            .get("rcon_password")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-    {
+    if game == GameId::SevenDaysToDie && config.admin_port.is_none() {
         bail!(InvalidGenericConfig(
-            "V Rising RCON password is required when RCON is enabled".into()
+            "7 Days to Die console port is required".into(),
         ));
-    }
-    if game == GameId::SevenDaysToDie {
-        if config.admin_port.is_none() {
-            bail!(InvalidGenericConfig(
-                "7 Days to Die console port is required".into(),
-            ));
-        }
-        for key in ["server_name", "game_world", "game_name"] {
-            if settings
-                .get(key)
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
-            {
-                bail!(InvalidGenericConfig(format!(
-                    "7 Days to Die {key} is required"
-                )));
-            }
-        }
-        let visibility = settings
-            .get("visibility")
-            .and_then(Value::as_u64)
-            .unwrap_or(2);
-        if !matches!(visibility, 0..=2) {
-            bail!(InvalidGenericConfig(
-                "7 Days to Die visibility must be 0, 1, or 2".into()
-            ));
-        }
-        if settings
-            .get("max_players")
-            .and_then(Value::as_u64)
-            .is_none_or(|value| value == 0)
-        {
-            bail!(InvalidGenericConfig(
-                "7 Days to Die max_players must be positive".into()
-            ));
-        }
-        if let Some(code) = settings.get("sandbox_code") {
-            let Some(code) = code.as_str() else {
-                bail!(InvalidGenericConfig(
-                    "7 Days to Die SandboxCode must be text".into()
-                ));
-            };
-            if code.len() > 4096 || code.chars().any(char::is_whitespace) {
-                bail!(InvalidGenericConfig(
-                    "7 Days to Die SandboxCode must be a single value no longer than 4096 characters"
-                        .into(),
-                ));
-            }
-            if !code.bytes().all(|byte| byte.is_ascii_uppercase())
-                || !code.starts_with('A')
-                || !(code.len() - 1).is_multiple_of(3)
-            {
-                bail!(InvalidGenericConfig(
-                    "7 Days to Die SandboxCode must be a V3 uppercase code with a header and three-character settings".into(),
-                ));
-            }
-        }
-        if settings
-            .get("telnet_enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            && settings
-                .get("telnet_password")
-                .and_then(Value::as_str)
-                .is_none_or(|value| value.len() < 12)
-        {
-            bail!(InvalidGenericConfig(
-                "7 Days to Die console password must contain at least 12 characters".into(),
-            ));
-        }
     }
     Ok(())
-}
-
-fn merged_generic_settings(stored: &Value, submitted: &Value) -> Result<Value> {
-    let Value::Object(mut submitted) = submitted.clone() else {
-        bail!(InvalidGenericConfig(
-            "game settings must be a JSON object".into()
-        ));
-    };
-    let Value::Object(stored) = stored else {
-        return Ok(Value::Object(submitted));
-    };
-    for key in [
-        "admin_password",
-        "server_password",
-        "world_password",
-        "rcon_password",
-        "telnet_password",
-        "password",
-    ] {
-        if submitted
-            .get(key)
-            .and_then(Value::as_str)
-            .is_some_and(str::is_empty)
-            && let Some(value) = stored.get(key)
-        {
-            submitted.insert(key.to_string(), value.clone());
-        }
-    }
-    Ok(Value::Object(submitted))
 }
 
 pub fn identity(
@@ -962,57 +803,25 @@ mod tests {
     }
 
     #[test]
-    fn dragonwilds_configuration_requires_its_bootstrap_fields_and_keeps_secrets() {
+    fn dragonwilds_operational_configuration_does_not_require_game_file_values() {
         let (paths, db) = temp_context("dragonwilds-config");
         let instance = create_generic(&paths, &db, GameId::RunescapeDragonwilds, "dragon").unwrap();
-        let error = update_generic_config(
+        let updated = update_generic_config(
             &db,
             GameId::RunescapeDragonwilds,
             "dragon",
             &instance.config,
         )
-        .unwrap_err();
-        assert!(error.to_string().contains("owner_id"));
-
-        let config = GenericGameConfig {
-            settings: json!({
-                "owner_id": "owner-123",
-                "server_name": "Dragon Server",
-                "default_world_name": "MyWorld",
-                "admin_password": "admin-secret",
-                "world_password": "world-secret"
-            }),
-            ..instance.config
-        };
-        update_generic_config(&db, GameId::RunescapeDragonwilds, "dragon", &config).unwrap();
-
-        let submitted_without_passwords = GenericGameConfig {
-            settings: json!({
-                "owner_id": "owner-123",
-                "server_name": "Renamed Server",
-                "default_world_name": "MyWorld",
-                "admin_password": "",
-                "world_password": ""
-            }),
-            ..config
-        };
-        let updated = update_generic_config(
-            &db,
-            GameId::RunescapeDragonwilds,
-            "dragon",
-            &submitted_without_passwords,
-        )
         .unwrap();
-        assert_eq!(updated.config.settings["admin_password"], "admin-secret");
-        assert_eq!(updated.config.settings["world_password"], "world-secret");
+        assert!(updated.config.settings.as_object().unwrap().is_empty());
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]
-    fn palworld_configuration_keeps_redacted_passwords() {
+    fn palworld_operational_configuration_preserves_legacy_game_values() {
         let (paths, db) = temp_context("palworld-config");
         let instance = create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
-        let config = GenericGameConfig {
+        let legacy = GenericGameConfig {
             settings: json!({
                 "server_name": "Pals",
                 "max_players": 32,
@@ -1022,21 +831,17 @@ mod tests {
             }),
             ..instance.config
         };
-        update_generic_config(&db, GameId::Palworld, "pals", &config).unwrap();
-
-        let submitted_without_passwords = GenericGameConfig {
-            settings: json!({
-                "server_name": "Renamed Pals",
-                "max_players": 32,
-                "rest_api_enabled": true,
-                "admin_password": "",
-                "server_password": ""
-            }),
-            ..config
-        };
+        db.conn()
+            .execute(
+                "UPDATE generic_game_instance_configs SET config_json = ?1 WHERE instance_id = ?2",
+                rusqlite::params![
+                    serde_json::to_string(&legacy.settings).unwrap(),
+                    instance.identity.id
+                ],
+            )
+            .unwrap();
         let updated =
-            update_generic_config(&db, GameId::Palworld, "pals", &submitted_without_passwords)
-                .unwrap();
+            update_generic_config(&db, GameId::Palworld, "pals", &instance.config).unwrap();
 
         assert_eq!(updated.config.settings["admin_password"], "admin-secret");
         assert_eq!(updated.config.settings["server_password"], "join-secret");
@@ -1044,42 +849,12 @@ mod tests {
     }
 
     #[test]
-    fn seven_days_configuration_persists_a_complete_sandbox_code() {
+    fn seven_days_operational_configuration_ignores_legacy_sandbox_code() {
         let (paths, db) = temp_context("7d2d-sandbox-code");
         let instance = create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
-        let config = GenericGameConfig {
-            settings: json!({
-                "server_name": "Undead",
-                "server_description": "",
-                "server_password": "",
-                "visibility": 2,
-                "max_players": 8,
-                "game_world": "Navezgane",
-                "game_name": "undead",
-                "world_gen_seed": "undead",
-                "world_gen_size": 6144,
-                "sandbox_code": "AAAJABJACJADJARFBNC"
-            }),
-            ..instance.config
-        };
         let updated =
-            update_generic_config(&db, GameId::SevenDaysToDie, "undead", &config).unwrap();
-        assert_eq!(
-            updated.config.settings["sandbox_code"],
-            "AAAJABJACJADJARFBNC"
-        );
-
-        let invalid = GenericGameConfig {
-            settings: json!({
-                "server_name": "Undead",
-                "game_world": "Navezgane",
-                "game_name": "undead",
-                "max_players": 8,
-                "sandbox_code": "not a code"
-            }),
-            ..config
-        };
-        assert!(update_generic_config(&db, GameId::SevenDaysToDie, "undead", &invalid).is_err());
+            update_generic_config(&db, GameId::SevenDaysToDie, "undead", &instance.config).unwrap();
+        assert!(updated.config.settings.as_object().unwrap().is_empty());
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

@@ -37,6 +37,7 @@ pub struct Player {
 /// the game port protected by their host firewall because the game itself does
 /// not expose a bind-address setting for this endpoint.
 pub fn execute_console(
+    paths: &Paths,
     instance: &crate::db::game_instances::GenericGameInstance,
     command: &str,
 ) -> Result<ConsoleResponse> {
@@ -44,26 +45,18 @@ pub fn execute_console(
     if command.is_empty() || command.len() > 16 * 1024 || command.contains(['\r', '\n']) {
         bail!("console command must be one non-empty line no longer than 16 KiB");
     }
-    if !instance
-        .config
-        .settings
-        .get("telnet_enabled")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    let enabled = crate::game::config_documents::value(paths, instance, "TelnetEnabled")?
+        .context("7 Days to Die configuration has not been generated yet")?;
+    if !matches!(enabled.as_str(), "true" | "True" | "1") {
         bail!("7 Days to Die console is disabled for this instance");
     }
-    let password = instance
-        .config
-        .settings
-        .get("telnet_password")
-        .and_then(serde_json::Value::as_str)
+    let password = crate::game::config_documents::value(paths, instance, "TelnetPassword")?
         .filter(|value| !value.is_empty())
         .context("7 Days to Die console requires a password")?;
-    let port = instance
-        .config
-        .admin_port
-        .context("7 Days to Die console port is not configured")?;
+    let port = crate::game::config_documents::value(paths, instance, "TelnetPort")?
+        .context("7 Days to Die console port is not configured")?
+        .parse::<u16>()
+        .context("7 Days to Die console port is invalid")?;
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
     let mut stream = TcpStream::connect_timeout(&address.into(), CONSOLE_TIMEOUT)
         .with_context(|| format!("failed to connect to 7 Days to Die console at {address}"))?;

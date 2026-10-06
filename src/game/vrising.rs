@@ -132,33 +132,29 @@ pub fn remove_id(paths: &Paths, name: &str, kind: VRisingAccessListKind, id: &st
 /// listener. The credentials remain in Odin's database and are never
 /// included in the HTTP response or sent to the browser.
 pub fn execute_rcon(
+    paths: &crate::paths::Paths,
     instance: &crate::db::game_instances::GenericGameInstance,
     command: &str,
 ) -> Result<String> {
-    let settings = &instance.config.settings;
-    if !settings
-        .get("rcon_enabled")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    let enabled = crate::game::config_documents::value(paths, instance, "Rcon.Enabled")?
+        .context("V Rising configuration has not been generated yet")?;
+    if !matches!(enabled.as_str(), "true" | "True" | "1") {
         bail!("V Rising RCON is disabled for this instance");
     }
-    let password = settings
-        .get("rcon_password")
-        .and_then(serde_json::Value::as_str)
+    let password = crate::game::config_documents::value(paths, instance, "Rcon.Password")?
         .filter(|value| !value.is_empty())
         .context("V Rising RCON requires a password")?;
-    let port = instance
-        .config
-        .admin_port
-        .context("V Rising RCON port is not configured")?;
+    let port = crate::game::config_documents::value(paths, instance, "Rcon.Port")?
+        .context("V Rising RCON port is not configured")?
+        .parse::<u16>()
+        .context("V Rising RCON port is invalid")?;
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
     let mut stream = TcpStream::connect_timeout(&address.into(), RCON_TIMEOUT)
         .with_context(|| format!("failed to connect to V Rising RCON at {address}"))?;
     stream.set_read_timeout(Some(RCON_TIMEOUT))?;
     stream.set_write_timeout(Some(RCON_TIMEOUT))?;
 
-    write_rcon_packet(&mut stream, 1, AUTH_REQUEST, password)?;
+    write_rcon_packet(&mut stream, 1, AUTH_REQUEST, &password)?;
     let (id, packet_type, _) = read_rcon_packet(&mut stream)?;
     if id == -1 {
         bail!("V Rising RCON authentication failed");

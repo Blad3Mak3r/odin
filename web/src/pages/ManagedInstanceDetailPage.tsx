@@ -12,7 +12,6 @@ import { ModsTab } from '@/components/instance/ModsTab'
 import { SevenDaysModsTab } from '@/components/instance/SevenDaysModsTab'
 import { SevenDaysConsoleTab } from '@/components/instance/SevenDaysConsoleTab'
 import { SevenDaysPlayersTab } from '@/components/instance/SevenDaysPlayersTab'
-import { SevenDaysSandboxCodeEditor } from '@/components/instance/SevenDaysSandboxCodeEditor'
 import { useEffect, useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
@@ -63,7 +62,7 @@ type RustConfig = {
   autoRestart: boolean
 }
 
-type GenericConfig = GenericConfigUpdateRequest & { configuredPasswords: Record<string, boolean> }
+type GenericConfig = GenericConfigUpdateRequest
 
 function asRustConfig(config: Record<string, unknown>): RustConfig | null {
   const port = config.port
@@ -88,23 +87,12 @@ function asGenericConfig(config: Record<string, unknown>): GenericConfig | null 
   const port = config.port
   const queryPort = config.query_port
   const adminPort = config.admin_port
-  const configuredPasswords = config.passwords_configured
-  const settings = { ...config }
-  delete settings.port
-  delete settings.query_port
-  delete settings.admin_port
-  delete settings.auto_restart
-  delete settings.passwords_configured
   if (typeof port !== 'number' || (typeof queryPort !== 'number' && queryPort !== null) || (typeof adminPort !== 'number' && adminPort !== null) || typeof config.auto_restart !== 'boolean') return null
   return {
     port,
     query_port: queryPort,
     admin_port: adminPort,
-    settings,
     auto_restart: config.auto_restart,
-    configuredPasswords: configuredPasswords !== null && typeof configuredPasswords === 'object' && !Array.isArray(configuredPasswords)
-      ? Object.fromEntries(Object.entries(configuredPasswords).filter(([, value]) => typeof value === 'boolean')) as Record<string, boolean>
-      : {},
   }
 }
 
@@ -204,26 +192,34 @@ function AdvancedConfigSection({ id, running }: { id: string; running: boolean }
   const config = useAdvancedConfig(id, true)
   const update = useUpdateAdvancedConfig(id)
   const [values, setValues] = useState<Record<string, string>>({})
+  const [search, setSearch] = useState('')
   useEffect(() => {
     const initial: Record<string, string> = {}
-    for (const file of config.data?.files ?? []) for (const entry of file.entries) initial[`${file.id}:${entry.key}`] = entry.value
+    for (const file of config.data?.files ?? []) for (const section of file.sections) for (const entry of section.entries) initial[`${file.id}:${entry.key}`] = entry.value
     setValues(initial)
   }, [config.data])
   if (config.isLoading || config.isError) return null
   const files = config.data?.files ?? []
-  if (files.every((file) => file.entries.length === 0)) return null
+  const normalizedSearch = search.trim().toLocaleLowerCase()
+  const generatedFiles = files.filter((file) => file.exists)
+  const visibleFiles = generatedFiles.map((file) => ({
+    ...file,
+    sections: file.sections.map((section) => ({ ...section, entries: section.entries.filter((entry) => entry.label.toLocaleLowerCase().includes(normalizedSearch)) })).filter((section) => section.entries.length > 0),
+  })).filter((file) => file.sections.length > 0)
   const save = () => {
     const changes: AdvancedConfigChange[] = []
-    for (const file of files) for (const entry of file.entries) {
+    for (const file of generatedFiles) for (const section of file.sections) for (const entry of section.entries) {
       const value = values[`${file.id}:${entry.key}`] ?? entry.value
-      if (value !== entry.value) changes.push({ file: file.id, key: entry.key, value })
+      if (!entry.managed && value !== entry.value) changes.push({ file: file.id, key: entry.key, value })
     }
     if (changes.length > 0) update.mutate(changes, { onSuccess: () => toast.success('Advanced configuration saved'), onError: (error) => toast.error(error.message) })
   }
-  return <details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-medium">Advanced configuration</summary><p className="mt-2 text-xs text-muted-foreground">Settings found in declared server files. Stop the server before saving.</p><div className="mt-4 flex flex-col gap-5">{files.filter((file) => file.entries.length > 0).map((file) => <div key={file.id} className="flex flex-col gap-3"><div><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="grid gap-3 sm:grid-cols-2">{file.entries.map((entry) => <div key={entry.key} className="flex flex-col gap-1"><Label htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.key}</Label><Input id={`advanced-${file.id}-${entry.key}`} type={entry.sensitive ? 'password' : 'text'} placeholder={entry.sensitive && entry.configured ? '••••••••' : undefined} value={values[`${file.id}:${entry.key}`] ?? entry.value} disabled={running} onChange={(event) => setValues((current) => ({ ...current, [`${file.id}:${entry.key}`]: event.target.value }))} /></div>)}</div></div>)}<Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save advanced configuration</Button></div></details>
+  return <div className="flex flex-col gap-4"><div><p className="text-sm text-muted-foreground">Settings come directly from files generated by the server. Stop the server before saving.</p>{files.some((file) => !file.exists) && <p className="mt-2 text-sm text-muted-foreground">Start and stop the server once to generate: {files.filter((file) => !file.exists).map((file) => file.path).join(', ')}.</p>}</div>{generatedFiles.length > 0 && <Input aria-label="Search configuration keys" placeholder="Search configuration keys…" value={search} onChange={(event) => setSearch(event.target.value)} />}{visibleFiles.map((file) => <div key={file.id} className="rounded-xl border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="divide-y">{file.sections.map((section) => <details key={section.id} open={normalizedSearch.length > 0} className="group"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">{section.label}</summary><div className="grid gap-3 border-t px-4 py-4 sm:grid-cols-2">{section.entries.map((entry) => <div key={entry.key} className="flex flex-col gap-1"><Label htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.label}</Label><Input id={`advanced-${file.id}-${entry.key}`} type={entry.sensitive ? 'password' : 'text'} placeholder={entry.sensitive && entry.configured ? '••••••••' : entry.managed ? 'Managed by Odin' : undefined} value={values[`${file.id}:${entry.key}`] ?? entry.value} disabled={running || entry.managed} onChange={(event) => setValues((current) => ({ ...current, [`${file.id}:${entry.key}`]: event.target.value }))} /></div>)}</div></details>)}</div></div>)}{generatedFiles.length > 0 && visibleFiles.length === 0 && <p className="text-sm text-muted-foreground">No configuration keys match “{search}”.</p>}{generatedFiles.length > 0 && <Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save configuration</Button>}</div>
 }
 
 function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'>; config: GenericConfig; running: boolean }) {
+  return <GenericRuntimeConfigForm id={id} game={game} config={config} running={running} />
+  /*
   const update = useUpdateGenericConfig()
   const [port, setPort] = useState(String(config.port))
   const [queryPort, setQueryPort] = useState(config.query_port === null ? '' : String(config.query_port))
@@ -268,7 +264,6 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
         port: Number(port),
         query_port: queryPort ? Number(queryPort) : null,
         admin_port: adminPort ? Number(adminPort) : null,
-        settings,
         auto_restart: autoRestart,
       },
     }, {
@@ -315,6 +310,17 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
       <AdvancedConfigSection id={id} running={running} />
     </form>
   )
+  */
+}
+
+function GenericRuntimeConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'>; config: GenericConfig; running: boolean }) {
+  const update = useUpdateGenericConfig()
+  const [port, setPort] = useState(String(config.port))
+  const [queryPort, setQueryPort] = useState(config.query_port === null ? '' : String(config.query_port))
+  const [adminPort, setAdminPort] = useState(config.admin_port === null ? '' : String(config.admin_port))
+  const [autoRestart, setAutoRestart] = useState(config.auto_restart)
+  const save = () => update.mutate({ id, request: { port: Number(port), query_port: queryPort ? Number(queryPort) : null, admin_port: adminPort ? Number(adminPort) : null, auto_restart: autoRestart } }, { onSuccess: () => toast.success('Odin runtime settings saved'), onError: (error) => toast.error(error.message) })
+  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'runescape-dragonwilds' ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === '7d2d' ? 'Local console port' : 'RCON port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form><AdvancedConfigSection id={id} running={running} /></div>
 }
 
 export function ManagedInstanceDetailPage() {

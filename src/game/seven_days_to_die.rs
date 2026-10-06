@@ -67,14 +67,13 @@ pub fn execute_console(
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
     let mut stream = TcpStream::connect_timeout(&address.into(), CONSOLE_TIMEOUT)
         .with_context(|| format!("failed to connect to 7 Days to Die console at {address}"))?;
-    stream.set_read_timeout(Some(Duration::from_millis(250)))?;
     stream.set_write_timeout(Some(CONSOLE_TIMEOUT))?;
     // The game uses a line-oriented raw TCP service, despite its Telnet name.
     // It prints a greeting first, then accepts the configured password.
-    let _ = read_available(&mut stream)?;
+    let _ = read_available(&mut stream, Duration::from_secs(1))?;
     stream.write_all(password.as_bytes())?;
     stream.write_all(b"\n")?;
-    let authentication = read_available(&mut stream)?;
+    let authentication = read_available(&mut stream, Duration::from_secs(2))?;
     if authentication.to_ascii_lowercase().contains("incorrect")
         || authentication.to_ascii_lowercase().contains("failed")
     {
@@ -82,13 +81,14 @@ pub fn execute_console(
     }
     stream.write_all(command.as_bytes())?;
     stream.write_all(b"\n")?;
-    let output = read_available(&mut stream)?;
+    let output = read_available(&mut stream, Duration::from_secs(2))?;
     Ok(ConsoleResponse { output })
 }
 
-fn read_available(stream: &mut TcpStream) -> Result<String> {
+fn read_available(stream: &mut TcpStream, first_byte_timeout: Duration) -> Result<String> {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 4096];
+    stream.set_read_timeout(Some(first_byte_timeout))?;
     loop {
         match stream.read(&mut buffer) {
             Ok(0) => break,
@@ -97,6 +97,9 @@ fn read_available(stream: &mut TcpStream) -> Result<String> {
                 if bytes.len() > MAX_CONSOLE_RESPONSE {
                     bail!("7 Days to Die console response exceeds 256 KiB");
                 }
+                // The protocol has no explicit response framing. Once data
+                // arrives, a brief idle period marks the end of this command.
+                stream.set_read_timeout(Some(Duration::from_millis(150)))?;
             }
             Err(error)
                 if matches!(

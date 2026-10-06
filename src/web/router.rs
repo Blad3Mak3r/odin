@@ -348,8 +348,34 @@ mod tests {
     use crate::db::Db;
     use crate::instance::Instance;
     use crate::paths::Paths;
+    use std::io::{Cursor, Write};
     use std::process::Command;
     use std::sync::Arc;
+
+    fn seven_days_mod_zip() -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut archive = zip::ZipWriter::new(cursor);
+        archive
+            .start_file(
+                "Example_Mod/ModInfo.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive
+            .write_all(b"<xml><Name value=\"Example_Mod\"/><DisplayName value=\"Example Mod\"/><Version value=\"1.0.0\"/></xml>")
+            .unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    fn multipart_file_body(boundary: &str, bytes: Vec<u8>) -> Vec<u8> {
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"mod.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend(bytes);
+        body.extend(format!("\r\n--{boundary}--\r\n").as_bytes());
+        body
+    }
 
     // `Router::route` panics at registration time if two routes' path
     // shapes are ambiguous — e.g. a literal segment landing where another
@@ -403,6 +429,129 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn seven_days_mod_routes_list_mods_and_clean_up_conflicting_uploads() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-7d2d-mods-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::SevenDaysToDie,
+            "undead",
+        )
+        .unwrap();
+        let installed = paths
+            .game_instance_dir(crate::game::GameId::SevenDaysToDie, "undead")
+            .join("Mods/Example_Mod");
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(
+            installed.join("ModInfo.xml"),
+            "<xml><Name value=\"Example_Mod\"/><DisplayName value=\"Example Mod\"/><Version value=\"1.0.0\"/></xml>",
+        )
+        .unwrap();
+        let active = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::SevenDaysToDie,
+            "active-undead",
+        )
+        .unwrap();
+        let pid = std::process::id();
+        crate::db::game_instances::set_generic_pid(
+            &db,
+            crate::game::GameId::SevenDaysToDie,
+            "active-undead",
+            pid,
+            crate::instance::process::start_time_of(pid).unwrap(),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let app = build_router(AppState::new(paths.clone(), db));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/instances/{}/7d2d/mods", instance.identity.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()[0]["name"],
+            "Example_Mod"
+        );
+
+        let boundary = "odin-test-boundary";
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/instances/{}/7d2d/mods/upload",
+                        instance.identity.id
+                    ))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart_file_body(
+                        boundary,
+                        seven_days_mod_zip(),
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(
+            std::fs::read_dir(installed.parent().unwrap())
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".odin-upload-"))
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/instances/{}/7d2d/mods/upload",
+                        active.identity.id
+                    ))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart_file_body(
+                        boundary,
+                        seven_days_mod_zip(),
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, Transaction, params};
 
 use super::Db;
-use crate::instance::state::{InstalledMod, InstanceState};
+use crate::instance::state::{InstalledMod, InstanceState, ValheimPreset};
 
 /// Upserts an instance and wholesale-replaces its installed mods, mirroring
 /// how the old file-based `InstanceState::save` just overwrote the whole
@@ -99,13 +99,16 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
     )?;
     tx.execute(
         "INSERT INTO valheim_instance_configs \
-            (instance_id, port, world_name, password, public, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version) \
-         SELECT id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12 FROM game_instances WHERE game = 'valheim' AND name = ?1 \
+            (instance_id, port, world_name, password, public, save_interval, backups, backup_short, backup_long, crossplay, playfab_instance_id, preset, modifiers_json, set_keys_json, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version) \
+         SELECT id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21 FROM game_instances WHERE game = 'valheim' AND name = ?1 \
          ON CONFLICT(instance_id) DO UPDATE SET \
             port = excluded.port, world_name = excluded.world_name, password = excluded.password, public = excluded.public, \
+            save_interval = excluded.save_interval, backups = excluded.backups, backup_short = excluded.backup_short, backup_long = excluded.backup_long, \
+            crossplay = excluded.crossplay, playfab_instance_id = excluded.playfab_instance_id, preset = excluded.preset, \
+            modifiers_json = excluded.modifiers_json, set_keys_json = excluded.set_keys_json, \
             last_started_at = excluded.last_started_at, last_stopped_at = excluded.last_stopped_at, pid = excluded.pid, pid_started_at = excluded.pid_started_at, \
             bepinex_installed = excluded.bepinex_installed, auto_restart = excluded.auto_restart, bepinex_version = excluded.bepinex_version",
-        params![state.name, state.port, state.world_name, state.password, state.public, state.last_started_at, state.last_stopped_at, state.pid, state.pid_started_at, state.bepinex_installed, state.auto_restart, state.bepinex_version],
+        params![state.name, state.port, state.world_name, state.password, state.public, state.save_interval, state.backups, state.backup_short, state.backup_long, state.crossplay, state.playfab_instance_id, state.preset.map(|value| value.as_arg()), serde_json::to_string(&state.modifiers)?, serde_json::to_string(&state.set_keys)?, state.last_started_at, state.last_stopped_at, state.pid, state.pid_started_at, state.bepinex_installed, state.auto_restart, state.bepinex_version],
     )?;
 
     tx.execute(
@@ -183,10 +186,12 @@ pub fn delete(db: &Db, name: &str) -> Result<()> {
 }
 
 const SELECT_INSTANCE: &str = "SELECT g.name, v.port, v.world_name, v.password, v.public, g.created_at, \
+     v.save_interval, v.backups, v.backup_short, v.backup_long, v.crossplay, v.playfab_instance_id, v.preset, v.modifiers_json, v.set_keys_json, \
      v.last_started_at, v.last_stopped_at, v.pid, v.pid_started_at, v.bepinex_installed, v.auto_restart, v.bepinex_version \
      FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id \
      WHERE g.game = 'valheim' AND g.name = ?1";
 const SELECT_ALL_INSTANCES: &str = "SELECT g.name, v.port, v.world_name, v.password, v.public, g.created_at, \
+     v.save_interval, v.backups, v.backup_short, v.backup_long, v.crossplay, v.playfab_instance_id, v.preset, v.modifiers_json, v.set_keys_json, \
      v.last_started_at, v.last_stopped_at, v.pid, v.pid_started_at, v.bepinex_installed, v.auto_restart, v.bepinex_version \
      FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id \
      WHERE g.game = 'valheim' ORDER BY g.name";
@@ -199,13 +204,25 @@ fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
         password: row.get(3)?,
         public: row.get(4)?,
         created_at: row.get(5)?,
-        last_started_at: row.get(6)?,
-        last_stopped_at: row.get(7)?,
-        pid: row.get(8)?,
-        pid_started_at: row.get(9)?,
-        bepinex_installed: row.get(10)?,
-        auto_restart: row.get(11)?,
-        bepinex_version: row.get(12)?,
+        save_interval: row.get(6)?,
+        backups: row.get(7)?,
+        backup_short: row.get(8)?,
+        backup_long: row.get(9)?,
+        crossplay: row.get(10)?,
+        playfab_instance_id: row.get(11)?,
+        preset: row
+            .get::<_, Option<String>>(12)?
+            .as_deref()
+            .and_then(ValheimPreset::from_arg),
+        modifiers: serde_json::from_str(&row.get::<_, String>(13)?).unwrap_or_default(),
+        set_keys: serde_json::from_str(&row.get::<_, String>(14)?).unwrap_or_default(),
+        last_started_at: row.get(15)?,
+        last_stopped_at: row.get(16)?,
+        pid: row.get(17)?,
+        pid_started_at: row.get(18)?,
+        bepinex_installed: row.get(19)?,
+        auto_restart: row.get(20)?,
+        bepinex_version: row.get(21)?,
         installed_mods: Vec::new(),
     })
 }
@@ -308,12 +325,22 @@ mod tests {
     #[test]
     fn save_then_load_round_trips() {
         let db = temp_db("roundtrip");
-        let original = sample("my-server");
+        let mut original = sample("my-server");
+        original.save_interval = Some(900);
+        original.crossplay = true;
+        original.preset = Some(crate::instance::state::ValheimPreset::Immersive);
+        original.modifiers.combat = Some(crate::instance::state::ValheimCombatModifier::Hard);
+        original.set_keys = vec![crate::instance::state::ValheimSetKey::NoMap];
         save(&db, &original).unwrap();
 
         let loaded = load(&db, "my-server").unwrap().unwrap();
         assert_eq!(loaded.name, original.name);
         assert_eq!(loaded.port, original.port);
+        assert_eq!(loaded.save_interval, Some(900));
+        assert!(loaded.crossplay);
+        assert_eq!(loaded.preset, original.preset);
+        assert_eq!(loaded.modifiers, original.modifiers);
+        assert_eq!(loaded.set_keys, original.set_keys);
         assert_eq!(loaded.installed_mods.len(), 1);
         assert_eq!(loaded.installed_mods[0].mod_id, "owner-mod");
     }

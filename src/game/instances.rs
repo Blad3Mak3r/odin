@@ -316,18 +316,20 @@ pub fn clone_rust(paths: &Paths, db: &Db, source: &str, target: &str) -> Result<
     let original =
         game_instances::load_rust(db, source)?.context("Rust instance does not exist")?;
     let cloned = game_instances::create_rust(paths, db, target)?;
-    let mut config = original.config;
+    let mut config = original.config.clone();
     config.port = cloned.config.port;
     config.query_port = cloned.config.query_port;
     config.rcon_port = cloned.config.rcon_port;
     config.rcon_password = cloned.config.rcon_password;
-    config.hostname = target.into();
     if let Err(error) = game_instances::update_rust_config(db, target, &config) {
         game_instances::delete_rust(db, target)?;
         std::fs::remove_dir_all(paths.game_instance_dir(GameId::Rust, target))?;
         return Err(error);
     }
-    game_instances::load_rust(db, target)?.context("cloned Rust instance disappeared")
+    let cloned =
+        game_instances::load_rust(db, target)?.context("cloned Rust instance disappeared")?;
+    crate::game::config_documents::clone_rust(paths, &original, &cloned)?;
+    Ok(cloned)
 }
 
 #[cfg(test)]
@@ -391,6 +393,18 @@ mod tests {
             let backup = create_backup(&paths, &db, game, "source").unwrap();
             crate::db::backup_schedules::upsert_for_game(&db, game, "source", 24, 7, true).unwrap();
             rename(&paths, &db, game, "source", "target").unwrap();
+            if game == GameId::Rust {
+                let renamed = game_instances::load_rust(&db, "target").unwrap().unwrap();
+                rust::ensure_layout(&paths, &renamed).unwrap();
+                let bridge = paths
+                    .game_install_dir(GameId::Rust)
+                    .join("server")
+                    .join(&renamed.identity.id);
+                assert_eq!(
+                    std::fs::canonicalize(bridge).unwrap(),
+                    std::fs::canonicalize(rust::identity_dir(&paths, &renamed)).unwrap()
+                );
+            }
             assert_eq!(
                 game_instances::identity(&db, game, "target")
                     .unwrap()
@@ -426,11 +440,20 @@ mod tests {
         assert_ne!(original.config.port, cloned.config.port);
         assert_ne!(original.config.rcon_port, cloned.config.rcon_port);
         assert_ne!(original.config.rcon_password, cloned.config.rcon_password);
-        assert_eq!(original.config.seed, cloned.config.seed);
+        let original_cfg =
+            std::fs::read_to_string(rust::identity_dir(&paths, &original).join("cfg/server.cfg"))
+                .unwrap();
+        let cloned_cfg =
+            std::fs::read_to_string(rust::identity_dir(&paths, &cloned).join("cfg/server.cfg"))
+                .unwrap();
+        assert_eq!(
+            original_cfg.replace("server.hostname \"source\"", "server.hostname \"target\""),
+            cloned_cfg
+        );
         assert!(cloned.pid.is_none());
         let identity = rust::backup_source(&paths, &cloned);
         assert!(identity.is_dir());
-        assert!(std::fs::read_dir(identity).unwrap().next().is_none());
+        assert!(!identity.join("saves").exists());
         assert!(
             crate::db::backup_storage::get_for_game(&db, GameId::Rust, "target")
                 .unwrap()

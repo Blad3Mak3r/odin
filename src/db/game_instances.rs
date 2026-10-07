@@ -1,18 +1,159 @@
 //! Game-neutral identity records plus Rust's v1 configuration.
 
 use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-#[cfg(test)]
-use serde_json::json;
 
 use crate::cli::validate_instance_name;
 use crate::game::{GameId, SEVEN_DAYS_TEMPLATE_BASELINE_FILE, rust};
 use crate::paths::Paths;
+
+pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) -> Result<()> {
+    let mut conn = db.conn();
+    let staged: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rust_file_config_migrations')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !staged {
+        return Ok(());
+    }
+
+    let rust_rows = {
+        let mut statement = conn.prepare(
+            "SELECT g.name, m.hostname, m.level, m.seed, m.world_size, m.max_players,
+                    r.pid, r.pid_started_at \
+             FROM rust_file_config_migrations m
+             JOIN game_instances g ON g.id = m.instance_id
+             JOIN rust_instance_configs r ON r.instance_id = m.instance_id",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    crate::game::rust::RustFileConfig {
+                        hostname: row.get(1)?,
+                        level: row.get(2)?,
+                        seed: row.get(3)?,
+                        world_size: row.get(4)?,
+                        max_players: row.get(5)?,
+                    },
+                    row.get::<_, Option<u32>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (name, config, pid, pid_started_at) in rust_rows {
+        anyhow::ensure!(
+            !matches!((pid, pid_started_at), (Some(pid), Some(started_at)) if crate::instance::process::is_alive(pid, started_at)),
+            "stop Rust instance '{name}' before migrating its server.cfg"
+        );
+        let path = paths
+            .game_instance_dir(GameId::Rust, &name)
+            .join("server/cfg/server.cfg");
+        crate::game::config_documents::migrate_rust_file_config(&path, &config)
+            .with_context(|| format!("failed to migrate Rust configuration for '{name}'"))?;
+    }
+
+    let legacy_json = {
+        let mut statement = conn.prepare(
+            "SELECT g.game, g.name, m.config_json \
+             FROM generic_config_json_migrations m JOIN game_instances g ON g.id = m.instance_id",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (game, name, contents) in legacy_json {
+        let game: GameId = game.parse().map_err(anyhow::Error::msg)?;
+        let path = paths
+            .game_instance_dir(game, &name)
+            .join("legacy-config.json.disabled");
+        write_private_backup(&path, &contents)?;
+    }
+
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "CREATE TABLE rust_instance_configs_next (
+            instance_id TEXT PRIMARY KEY REFERENCES game_instances(id) ON DELETE CASCADE,
+            port INTEGER NOT NULL, query_port INTEGER NOT NULL,
+            rcon_port INTEGER NOT NULL, rcon_password TEXT NOT NULL,
+            auto_restart INTEGER NOT NULL DEFAULT 0,
+            pid INTEGER, pid_started_at INTEGER,
+            last_started_at TEXT, last_stopped_at TEXT
+         );
+         INSERT INTO rust_instance_configs_next
+            SELECT instance_id, port, query_port, rcon_port, rcon_password,
+                   auto_restart, pid, pid_started_at, last_started_at, last_stopped_at
+            FROM rust_instance_configs;
+         DROP TABLE rust_instance_configs;
+         ALTER TABLE rust_instance_configs_next RENAME TO rust_instance_configs;
+
+         CREATE TABLE generic_game_instance_configs_next (
+            instance_id TEXT PRIMARY KEY REFERENCES game_instances(id) ON DELETE CASCADE,
+            port INTEGER NOT NULL, query_port INTEGER, admin_port INTEGER,
+            auto_restart INTEGER NOT NULL DEFAULT 0,
+            pid INTEGER, pid_started_at INTEGER,
+            last_started_at TEXT, last_stopped_at TEXT
+         );
+         INSERT INTO generic_game_instance_configs_next
+            SELECT c.instance_id, c.port, c.query_port,
+                   CASE WHEN g.game = 'palworld' THEN NULL ELSE c.admin_port END,
+                   c.auto_restart, c.pid, c.pid_started_at,
+                   c.last_started_at, c.last_stopped_at
+            FROM generic_game_instance_configs c
+            JOIN game_instances g ON g.id = c.instance_id;
+         DROP TABLE generic_game_instance_configs;
+         ALTER TABLE generic_game_instance_configs_next RENAME TO generic_game_instance_configs;
+         DROP TABLE rust_file_config_migrations;
+         DROP TABLE generic_config_json_migrations;",
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn write_private_backup(path: &Path, contents: &str) -> Result<()> {
+    if path.exists() {
+        let existing = fs::read_to_string(path)?;
+        anyhow::ensure!(
+            existing == contents,
+            "legacy configuration backup already exists with different contents at {}",
+            path.display()
+        );
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .context("legacy configuration backup has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(".legacy-config-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        fs::write(&temporary, contents)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        }
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GameInstanceIdentity {
@@ -29,11 +170,6 @@ pub struct RustInstanceConfig {
     pub query_port: u16,
     pub rcon_port: u16,
     pub rcon_password: String,
-    pub hostname: String,
-    pub level: String,
-    pub seed: u32,
-    pub world_size: u32,
-    pub max_players: u16,
     pub auto_restart: bool,
 }
 
@@ -63,16 +199,13 @@ impl RustInstance {
     }
 }
 
-/// Persisted state for a compiled driver whose settings are not part of
-/// Odin's historical Valheim/Rust schemas. Keeping the typed transport fields
-/// separate from `settings` gives the supervisor a stable lifecycle contract
-/// while each driver owns its own configuration document.
+/// Process arguments and operational metadata for a compiled generic driver.
+/// Game settings live exclusively in the native configuration documents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenericGameConfig {
     pub port: u16,
     pub query_port: Option<u16>,
     pub admin_port: Option<u16>,
-    pub settings: Value,
     pub auto_restart: bool,
 }
 
@@ -115,21 +248,21 @@ pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
             port: 27015,
             query_port: Some(27016),
             admin_port: Some(25575),
-            settings: Value::Object(Default::default()),
             auto_restart: false,
         },
         GameId::Palworld => GenericGameConfig {
             port: 8211,
-            query_port: None,
-            admin_port: Some(8212),
-            settings: Value::Object(Default::default()),
+            // Palworld's Steam server browser listener otherwise defaults to
+            // 27015 for every process. It is a launch argument, rather than
+            // an INI setting, and must be allocated per instance.
+            query_port: Some(27015),
+            admin_port: None,
             auto_restart: false,
         },
         GameId::RunescapeDragonwilds => GenericGameConfig {
             port: 7777,
             query_port: Some(8888),
             admin_port: None,
-            settings: Value::Object(Default::default()),
             auto_restart: false,
         },
         GameId::SevenDaysToDie => GenericGameConfig {
@@ -140,7 +273,6 @@ pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
             // allocation moves the complete group together for later
             // instances.
             admin_port: Some(26903),
-            settings: Value::Object(Default::default()),
             auto_restart: false,
         },
         _ => unreachable!("only generic games have generic defaults"),
@@ -154,7 +286,7 @@ pub fn list_generic(db: &crate::db::Db, game: GameId) -> Result<Vec<GenericGameI
     );
     let conn = db.conn();
     let mut statement = conn.prepare(
-        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.config_json, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
          FROM game_instances g JOIN generic_game_instance_configs c ON c.instance_id = g.id \
          WHERE g.game = ?1 ORDER BY g.name",
     )?;
@@ -175,7 +307,7 @@ pub fn load_generic(
     );
     let conn = db.conn();
     conn.query_row(
-        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.config_json, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
          FROM game_instances g JOIN generic_game_instance_configs c ON c.instance_id = g.id \
          WHERE g.game = ?1 AND g.name = ?2",
         params![game.as_str(), name],
@@ -216,6 +348,23 @@ pub fn create_generic(
         copy_seven_days_to_die_config(paths, name)?;
     } else {
         std::fs::create_dir_all(paths.game_instance_dir(game, name))?;
+        let pending = GenericGameInstance {
+            identity: GameInstanceIdentity {
+                tags: Vec::new(),
+                id: id.clone(),
+                game,
+                name: name.to_string(),
+                created_at,
+            },
+            config: config.clone(),
+            pid: None,
+            pid_started_at: None,
+            last_started_at: None,
+            last_stopped_at: None,
+        };
+        if game == GameId::RunescapeDragonwilds {
+            crate::game::config_documents::initialize(paths, &pending)?;
+        }
     }
     let mut conn = db.conn();
     let tx = conn.transaction()?;
@@ -223,7 +372,7 @@ pub fn create_generic(
         "INSERT INTO game_instances (id, game, name, created_at) VALUES (?1, ?2, ?3, ?4)",
         params![id, game.as_str(), name, created_at],
     )?;
-    tx.execute("INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port, config_json, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![id, config.port, config.query_port, config.admin_port, serde_json::to_string(&config.settings)?, config.auto_restart])?;
+    tx.execute("INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, config.port, config.query_port, config.admin_port, config.auto_restart])?;
     tx.commit()?;
     drop(conn);
     load_generic(db, game, name)?.context("failed to load newly-created game instance")
@@ -323,14 +472,12 @@ fn row_to_generic(row: &rusqlite::Row<'_>, game: GameId) -> rusqlite::Result<Gen
             port: row.get(4)?,
             query_port: row.get(5)?,
             admin_port: row.get(6)?,
-            settings: serde_json::from_str(&row.get::<_, String>(7)?)
-                .unwrap_or(Value::Object(Default::default())),
-            auto_restart: row.get(8)?,
+            auto_restart: row.get(7)?,
         },
-        pid: row.get(9)?,
-        pid_started_at: row.get(10)?,
-        last_started_at: row.get(11)?,
-        last_stopped_at: row.get(12)?,
+        pid: row.get(8)?,
+        pid_started_at: row.get(9)?,
+        last_started_at: row.get(10)?,
+        last_stopped_at: row.get(11)?,
     })
 }
 
@@ -401,16 +548,11 @@ pub fn update_generic_config(
     if current.is_running() {
         bail!(crate::instance::InstanceError::AlreadyRunning(name.into()));
     }
-    let persisted = GenericGameConfig {
-        // Keep legacy JSON intact for compatibility, but game-owned files are
-        // now the source of truth for these values.
-        settings: current.config.settings,
-        ..config.clone()
-    };
+    let persisted = config.clone();
     validate_generic_config(game, &persisted)?;
     db.conn().execute(
-        "UPDATE generic_game_instance_configs SET port = ?3, query_port = ?4, admin_port = ?5, config_json = ?6, auto_restart = ?7 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
-        params![game.as_str(), name, persisted.port, persisted.query_port, persisted.admin_port, serde_json::to_string(&persisted.settings)?, persisted.auto_restart],
+        "UPDATE generic_game_instance_configs SET port = ?3, query_port = ?4, admin_port = ?5, auto_restart = ?6 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
+        params![game.as_str(), name, persisted.port, persisted.query_port, persisted.admin_port, persisted.auto_restart],
     )?;
     load_generic(db, game, name)?.context("game instance disappeared while updating configuration")
 }
@@ -424,6 +566,16 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
         bail!(InvalidGenericConfig(
             "game, query, and administration ports must be different and between 1 and 65535"
                 .into()
+        ));
+    }
+    if game == GameId::Palworld && config.query_port.is_none() {
+        bail!(InvalidGenericConfig(
+            "Palworld Steam query port is required".into()
+        ));
+    }
+    if game == GameId::Palworld && config.admin_port.is_some() {
+        bail!(InvalidGenericConfig(
+            "Palworld REST API port belongs in PalWorldSettings.ini".into()
         ));
     }
     if game == GameId::RunescapeDragonwilds && config.query_port.is_none() {
@@ -520,7 +672,7 @@ pub fn ensure_valheim_identity(
 pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
     let conn = db.conn();
     let mut statement = conn.prepare(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' ORDER BY g.name",
     )?;
@@ -533,7 +685,7 @@ pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
 pub fn load_rust(db: &crate::db::Db, name: &str) -> Result<Option<RustInstance>> {
     let conn = db.conn();
     conn.query_row(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.hostname, r.level, r.seed, r.world_size, r.max_players, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' AND g.name = ?1",
         params![name],
@@ -549,7 +701,8 @@ pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Rust
         bail!("Rust instance '{name}' already exists");
     }
     let port = next_rust_port(db)?;
-    let config = rust::default_config(name, port);
+    let config = rust::default_config(port);
+    let file_config = rust::default_file_config(name);
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now();
     std::fs::create_dir_all(paths.game_instance_dir(GameId::Rust, name))?;
@@ -560,14 +713,28 @@ pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Rust
         params![id, name, created_at],
     )?;
     tx.execute(
-        "INSERT INTO rust_instance_configs (instance_id, port, query_port, rcon_port, rcon_password, hostname, level, seed, world_size, max_players, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![id, config.port, config.query_port, config.rcon_port, config.rcon_password, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart],
+        "INSERT INTO rust_instance_configs (instance_id, port, query_port, rcon_port, rcon_password, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, config.port, config.query_port, config.rcon_port, config.rcon_password, config.auto_restart],
     )?;
+    let pending = RustInstance {
+        identity: GameInstanceIdentity {
+            tags: Vec::new(),
+            id,
+            game: GameId::Rust,
+            name: name.to_string(),
+            created_at,
+        },
+        config,
+        pid: None,
+        pid_started_at: None,
+        last_started_at: None,
+        last_stopped_at: None,
+    };
+    rust::ensure_layout(paths, &pending)?;
+    crate::game::config_documents::initialize_rust(paths, &pending, &file_config)?;
     tx.commit()?;
     drop(conn);
-    let instance = load_rust(db, name)?.context("failed to load newly-created Rust instance")?;
-    rust::ensure_layout(paths, &instance)?;
-    Ok(instance)
+    load_rust(db, name)?.context("failed to load newly-created Rust instance")
 }
 
 pub fn update_rust_config(
@@ -597,21 +764,10 @@ pub fn update_rust_config(
             "Rust RCON password cannot be empty".into()
         ));
     }
-    if config.hostname.trim().is_empty() || config.level.trim().is_empty() {
-        bail!(InvalidRustConfig(
-            "Rust hostname and level cannot be empty".into()
-        ));
-    }
-    if config.world_size == 0 || config.max_players == 0 {
-        bail!(InvalidRustConfig(
-            "Rust world size and max players must be greater than zero".into()
-        ));
-    }
-
     db.conn().execute(
-        "UPDATE rust_instance_configs SET hostname = ?2, level = ?3, seed = ?4, world_size = ?5, max_players = ?6, auto_restart = ?7, port = ?8, query_port = ?9, rcon_port = ?10, rcon_password = ?11 \
+        "UPDATE rust_instance_configs SET auto_restart = ?2, port = ?3, query_port = ?4, rcon_port = ?5, rcon_password = ?6 \
          WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
-        params![name, config.hostname, config.level, config.seed, config.world_size, config.max_players, config.auto_restart, config.port, config.query_port, config.rcon_port, config.rcon_password],
+        params![name, config.auto_restart, config.port, config.query_port, config.rcon_port, config.rcon_password],
     )?;
     load_rust(db, name)?.context("Rust instance disappeared while updating configuration")
 }
@@ -692,7 +848,7 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
 fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
     Ok(RustInstance {
         identity: GameInstanceIdentity {
-            tags: serde_json::from_str(&row.get::<_, String>(17)?)
+            tags: serde_json::from_str(&row.get::<_, String>(12)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
             id: row.get(0)?,
             game: GameId::Rust,
@@ -704,17 +860,12 @@ fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
             query_port: row.get(4)?,
             rcon_port: row.get(5)?,
             rcon_password: row.get(6)?,
-            hostname: row.get(7)?,
-            level: row.get(8)?,
-            seed: row.get(9)?,
-            world_size: row.get(10)?,
-            max_players: row.get(11)?,
-            auto_restart: row.get(12)?,
+            auto_restart: row.get(7)?,
         },
-        pid: row.get(13)?,
-        pid_started_at: row.get(14)?,
-        last_started_at: row.get(15)?,
-        last_stopped_at: row.get(16)?,
+        pid: row.get(8)?,
+        pid_started_at: row.get(9)?,
+        last_started_at: row.get(10)?,
+        last_stopped_at: row.get(11)?,
     })
 }
 
@@ -809,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn update_rust_config_persists_game_specific_settings() {
+    fn update_rust_config_persists_operational_settings() {
         let (paths, db) = temp_context("settings");
         let instance = create_rust(&paths, &db, "rust-server").unwrap();
         assert!(!instance.config.auto_restart);
@@ -818,25 +969,15 @@ mod tests {
             query_port: 30000,
             rcon_port: 31000,
             rcon_password: "rcon-secret".to_string(),
-            hostname: "Rust Server".to_string(),
-            level: "Barren".to_string(),
-            seed: 42,
-            world_size: 4000,
-            max_players: 100,
             auto_restart: true,
         };
 
         let updated = update_rust_config(&db, "rust-server", &config).unwrap();
 
-        assert_eq!(updated.config.hostname, "Rust Server");
         assert_eq!(updated.config.port, 29000);
         assert_eq!(updated.config.query_port, 30000);
         assert_eq!(updated.config.rcon_port, 31000);
         assert_eq!(updated.config.rcon_password, "rcon-secret");
-        assert_eq!(updated.config.level, "Barren");
-        assert_eq!(updated.config.seed, 42);
-        assert_eq!(updated.config.world_size, 4000);
-        assert_eq!(updated.config.max_players, 100);
         assert!(updated.config.auto_restart);
 
         std::fs::remove_dir_all(paths.data_dir).ok();
@@ -868,38 +1009,21 @@ mod tests {
             &instance.config,
         )
         .unwrap();
-        assert!(updated.config.settings.as_object().unwrap().is_empty());
+        assert_eq!(updated.config.port, instance.config.port);
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]
-    fn palworld_operational_configuration_preserves_legacy_game_values() {
+    fn palworld_operational_configuration_has_no_admin_port() {
         let (paths, db) = temp_context("palworld-config");
+        let template = paths
+            .game_install_dir(GameId::Palworld)
+            .join("DefaultPalWorldSettings.ini");
+        std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+        std::fs::write(&template, "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(PublicPort=8211,RESTAPIPort=8212)\n").unwrap();
         let instance = create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
-        let legacy = GenericGameConfig {
-            settings: json!({
-                "server_name": "Pals",
-                "max_players": 32,
-                "rest_api_enabled": true,
-                "admin_password": "admin-secret",
-                "server_password": "join-secret"
-            }),
-            ..instance.config
-        };
-        db.conn()
-            .execute(
-                "UPDATE generic_game_instance_configs SET config_json = ?1 WHERE instance_id = ?2",
-                rusqlite::params![
-                    serde_json::to_string(&legacy.settings).unwrap(),
-                    instance.identity.id
-                ],
-            )
-            .unwrap();
-        let updated =
-            update_generic_config(&db, GameId::Palworld, "pals", &instance.config).unwrap();
-
-        assert_eq!(updated.config.settings["admin_password"], "admin-secret");
-        assert_eq!(updated.config.settings["server_password"], "join-secret");
+        assert_eq!(instance.config.query_port, Some(27015));
+        assert_eq!(instance.config.admin_port, None);
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
@@ -910,7 +1034,7 @@ mod tests {
         let instance = create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
         let updated =
             update_generic_config(&db, GameId::SevenDaysToDie, "undead", &instance.config).unwrap();
-        assert!(updated.config.settings.as_object().unwrap().is_empty());
+        assert_eq!(updated.config.admin_port, Some(26903));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

@@ -830,7 +830,7 @@ mod tests {
             .uri(format!("/api/instances/{rust_id}/config"))
             .header("content-type", "application/json")
             .body(Body::from(
-                r#"{"hostname":"Rusty Server","max_players":50,"port":29000,"query_port":30000,"rcon_port":31000,"rcon_password":"rcon-secret"}"#,
+                r#"{"port":29000,"query_port":30000,"rcon_port":31000,"rcon_password":"rcon-secret"}"#,
             ))
             .unwrap();
 
@@ -858,7 +858,8 @@ mod tests {
             (r#"{"query_port":-1}"#, StatusCode::BAD_REQUEST),
             (r#"{"rcon_port":29000.5}"#, StatusCode::BAD_REQUEST),
             (r#"{"port":29000.5}"#, StatusCode::BAD_REQUEST),
-            (r#"{"seed":42}"#, StatusCode::OK),
+            (r#"{"seed":42}"#, StatusCode::BAD_REQUEST),
+            (r#"{"hostname":"file-owned"}"#, StatusCode::BAD_REQUEST),
         ] {
             let request = Request::builder()
                 .method("PUT")

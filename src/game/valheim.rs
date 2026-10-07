@@ -90,6 +90,45 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
     if let Some(password) = &instance.state.password {
         command.arg("-password").arg(password);
     }
+    if let Some(seconds) = instance.state.save_interval {
+        command.arg("-saveinterval").arg(seconds.to_string());
+    }
+    if let Some(count) = instance.state.backups {
+        command.arg("-backups").arg(count.to_string());
+    }
+    if let Some(seconds) = instance.state.backup_short {
+        command.arg("-backupshort").arg(seconds.to_string());
+    }
+    if let Some(seconds) = instance.state.backup_long {
+        command.arg("-backuplong").arg(seconds.to_string());
+    }
+    if instance.state.crossplay {
+        command.arg("-crossplay");
+    }
+    if let Some(id) = &instance.state.playfab_instance_id {
+        command.arg("-instanceid").arg(id);
+    }
+    if let Some(preset) = instance.state.preset {
+        command.arg("-preset").arg(preset.as_arg());
+    }
+    let modifiers = &instance.state.modifiers;
+    for (name, value) in [
+        ("combat", modifiers.combat.map(|value| value.as_arg())),
+        (
+            "deathpenalty",
+            modifiers.death_penalty.map(|value| value.as_arg()),
+        ),
+        ("resources", modifiers.resources.map(|value| value.as_arg())),
+        ("raids", modifiers.raids.map(|value| value.as_arg())),
+        ("portals", modifiers.portals.map(|value| value.as_arg())),
+    ] {
+        if let Some(value) = value {
+            command.arg("-modifier").arg(name).arg(value);
+        }
+    }
+    for key in &instance.state.set_keys {
+        command.arg("-setkey").arg(key.as_arg());
+    }
 
     tracing::info!(
         instance = %instance.state.name,
@@ -103,7 +142,11 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instance::state::InstanceState;
+    use crate::instance::state::{
+        InstanceState, ValheimCombatModifier, ValheimDeathPenaltyModifier, ValheimModifiers,
+        ValheimPortalModifier, ValheimPreset, ValheimRaidModifier, ValheimResourceModifier,
+        ValheimSetKey,
+    };
 
     #[test]
     fn build_command_preserves_the_valheim_launch_contract() {
@@ -149,6 +192,65 @@ mod tests {
                 "secret",
             ]
         );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn build_command_emits_every_configured_official_argument() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-valheim-full-command-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let mut state = InstanceState::new("valheim-server", 2456);
+        state.save_interval = Some(900);
+        state.backups = Some(5);
+        state.backup_short = Some(7200);
+        state.backup_long = Some(43200);
+        state.crossplay = true;
+        state.playfab_instance_id = Some("odin-one".into());
+        state.preset = Some(ValheimPreset::Immersive);
+        state.modifiers = ValheimModifiers {
+            combat: Some(ValheimCombatModifier::Hard),
+            death_penalty: Some(ValheimDeathPenaltyModifier::Casual),
+            resources: Some(ValheimResourceModifier::More),
+            raids: Some(ValheimRaidModifier::Less),
+            portals: Some(ValheimPortalModifier::VeryHard),
+        };
+        state.set_keys = vec![ValheimSetKey::NoBuildCost, ValheimSetKey::NoMap];
+        let instance = Instance {
+            dir: paths.instance_dir(&state.name),
+            state,
+        };
+        std::fs::create_dir_all(paths::instance_logs_dir(&instance.dir)).unwrap();
+
+        let args: Vec<_> = build_command(&instance, &paths)
+            .unwrap()
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        for expected in [
+            ["-saveinterval", "900"],
+            ["-backups", "5"],
+            ["-backupshort", "7200"],
+            ["-backuplong", "43200"],
+            ["-instanceid", "odin-one"],
+            ["-preset", "immersive"],
+            ["-modifier", "combat"],
+            ["-modifier", "deathpenalty"],
+            ["-modifier", "resources"],
+            ["-modifier", "raids"],
+            ["-modifier", "portals"],
+            ["-setkey", "nobuildcost"],
+            ["-setkey", "nomap"],
+        ] {
+            assert!(args.windows(2).any(|pair| pair == expected));
+        }
+        assert!(args.iter().any(|argument| argument == "-crossplay"));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

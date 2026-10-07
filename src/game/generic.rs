@@ -41,9 +41,14 @@ pub fn prepare_start(
     match game {
         GameId::VRising => {
             crate::game::proton_ge::ensure(paths)?;
+            crate::game::config_documents::initialize(paths, &instance)?;
         }
         GameId::Palworld | GameId::RunescapeDragonwilds => {
             prepare_native_runtime(paths, &instance)?;
+            crate::game::config_documents::initialize(paths, &instance)?;
+            if game == GameId::RunescapeDragonwilds {
+                crate::game::config_documents::validate_dragonwilds(paths, &instance)?;
+            }
         }
         GameId::SevenDaysToDie => {
             let instance_dir = paths.game_instance_dir(GameId::SevenDaysToDie, instance.name());
@@ -57,6 +62,7 @@ pub fn prepare_start(
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
+    crate::game::config_documents::sync_operational(paths, &instance)?;
     Ok(instance)
 }
 
@@ -206,12 +212,18 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
             }
         }
         GameId::Palworld => {
-            command.arg(format!("-port={}", instance.config.port));
+            let query_port = instance
+                .config
+                .query_port
+                .context("Palworld Steam query port is required")?;
+            command
+                .arg(format!("-port={}", instance.config.port))
+                .arg(format!("-queryport={query_port}"));
         }
         GameId::RunescapeDragonwilds => {
             command
                 .arg("-log")
-                .arg(format!("-port={}", instance.config.port));
+                .arg(format!("-Port={}", instance.config.port));
             if let Some(port) = instance.config.query_port {
                 command.arg(format!("-BeaconPort={port}"));
             }
@@ -332,17 +344,12 @@ mod tests {
             },
             config: GenericGameConfig {
                 port: if game == GameId::Palworld { 8211 } else { 7777 },
-                query_port: if game == GameId::RunescapeDragonwilds {
-                    Some(8888)
-                } else {
-                    None
+                query_port: match game {
+                    GameId::Palworld => Some(27015),
+                    GameId::RunescapeDragonwilds => Some(8888),
+                    _ => None,
                 },
-                admin_port: if game == GameId::Palworld {
-                    Some(8212)
-                } else {
-                    None
-                },
-                settings: Value::Object(Default::default()),
+                admin_port: None,
                 auto_restart: false,
             },
             pid: None,
@@ -388,7 +395,6 @@ mod tests {
                 .join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini")
                 .exists()
         );
-
         fs::create_dir_all(runtime.join("Pal/Saved/SaveGames")).unwrap();
         fs::write(runtime.join("Pal/Saved/SaveGames/world.sav"), "world").unwrap();
         fs::write(install.join("PalServer.sh"), "server-v2").unwrap();
@@ -416,9 +422,62 @@ mod tests {
 
         let command = build_command(&paths, &instance).unwrap();
         let arguments = format!("{command:?}");
-        assert!(arguments.contains("-port=7777"));
+        assert!(arguments.contains("-Port=7777"));
         assert!(arguments.contains("-BeaconPort=8888"));
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn vrising_command_uses_persistent_data_and_all_operational_ports() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-vrising-command-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let proton = crate::game::proton_ge::binary(&paths);
+        fs::create_dir_all(proton.parent().unwrap()).unwrap();
+        fs::write(&proton, "").unwrap();
+        let mut instance = generic_instance(GameId::VRising);
+        instance.config.port = 27015;
+        instance.config.query_port = Some(27016);
+        instance.config.admin_port = Some(25575);
+
+        let args: Vec<_> = build_command(&paths, &instance)
+            .unwrap()
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        for expected in [
+            ["-gamePort", "27015"],
+            ["-queryPort", "27016"],
+            ["-rconPort", "25575"],
+        ] {
+            assert!(args.windows(2).any(|pair| pair == expected));
+        }
+        assert!(
+            args.windows(2).any(|pair| pair[0] == "-persistentDataPath"
+                && pair[1].ends_with("instances/server/data"))
+        );
+        fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn palworld_command_passes_a_private_steam_query_port() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-palworld-command-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let instance = generic_instance(GameId::Palworld);
+
+        let command = build_command(&paths, &instance).unwrap();
+        let arguments = format!("{command:?}");
+        assert!(arguments.contains("-port=8211"));
+        assert!(arguments.contains("-queryport=27015"));
+        fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]
@@ -441,6 +500,15 @@ mod tests {
         )));
         assert!(arguments.contains(&format!("-UserDataFolder={}", root.display())));
         assert!(!root.join("config/serverconfig.xml").exists());
+        assert_eq!(
+            command
+                .as_std()
+                .get_args()
+                .last()
+                .unwrap()
+                .to_string_lossy(),
+            "-dedicated"
+        );
         fs::remove_dir_all(paths.data_dir).ok();
     }
 }

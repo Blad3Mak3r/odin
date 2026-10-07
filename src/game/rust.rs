@@ -20,17 +20,20 @@ use crate::paths::Paths;
 pub const DEDICATED_SERVER_APP_ID: &str = "258550";
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Clone)]
+pub struct RustFileConfig {
+    pub hostname: String,
+    pub level: String,
+    pub seed: u32,
+    pub world_size: u32,
+    pub max_players: u16,
+}
+
 /// The physical Rust identity directory owned by one Odin instance.
 pub fn identity_dir(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
     paths
         .game_instance_dir(crate::game::GameId::Rust, instance.name())
         .join("server")
-}
-
-fn runtime_link(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
-    paths
-        .game_instance_dir(crate::game::GameId::Rust, instance.name())
-        .join("runtime")
 }
 
 fn install_identity_link(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
@@ -46,21 +49,31 @@ fn install_identity_link(paths: &Paths, instance: &RustInstance) -> std::path::P
 pub fn ensure_layout(paths: &Paths, instance: &RustInstance) -> Result<()> {
     let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
     fs::create_dir_all(&instance_dir)?;
-    let runtime = runtime_link(paths, instance);
-    if runtime.symlink_metadata().is_err() {
-        std::os::unix::fs::symlink(paths.game_install_dir(crate::game::GameId::Rust), &runtime)
-            .with_context(|| format!("failed to create {}", runtime.display()))?;
-    }
     let local = identity_dir(paths, instance);
     let bridge = install_identity_link(paths, instance);
     if let Ok(metadata) = bridge.symlink_metadata() {
         if metadata.file_type().is_symlink() {
-            let target = fs::canonicalize(&bridge)?;
-            if target != fs::canonicalize(&local).unwrap_or_else(|_| local.clone()) {
-                bail!(
-                    "Rust identity bridge {} belongs to another instance",
-                    bridge.display()
-                );
+            match fs::canonicalize(&bridge) {
+                Ok(target)
+                    if target == fs::canonicalize(&local).unwrap_or_else(|_| local.clone()) => {}
+                Ok(_) => {
+                    bail!(
+                        "Rust identity bridge {} belongs to another instance",
+                        bridge.display()
+                    );
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound && local.exists() => {
+                    fs::remove_file(&bridge).with_context(|| {
+                        format!(
+                            "failed to replace stale Rust identity bridge {}",
+                            bridge.display()
+                        )
+                    })?;
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to resolve {}", bridge.display()));
+                }
             }
         } else if !local.exists() {
             fs::create_dir_all(local.parent().context("Rust identity has no parent")?)?;
@@ -150,7 +163,7 @@ pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Ru
 /// [`process::spawn`].
 pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> {
     let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
-    let binary = runtime_link(paths, instance).join("RustDedicated");
+    let binary = install_dir.join("RustDedicated");
     if !binary.is_file() {
         bail!(
             "Rust Dedicated Server is not installed (expected {}); install Rust first",
@@ -191,16 +204,6 @@ pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> 
         .arg("1")
         .arg("+server.identity")
         .arg(&instance.identity.id)
-        .arg("+server.hostname")
-        .arg(&config.hostname)
-        .arg("+server.level")
-        .arg(&config.level)
-        .arg("+server.seed")
-        .arg(config.seed.to_string())
-        .arg("+server.worldsize")
-        .arg(config.world_size.to_string())
-        .arg("+server.maxplayers")
-        .arg(config.max_players.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
@@ -489,18 +492,23 @@ pub fn restore_backup(
     )
 }
 
-pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
+pub fn default_config(port: u16) -> RustInstanceConfig {
     RustInstanceConfig {
         port,
         query_port: port + 1,
         rcon_port: port + 2,
         rcon_password: generate_rcon_password(),
+        auto_restart: false,
+    }
+}
+
+pub fn default_file_config(name: &str) -> RustFileConfig {
+    RustFileConfig {
         hostname: name.to_string(),
         level: "Procedural Map".to_string(),
         seed: rand::random(),
         world_size: 3000,
         max_players: 50,
-        auto_restart: false,
     }
 }
 
@@ -784,6 +792,15 @@ mod tests {
                 .any(|args| args[0] == "+rcon.password" && args[1] == instance.config.rcon_password)
         );
         assert!(args.windows(2).any(|args| args == ["+rcon.web", "1"]));
+        for file_owned in [
+            "+server.hostname",
+            "+server.level",
+            "+server.seed",
+            "+server.worldsize",
+            "+server.maxplayers",
+        ] {
+            assert!(!args.iter().any(|argument| argument == file_owned));
+        }
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
 use crate::db::Db;
-use crate::instance::state::InstanceState;
+use crate::instance::state::{InstanceState, ValheimModifiers, ValheimPreset, ValheimSetKey};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
 use crate::supervisor::client;
@@ -151,6 +151,34 @@ pub struct ConfigView {
     pub password: Option<String>,
     pub public: bool,
     pub auto_restart: bool,
+    pub save_interval: Option<u32>,
+    pub backups: Option<u16>,
+    pub backup_short: Option<u32>,
+    pub backup_long: Option<u32>,
+    pub crossplay: bool,
+    pub playfab_instance_id: Option<String>,
+    pub preset: Option<ValheimPreset>,
+    pub modifiers: ValheimModifiers,
+    pub set_keys: Vec<ValheimSetKey>,
+}
+
+fn config_view(state: &InstanceState) -> ConfigView {
+    ConfigView {
+        world_name: state.world_name.clone(),
+        port: state.port,
+        password: state.password.clone(),
+        public: state.public,
+        auto_restart: state.auto_restart,
+        save_interval: state.save_interval,
+        backups: state.backups,
+        backup_short: state.backup_short,
+        backup_long: state.backup_long,
+        crossplay: state.crossplay,
+        playfab_instance_id: state.playfab_instance_id.clone(),
+        preset: state.preset,
+        modifiers: state.modifiers.clone(),
+        set_keys: state.set_keys.clone(),
+    }
 }
 
 pub async fn get_config(
@@ -160,13 +188,7 @@ pub async fn get_config(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let instance = run_blocking(move || Instance::load_existing(&paths, &db, &name)).await?;
-    Ok(Json(ConfigView {
-        world_name: instance.state.world_name,
-        port: instance.state.port,
-        password: instance.state.password,
-        public: instance.state.public,
-        auto_restart: instance.state.auto_restart,
-    }))
+    Ok(Json(config_view(&instance.state)))
 }
 
 pub async fn get_config_by_id(
@@ -184,6 +206,34 @@ pub struct ConfigUpdateRequest {
     pub password: Option<String>,
     pub public: Option<bool>,
     pub auto_restart: Option<bool>,
+    #[serde(default)]
+    save_interval: OptionalUpdate<u32>,
+    #[serde(default)]
+    backups: OptionalUpdate<u16>,
+    #[serde(default)]
+    backup_short: OptionalUpdate<u32>,
+    #[serde(default)]
+    backup_long: OptionalUpdate<u32>,
+    pub crossplay: Option<bool>,
+    #[serde(default)]
+    playfab_instance_id: OptionalUpdate<String>,
+    #[serde(default)]
+    preset: OptionalUpdate<ValheimPreset>,
+    pub modifiers: Option<ValheimModifiers>,
+    pub set_keys: Option<Vec<ValheimSetKey>>,
+}
+
+#[derive(Default)]
+enum OptionalUpdate<T> {
+    #[default]
+    Unset,
+    Set(Option<T>),
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for OptionalUpdate<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Self::Set)
+    }
 }
 
 pub async fn set_config(
@@ -194,13 +244,7 @@ pub async fn set_config(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let instance = run_blocking(move || update_config(&paths, &db, &name, req)).await?;
-    Ok(Json(ConfigView {
-        world_name: instance.state.world_name,
-        port: instance.state.port,
-        password: instance.state.password,
-        public: instance.state.public,
-        auto_restart: instance.state.auto_restart,
-    }))
+    Ok(Json(config_view(&instance.state)))
 }
 
 pub async fn set_config_by_id(
@@ -244,8 +288,48 @@ fn update_config(
     if let Some(auto_restart) = req.auto_restart {
         instance.state.auto_restart = auto_restart;
     }
+    if let OptionalUpdate::Set(value) = req.save_interval {
+        instance.state.save_interval = positive_optional("save interval", value)?;
+    }
+    if let OptionalUpdate::Set(value) = req.backups {
+        instance.state.backups = positive_optional("backup count", value)?;
+    }
+    if let OptionalUpdate::Set(value) = req.backup_short {
+        instance.state.backup_short = positive_optional("short backup interval", value)?;
+    }
+    if let OptionalUpdate::Set(value) = req.backup_long {
+        instance.state.backup_long = positive_optional("long backup interval", value)?;
+    }
+    if let Some(crossplay) = req.crossplay {
+        instance.state.crossplay = crossplay;
+    }
+    if let OptionalUpdate::Set(value) = req.playfab_instance_id {
+        instance.state.playfab_instance_id = value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
+    if let OptionalUpdate::Set(value) = req.preset {
+        instance.state.preset = value;
+    }
+    if let Some(modifiers) = req.modifiers {
+        instance.state.modifiers = modifiers;
+    }
+    if let Some(mut set_keys) = req.set_keys {
+        set_keys.dedup();
+        instance.state.set_keys = set_keys;
+    }
     instance.save(db)?;
     Ok(instance)
+}
+
+fn positive_optional<T>(label: &str, value: Option<T>) -> anyhow::Result<Option<T>>
+where
+    T: Copy + PartialEq + From<u8>,
+{
+    if value == Some(T::from(0)) {
+        return Err(BadRequest(format!("{label} must be greater than zero")).into());
+    }
+    Ok(value)
 }
 
 #[derive(Deserialize)]

@@ -198,6 +198,14 @@ fn clone_state(
     state.world_name = world_name.to_string();
     state.public = source.public;
     state.auto_restart = source.auto_restart;
+    state.save_interval = source.save_interval;
+    state.backups = source.backups;
+    state.backup_short = source.backup_short;
+    state.backup_long = source.backup_long;
+    state.crossplay = source.crossplay;
+    state.preset = source.preset;
+    state.modifiers = source.modifiers.clone();
+    state.set_keys = source.set_keys.clone();
     state.bepinex_installed = source.bepinex_installed;
     state.bepinex_version = source.bepinex_version.clone();
     state.installed_mods = source
@@ -340,6 +348,9 @@ mod tests {
         let mut source = Instance::create(paths, db, "source").unwrap();
         source.state.public = false;
         source.state.auto_restart = true;
+        source.state.crossplay = true;
+        source.state.save_interval = Some(900);
+        source.state.preset = Some(crate::instance::state::ValheimPreset::Hard);
         source.state.bepinex_installed = true;
         source.state.bepinex_version = Some("5.4.2202".to_string());
         source.state.installed_mods = vec![
@@ -414,6 +425,9 @@ mod tests {
         assert_eq!(target.state.world_name, "season-two-world");
         assert_eq!(target.state.public, source.state.public);
         assert_eq!(target.state.auto_restart, source.state.auto_restart);
+        assert_eq!(target.state.crossplay, source.state.crossplay);
+        assert_eq!(target.state.save_interval, source.state.save_interval);
+        assert_eq!(target.state.preset, source.state.preset);
         assert_eq!(target.state.bepinex_version, source.state.bepinex_version);
         assert_ne!(target.state.port, source.state.port);
         assert_ne!(target.state.password, source.state.password);

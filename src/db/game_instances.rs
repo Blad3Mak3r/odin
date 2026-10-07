@@ -565,7 +565,9 @@ pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Rust
     )?;
     tx.commit()?;
     drop(conn);
-    load_rust(db, name)?.context("failed to load newly-created Rust instance")
+    let instance = load_rust(db, name)?.context("failed to load newly-created Rust instance")?;
+    rust::ensure_layout(paths, &instance)?;
+    Ok(instance)
 }
 
 pub fn update_rust_config(

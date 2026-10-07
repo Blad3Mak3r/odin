@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::db::game_instances::GenericGameInstance;
+use crate::db::game_instances::{GenericGameInstance, RustInstance};
 use crate::game::{GameId, SEVEN_DAYS_TEMPLATE_BASELINE_FILE};
 use crate::paths::Paths;
 
@@ -83,6 +83,7 @@ enum Format {
     Json,
     Ini,
     PalworldOptions,
+    RustCfg,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +98,13 @@ const SEVEN_DAYS_MANAGED: &[&str] = &["ServerPort", "UserDataFolder", "TelnetPor
 const VRISING_MANAGED: &[&str] = &["Port", "QueryPort", "Rcon.Port", "Rcon.BindAddress"];
 const PALWORLD_MANAGED: &[&str] = &["PublicPort", "RESTAPIPort"];
 const DRAGONWILDS_MANAGED: &[&str] = &[];
+const RUST_MANAGED: &[&str] = &[
+    "server.port",
+    "server.queryport",
+    "rcon.port",
+    "rcon.password",
+    "rcon.web",
+];
 
 fn specs(game: GameId) -> &'static [FileSpec] {
     match game {
@@ -126,6 +134,99 @@ fn specs(game: GameId) -> &'static [FileSpec] {
         }],
         GameId::Valheim | GameId::Rust => &[],
     }
+}
+
+fn rust_document_path(paths: &Paths, instance: &RustInstance) -> PathBuf {
+    crate::game::rust::identity_dir(paths, instance).join("cfg/server.cfg")
+}
+
+pub fn list_rust(paths: &Paths, instance: &RustInstance) -> Result<Vec<AdvancedConfigFile>> {
+    let path = rust_document_path(paths, instance);
+    let contents = if path.is_file() {
+        Some(fs::read_to_string(&path)?)
+    } else {
+        None
+    };
+    let sections = contents
+        .as_deref()
+        .map(|text| sections(Format::RustCfg, text, RUST_MANAGED))
+        .transpose()?;
+    Ok(vec![AdvancedConfigFile {
+        id: "server".into(),
+        path: "server/cfg/server.cfg".into(),
+        format: "rust-cfg",
+        exists: contents.is_some(),
+        sections: sections.unwrap_or_default(),
+    }])
+}
+
+pub fn apply_rust(
+    paths: &Paths,
+    instance: &RustInstance,
+    changes: &[AdvancedConfigChange],
+) -> Result<()> {
+    if instance.is_running() {
+        bail!("stop the server before changing advanced configuration");
+    }
+    let path = rust_document_path(paths, instance);
+    let original = fs::read_to_string(&path)
+        .with_context(|| format!("{} has not been created", path.display()))?;
+    let keys = parse(Format::RustCfg, &original)?
+        .into_iter()
+        .map(|entry| entry.key)
+        .collect::<std::collections::HashSet<_>>();
+    let mut updated = original;
+    for change in changes {
+        if change.file != "server" {
+            bail!("configuration file is not declared for Rust");
+        }
+        if RUST_MANAGED.contains(&change.key.as_str()) {
+            bail!("{} is managed by Odin", change.key);
+        }
+        if !keys.contains(change.key.as_str()) {
+            bail!("{} does not exist in server.cfg", change.key);
+        }
+        if is_sensitive_key(&change.key) && change.value.is_empty() {
+            continue;
+        }
+        updated = set(Format::RustCfg, &updated, &change.key, &change.value)?;
+    }
+    write_atomically(&path, &updated)
+}
+
+/// Keeps Odin-owned transport convars authoritative without inventing a
+/// server.cfg or adding keys an operator did not put there.
+pub fn sync_rust_operational(paths: &Paths, instance: &RustInstance) -> Result<()> {
+    let path = rust_document_path(paths, instance);
+    let mut contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    let values = [
+        ("server.port", instance.config.port.to_string()),
+        ("server.queryport", instance.config.query_port.to_string()),
+        ("rcon.port", instance.config.rcon_port.to_string()),
+        ("rcon.password", instance.config.rcon_password.clone()),
+        ("rcon.web", "1".into()),
+    ];
+    let keys = parse(Format::RustCfg, &contents)?
+        .into_iter()
+        .map(|entry| entry.key)
+        .collect::<std::collections::HashSet<_>>();
+    let mut changed = false;
+    for (key, value) in values {
+        if keys.contains(key) {
+            contents = set_rust_cfg(&contents, key, &value)?;
+            changed = true;
+        }
+    }
+    if changed {
+        write_atomically(&path, &contents)?;
+    }
+    Ok(())
 }
 
 fn instance_root(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
@@ -435,6 +536,7 @@ fn format_name(format: Format) -> &'static str {
         Format::Json => "json",
         Format::Ini => "ini",
         Format::PalworldOptions => "unreal-ini",
+        Format::RustCfg => "rust-cfg",
     }
 }
 
@@ -520,7 +622,28 @@ fn parse(format: Format, contents: &str) -> Result<Vec<ParsedEntry>> {
         }
         Format::Ini => Ok(parse_ini(contents)),
         Format::PalworldOptions => parse_palworld(contents),
+        Format::RustCfg => Ok(parse_rust_cfg(contents)),
     }
+}
+
+fn parse_rust_cfg(contents: &str) -> Vec<ParsedEntry> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once(char::is_whitespace)?;
+            Some(ParsedEntry {
+                key: key.into(),
+                label: key.into(),
+                section_id: "server".into(),
+                section_label: "server.cfg".into(),
+                value: value.trim().into(),
+            })
+        })
+        .collect()
 }
 
 fn flatten_json(prefix: &str, value: &Value, entries: &mut Vec<ParsedEntry>) {
@@ -802,7 +925,38 @@ fn set(format: Format, contents: &str, key: &str, value: &str) -> Result<String>
         Format::Json => set_json(contents, key, value),
         Format::Ini => set_ini(contents, key, value),
         Format::PalworldOptions => set_palworld(contents, key, value),
+        Format::RustCfg => set_rust_cfg(contents, key, value),
     }
+}
+
+fn set_rust_cfg(contents: &str, key: &str, value: &str) -> Result<String> {
+    let replacement = format!("{key} {value}");
+    let mut found = false;
+    let output = contents
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if !found
+                && !trimmed.starts_with('#')
+                && !trimmed.starts_with("//")
+                && trimmed.split_whitespace().next() == Some(key)
+            {
+                found = true;
+                replacement.clone()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !found {
+        bail!("Rust convar {key} does not exist");
+    }
+    Ok(if contents.ends_with('\n') {
+        format!("{output}\n")
+    } else {
+        output
+    })
 }
 
 fn set_xml(contents: &str, key: &str, value: &str) -> Result<String> {
@@ -1198,6 +1352,18 @@ mod tests {
             "[/Script/Pal.PalGameWorldSettings] / OptionSettings"
         );
         assert_eq!(sections[0].entries[0].label, "ServerName");
+    }
+
+    #[test]
+    fn rust_cfg_round_trip_preserves_comments_and_other_convars() {
+        let input = "// keep this\nserver.hostname \"Old name\"\nserver.maxplayers 20\n";
+        let entries = parse(Format::RustCfg, input).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].key, "server.hostname");
+        assert_eq!(
+            set_rust_cfg(input, "server.hostname", "\"New name\"").unwrap(),
+            "// keep this\nserver.hostname \"New name\"\nserver.maxplayers 20\n"
+        );
     }
 
     #[test]

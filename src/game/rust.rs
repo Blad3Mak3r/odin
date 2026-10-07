@@ -20,6 +20,69 @@ use crate::paths::Paths;
 pub const DEDICATED_SERVER_APP_ID: &str = "258550";
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The physical Rust identity directory owned by one Odin instance.
+pub fn identity_dir(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
+    paths
+        .game_instance_dir(crate::game::GameId::Rust, instance.name())
+        .join("server")
+}
+
+fn runtime_link(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
+    paths
+        .game_instance_dir(crate::game::GameId::Rust, instance.name())
+        .join("runtime")
+}
+
+fn install_identity_link(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
+    paths
+        .game_install_dir(crate::game::GameId::Rust)
+        .join("server")
+        .join(&instance.identity.id)
+}
+
+/// Makes Rust's conventional `install/server/<identity>` location point at
+/// the instance-owned data directory. Existing identities are moved once,
+/// never merged, so upgrades cannot silently lose a world or configuration.
+pub fn ensure_layout(paths: &Paths, instance: &RustInstance) -> Result<()> {
+    let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
+    fs::create_dir_all(&instance_dir)?;
+    let runtime = runtime_link(paths, instance);
+    if runtime.symlink_metadata().is_err() {
+        std::os::unix::fs::symlink(paths.game_install_dir(crate::game::GameId::Rust), &runtime)
+            .with_context(|| format!("failed to create {}", runtime.display()))?;
+    }
+    let local = identity_dir(paths, instance);
+    let bridge = install_identity_link(paths, instance);
+    if let Ok(metadata) = bridge.symlink_metadata() {
+        if metadata.file_type().is_symlink() {
+            let target = fs::canonicalize(&bridge)?;
+            if target != fs::canonicalize(&local).unwrap_or_else(|_| local.clone()) {
+                bail!(
+                    "Rust identity bridge {} belongs to another instance",
+                    bridge.display()
+                );
+            }
+        } else if !local.exists() {
+            fs::create_dir_all(local.parent().context("Rust identity has no parent")?)?;
+            fs::rename(&bridge, &local)
+                .with_context(|| format!("failed to migrate {}", bridge.display()))?;
+        } else {
+            bail!(
+                "Rust identity exists both at {} and {}",
+                bridge.display(),
+                local.display()
+            );
+        }
+    }
+    fs::create_dir_all(&local)?;
+    if bridge.symlink_metadata().is_err() {
+        fs::create_dir_all(bridge.parent().context("Rust bridge has no parent")?)?;
+        std::os::unix::fs::symlink(&local, &bridge)
+            .with_context(|| format!("failed to create {}", bridge.display()))?;
+    }
+    Ok(())
+}
+
 pub fn is_running(instance: &RustInstance) -> bool {
     matches!(
         (instance.pid, instance.pid_started_at),
@@ -62,6 +125,7 @@ pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Ru
     if is_running(&instance) {
         bail!("instance '{}' is already running", instance.name());
     }
+    ensure_layout(paths, &instance)?;
     crate::game::ports::ensure_available(
         db,
         crate::game::GameId::Rust,
@@ -76,6 +140,7 @@ pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Ru
     crate::steamcmd::SteamCmd::new(paths.steamcmd_dir())
         .ensure_sdk64_client_at(&crate::steamcmd::steam_home_dir()?)
         .context("failed to prepare Rust's Steamworks runtime")?;
+    crate::game::config_documents::sync_rust_operational(paths, &instance)?;
     build_command(paths, &instance)?;
     Ok(instance)
 }
@@ -85,7 +150,7 @@ pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Ru
 /// [`process::spawn`].
 pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> {
     let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
-    let binary = install_dir.join("RustDedicated");
+    let binary = runtime_link(paths, instance).join("RustDedicated");
     if !binary.is_file() {
         bail!(
             "Rust Dedicated Server is not installed (expected {}); install Rust first",
@@ -199,6 +264,7 @@ pub async fn restart(
     if is_running(&instance) {
         stop_unlocked(paths, db, &instance).await?;
     }
+    ensure_layout(paths, &instance)?;
     start_unlocked(paths, db, instance.name()).await
 }
 
@@ -231,10 +297,11 @@ pub fn delete(
             instance.name().to_string()
         ));
     }
+    ensure_layout(paths, &instance)?;
     let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
-    let source = backup_source(paths, &instance);
-    if source.exists() {
-        std::fs::remove_dir_all(&source).context("failed to delete Rust world data")?;
+    let bridge = install_identity_link(paths, &instance);
+    if bridge.symlink_metadata().is_ok() {
+        std::fs::remove_file(&bridge)?;
     }
     crate::instance::lifecycle::delete_instance_dir(&instance_dir, keep_backups)?;
     crate::db::game_instances::delete_rust(db, instance.name())
@@ -267,6 +334,7 @@ fn wipe(
             instance.name().to_string()
         ));
     }
+    ensure_layout(paths, &instance)?;
 
     let source = backup_source(paths, &instance);
     let entries = match fs::read_dir(&source) {
@@ -316,12 +384,7 @@ fn is_wipe_file(entry: &fs::DirEntry, wipe_blueprints: bool) -> bool {
 }
 
 pub fn backup_source(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
-    // Rust itself stores an identity under its shared install tree.  Using the
-    // immutable Odin id prevents collisions even when games share a name.
-    paths
-        .game_install_dir(crate::game::GameId::Rust)
-        .join("server")
-        .join(&instance.identity.id)
+    identity_dir(paths, instance)
 }
 
 fn refresh(db: &crate::db::Db, instance: &RustInstance) -> Result<RustInstance> {
@@ -341,6 +404,13 @@ pub fn create_backup(
 ) -> Result<crate::backup::BackupEntry> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
+    if is_running(&instance) {
+        bail!(
+            "stop Rust instance '{}' before creating a backup",
+            instance.name()
+        );
+    }
+    ensure_layout(paths, &instance)?;
     create_backup_unlocked(paths, db, &instance)
 }
 
@@ -407,6 +477,7 @@ pub fn restore_backup(
             instance.name()
         );
     }
+    ensure_layout(paths, &instance)?;
     list_backups(paths, db, &instance)?;
     crate::backup::restore_at(
         db,

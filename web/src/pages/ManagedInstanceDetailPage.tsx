@@ -58,11 +58,6 @@ type RustConfig = {
   queryPort: number
   rconPort: number
   rconPassword: string
-  hostname: string
-  level: string
-  seed: number
-  worldSize: number
-  maxPlayers: number
   autoRestart: boolean
 }
 
@@ -73,18 +68,11 @@ function asRustConfig(config: Record<string, unknown>): RustConfig | null {
   const queryPort = config.query_port
   const rconPort = config.rcon_port
   const rconPassword = config.rcon_password
-  const hostname = config.hostname
-  const level = config.level
-  const seed = config.seed
-  const worldSize = config.world_size
-  const maxPlayers = config.max_players
   const autoRestart = config.auto_restart
   if (
-    typeof port !== 'number' || typeof queryPort !== 'number' || typeof rconPort !== 'number' || typeof rconPassword !== 'string' || typeof hostname !== 'string' ||
-    typeof level !== 'string' || typeof seed !== 'number' || typeof worldSize !== 'number' ||
-    typeof maxPlayers !== 'number' || typeof autoRestart !== 'boolean'
+    typeof port !== 'number' || typeof queryPort !== 'number' || typeof rconPort !== 'number' || typeof rconPassword !== 'string' || typeof autoRestart !== 'boolean'
   ) return null
-  return { port, queryPort, rconPort, rconPassword, hostname, level, seed, worldSize, maxPlayers, autoRestart }
+  return { port, queryPort, rconPort, rconPassword, autoRestart }
 }
 
 function asGenericConfig(config: Record<string, unknown>): GenericConfig | null {
@@ -106,11 +94,6 @@ function RustConfigForm({ id, config, running }: { id: string; config: RustConfi
   const [queryPort, setQueryPort] = useState(String(config.queryPort))
   const [rconPort, setRconPort] = useState(String(config.rconPort))
   const [rconPassword, setRconPassword] = useState(config.rconPassword)
-  const [hostname, setHostname] = useState(config.hostname)
-  const [level, setLevel] = useState(config.level)
-  const [seed, setSeed] = useState(config.seed)
-  const [worldSize, setWorldSize] = useState(config.worldSize)
-  const [maxPlayers, setMaxPlayers] = useState(config.maxPlayers)
   const [autoRestart, setAutoRestart] = useState(config.autoRestart)
 
   const save = () => update.mutate(
@@ -121,11 +104,6 @@ function RustConfigForm({ id, config, running }: { id: string; config: RustConfi
         query_port: Number(queryPort),
         rcon_port: Number(rconPort),
         rcon_password: rconPassword,
-        hostname,
-        level,
-        seed,
-        world_size: worldSize,
-        max_players: maxPlayers,
         auto_restart: autoRestart,
       },
     },
@@ -153,11 +131,6 @@ function RustConfigForm({ id, config, running }: { id: string; config: RustConfi
         <ConfigInput id="rust-query-port" label="Query port" type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />
         <ConfigInput id="rust-rcon-port" label="RCON port" type="number" min={1} max={65535} value={rconPort} disabled={running} onChange={setRconPort} />
         <ConfigInput id="rust-rcon-password" label="RCON password" type="password" value={rconPassword} disabled={running} onChange={setRconPassword} />
-        <ConfigInput id="rust-hostname" label="Hostname" value={hostname} disabled={running} onChange={setHostname} />
-        <ConfigInput id="rust-level" label="Map" value={level} disabled={running} onChange={setLevel} />
-        <ConfigInput id="rust-seed" label="Seed" type="number" value={seed} disabled={running} onChange={(value) => setSeed(Number(value))} />
-        <ConfigInput id="rust-world-size" label="World size" type="number" min={1} value={worldSize} disabled={running} onChange={(value) => setWorldSize(Number(value))} />
-        <ConfigInput id="rust-max-players" label="Max players" type="number" min={1} value={maxPlayers} disabled={running} onChange={(value) => setMaxPlayers(Number(value))} />
       </div>
       <div className="flex items-center justify-between rounded-xl border p-3">
         <div>
@@ -166,8 +139,8 @@ function RustConfigForm({ id, config, running }: { id: string; config: RustConfi
         </div>
         <Switch id="rust-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} />
       </div>
-      <p className="text-sm text-muted-foreground">Choose different game, query, and RCON ports between 1 and 65535. Keep the RCON password secret, and only allow its TCP port through your firewall when remote administration is needed.</p>
-      <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save configuration</Button>
+      <p className="text-sm text-muted-foreground">Odin manages process ports, RCON, and restart behavior. Game rules and listing settings belong in server.cfg below.</p>
+      <Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button>
     </form>
   )
 }
@@ -335,7 +308,7 @@ export function ManagedInstanceDetailPage() {
           {detail.game === 'valheim'
             ? <ConfigTab id={detail.id} />
             : rustConfig
-            ? <RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={rustConfig} running={detail.running} />
+            ? <div className="flex flex-col gap-6"><RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={rustConfig} running={detail.running} /><AdvancedConfigSection id={detail.id} game={detail.game} running={detail.running} /></div>
             : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds' || detail.game === '7d2d')
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}

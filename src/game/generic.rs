@@ -57,9 +57,6 @@ pub fn prepare_start(
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
-    // Keep game-generated configuration in the per-instance runtime aligned
-    // with the ports Odin owns before the supervisor launches it.
-    crate::game::config_documents::sync_operational(paths, &instance)?;
     Ok(instance)
 }
 
@@ -75,95 +72,21 @@ fn native_runtime_dir(paths: &Paths, instance: &GenericGameInstance) -> PathBuf 
         .join("runtime")
 }
 
-fn palworld_data_dir(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
-    paths
-        .game_instance_dir(GameId::Palworld, instance.name())
-        .join("data")
-}
-
 /// Palworld and Dragonwilds write their Saved directory relative to their
 /// install tree. Build a lightweight, per-instance runtime with hard links
-/// to immutable Steam files. Palworld's Saved directory is a symlink to an
-/// instance-owned data directory; Dragonwilds keeps its private Saved tree in
-/// the runtime. The runtime is refreshed on every start, making SteamCMD
-/// updates visible immediately without touching persistent game data.
+/// to immutable Steam files and a private Saved directory, so several
+/// servers never overwrite each other's configuration or worlds. The tree
+/// is refreshed on every start, making SteamCMD updates visible immediately.
 fn prepare_native_runtime(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
     let source = paths.game_install_dir(instance.identity.game);
     let destination = native_runtime_dir(paths, instance);
     sync_runtime_tree(&source, &destination, instance.identity.game, Path::new(""))?;
-    match instance.identity.game {
-        GameId::Palworld => {
-            ensure_palworld_data_link(
-                &destination.join("Pal/Saved"),
-                &palworld_data_dir(paths, instance),
-            )?;
-        }
-        GameId::RunescapeDragonwilds => {
-            fs::create_dir_all(destination.join("RSDragonwilds/Saved"))?;
-        }
+    let saved = match instance.identity.game {
+        GameId::Palworld => destination.join("Pal/Saved"),
+        GameId::RunescapeDragonwilds => destination.join("RSDragonwilds/Saved"),
         GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => unreachable!(),
-    }
-    Ok(())
-}
-
-/// Moves the legacy per-runtime save tree once, then makes Palworld resolve
-/// its fixed `Pal/Saved` path to the instance-owned `data` directory. Refuse
-/// ambiguous layouts rather than merging directories and risking a save loss.
-#[cfg(unix)]
-fn ensure_palworld_data_link(saved: &Path, data: &Path) -> Result<()> {
-    match saved.symlink_metadata() {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            fs::create_dir_all(data)?;
-            let actual = fs::canonicalize(saved).with_context(|| {
-                format!("failed to resolve Palworld data link {}", saved.display())
-            })?;
-            let expected = fs::canonicalize(data)?;
-            if actual != expected {
-                bail!(
-                    "Palworld data link {} points to {} instead of {}",
-                    saved.display(),
-                    actual.display(),
-                    expected.display()
-                );
-            }
-            return Ok(());
-        }
-        Ok(metadata) if metadata.is_dir() => {
-            if data.exists() {
-                bail!(
-                    "Palworld save data exists both at {} and {}; move it manually before starting",
-                    saved.display(),
-                    data.display()
-                );
-            }
-            fs::create_dir_all(
-                data.parent()
-                    .context("Palworld data directory has no parent")?,
-            )?;
-            fs::rename(saved, data).with_context(|| {
-                format!(
-                    "failed to move Palworld data from {} to {}",
-                    saved.display(),
-                    data.display()
-                )
-            })?;
-        }
-        Ok(_) => bail!("Palworld save path {} is not a directory", saved.display()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(data)?;
-        }
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to inspect {}", saved.display()));
-        }
-    }
-    fs::create_dir_all(saved.parent().context("Palworld save path has no parent")?)?;
-    std::os::unix::fs::symlink(data, saved).with_context(|| {
-        format!(
-            "failed to link Palworld save path {} to {}",
-            saved.display(),
-            data.display()
-        )
-    })?;
+    };
+    fs::create_dir_all(saved)?;
     Ok(())
 }
 
@@ -458,33 +381,21 @@ mod tests {
         fs::write(install.join("PalServer.sh"), "server-v1").unwrap();
         fs::write(install.join("Pal/Saved/shared.txt"), "must-not-copy").unwrap();
         let instance = generic_instance(GameId::Palworld);
-        let runtime = native_runtime_dir(&paths, &instance);
-        fs::create_dir_all(runtime.join("Pal/Saved/SaveGames")).unwrap();
-        fs::write(runtime.join("Pal/Saved/SaveGames/world.sav"), "world").unwrap();
 
         prepare_native_runtime(&paths, &instance).unwrap();
-        let data = palworld_data_dir(&paths, &instance);
+        let runtime = native_runtime_dir(&paths, &instance);
         assert_eq!(
             fs::read_to_string(runtime.join("PalServer.sh")).unwrap(),
             "server-v1"
         );
-        assert!(
-            runtime
-                .join("Pal/Saved")
-                .symlink_metadata()
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert_eq!(
-            fs::canonicalize(runtime.join("Pal/Saved")).unwrap(),
-            fs::canonicalize(&data).unwrap()
-        );
         assert!(!runtime.join("Pal/Saved/shared.txt").exists());
-        assert_eq!(
-            fs::read_to_string(data.join("SaveGames/world.sav")).unwrap(),
-            "world"
+        assert!(
+            !runtime
+                .join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini")
+                .exists()
         );
+        fs::create_dir_all(runtime.join("Pal/Saved/SaveGames")).unwrap();
+        fs::write(runtime.join("Pal/Saved/SaveGames/world.sav"), "world").unwrap();
         fs::write(install.join("PalServer.sh"), "server-v2").unwrap();
         prepare_native_runtime(&paths, &instance).unwrap();
         assert_eq!(

@@ -235,10 +235,12 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO game_instances (id, game, name, created_at) VALUES
                 ('first', 'palworld', 'first', '2026-01-01T00:00:00Z'),
-                ('second', 'palworld', 'second', '2026-01-01T00:00:00Z');
-             INSERT INTO generic_game_instance_configs (instance_id, port, admin_port, config_json) VALUES
-                ('first', 8211, 8212, '{}'),
-                ('second', 8221, 8222, '{}');",
+                ('second', 'palworld', 'second', '2026-01-01T00:00:00Z'),
+                ('vrising', 'vrising', 'vrising', '2026-01-01T00:00:00Z');
+             INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port, config_json) VALUES
+                ('first', 8211, NULL, 8212, '{}'),
+                ('second', 8221, NULL, 8222, '{}'),
+                ('vrising', 27015, 27016, 25575, '{}');",
         )
         .unwrap();
 
@@ -254,7 +256,7 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(query_ports, vec![27100, 27110]);
+        assert_eq!(query_ports, vec![27017, 27018]);
     }
 
     #[test]

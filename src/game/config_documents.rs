@@ -212,13 +212,13 @@ pub fn sync_rust_operational(paths: &Paths, instance: &RustInstance) -> Result<(
         ("rcon.password", instance.config.rcon_password.clone()),
         ("rcon.web", "1".into()),
     ];
-    let keys = parse(Format::RustCfg, &contents)?
+    let existing = parse(Format::RustCfg, &contents)?
         .into_iter()
-        .map(|entry| entry.key)
-        .collect::<std::collections::HashSet<_>>();
+        .map(|entry| (entry.key, entry.value))
+        .collect::<HashMap<_, _>>();
     let mut changed = false;
     for (key, value) in values {
-        if keys.contains(key) {
+        if existing.get(key).is_some_and(|current| current != &value) {
             contents = set_rust_cfg(&contents, key, &value)?;
             changed = true;
         }
@@ -880,13 +880,13 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
         ],
         GameId::RunescapeDragonwilds | GameId::Valheim | GameId::Rust => Vec::new(),
     };
-    let keys = parse(spec.format, &contents)?
+    let existing = parse(spec.format, &contents)?
         .into_iter()
-        .map(|entry| entry.key)
-        .collect::<std::collections::HashSet<_>>();
+        .map(|entry| (entry.key, entry.value))
+        .collect::<HashMap<_, _>>();
     let mut changed = false;
     for (key, value) in values {
-        if keys.contains(key) {
+        if existing.get(key).is_some_and(|current| current != &value) {
             contents = set(spec.format, &contents, key, &value)?;
             changed = true;
         }
@@ -1364,6 +1364,91 @@ mod tests {
             set_rust_cfg(input, "server.hostname", "\"New name\"").unwrap(),
             "// keep this\nserver.hostname \"New name\"\nserver.maxplayers 20\n"
         );
+    }
+
+    #[test]
+    fn operational_sync_does_not_rewrite_matching_palworld_settings() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-palworld-config-sync-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let instance = GenericGameInstance {
+            identity: crate::db::game_instances::GameInstanceIdentity {
+                id: "id".into(),
+                game: GameId::Palworld,
+                name: "pals".into(),
+                created_at: chrono::Utc::now(),
+                tags: Vec::new(),
+            },
+            config: crate::db::game_instances::GenericGameConfig {
+                port: 8211,
+                query_port: Some(27015),
+                admin_port: Some(8212),
+                settings: Value::Object(Default::default()),
+                auto_restart: false,
+            },
+            pid: None,
+            pid_started_at: None,
+            last_started_at: None,
+            last_stopped_at: None,
+        };
+        let path = document_path(&paths, &instance, specs(GameId::Palworld)[0]);
+        let contents = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(PublicPort=8211,RESTAPIPort=8212,ServerName=Odin)\n";
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, contents).unwrap();
+
+        sync_operational(&paths, &instance).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+        fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
+    #[test]
+    fn rust_operational_sync_does_not_rewrite_matching_convars() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-rust-config-sync-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let instance = RustInstance {
+            identity: crate::db::game_instances::GameInstanceIdentity {
+                id: "id".into(),
+                game: GameId::Rust,
+                name: "rusty".into(),
+                created_at: chrono::Utc::now(),
+                tags: Vec::new(),
+            },
+            config: crate::db::game_instances::RustInstanceConfig {
+                port: 28015,
+                query_port: 28016,
+                rcon_port: 28017,
+                rcon_password: "secret".into(),
+                hostname: "rusty".into(),
+                level: "Procedural Map".into(),
+                seed: 1,
+                world_size: 3000,
+                max_players: 50,
+                auto_restart: false,
+            },
+            pid: None,
+            pid_started_at: None,
+            last_started_at: None,
+            last_stopped_at: None,
+        };
+        let path = rust_document_path(&paths, &instance);
+        let contents = "// preserve this comment\nserver.port 28015\nserver.queryport 28016\nrcon.port 28017\nrcon.password secret\nrcon.web 1\n";
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, contents).unwrap();
+
+        sync_rust_operational(&paths, &instance).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+        fs::remove_dir_all(paths.data_dir).unwrap();
     }
 
     #[test]

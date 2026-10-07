@@ -27,12 +27,6 @@ pub fn identity_dir(paths: &Paths, instance: &RustInstance) -> std::path::PathBu
         .join("server")
 }
 
-fn runtime_link(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
-    paths
-        .game_instance_dir(crate::game::GameId::Rust, instance.name())
-        .join("runtime")
-}
-
 fn install_identity_link(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
     paths
         .game_install_dir(crate::game::GameId::Rust)
@@ -46,21 +40,31 @@ fn install_identity_link(paths: &Paths, instance: &RustInstance) -> std::path::P
 pub fn ensure_layout(paths: &Paths, instance: &RustInstance) -> Result<()> {
     let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
     fs::create_dir_all(&instance_dir)?;
-    let runtime = runtime_link(paths, instance);
-    if runtime.symlink_metadata().is_err() {
-        std::os::unix::fs::symlink(paths.game_install_dir(crate::game::GameId::Rust), &runtime)
-            .with_context(|| format!("failed to create {}", runtime.display()))?;
-    }
     let local = identity_dir(paths, instance);
     let bridge = install_identity_link(paths, instance);
     if let Ok(metadata) = bridge.symlink_metadata() {
         if metadata.file_type().is_symlink() {
-            let target = fs::canonicalize(&bridge)?;
-            if target != fs::canonicalize(&local).unwrap_or_else(|_| local.clone()) {
-                bail!(
-                    "Rust identity bridge {} belongs to another instance",
-                    bridge.display()
-                );
+            match fs::canonicalize(&bridge) {
+                Ok(target)
+                    if target == fs::canonicalize(&local).unwrap_or_else(|_| local.clone()) => {}
+                Ok(_) => {
+                    bail!(
+                        "Rust identity bridge {} belongs to another instance",
+                        bridge.display()
+                    );
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound && local.exists() => {
+                    fs::remove_file(&bridge).with_context(|| {
+                        format!(
+                            "failed to replace stale Rust identity bridge {}",
+                            bridge.display()
+                        )
+                    })?;
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to resolve {}", bridge.display()));
+                }
             }
         } else if !local.exists() {
             fs::create_dir_all(local.parent().context("Rust identity has no parent")?)?;
@@ -150,7 +154,7 @@ pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Ru
 /// [`process::spawn`].
 pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> {
     let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
-    let binary = runtime_link(paths, instance).join("RustDedicated");
+    let binary = install_dir.join("RustDedicated");
     if !binary.is_file() {
         bail!(
             "Rust Dedicated Server is not installed (expected {}); install Rust first",

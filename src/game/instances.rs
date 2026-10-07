@@ -391,6 +391,18 @@ mod tests {
             let backup = create_backup(&paths, &db, game, "source").unwrap();
             crate::db::backup_schedules::upsert_for_game(&db, game, "source", 24, 7, true).unwrap();
             rename(&paths, &db, game, "source", "target").unwrap();
+            if game == GameId::Rust {
+                let renamed = game_instances::load_rust(&db, "target").unwrap().unwrap();
+                rust::ensure_layout(&paths, &renamed).unwrap();
+                let bridge = paths
+                    .game_install_dir(GameId::Rust)
+                    .join("server")
+                    .join(&renamed.identity.id);
+                assert_eq!(
+                    std::fs::canonicalize(bridge).unwrap(),
+                    std::fs::canonicalize(rust::identity_dir(&paths, &renamed)).unwrap()
+                );
+            }
             assert_eq!(
                 game_instances::identity(&db, game, "target")
                     .unwrap()

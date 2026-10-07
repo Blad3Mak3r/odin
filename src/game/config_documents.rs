@@ -3,7 +3,7 @@
 //! Odin owns only lifecycle-critical transport settings. Everything else stays
 //! in the document created by the game and is exposed verbatim to the dashboard.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::game_instances::{GenericGameInstance, RustInstance};
-use crate::game::GameId;
+use crate::game::{GameId, SEVEN_DAYS_TEMPLATE_BASELINE_FILE};
 use crate::paths::Paths;
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +51,30 @@ pub struct AdvancedConfigChange {
     pub file: String,
     pub key: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SevenDaysTemplateReview {
+    pub instance_config_exists: bool,
+    pub template_exists: bool,
+    pub baseline_exists: bool,
+    pub changes: Vec<SevenDaysTemplateChange>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SevenDaysTemplateChange {
+    pub key: String,
+    pub kind: SevenDaysTemplateChangeKind,
+    pub applyable: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SevenDaysTemplateChangeKind {
+    Added,
+    Removed,
+    DefaultChanged,
+    Conflict,
 }
 
 #[derive(Clone, Copy)]
@@ -245,6 +269,176 @@ pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<Advance
                 exists,
                 sections: sections.unwrap_or_default(),
             })
+        })
+        .collect()
+}
+
+fn seven_days_template_path(paths: &Paths) -> PathBuf {
+    paths
+        .game_install_dir(GameId::SevenDaysToDie)
+        .join("serverconfig.xml")
+}
+
+fn seven_days_baseline_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
+    instance_root(paths, instance)
+        .join("config")
+        .join(SEVEN_DAYS_TEMPLATE_BASELINE_FILE)
+}
+
+fn seven_days_config_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
+    document_path(paths, instance, specs(GameId::SevenDaysToDie)[0])
+}
+
+/// Compares the installed 7D2D template to the immutable template captured
+/// when the instance configuration was created. The result never exposes
+/// values, so passwords remain private while the dashboard can still show
+/// which settings need an operator decision.
+pub fn review_seven_days_template(
+    paths: &Paths,
+    instance: &GenericGameInstance,
+) -> Result<SevenDaysTemplateReview> {
+    anyhow::ensure!(
+        instance.identity.game == GameId::SevenDaysToDie,
+        "template review is only available for 7 Days to Die"
+    );
+    let config = seven_days_config_path(paths, instance);
+    let template = seven_days_template_path(paths);
+    let baseline = seven_days_baseline_path(paths, instance);
+    if !config.is_file() || !template.is_file() || !baseline.is_file() {
+        return Ok(SevenDaysTemplateReview {
+            instance_config_exists: config.is_file(),
+            template_exists: template.is_file(),
+            baseline_exists: baseline.is_file(),
+            changes: Vec::new(),
+        });
+    }
+    let current = xml_property_values(&fs::read_to_string(&config)?)?;
+    let installed = xml_property_values(&fs::read_to_string(&template)?)?;
+    let baseline = xml_property_values(&fs::read_to_string(&baseline)?)?;
+    Ok(SevenDaysTemplateReview {
+        instance_config_exists: true,
+        template_exists: true,
+        baseline_exists: true,
+        changes: template_changes(&baseline, &installed, &current),
+    })
+}
+
+pub fn apply_seven_days_template_review(
+    paths: &Paths,
+    instance: &GenericGameInstance,
+    keys: &[String],
+) -> Result<()> {
+    let review = review_seven_days_template(paths, instance)?;
+    anyhow::ensure!(
+        review.instance_config_exists,
+        "instance configuration does not exist"
+    );
+    anyhow::ensure!(
+        review.template_exists,
+        "installed 7 Days to Die configuration template does not exist"
+    );
+    anyhow::ensure!(
+        review.baseline_exists,
+        "instance has no configuration template baseline"
+    );
+
+    let config = seven_days_config_path(paths, instance);
+    let template = seven_days_template_path(paths);
+    let selected: BTreeSet<_> = keys.iter().map(String::as_str).collect();
+    let changes: BTreeMap<_, _> = review
+        .changes
+        .iter()
+        .map(|change| (change.key.as_str(), change))
+        .collect();
+    for key in &selected {
+        let change = changes
+            .get(key)
+            .context("selected configuration template change no longer exists")?;
+        anyhow::ensure!(change.applyable, "{key} must be resolved manually");
+    }
+
+    let installed_contents = fs::read_to_string(&template)?;
+    let installed = xml_property_values(&installed_contents)?;
+    let mut contents = fs::read_to_string(&config)?;
+    for key in selected {
+        match changes[key].kind {
+            SevenDaysTemplateChangeKind::Added => {
+                contents = insert_xml_property(&contents, key, &installed[key])?;
+            }
+            SevenDaysTemplateChangeKind::Removed => {
+                contents = remove_xml_property(&contents, key)?;
+            }
+            SevenDaysTemplateChangeKind::DefaultChanged => {
+                contents = set_xml(&contents, key, &installed[key])?;
+            }
+            SevenDaysTemplateChangeKind::Conflict => unreachable!("conflicts are not applyable"),
+        }
+    }
+    if !keys.is_empty() {
+        write_atomically(&config, &contents)?;
+    }
+    fs::write(
+        seven_days_baseline_path(paths, instance),
+        installed_contents,
+    )?;
+    Ok(())
+}
+
+/// Starts tracking an existing configuration without guessing which values
+/// came from an older game template and which the operator intentionally set.
+pub fn adopt_seven_days_template_baseline(
+    paths: &Paths,
+    instance: &GenericGameInstance,
+) -> Result<()> {
+    let config = seven_days_config_path(paths, instance);
+    let contents = fs::read_to_string(&config)
+        .with_context(|| format!("failed to read {}", config.display()))?;
+    xml_property_values(&contents)?;
+    fs::write(seven_days_baseline_path(paths, instance), contents)
+        .context("failed to save 7 Days to Die configuration template baseline")
+}
+
+fn xml_property_values(contents: &str) -> Result<BTreeMap<String, String>> {
+    Ok(parse(Format::XmlProperties, contents)?
+        .into_iter()
+        .map(|entry| (entry.key, entry.value))
+        .collect())
+}
+
+fn template_changes(
+    baseline: &BTreeMap<String, String>,
+    installed: &BTreeMap<String, String>,
+    current: &BTreeMap<String, String>,
+) -> Vec<SevenDaysTemplateChange> {
+    baseline
+        .keys()
+        .chain(installed.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|key| {
+            match (baseline.get(key), installed.get(key), current.get(key)) {
+                (None, Some(_), None) => Some((SevenDaysTemplateChangeKind::Added, true)),
+                (None, Some(_), Some(_)) => Some((SevenDaysTemplateChangeKind::Conflict, false)),
+                (Some(base), None, Some(current)) if current == base => {
+                    Some((SevenDaysTemplateChangeKind::Removed, true))
+                }
+                (Some(_), None, _) => Some((SevenDaysTemplateChangeKind::Conflict, false)),
+                (Some(base), Some(installed), Some(current))
+                    if base != installed && current == base =>
+                {
+                    Some((SevenDaysTemplateChangeKind::DefaultChanged, true))
+                }
+                (Some(base), Some(installed), _) if base != installed => {
+                    Some((SevenDaysTemplateChangeKind::Conflict, false))
+                }
+                _ => None,
+            }
+            .map(|(kind, applyable)| (key, kind, applyable))
+        })
+        .map(|(key, kind, applyable)| SevenDaysTemplateChange {
+            key: (*key).clone(),
+            kind,
+            applyable,
         })
         .collect()
 }
@@ -780,6 +974,35 @@ fn set_xml(contents: &str, key: &str, value: &str) -> Result<String> {
     bail!("XML property {key} does not exist")
 }
 
+fn insert_xml_property(contents: &str, key: &str, value: &str) -> Result<String> {
+    let closing = contents
+        .rfind("</ServerSettings>")
+        .context("serverconfig.xml has no ServerSettings element")?;
+    let property = format!(
+        r#"    <property name="{key}" value="{}"/>\n"#,
+        xml_escape(value)
+    );
+    let mut output = String::with_capacity(contents.len() + property.len());
+    output.push_str(&contents[..closing]);
+    output.push_str(&property);
+    output.push_str(&contents[closing..]);
+    Ok(output)
+}
+
+fn remove_xml_property(contents: &str, key: &str) -> Result<String> {
+    let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
+    let ranges = pattern
+        .find_iter(contents)
+        .filter(|tag| xml_attribute(tag.as_str(), "name").as_deref() == Some(key))
+        .map(|tag| tag.range())
+        .collect::<Vec<_>>();
+    let mut output = contents.to_owned();
+    for range in ranges.into_iter().rev() {
+        output.replace_range(range, "");
+    }
+    Ok(output)
+}
+
 fn xml_attribute(tag: &str, name: &str) -> Option<String> {
     let expression = format!(
         r#"(?is)\b{}\s*=\s*(?:"([^"]*)"|'([^']*)')"#,
@@ -907,6 +1130,106 @@ fn html_unescape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seven_days_instance() -> GenericGameInstance {
+        GenericGameInstance {
+            identity: crate::db::game_instances::GameInstanceIdentity {
+                id: "id".into(),
+                game: GameId::SevenDaysToDie,
+                name: "undead".into(),
+                created_at: chrono::Utc::now(),
+                tags: Vec::new(),
+            },
+            config: crate::db::game_instances::GenericGameConfig {
+                port: 26900,
+                query_port: None,
+                admin_port: Some(26903),
+                settings: Value::Object(Default::default()),
+                auto_restart: false,
+            },
+            pid: None,
+            pid_started_at: None,
+            last_started_at: None,
+            last_stopped_at: None,
+        }
+    }
+
+    #[test]
+    fn template_review_distinguishes_safe_updates_from_conflicts() {
+        let values = |entries: &[(&str, &str)]| {
+            entries
+                .iter()
+                .map(|(key, value)| ((*key).into(), (*value).into()))
+                .collect::<BTreeMap<String, String>>()
+        };
+        let changes = template_changes(
+            &values(&[("Changed", "old"), ("Removed", "old")]),
+            &values(&[("Added", "new"), ("Changed", "new")]),
+            &values(&[("Changed", "old"), ("Removed", "custom")]),
+        );
+
+        assert_eq!(changes.len(), 3);
+        assert!(changes.iter().any(|change| {
+            change.key == "Added"
+                && change.kind == SevenDaysTemplateChangeKind::Added
+                && change.applyable
+        }));
+        assert!(changes.iter().any(|change| {
+            change.key == "Changed"
+                && change.kind == SevenDaysTemplateChangeKind::DefaultChanged
+                && change.applyable
+        }));
+        assert!(changes.iter().any(|change| {
+            change.key == "Removed"
+                && change.kind == SevenDaysTemplateChangeKind::Conflict
+                && !change.applyable
+        }));
+    }
+
+    #[test]
+    fn template_review_applies_selected_safe_changes_and_advances_the_baseline() {
+        let directory =
+            std::env::temp_dir().join(format!("odin-template-review-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: directory.clone(),
+            config_dir: directory,
+        };
+        let instance = seven_days_instance();
+        let config = seven_days_config_path(&paths, &instance);
+        let template = seven_days_template_path(&paths);
+        let baseline = seven_days_baseline_path(&paths, &instance);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::create_dir_all(template.parent().unwrap()).unwrap();
+        fs::write(
+            &baseline,
+            "<ServerSettings><property name=\"Changed\" value=\"old\"/><property name=\"Removed\" value=\"old\"/></ServerSettings>",
+        )
+        .unwrap();
+        fs::write(
+            &template,
+            "<ServerSettings><property name=\"Added\" value=\"new\"/><property name=\"Changed\" value=\"new\"/></ServerSettings>",
+        )
+        .unwrap();
+        fs::write(
+            &config,
+            "<ServerSettings><property name=\"Changed\" value=\"old\"/><property name=\"Removed\" value=\"custom\"/></ServerSettings>",
+        )
+        .unwrap();
+
+        apply_seven_days_template_review(&paths, &instance, &["Added".into(), "Changed".into()])
+            .unwrap();
+
+        let updated = fs::read_to_string(&config).unwrap();
+        assert!(updated.contains("name=\"Added\" value=\"new\""));
+        assert!(updated.contains("name=\"Changed\" value=\"new\""));
+        assert!(updated.contains("name=\"Removed\" value=\"custom\""));
+        assert_eq!(
+            fs::read_to_string(baseline).unwrap(),
+            fs::read_to_string(template).unwrap()
+        );
+        fs::remove_dir_all(paths.data_dir).unwrap();
+    }
+
     #[test]
     fn xml_round_trip_preserves_unknown_properties() {
         let input = "<ServerSettings><property name=\"Known\" value=\"old\"/><property name=\"Other\" value=\"yes\"/></ServerSettings>";

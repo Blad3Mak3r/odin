@@ -18,6 +18,8 @@ pub mod update;
 pub mod valheim;
 pub mod vrising;
 
+pub const SEVEN_DAYS_TEMPLATE_BASELINE_FILE: &str = ".odin-serverconfig-template.xml";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameId {

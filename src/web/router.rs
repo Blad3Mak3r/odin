@@ -92,6 +92,19 @@ pub fn build_router(state: AppState) -> Router {
             get(config_files::list_advanced_config_by_id)
                 .put(config_files::set_advanced_config_by_id),
         )
+        .route(
+            "/instances/{id}/config/advanced/init",
+            post(config_files::initialize_advanced_config_by_id),
+        )
+        .route(
+            "/instances/{id}/7d2d/config-template",
+            get(config_files::get_seven_days_template_review_by_id)
+                .post(config_files::apply_seven_days_template_review_by_id),
+        )
+        .route(
+            "/instances/{id}/7d2d/config-template/adopt",
+            post(config_files::adopt_seven_days_template_baseline_by_id),
+        )
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
         .route(
@@ -426,6 +439,14 @@ mod tests {
         body
     }
 
+    fn write_seven_days_template(paths: &Paths, contents: &str) {
+        let template = paths
+            .game_install_dir(crate::game::GameId::SevenDaysToDie)
+            .join("serverconfig.xml");
+        std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+        std::fs::write(template, contents).unwrap();
+    }
+
     // `Router::route` panics at registration time if two routes' path
     // shapes are ambiguous — e.g. a literal segment landing where another
     // route already has a `{param}` at the same depth (`/instances/bulk/...`
@@ -493,6 +514,7 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
+        write_seven_days_template(&paths, "<ServerSettings/>");
         let instance = crate::db::game_instances::create_generic(
             &paths,
             &db,
@@ -600,6 +622,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn seven_days_config_init_route_copies_the_missing_template() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-7d2d-config-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let template = "<?xml version=\"1.0\"?><ServerSettings/>";
+        write_seven_days_template(&paths, template);
+        let instance = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::SevenDaysToDie,
+            "undead",
+        )
+        .unwrap();
+        let config = paths
+            .game_instance_dir(crate::game::GameId::SevenDaysToDie, "undead")
+            .join("config/serverconfig.xml");
+        std::fs::remove_file(&config).unwrap();
+        let app = build_router(AppState::new(paths.clone(), db));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/instances/{}/config/advanced/init",
+                        instance.identity.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(std::fs::read_to_string(config).unwrap(), template);
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

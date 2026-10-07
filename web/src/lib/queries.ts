@@ -42,6 +42,7 @@ import type {
   ResourceSample,
   RconCommandResponse,
   ResourceLimits,
+  SevenDaysTemplateReview,
   RustAccessListKind,
   RustConfigUpdateRequest,
   SaveFileEntry,
@@ -389,6 +390,41 @@ export function useUpdateAdvancedConfig(id: string) {
     mutationFn: (changes: AdvancedConfigChange[]) =>
       api.put<void>(`/instances/${id}/config/advanced`, { changes }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] }),
+  })
+}
+
+export function useInitializeAdvancedConfig(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>(`/instances/${id}/config/advanced/init`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] }),
+  })
+}
+
+export function useSevenDaysTemplateReview(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['managed-instances', id, '7d2d', 'config-template'],
+    queryFn: () => api.get<SevenDaysTemplateReview>(`/instances/${id}/7d2d/config-template`),
+    enabled,
+  })
+}
+
+export function useApplySevenDaysTemplateReview(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (keys: string[]) => api.post<void>(`/instances/${id}/7d2d/config-template`, { keys }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'config-template'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] })
+    },
+  })
+}
+
+export function useAdoptSevenDaysTemplateBaseline(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>(`/instances/${id}/7d2d/config-template/adopt`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'config-template'] }),
   })
 }
 

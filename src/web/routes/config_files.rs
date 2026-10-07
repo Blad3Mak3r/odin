@@ -18,6 +18,11 @@ pub struct SetAdvancedConfigRequest {
     pub changes: Vec<crate::game::config_documents::AdvancedConfigChange>,
 }
 
+#[derive(Deserialize)]
+pub struct ApplySevenDaysTemplateRequest {
+    pub keys: Vec<String>,
+}
+
 /// The declared, game-owned documents are deliberately separate from the
 /// Valheim BepInEx file editor below.  This endpoint never follows arbitrary
 /// paths and only returns values which Odin itself does not manage.
@@ -61,6 +66,109 @@ pub async fn set_advanced_config_by_id(
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn initialize_advanced_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let identity = crate::web::routes::games::resolve_instance_id(&state, &id).await?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || {
+        if identity.game != crate::game::GameId::SevenDaysToDie {
+            return Err(anyhow::Error::new(crate::web::error::BadRequest(
+                "only 7 Days to Die instances use this configuration template".into(),
+            )));
+        }
+        let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
+            .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
+        if instance.is_running() {
+            return Err(anyhow::Error::new(crate::web::error::BadRequest(
+                "stop the server before initializing its configuration".into(),
+            )));
+        }
+        crate::db::game_instances::copy_seven_days_to_die_config(&paths, &identity.name)
+            .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn get_seven_days_template_review_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::game::config_documents::SevenDaysTemplateReview>> {
+    let identity = crate::web::routes::games::resolve_instance_id(&state, &id).await?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let review = run_blocking(move || {
+        let instance = seven_days_instance(&db, &identity)?;
+        crate::game::config_documents::review_seven_days_template(&paths, &instance)
+    })
+    .await?;
+    Ok(Json(review))
+}
+
+pub async fn apply_seven_days_template_review_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<ApplySevenDaysTemplateRequest>,
+) -> ApiResult<StatusCode> {
+    let identity = crate::web::routes::games::resolve_instance_id(&state, &id).await?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || {
+        let instance = seven_days_instance(&db, &identity)?;
+        ensure_stopped(&instance)?;
+        crate::game::config_documents::apply_seven_days_template_review(
+            &paths,
+            &instance,
+            &request.keys,
+        )
+        .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn adopt_seven_days_template_baseline_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let identity = crate::web::routes::games::resolve_instance_id(&state, &id).await?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || {
+        let instance = seven_days_instance(&db, &identity)?;
+        ensure_stopped(&instance)?;
+        crate::game::config_documents::adopt_seven_days_template_baseline(&paths, &instance)
+            .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn seven_days_instance(
+    db: &crate::db::Db,
+    identity: &crate::db::game_instances::GameInstanceIdentity,
+) -> anyhow::Result<crate::db::game_instances::GenericGameInstance> {
+    if identity.game != crate::game::GameId::SevenDaysToDie {
+        return Err(anyhow::Error::new(crate::web::error::BadRequest(
+            "only 7 Days to Die instances use configuration template reviews".into(),
+        )));
+    }
+    crate::db::game_instances::load_generic(db, identity.game, &identity.name)?
+        .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))
+}
+
+fn ensure_stopped(instance: &crate::db::game_instances::GenericGameInstance) -> anyhow::Result<()> {
+    if instance.is_running() {
+        return Err(anyhow::Error::new(crate::web::error::BadRequest(
+            "stop the server before changing its configuration template".into(),
+        )));
+    }
+    Ok(())
 }
 
 pub async fn list_config_files(

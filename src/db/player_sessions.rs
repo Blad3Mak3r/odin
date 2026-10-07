@@ -242,6 +242,11 @@ mod tests {
             config_dir: dir.clone(),
         };
         let db = Db::open(&paths).unwrap();
+        let template = paths
+            .game_install_dir(GameId::SevenDaysToDie)
+            .join("serverconfig.xml");
+        std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+        std::fs::write(template, "<ServerSettings/>").unwrap();
         crate::db::game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "navezgane")
             .unwrap();
         let joined_at = Utc::now();

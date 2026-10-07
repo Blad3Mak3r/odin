@@ -212,7 +212,11 @@ pub fn create_generic(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now();
-    std::fs::create_dir_all(paths.game_instance_dir(game, name))?;
+    if game == GameId::SevenDaysToDie {
+        copy_seven_days_to_die_config(paths, name)?;
+    } else {
+        std::fs::create_dir_all(paths.game_instance_dir(game, name))?;
+    }
     let mut conn = db.conn();
     let tx = conn.transaction()?;
     tx.execute(
@@ -223,6 +227,34 @@ pub fn create_generic(
     tx.commit()?;
     drop(conn);
     load_generic(db, game, name)?.context("failed to load newly-created game instance")
+}
+
+fn copy_seven_days_to_die_config(paths: &Paths, name: &str) -> Result<()> {
+    let template = paths
+        .game_install_dir(GameId::SevenDaysToDie)
+        .join("serverconfig.xml");
+    anyhow::ensure!(
+        template.is_file(),
+        "7 Days to Die is not installed (expected configuration template at {}); install it before creating an instance",
+        template.display()
+    );
+
+    let destination = paths
+        .game_instance_dir(GameId::SevenDaysToDie, name)
+        .join("config/serverconfig.xml");
+    let parent = destination
+        .parent()
+        .context("7 Days to Die configuration path has no parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
+    std::fs::copy(&template, &destination).with_context(|| {
+        format!(
+            "failed to copy 7 Days to Die configuration from {} to {}",
+            template.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
 }
 
 /// Every persisted port, including stopped servers. Allocation uses this to
@@ -753,6 +785,14 @@ mod tests {
         (paths, db)
     }
 
+    fn write_seven_days_template(paths: &Paths, contents: &str) {
+        let template = paths
+            .game_install_dir(GameId::SevenDaysToDie)
+            .join("serverconfig.xml");
+        std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+        std::fs::write(template, contents).unwrap();
+    }
+
     #[test]
     fn update_rust_config_persists_game_specific_settings() {
         let (paths, db) = temp_context("settings");
@@ -851,10 +891,48 @@ mod tests {
     #[test]
     fn seven_days_operational_configuration_ignores_legacy_sandbox_code() {
         let (paths, db) = temp_context("7d2d-sandbox-code");
+        write_seven_days_template(&paths, "<ServerSettings/>");
         let instance = create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
         let updated =
             update_generic_config(&db, GameId::SevenDaysToDie, "undead", &instance.config).unwrap();
         assert!(updated.config.settings.as_object().unwrap().is_empty());
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn seven_days_creation_copies_the_installed_server_config() {
+        let (paths, db) = temp_context("7d2d-config-copy");
+        let template = "<?xml version=\"1.0\"?>\n<ServerSettings><property name=\"ServerName\" value=\"Default\"/></ServerSettings>\n";
+        write_seven_days_template(&paths, template);
+
+        create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+
+        let config = paths
+            .game_instance_dir(GameId::SevenDaysToDie, "undead")
+            .join("config/serverconfig.xml");
+        assert_eq!(std::fs::read_to_string(config).unwrap(), template);
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn seven_days_creation_requires_the_installed_server_config() {
+        let (paths, db) = temp_context("7d2d-missing-config");
+
+        let error = create_generic(&paths, &db, GameId::SevenDaysToDie, "undead")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("install it before creating an instance"));
+        assert!(
+            load_generic(&db, GameId::SevenDaysToDie, "undead")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !paths
+                .game_instance_dir(GameId::SevenDaysToDie, "undead")
+                .exists()
+        );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

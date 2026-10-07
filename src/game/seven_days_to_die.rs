@@ -435,6 +435,11 @@ mod tests {
     fn replacement_uses_internal_name_and_keeps_the_previous_mod_on_failure() {
         let paths = temporary_paths("replace");
         let db = crate::db::Db::open(&paths).unwrap();
+        let template = paths
+            .game_install_dir(GameId::SevenDaysToDie)
+            .join("serverconfig.xml");
+        fs::create_dir_all(template.parent().unwrap()).unwrap();
+        fs::write(template, "<ServerSettings/>").unwrap();
         crate::db::game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead")
             .unwrap();
         let first = paths.data_dir.join("first.zip");

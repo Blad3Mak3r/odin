@@ -29,6 +29,11 @@ pub async fn list_advanced_config_by_id(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let files = run_blocking(move || {
+        if identity.game == crate::game::GameId::Rust {
+            let instance = crate::db::game_instances::load_rust(&db, &identity.name)?
+                .ok_or_else(|| anyhow::anyhow!("Rust instance does not exist"))?;
+            return crate::game::config_documents::list_rust(&paths, &instance);
+        }
         if !crate::db::game_instances::is_generic_game(identity.game) {
             return Ok(Vec::new());
         }
@@ -49,6 +54,14 @@ pub async fn set_advanced_config_by_id(
     let paths = state.paths.clone();
     let db = state.db.clone();
     run_blocking(move || {
+        if identity.game == crate::game::GameId::Rust {
+            let instance = crate::db::game_instances::load_rust(&db, &identity.name)?
+                .ok_or_else(|| anyhow::anyhow!("Rust instance does not exist"))?;
+            return crate::game::config_documents::apply_rust(&paths, &instance, &request.changes)
+                .map_err(|error| {
+                    anyhow::Error::new(crate::web::error::BadRequest(error.to_string()))
+                });
+        }
         if !crate::db::game_instances::is_generic_game(identity.game) {
             return Err(anyhow::anyhow!(
                 "this game has no declared advanced configuration"

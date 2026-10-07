@@ -120,7 +120,10 @@ pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
         },
         GameId::Palworld => GenericGameConfig {
             port: 8211,
-            query_port: None,
+            // Palworld's Steam server browser listener otherwise defaults to
+            // 27015 for every process. It is a launch argument, rather than
+            // an INI setting, and must be allocated per instance.
+            query_port: Some(27015),
             admin_port: Some(8212),
             settings: Value::Object(Default::default()),
             auto_restart: false,
@@ -424,6 +427,11 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
         bail!(InvalidGenericConfig(
             "game, query, and administration ports must be different and between 1 and 65535"
                 .into()
+        ));
+    }
+    if game == GameId::Palworld && config.query_port.is_none() {
+        bail!(InvalidGenericConfig(
+            "Palworld Steam query port is required".into()
         ));
     }
     if game == GameId::RunescapeDragonwilds && config.query_port.is_none() {
@@ -876,6 +884,7 @@ mod tests {
     fn palworld_operational_configuration_preserves_legacy_game_values() {
         let (paths, db) = temp_context("palworld-config");
         let instance = create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
+        assert_eq!(instance.config.query_port, Some(27015));
         let legacy = GenericGameConfig {
             settings: json!({
                 "server_name": "Pals",

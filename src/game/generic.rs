@@ -57,6 +57,9 @@ pub fn prepare_start(
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
+    // Keep game-generated configuration in the per-instance runtime aligned
+    // with the ports Odin owns before the supervisor launches it.
+    crate::game::config_documents::sync_operational(paths, &instance)?;
     Ok(instance)
 }
 
@@ -206,7 +209,13 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
             }
         }
         GameId::Palworld => {
-            command.arg(format!("-port={}", instance.config.port));
+            let query_port = instance
+                .config
+                .query_port
+                .context("Palworld Steam query port is required")?;
+            command
+                .arg(format!("-port={}", instance.config.port))
+                .arg(format!("-queryport={query_port}"));
         }
         GameId::RunescapeDragonwilds => {
             command
@@ -332,10 +341,10 @@ mod tests {
             },
             config: GenericGameConfig {
                 port: if game == GameId::Palworld { 8211 } else { 7777 },
-                query_port: if game == GameId::RunescapeDragonwilds {
-                    Some(8888)
-                } else {
-                    None
+                query_port: match game {
+                    GameId::Palworld => Some(27015),
+                    GameId::RunescapeDragonwilds => Some(8888),
+                    _ => None,
                 },
                 admin_port: if game == GameId::Palworld {
                     Some(8212)
@@ -419,6 +428,23 @@ mod tests {
         assert!(arguments.contains("-port=7777"));
         assert!(arguments.contains("-BeaconPort=8888"));
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn palworld_command_passes_a_private_steam_query_port() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-palworld-command-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let instance = generic_instance(GameId::Palworld);
+
+        let command = build_command(&paths, &instance).unwrap();
+        let arguments = format!("{command:?}");
+        assert!(arguments.contains("-port=8211"));
+        assert!(arguments.contains("-queryport=27015"));
+        fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]

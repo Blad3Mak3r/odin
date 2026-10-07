@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-10-07
+
+### What's Changed
+- fix: copy 7d2d server config on creation by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/109
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.14.4...v0.14.5
+
 ## [0.14.4] - 2026-10-06
 
 ### What's Changed

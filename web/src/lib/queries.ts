@@ -705,6 +705,14 @@ export function useUploadSevenDaysMod() {
     onSuccess: (_result, { id }) => { queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'mods'] }); queryClient.invalidateQueries({ queryKey: ['jobs'] }) },
   })
 }
+export function useRemoveSevenDaysMod() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, modName }: { id: string; modName: string }) =>
+      api.delete<void>(`/instances/${id}/7d2d/mods/${encodeURIComponent(modName)}`),
+    onSuccess: (_result, { id }) => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, '7d2d', 'mods'] }),
+  })
+}
 
 export function useExecuteSevenDaysConsole() {
   return useMutation({

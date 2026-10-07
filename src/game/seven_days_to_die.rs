@@ -156,12 +156,7 @@ fn value(xml: &str, tag: &str) -> Option<String> {
 
 pub fn parse_mod_info(xml: &str) -> Result<ModInfo> {
     let name = value(xml, "Name").context("ModInfo.xml is missing Name")?;
-    if !name
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-    {
-        bail!("ModInfo.xml Name may only contain letters, numbers, '_' and '-'");
-    }
+    validate_mod_name(&name)?;
     Ok(ModInfo {
         name,
         display_name: value(xml, "DisplayName").context("ModInfo.xml is missing DisplayName")?,
@@ -170,6 +165,17 @@ pub fn parse_mod_info(xml: &str) -> Result<ModInfo> {
         author: value(xml, "Author"),
         website: value(xml, "Website"),
     })
+}
+
+fn validate_mod_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        bail!("mod name may only contain letters, numbers, '_' and '-'");
+    }
+    Ok(())
 }
 
 fn archive_root_and_info(zip_path: &Path) -> Result<(String, ModInfo)> {
@@ -339,6 +345,20 @@ pub fn install(
     Ok(info)
 }
 
+/// Removes an instance-local 7 Days to Die mod after validating its directory
+/// name so a request cannot escape the instance's `Mods` directory.
+pub fn remove(paths: &Paths, db: &crate::db::Db, instance: &str, mod_name: &str) -> Result<()> {
+    if crate::game::instances::is_running(paths, db, GameId::SevenDaysToDie, instance)? {
+        return Err(crate::instance::InstanceError::ModsLocked(instance.to_owned()).into());
+    }
+    validate_mod_name(mod_name)?;
+    let target = mods_dir(paths, instance).join(mod_name);
+    if !target.is_dir() {
+        bail!("mod '{mod_name}' is not installed");
+    }
+    fs::remove_dir_all(target).with_context(|| format!("failed to remove mod '{mod_name}'"))
+}
+
 #[cfg(test)]
 mod console_tests {
     use super::*;
@@ -487,6 +507,30 @@ mod tests {
             fs::read_to_string(target.join("payload.txt")).unwrap(),
             "second"
         );
+
+        drop(db);
+        fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn removes_an_installed_mod_without_allowing_path_traversal() {
+        let paths = temporary_paths("remove");
+        let db = crate::db::Db::open(&paths).unwrap();
+        let template = paths
+            .game_install_dir(GameId::SevenDaysToDie)
+            .join("serverconfig.xml");
+        fs::create_dir_all(template.parent().unwrap()).unwrap();
+        fs::write(template, "<ServerSettings/>").unwrap();
+        crate::db::game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead")
+            .unwrap();
+        let installed = paths
+            .game_instance_dir(GameId::SevenDaysToDie, "undead")
+            .join("Mods/Example_Mod");
+        fs::create_dir_all(&installed).unwrap();
+
+        remove(&paths, &db, "undead", "Example_Mod").unwrap();
+        assert!(!installed.exists());
+        assert!(remove(&paths, &db, "undead", "../outside").is_err());
 
         drop(db);
         fs::remove_dir_all(paths.data_dir).ok();

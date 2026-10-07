@@ -158,6 +158,31 @@ pub async fn upload_mod(
     Ok(Json(JobHandle { id }))
 }
 
+pub async fn remove_mod(
+    State(state): State<AppState>,
+    Path((id, mod_name)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let name = resolve(&state, &id).await?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let activity = state.activity.clone();
+    let event_name = name.clone();
+    let event_mod_name = mod_name.clone();
+    run_blocking(move || {
+        seven_days_to_die::remove(&paths, &db, &name, &mod_name)?;
+        activity.record_for(
+            GameId::SevenDaysToDie,
+            ActivityKind::ModRemoved {
+                mod_id: event_mod_name,
+            },
+            Some(event_name),
+        );
+        Ok(())
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 pub struct ConsoleCommandRequest {
     pub command: String,

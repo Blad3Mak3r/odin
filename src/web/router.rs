@@ -174,6 +174,10 @@ pub fn build_router(state: AppState) -> Router {
             get(seven_days_to_die::list_mods),
         )
         .route(
+            "/instances/{id}/7d2d/mods/{mod_name}",
+            delete(seven_days_to_die::remove_mod),
+        )
+        .route(
             "/instances/{id}/7d2d/mods/upload",
             post(seven_days_to_die::upload_mod).layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
         )
@@ -568,6 +572,45 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&body).unwrap()[0]["name"],
             "Example_Mod"
         );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!(
+                        "/api/instances/{}/7d2d/mods/Example_Mod",
+                        instance.identity.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(!installed.exists());
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(
+            installed.join("ModInfo.xml"),
+            "<xml><Name value=\"Example_Mod\"/><DisplayName value=\"Example Mod\"/><Version value=\"1.0.0\"/></xml>",
+        )
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!(
+                        "/api/instances/{}/7d2d/mods/Example_Mod",
+                        active.identity.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
 
         let boundary = "odin-test-boundary";
         let response = app

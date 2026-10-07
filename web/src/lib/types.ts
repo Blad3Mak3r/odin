@@ -81,6 +81,7 @@ export interface AdvancedConfigChange {
   file: string
   key: string
   value: string
+  delete?: boolean
 }
 
 export type SevenDaysTemplateChangeKind = 'added' | 'removed' | 'default_changed' | 'conflict'

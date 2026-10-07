@@ -11,7 +11,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::cli::validate_instance_name;
-use crate::game::{GameId, rust};
+use crate::game::{GameId, SEVEN_DAYS_TEMPLATE_BASELINE_FILE, rust};
 use crate::paths::Paths;
 
 #[derive(Debug, Clone, Serialize)]
@@ -259,6 +259,14 @@ pub fn copy_seven_days_to_die_config(paths: &Paths, name: &str) -> Result<()> {
             destination.display()
         )
     })?;
+    std::fs::copy(&template, parent.join(SEVEN_DAYS_TEMPLATE_BASELINE_FILE)).with_context(
+        || {
+            format!(
+                "failed to save 7 Days to Die configuration template from {}",
+                template.display()
+            )
+        },
+    )?;
     Ok(())
 }
 
@@ -916,6 +924,15 @@ mod tests {
             .game_instance_dir(GameId::SevenDaysToDie, "undead")
             .join("config/serverconfig.xml");
         assert_eq!(std::fs::read_to_string(config).unwrap(), template);
+        assert_eq!(
+            std::fs::read_to_string(
+                paths
+                    .game_instance_dir(GameId::SevenDaysToDie, "undead")
+                    .join(format!("config/{SEVEN_DAYS_TEMPLATE_BASELINE_FILE}")),
+            )
+            .unwrap(),
+            template
+        );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

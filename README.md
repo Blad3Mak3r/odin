@@ -493,6 +493,7 @@ In both modes, the data dir is resolved in this order:
   games/7d2d/
     install/                     # shared 7 Days to Die Dedicated Server binaries
     instances/<name>/
+      config/serverconfig.xml    # instance-local server configuration
       Mods/<mod-name>/ModInfo.xml # instance-local uploaded 7D2D mods
       Saves/                      # isolated 7D2D saves
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
@@ -517,6 +518,13 @@ used by an instance.
 UDP ports `26900–26902` by default and load user-uploaded ZIP mods from each
 instance's own `Mods/` directory. Odin requires a stopped 7D2D server before
 creating a backup or changing mods.
+
+Each 7D2D instance starts from the installed `serverconfig.xml` template. When
+an installed game update changes that template, the dashboard offers a review
+of added, removed, and changed defaults. Applying a review is explicit: Odin
+never overwrites an instance value that differs from its original template.
+Existing instances can adopt their current configuration as the baseline for
+future reviews.
 
 On 7 Days to Die V3 and later, gameplay rules are represented by the game's
 single `SandboxCode` value rather than individual XML properties. Odin exposes

@@ -87,6 +87,21 @@ export interface AdvancedConfigChange {
   value: string
 }
 
+export type SevenDaysTemplateChangeKind = 'added' | 'removed' | 'default_changed' | 'conflict'
+
+export interface SevenDaysTemplateChange {
+  key: string
+  kind: SevenDaysTemplateChangeKind
+  applyable: boolean
+}
+
+export interface SevenDaysTemplateReview {
+  instance_config_exists: boolean
+  template_exists: boolean
+  baseline_exists: boolean
+  changes: SevenDaysTemplateChange[]
+}
+
 export interface ResourceLimits {
   cpu_percent: number | null
   memory_max_bytes: number | null

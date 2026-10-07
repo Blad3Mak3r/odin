@@ -36,7 +36,10 @@ import {
   useUpdateGenericConfig,
   useUpdateRustConfig,
   useAdvancedConfig,
+  useAdoptSevenDaysTemplateBaseline,
+  useApplySevenDaysTemplateReview,
   useInitializeAdvancedConfig,
+  useSevenDaysTemplateReview,
   useUpdateAdvancedConfig,
 } from '@/lib/queries'
 import type { AdvancedConfigChange, GameId, GenericConfigUpdateRequest } from '@/lib/types'
@@ -189,6 +192,26 @@ function ConfigInput({ id, label, type = 'text', value, disabled, onChange, min,
   )
 }
 
+function SevenDaysTemplateReview({ id, running }: { id: string; running: boolean }) {
+  const review = useSevenDaysTemplateReview(id, true)
+  const apply = useApplySevenDaysTemplateReview(id)
+  const adopt = useAdoptSevenDaysTemplateBaseline(id)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  useEffect(() => setSelected(new Set()), [review.data])
+  if (!review.data?.instance_config_exists || !review.data.template_exists) return null
+  if (!review.data.baseline_exists) return <Card><CardHeader><CardTitle>Server config template</CardTitle><CardDescription>Track future 7 Days to Die template updates without changing this instance’s current settings.</CardDescription></CardHeader><CardContent><Button type="button" variant="outline" disabled={running || adopt.isPending} onClick={() => adopt.mutate(undefined, { onSuccess: () => toast.success('Configuration template baseline saved'), onError: (error) => toast.error(error.message) })}>Track template updates</Button></CardContent></Card>
+  if (review.data.changes.length === 0) return null
+  const labels = { added: 'New setting', removed: 'Removed setting', default_changed: 'Changed default', conflict: 'Manual review needed' }
+  const toggle = (key: string, checked: boolean) => setSelected((current) => {
+    const next = new Set(current)
+    if (checked) next.add(key)
+    else next.delete(key)
+    return next
+  })
+  const confirm = () => apply.mutate([...selected], { onSuccess: () => toast.success(selected.size > 0 ? 'Selected template updates applied' : 'Template update reviewed'), onError: (error) => toast.error(error.message) })
+  return <Card><CardHeader><CardTitle>Server config update available</CardTitle><CardDescription>Review changes from the installed 7 Days to Die template. Odin never overwrites settings that differ from the original template.</CardDescription></CardHeader><CardContent className="flex flex-col gap-3">{review.data.changes.map((change) => <label key={change.key} className="flex items-center gap-3 rounded-md border p-3 text-sm"><input type="checkbox" checked={selected.has(change.key)} disabled={!change.applyable || running || apply.isPending} onChange={(event) => toggle(change.key, event.target.checked)} /><span className="flex-1"><span className="font-medium">{change.key}</span><span className="block text-xs text-muted-foreground">{labels[change.kind]}</span></span></label>)}<Button className="w-fit" type="button" disabled={running || apply.isPending} onClick={confirm}>{selected.size > 0 ? 'Apply selected changes' : 'Keep instance settings'}</Button></CardContent></Card>
+}
+
 function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId; running: boolean }) {
   const config = useAdvancedConfig(id, true)
   const update = useUpdateAdvancedConfig(id)
@@ -229,7 +252,7 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
   const [adminPort, setAdminPort] = useState(config.admin_port === null ? '' : String(config.admin_port))
   const [autoRestart, setAutoRestart] = useState(config.auto_restart)
   const save = () => update.mutate({ id, request: { port: Number(port), query_port: queryPort ? Number(queryPort) : null, admin_port: adminPort ? Number(adminPort) : null, auto_restart: autoRestart } }, { onSuccess: () => toast.success('Odin runtime settings saved'), onError: (error) => toast.error(error.message) })
-  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'runescape-dragonwilds' ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === '7d2d' ? 'Local console port' : 'RCON port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form><AdvancedConfigSection id={id} game={game} running={running} /></div>
+  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'runescape-dragonwilds' ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === '7d2d' ? 'Local console port' : 'RCON port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form><AdvancedConfigSection id={id} game={game} running={running} />{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
 }
 
 export function ManagedInstanceDetailPage() {

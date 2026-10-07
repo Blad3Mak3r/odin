@@ -96,6 +96,15 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/config/advanced/init",
             post(config_files::initialize_advanced_config_by_id),
         )
+        .route(
+            "/instances/{id}/7d2d/config-template",
+            get(config_files::get_seven_days_template_review_by_id)
+                .post(config_files::apply_seven_days_template_review_by_id),
+        )
+        .route(
+            "/instances/{id}/7d2d/config-template/adopt",
+            post(config_files::adopt_seven_days_template_baseline_by_id),
+        )
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
         .route(

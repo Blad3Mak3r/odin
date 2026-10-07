@@ -229,7 +229,7 @@ pub fn create_generic(
     load_generic(db, game, name)?.context("failed to load newly-created game instance")
 }
 
-fn copy_seven_days_to_die_config(paths: &Paths, name: &str) -> Result<()> {
+pub fn copy_seven_days_to_die_config(paths: &Paths, name: &str) -> Result<()> {
     let template = paths
         .game_install_dir(GameId::SevenDaysToDie)
         .join("serverconfig.xml");
@@ -242,6 +242,11 @@ fn copy_seven_days_to_die_config(paths: &Paths, name: &str) -> Result<()> {
     let destination = paths
         .game_instance_dir(GameId::SevenDaysToDie, name)
         .join("config/serverconfig.xml");
+    anyhow::ensure!(
+        !destination.exists(),
+        "7 Days to Die configuration already exists at {}",
+        destination.display()
+    );
     let parent = destination
         .parent()
         .context("7 Days to Die configuration path has no parent")?;

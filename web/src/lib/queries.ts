@@ -392,6 +392,14 @@ export function useUpdateAdvancedConfig(id: string) {
   })
 }
 
+export function useInitializeAdvancedConfig(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>(`/instances/${id}/config/advanced/init`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] }),
+  })
+}
+
 export function useResourceLimits(id: string) {
   return useQuery({
     queryKey: ['managed-instances', id, 'resource-limits'],

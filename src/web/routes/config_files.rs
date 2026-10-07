@@ -63,6 +63,33 @@ pub async fn set_advanced_config_by_id(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn initialize_advanced_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let identity = crate::web::routes::games::resolve_instance_id(&state, &id).await?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || {
+        if identity.game != crate::game::GameId::SevenDaysToDie {
+            return Err(anyhow::Error::new(crate::web::error::BadRequest(
+                "only 7 Days to Die instances use this configuration template".into(),
+            )));
+        }
+        let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
+            .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
+        if instance.is_running() {
+            return Err(anyhow::Error::new(crate::web::error::BadRequest(
+                "stop the server before initializing its configuration".into(),
+            )));
+        }
+        crate::db::game_instances::copy_seven_days_to_die_config(&paths, &identity.name)
+            .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn list_config_files(
     State(state): State<AppState>,
     Path(name): Path<String>,

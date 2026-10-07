@@ -39,11 +39,6 @@ export interface RustConfigUpdateRequest {
   query_port?: number
   rcon_port?: number
   rcon_password?: string
-  hostname?: string
-  level?: string
-  seed?: number
-  world_size?: number
-  max_players?: number
   auto_restart?: boolean
 }
 
@@ -184,6 +179,31 @@ export interface ConfigView {
   password: string | null
   public: boolean
   auto_restart: boolean
+  save_interval: number | null
+  backups: number | null
+  backup_short: number | null
+  backup_long: number | null
+  crossplay: boolean
+  playfab_instance_id: string | null
+  preset: ValheimPreset | null
+  modifiers: ValheimModifiers
+  set_keys: ValheimSetKey[]
+}
+
+export type ValheimPreset = 'normal' | 'casual' | 'easy' | 'hard' | 'hardcore' | 'immersive' | 'hammer'
+export type ValheimCombatModifier = 'veryeasy' | 'easy' | 'hard' | 'veryhard'
+export type ValheimDeathPenaltyModifier = 'casual' | 'veryeasy' | 'easy' | 'hard' | 'hardcore'
+export type ValheimResourceModifier = 'muchless' | 'less' | 'more' | 'muchmore' | 'most'
+export type ValheimRaidModifier = 'none' | 'muchless' | 'less' | 'more' | 'muchmore'
+export type ValheimPortalModifier = 'casual' | 'hard' | 'veryhard'
+export type ValheimSetKey = 'nobuildcost' | 'playerevents' | 'passivemobs' | 'nomap'
+
+export interface ValheimModifiers {
+  combat: ValheimCombatModifier | null
+  death_penalty: ValheimDeathPenaltyModifier | null
+  resources: ValheimResourceModifier | null
+  raids: ValheimRaidModifier | null
+  portals: ValheimPortalModifier | null
 }
 
 export interface ConfigUpdateRequest {
@@ -192,6 +212,15 @@ export interface ConfigUpdateRequest {
   password?: string
   public?: boolean
   auto_restart?: boolean
+  save_interval?: number | null
+  backups?: number | null
+  backup_short?: number | null
+  backup_long?: number | null
+  crossplay?: boolean
+  playfab_instance_id?: string | null
+  preset?: ValheimPreset | null
+  modifiers?: ValheimModifiers
+  set_keys?: ValheimSetKey[]
 }
 
 export interface LogsView {

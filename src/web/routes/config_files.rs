@@ -89,9 +89,9 @@ pub async fn initialize_advanced_config_by_id(
     let paths = state.paths.clone();
     let db = state.db.clone();
     run_blocking(move || {
-        if identity.game != crate::game::GameId::SevenDaysToDie {
+        if !crate::db::game_instances::is_generic_game(identity.game) {
             return Err(anyhow::Error::new(crate::web::error::BadRequest(
-                "only 7 Days to Die instances use this configuration template".into(),
+                "this game has no native configuration template".into(),
             )));
         }
         let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
@@ -101,7 +101,7 @@ pub async fn initialize_advanced_config_by_id(
                 "stop the server before initializing its configuration".into(),
             )));
         }
-        crate::db::game_instances::copy_seven_days_to_die_config(&paths, &identity.name)
+        crate::game::config_documents::initialize(&paths, &instance)
             .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
     })
     .await?;

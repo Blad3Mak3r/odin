@@ -20,6 +20,15 @@ use crate::paths::Paths;
 pub const DEDICATED_SERVER_APP_ID: &str = "258550";
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Clone)]
+pub struct RustFileConfig {
+    pub hostname: String,
+    pub level: String,
+    pub seed: u32,
+    pub world_size: u32,
+    pub max_players: u16,
+}
+
 /// The physical Rust identity directory owned by one Odin instance.
 pub fn identity_dir(paths: &Paths, instance: &RustInstance) -> std::path::PathBuf {
     paths
@@ -195,16 +204,6 @@ pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> 
         .arg("1")
         .arg("+server.identity")
         .arg(&instance.identity.id)
-        .arg("+server.hostname")
-        .arg(&config.hostname)
-        .arg("+server.level")
-        .arg(&config.level)
-        .arg("+server.seed")
-        .arg(config.seed.to_string())
-        .arg("+server.worldsize")
-        .arg(config.world_size.to_string())
-        .arg("+server.maxplayers")
-        .arg(config.max_players.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
@@ -493,18 +492,23 @@ pub fn restore_backup(
     )
 }
 
-pub fn default_config(name: &str, port: u16) -> RustInstanceConfig {
+pub fn default_config(port: u16) -> RustInstanceConfig {
     RustInstanceConfig {
         port,
         query_port: port + 1,
         rcon_port: port + 2,
         rcon_password: generate_rcon_password(),
+        auto_restart: false,
+    }
+}
+
+pub fn default_file_config(name: &str) -> RustFileConfig {
+    RustFileConfig {
         hostname: name.to_string(),
         level: "Procedural Map".to_string(),
         seed: rand::random(),
         world_size: 3000,
         max_players: 50,
-        auto_restart: false,
     }
 }
 
@@ -788,6 +792,15 @@ mod tests {
                 .any(|args| args[0] == "+rcon.password" && args[1] == instance.config.rcon_password)
         );
         assert!(args.windows(2).any(|args| args == ["+rcon.web", "1"]));
+        for file_owned in [
+            "+server.hostname",
+            "+server.level",
+            "+server.seed",
+            "+server.worldsize",
+            "+server.maxplayers",
+        ] {
+            assert!(!args.iter().any(|argument| argument == file_owned));
+        }
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

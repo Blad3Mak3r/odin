@@ -1,8 +1,8 @@
 //! Local, authenticated access to Palworld's dedicated-server REST API.
 //!
 //! Odin deliberately never proxies this service to an arbitrary host: every
-//! request is made to the managed instance's loopback REST port with the
-//! password held in Odin's private configuration store.
+//! request is made to the managed instance's loopback REST port. Enablement,
+//! port, and password are read directly from PalWorldSettings.ini.
 
 use std::time::Duration;
 
@@ -202,8 +202,7 @@ mod tests {
             config: GenericGameConfig {
                 port: 8211,
                 query_port: None,
-                admin_port: Some(8212),
-                settings: json!({"rest_api_enabled": false}),
+                admin_port: None,
                 auto_restart: false,
             },
             pid: None,

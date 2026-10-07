@@ -50,16 +50,12 @@ pub struct DeleteGameInstanceQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RustConfigUpdateRequest {
     pub port: Option<u16>,
     pub query_port: Option<u16>,
     pub rcon_port: Option<u16>,
     pub rcon_password: Option<String>,
-    pub hostname: Option<String>,
-    pub level: Option<String>,
-    pub seed: Option<u32>,
-    pub world_size: Option<u32>,
-    pub max_players: Option<u16>,
     pub auto_restart: Option<bool>,
 }
 
@@ -357,21 +353,6 @@ async fn update_rust_config_for(
         if let Some(rcon_password) = request.rcon_password {
             config.rcon_password = rcon_password;
         }
-        if let Some(hostname) = request.hostname {
-            config.hostname = hostname;
-        }
-        if let Some(level) = request.level {
-            config.level = level;
-        }
-        if let Some(seed) = request.seed {
-            config.seed = seed;
-        }
-        if let Some(world_size) = request.world_size {
-            config.world_size = world_size;
-        }
-        if let Some(max_players) = request.max_players {
-            config.max_players = max_players;
-        }
         if let Some(auto_restart) = request.auto_restart {
             config.auto_restart = auto_restart;
         }
@@ -398,7 +379,6 @@ async fn update_generic_config_for(
             port: request.port,
             query_port: request.query_port,
             admin_port: request.admin_port,
-            settings: Value::Object(Default::default()),
             auto_restart: request.auto_restart,
         };
         let instance = game_instances::update_generic_config(&db, game, &name, &config)?;
@@ -1085,6 +1065,15 @@ fn valheim_view(
             "password": instance.state.password,
             "public": instance.state.public,
             "auto_restart": instance.state.auto_restart,
+            "save_interval": instance.state.save_interval,
+            "backups": instance.state.backups,
+            "backup_short": instance.state.backup_short,
+            "backup_long": instance.state.backup_long,
+            "crossplay": instance.state.crossplay,
+            "playfab_instance_id": instance.state.playfab_instance_id,
+            "preset": instance.state.preset,
+            "modifiers": instance.state.modifiers,
+            "set_keys": instance.state.set_keys,
         }),
     })
 }
@@ -1109,11 +1098,6 @@ fn rust_view(paths: &Paths, instance: RustInstance) -> ManagedInstanceView {
             "query_port": instance.config.query_port,
             "rcon_port": instance.config.rcon_port,
             "rcon_password": instance.config.rcon_password,
-            "hostname": instance.config.hostname,
-            "level": instance.config.level,
-            "seed": instance.config.seed,
-            "world_size": instance.config.world_size,
-            "max_players": instance.config.max_players,
             "auto_restart": instance.config.auto_restart,
         }),
     }
@@ -1244,7 +1228,7 @@ mod tests {
         let view = generic_view(&paths, instance);
 
         assert_eq!(view.config["port"], 8211);
-        assert_eq!(view.config["admin_port"], 8212);
+        assert!(view.config["admin_port"].is_null());
         assert!(view.config.get("admin_password").is_none());
         assert!(view.config.get("server_password").is_none());
     }

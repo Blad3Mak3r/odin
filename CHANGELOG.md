@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-10-07
+
+### What's Changed
+- Use native configuration files for managed games by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/111
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.14.6...v0.14.7
+
 ## [0.14.6] - 2026-10-07
 
 ### What's Changed

@@ -190,11 +190,14 @@ function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId
   const update = useUpdateAdvancedConfig(id)
   const initialize = useInitializeAdvancedConfig(id)
   const [values, setValues] = useState<Record<string, string>>({})
+  const [newEntries, setNewEntries] = useState<{ id: number; file: string; key: string; value: string }[]>([])
+  const [nextNewEntryId, setNextNewEntryId] = useState(0)
   const [search, setSearch] = useState('')
   useEffect(() => {
     const initial: Record<string, string> = {}
     for (const file of config.data?.files ?? []) for (const section of file.sections) for (const entry of section.entries) initial[`${file.id}:${entry.key}`] = entry.value
     setValues(initial)
+    setNewEntries([])
   }, [config.data])
   if (config.isLoading) return null
   if (config.isError) return <QueryError error={config.error} />
@@ -206,16 +209,28 @@ function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId
   const visibleFiles = generatedFiles.map((file) => ({
     ...file,
     sections: file.sections.map((section) => ({ ...section, entries: section.entries.filter((entry) => entry.label.toLocaleLowerCase().includes(normalizedSearch)) })).filter((section) => section.entries.length > 0),
-  })).filter((file) => file.sections.length > 0)
+  })).filter((file) => file.sections.length > 0 || file.allows_new_keys)
   const save = () => {
     const changes: AdvancedConfigChange[] = []
     for (const file of generatedFiles) for (const section of file.sections) for (const entry of section.entries) {
       const value = values[`${file.id}:${entry.key}`] ?? entry.value
       if (!entry.managed && value !== entry.value) changes.push({ file: file.id, key: entry.key, value })
     }
+    for (const entry of newEntries) {
+      if (!entry.key.trim()) {
+        toast.error('Enter a configuration key')
+        return
+      }
+      changes.push({ file: entry.file, key: entry.key.trim(), value: entry.value })
+    }
     if (changes.length > 0) update.mutate(changes, { onSuccess: () => toast.success('Advanced configuration saved'), onError: (error) => toast.error(error.message) })
   }
-  return <div className="flex flex-col gap-4"><div><p className="text-sm text-muted-foreground">Settings come directly from native server files. Stop the server before saving.</p>{missingFiles.length > 0 && canInitialize ? <div className="mt-2 flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">Initialize missing files from the installed server template.</p><Button type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Configuration files initialized'), onError: (error) => toast.error(error.message) })}>Initialize config files</Button></div> : missingFiles.length > 0 && <p className="mt-2 text-sm text-muted-foreground">Missing: {missingFiles.map((file) => file.path).join(', ')}.</p>}</div>{generatedFiles.length > 0 && <Input aria-label="Search configuration keys" placeholder="Search configuration keys…" value={search} onChange={(event) => setSearch(event.target.value)} />}{visibleFiles.map((file) => <div key={file.id} className="rounded-xl border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="divide-y">{file.sections.map((section) => <details key={section.id} open={normalizedSearch.length > 0} className="group"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">{section.label}</summary><div className="grid gap-3 border-t px-4 py-4 sm:grid-cols-2">{section.entries.map((entry) => <div key={entry.key} className="flex flex-col gap-1"><Label htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.label}</Label><Input id={`advanced-${file.id}-${entry.key}`} type={entry.sensitive ? 'password' : 'text'} placeholder={entry.sensitive && entry.configured ? '••••••••' : entry.managed ? 'Managed by Odin' : undefined} value={values[`${file.id}:${entry.key}`] ?? entry.value} disabled={running || entry.managed} onChange={(event) => setValues((current) => ({ ...current, [`${file.id}:${entry.key}`]: event.target.value }))} /></div>)}</div></details>)}</div></div>)}{generatedFiles.length > 0 && visibleFiles.length === 0 && <p className="text-sm text-muted-foreground">No configuration keys match “{search}”.</p>}{generatedFiles.length > 0 && <Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save configuration</Button>}</div>
+  const addEntry = (file: string) => {
+    setNewEntries((current) => [...current, { id: nextNewEntryId, file, key: '', value: '' }])
+    setNextNewEntryId((current) => current + 1)
+  }
+  const updateNewEntry = (entryId: number, field: 'key' | 'value', value: string) => setNewEntries((current) => current.map((entry) => entry.id === entryId ? { ...entry, [field]: value } : entry))
+  return <div className="flex flex-col gap-4"><div><p className="text-sm text-muted-foreground">Settings come directly from native server files. Stop the server before saving.</p>{missingFiles.length > 0 && canInitialize ? <div className="mt-2 flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">Initialize missing files from the installed server template.</p><Button type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Configuration files initialized'), onError: (error) => toast.error(error.message) })}>Initialize config files</Button></div> : missingFiles.length > 0 && <p className="mt-2 text-sm text-muted-foreground">Missing: {missingFiles.map((file) => file.path).join(', ')}.</p>}</div>{generatedFiles.length > 0 && <Input aria-label="Search configuration keys" placeholder="Search configuration keys…" value={search} onChange={(event) => setSearch(event.target.value)} />}{visibleFiles.map((file) => <div key={file.id} className="rounded-xl border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="divide-y">{file.sections.map((section) => <details key={section.id} open={normalizedSearch.length > 0} className="group"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">{section.label}</summary><div className="grid gap-3 border-t px-4 py-4 sm:grid-cols-2">{section.entries.map((entry) => <div key={entry.key} className="flex flex-col gap-1"><Label htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.label}</Label><Input id={`advanced-${file.id}-${entry.key}`} type={entry.sensitive ? 'password' : 'text'} placeholder={entry.sensitive && entry.configured ? '••••••••' : entry.managed ? 'Managed by Odin' : undefined} value={values[`${file.id}:${entry.key}`] ?? entry.value} disabled={running || entry.managed} onChange={(event) => setValues((current) => ({ ...current, [`${file.id}:${entry.key}`]: event.target.value }))} /></div>)}</div></details>)}</div>{file.allows_new_keys && <div className="flex flex-col gap-3 border-t px-4 py-4"><div><p className="text-sm font-medium">Add configuration key</p><p className="text-xs text-muted-foreground">Use the Rust convar name and its value exactly as the server expects.</p></div>{newEntries.filter((entry) => entry.file === file.id).map((entry) => <div key={entry.id} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"><Input aria-label="New configuration key" placeholder="server.example" value={entry.key} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'key', event.target.value)} /><Input aria-label="New configuration value" placeholder="Value" value={entry.value} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'value', event.target.value)} /><Button type="button" variant="outline" disabled={running} onClick={() => setNewEntries((current) => current.filter((currentEntry) => currentEntry.id !== entry.id))}>Remove</Button></div>)}<Button className="w-fit" type="button" variant="outline" disabled={running} onClick={() => addEntry(file.id)}>Add key</Button></div>}</div>)}{generatedFiles.length > 0 && visibleFiles.length === 0 && <p className="text-sm text-muted-foreground">No configuration keys match “{search}”.</p>}{generatedFiles.length > 0 && <Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save configuration</Button>}</div>
 }
 
 function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'>; config: GenericConfig; running: boolean }) {

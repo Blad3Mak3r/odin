@@ -69,6 +69,7 @@ export interface AdvancedConfigFile {
   path: string
   format: string
   exists: boolean
+  allows_new_keys: boolean
   sections: AdvancedConfigSection[]
 }
 

@@ -428,7 +428,9 @@ mod tests {
         assert_ne!(original.config.rcon_password, cloned.config.rcon_password);
         assert_eq!(original.config.seed, cloned.config.seed);
         assert!(cloned.pid.is_none());
-        assert!(!rust::backup_source(&paths, &cloned).exists());
+        let identity = rust::backup_source(&paths, &cloned);
+        assert!(identity.is_dir());
+        assert!(std::fs::read_dir(identity).unwrap().next().is_none());
         assert!(
             crate::db::backup_storage::get_for_game(&db, GameId::Rust, "target")
                 .unwrap()

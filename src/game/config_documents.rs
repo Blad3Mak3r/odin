@@ -22,6 +22,8 @@ pub struct AdvancedConfigFile {
     pub path: String,
     pub format: &'static str,
     pub exists: bool,
+    /// Whether operators may add previously absent keys to this document.
+    pub allows_new_keys: bool,
     pub sections: Vec<AdvancedConfigSection>,
 }
 
@@ -234,6 +236,7 @@ pub fn list_rust(paths: &Paths, instance: &RustInstance) -> Result<Vec<AdvancedC
         path: "server/cfg/server.cfg".into(),
         format: "rust-cfg",
         exists: contents.is_some(),
+        allows_new_keys: true,
         sections: sections.unwrap_or_default(),
     }])
 }
@@ -249,7 +252,7 @@ pub fn apply_rust(
     let path = rust_document_path(paths, instance);
     let original = fs::read_to_string(&path)
         .with_context(|| format!("{} has not been created", path.display()))?;
-    let keys = parse(Format::RustCfg, &original)?
+    let mut keys = parse(Format::RustCfg, &original)?
         .into_iter()
         .map(|entry| entry.key)
         .collect::<std::collections::HashSet<_>>();
@@ -261,8 +264,11 @@ pub fn apply_rust(
         if RUST_MANAGED.contains(&change.key.as_str()) {
             bail!("{} is managed by Odin", change.key);
         }
+        validate_rust_convar(&change.key, &change.value)?;
         if !keys.contains(change.key.as_str()) {
-            bail!("{} does not exist in server.cfg", change.key);
+            updated = append_rust_cfg(&updated, &change.key, &change.value);
+            keys.insert(change.key.clone());
+            continue;
         }
         if is_sensitive_key(&change.key) && change.value.is_empty() {
             continue;
@@ -360,6 +366,7 @@ pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<Advance
                 path: spec.path.into(),
                 format: format_name(spec.format),
                 exists,
+                allows_new_keys: false,
                 sections: sections.unwrap_or_default(),
             })
         })
@@ -1198,6 +1205,31 @@ fn set_rust_cfg(contents: &str, key: &str, value: &str) -> Result<String> {
     })
 }
 
+fn append_rust_cfg(contents: &str, key: &str, value: &str) -> String {
+    let separator = if contents.is_empty() || contents.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    format!("{contents}{separator}{key} {value}\n")
+}
+
+fn validate_rust_convar(key: &str, value: &str) -> Result<()> {
+    anyhow::ensure!(
+        !key.is_empty()
+            && key
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric()
+                    || matches!(character, '.' | '_' | '-')),
+        "Rust convar names may contain only letters, numbers, dots, underscores, and hyphens"
+    );
+    anyhow::ensure!(
+        !value.contains('\n') && !value.contains('\r'),
+        "Rust convar values cannot contain line breaks"
+    );
+    Ok(())
+}
+
 fn set_xml(contents: &str, key: &str, value: &str) -> Result<String> {
     let pattern = regex::Regex::new(r"(?is)<property\b[^>]*>")?;
     for tag in pattern.find_iter(contents) {
@@ -1407,6 +1439,29 @@ mod tests {
                 tags: Vec::new(),
             },
             config: crate::db::game_instances::default_generic_config(game, "server"),
+            pid: None,
+            pid_started_at: None,
+            last_started_at: None,
+            last_stopped_at: None,
+        }
+    }
+
+    fn rust_instance() -> RustInstance {
+        RustInstance {
+            identity: crate::db::game_instances::GameInstanceIdentity {
+                id: "id".into(),
+                game: GameId::Rust,
+                name: "rusty".into(),
+                created_at: chrono::Utc::now(),
+                tags: Vec::new(),
+            },
+            config: crate::db::game_instances::RustInstanceConfig {
+                port: 28015,
+                query_port: 28016,
+                rcon_port: 28017,
+                rcon_password: "secret".into(),
+                auto_restart: false,
+            },
             pid: None,
             pid_started_at: None,
             last_started_at: None,
@@ -1775,6 +1830,62 @@ mod tests {
             set_rust_cfg(input, "server.hostname", "\"New name\"").unwrap(),
             "// keep this\nserver.hostname \"New name\"\nserver.maxplayers 20\n"
         );
+    }
+
+    #[test]
+    fn rust_configuration_allows_operators_to_add_safe_convars() {
+        let directory =
+            std::env::temp_dir().join(format!("odin-rust-config-add-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: directory.clone(),
+            config_dir: directory.clone(),
+        };
+        let instance = rust_instance();
+        let path = rust_document_path(&paths, &instance);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "server.hostname \"Odin\"\n").unwrap();
+
+        assert!(list_rust(&paths, &instance).unwrap()[0].allows_new_keys);
+        apply_rust(
+            &paths,
+            &instance,
+            &[AdvancedConfigChange {
+                file: "server".into(),
+                key: "server.description".into(),
+                value: "\"A Rust server\"".into(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "server.hostname \"Odin\"\nserver.description \"A Rust server\"\n"
+        );
+        assert!(
+            apply_rust(
+                &paths,
+                &instance,
+                &[AdvancedConfigChange {
+                    file: "server".into(),
+                    key: "rcon.port".into(),
+                    value: "28018".into(),
+                }],
+            )
+            .is_err()
+        );
+        assert!(
+            apply_rust(
+                &paths,
+                &instance,
+                &[AdvancedConfigChange {
+                    file: "server".into(),
+                    key: "server.motd".into(),
+                    value: "hello\nserver.port 28016".into(),
+                }],
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(paths.data_dir).unwrap();
     }
 
     #[test]

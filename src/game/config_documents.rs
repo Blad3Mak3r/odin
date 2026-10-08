@@ -1251,13 +1251,12 @@ fn remove_rust_cfg(contents: &str, key: &str) -> Result<String> {
     let mut found = false;
     let output = contents
         .lines()
-        .filter_map(|line| {
-            if rust_cfg_line_key(line) == Some(key) {
+        .filter(|line| {
+            let remove = rust_cfg_line_key(line) == Some(key);
+            if remove {
                 found = true;
-                None
-            } else {
-                Some(line)
             }
+            !remove
         })
         .collect::<Vec<_>>()
         .join("\n");

@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.9] - 2026-10-08
+
+### What's Changed
+- Fix: allow managing custom Rust configuration keys by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/114
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.14.8...v0.14.9
+
 ## [0.14.8] - 2026-10-07
 
 ### What's Changed

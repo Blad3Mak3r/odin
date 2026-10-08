@@ -53,6 +53,8 @@ pub struct AdvancedConfigChange {
     pub file: String,
     pub key: String,
     pub value: String,
+    #[serde(default)]
+    pub delete: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,7 +266,15 @@ pub fn apply_rust(
         if RUST_MANAGED.contains(&change.key.as_str()) {
             bail!("{} is managed by Odin", change.key);
         }
-        validate_rust_convar(&change.key, &change.value)?;
+        validate_rust_convar_name(&change.key)?;
+        if change.delete {
+            if !keys.remove(change.key.as_str()) {
+                bail!("{} does not exist in server.cfg", change.key);
+            }
+            updated = remove_rust_cfg(&updated, &change.key)?;
+            continue;
+        }
+        validate_rust_convar_value(&change.value)?;
         if !keys.contains(change.key.as_str()) {
             updated = append_rust_cfg(&updated, &change.key, &change.value);
             keys.insert(change.key.clone());
@@ -691,6 +701,9 @@ pub fn apply(
             .collect();
         let mut updated = original;
         for change in changes {
+            if change.delete {
+                bail!("deleting advanced configuration keys is not supported for this game");
+            }
             if spec.managed.contains(&change.key.as_str()) {
                 bail!("{} is managed by Odin", change.key);
             }
@@ -1214,7 +1227,7 @@ fn append_rust_cfg(contents: &str, key: &str, value: &str) -> String {
     format!("{contents}{separator}{key} {value}\n")
 }
 
-fn validate_rust_convar(key: &str, value: &str) -> Result<()> {
+fn validate_rust_convar_name(key: &str) -> Result<()> {
     anyhow::ensure!(
         !key.is_empty()
             && key
@@ -1223,11 +1236,47 @@ fn validate_rust_convar(key: &str, value: &str) -> Result<()> {
                     || matches!(character, '.' | '_' | '-')),
         "Rust convar names may contain only letters, numbers, dots, underscores, and hyphens"
     );
+    Ok(())
+}
+
+fn validate_rust_convar_value(value: &str) -> Result<()> {
     anyhow::ensure!(
         !value.contains('\n') && !value.contains('\r'),
         "Rust convar values cannot contain line breaks"
     );
     Ok(())
+}
+
+fn remove_rust_cfg(contents: &str, key: &str) -> Result<String> {
+    let mut found = false;
+    let output = contents
+        .lines()
+        .filter(|line| {
+            let remove = rust_cfg_line_key(line) == Some(key);
+            if remove {
+                found = true;
+            }
+            !remove
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !found {
+        bail!("Rust convar {key} does not exist");
+    }
+    Ok(if output.is_empty() {
+        output
+    } else if contents.ends_with('\n') {
+        format!("{output}\n")
+    } else {
+        output
+    })
+}
+
+fn rust_cfg_line_key(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    (!trimmed.starts_with('#') && !trimmed.starts_with("//"))
+        .then(|| trimmed.split_whitespace().next())
+        .flatten()
 }
 
 fn set_xml(contents: &str, key: &str, value: &str) -> Result<String> {
@@ -1804,11 +1853,13 @@ mod tests {
                     file: "server".into(),
                     key: "PublicPort".into(),
                     value: "9000".into(),
+                    delete: false,
                 },
                 AdvancedConfigChange {
                     file: "server".into(),
                     key: "RESTAPIPort".into(),
                     value: "9001".into(),
+                    delete: false,
                 },
             ],
         )
@@ -1843,7 +1894,7 @@ mod tests {
         let instance = rust_instance();
         let path = rust_document_path(&paths, &instance);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "server.hostname \"Odin\"\n").unwrap();
+        fs::write(&path, "// keep this\nserver.hostname \"Odin\"\n").unwrap();
 
         assert!(list_rust(&paths, &instance).unwrap()[0].allows_new_keys);
         apply_rust(
@@ -1853,13 +1904,29 @@ mod tests {
                 file: "server".into(),
                 key: "server.description".into(),
                 value: "\"A Rust server\"".into(),
+                delete: false,
             }],
         )
         .unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            "server.hostname \"Odin\"\nserver.description \"A Rust server\"\n"
+            "// keep this\nserver.hostname \"Odin\"\nserver.description \"A Rust server\"\n"
+        );
+        apply_rust(
+            &paths,
+            &instance,
+            &[AdvancedConfigChange {
+                file: "server".into(),
+                key: "server.description".into(),
+                value: String::new(),
+                delete: true,
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "// keep this\nserver.hostname \"Odin\"\n"
         );
         assert!(
             apply_rust(
@@ -1869,6 +1936,7 @@ mod tests {
                     file: "server".into(),
                     key: "rcon.port".into(),
                     value: "28018".into(),
+                    delete: false,
                 }],
             )
             .is_err()
@@ -1881,6 +1949,7 @@ mod tests {
                     file: "server".into(),
                     key: "server.motd".into(),
                     value: "hello\nserver.port 28016".into(),
+                    delete: false,
                 }],
             )
             .is_err()
@@ -2005,7 +2074,8 @@ mod tests {
                 &[AdvancedConfigChange {
                     file: "server".into(),
                     key: "ServerName".into(),
-                    value: "Odin".into()
+                    value: "Odin".into(),
+                    delete: false,
                 }]
             )
             .is_err()

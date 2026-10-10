@@ -328,3 +328,30 @@ pub(crate) fn replace_from_archive(archive: &Path, destination: &Path) -> Result
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replace_from_archive_preserves_existing_saves_when_extraction_fails() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-backup-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let saves = dir.join("saves");
+        std::fs::create_dir(&saves).unwrap();
+        std::fs::write(saves.join("existing-save.db"), "original").unwrap();
+        let archive = dir.join("invalid.zip");
+        std::fs::write(&archive, "not a zip archive").unwrap();
+
+        assert!(replace_from_archive(&archive, &saves).is_err());
+        assert_eq!(
+            std::fs::read_to_string(saves.join("existing-save.db")).unwrap(),
+            "original"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

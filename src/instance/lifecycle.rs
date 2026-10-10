@@ -47,6 +47,27 @@ impl LifecycleLock {
     }
 }
 
+/// A set of lifecycle locks acquired in lexical name order. Taking the locks
+/// in a fixed order lets operations that affect two instances (such as rename
+/// and clone) run concurrently with unrelated instances without deadlocking.
+pub(crate) struct LifecycleLocks {
+    _locks: Vec<LifecycleLock>,
+}
+
+impl LifecycleLocks {
+    pub(crate) fn acquire(paths: &Paths, names: &[&str]) -> Result<Self> {
+        let mut names = names.to_vec();
+        names.sort_unstable();
+        names.dedup();
+
+        let mut locks = Vec::with_capacity(names.len());
+        for name in names {
+            locks.push(LifecycleLock::acquire(paths, name)?);
+        }
+        Ok(Self { _locks: locks })
+    }
+}
+
 /// The single canonical liveness check: a live `(pid, pid_started_at)`
 /// comparison against the OS process table, never a cached/in-memory
 /// value. Correct standalone (no `odin serve` needed) and from the web
@@ -197,6 +218,8 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
         bail!("new name is the same as the current name");
     }
 
+    let _locks = LifecycleLocks::acquire(paths, &[old_name, new_name])?;
+
     let mut instance = Instance::load_existing(paths, db, old_name)?;
 
     if is_running(&instance)? {
@@ -209,31 +232,47 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
         bail!(InstanceError::AlreadyExists(new_name.to_string()));
     }
 
+    let old_dir = instance.dir.clone();
     let new_dir = paths.instance_dir(new_name);
-    std::fs::rename(&instance.dir, &new_dir).with_context(|| {
+    std::fs::rename(&old_dir, &new_dir).with_context(|| {
         format!(
             "failed to move instance directory {} to {}",
-            instance.dir.display(),
+            old_dir.display(),
             new_dir.display()
         )
     })?;
 
-    instance.dir = new_dir;
+    instance.dir = new_dir.clone();
     instance.state.name = new_name.to_string();
-    // The instance row is keyed by name, so saving under the new name inserts
-    // a fresh row rather than updating the old one — the old row (and its
-    // installed_mods) must be deleted explicitly afterwards.
-    instance.save(db)?;
-    crate::db::instances::delete(db, old_name)?;
+    if let Err(error) = crate::db::instances::rename(db, old_name, &instance.state) {
+        if let Err(rollback_error) = std::fs::rename(&new_dir, &old_dir) {
+            return Err(error.context(format!(
+                "failed to restore instance directory {} after database rename failed: {rollback_error}",
+                old_dir.display()
+            )));
+        }
+        return Err(error);
+    }
 
     Ok(instance)
 }
 
 /// Removes an instance's on-disk directory — optionally preserving its
 /// `backups` subdirectory — and its row from the database. Shared by
-/// `commands::delete::run` and `web::routes::instances::delete_instance`,
-/// which differ only in how they gate/confirm the call, not in what it does.
-pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
+/// `commands::delete::run` and `web::routes::instances::delete_instance`.
+/// It locks and rechecks liveness itself so a concurrent start cannot race
+/// between a caller's confirmation and deletion.
+pub fn delete(paths: &Paths, db: &Db, name: &str, keep_backups: bool) -> Result<()> {
+    let _lock = LifecycleLock::acquire(paths, name)?;
+    let instance = Instance::load_existing(paths, db, name)?;
+    if is_running(&instance)? {
+        bail!(InstanceError::AlreadyRunning(name.to_string()));
+    }
+
+    delete_unlocked(db, &instance, keep_backups)
+}
+
+fn delete_unlocked(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
     if keep_backups {
         let backups_dir = paths::instance_backups_dir(&instance.dir);
         for entry in std::fs::read_dir(&instance.dir)
@@ -306,6 +345,8 @@ fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instance::lists::{self, ListKind};
+    use crate::instance::state::InstalledMod;
 
     fn temp_paths(label: &str) -> Paths {
         let dir = std::env::temp_dir().join(format!(
@@ -332,5 +373,29 @@ mod tests {
         LifecycleLock::acquire(&paths, "bravo").unwrap();
         drop(first);
         LifecycleLock::acquire(&paths, "alpha").unwrap();
+    }
+
+    #[test]
+    fn rename_moves_directory_and_preserves_access_lists() {
+        let paths = temp_paths("rename");
+        let db = Db::open(&paths).unwrap();
+        let mut instance = Instance::create(&paths, &db, "old-name").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "author-mod".to_string(),
+            version: "1.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: true,
+            pinned: false,
+        });
+        instance.save(&db).unwrap();
+        let ids = vec!["76561197960287930".to_string()];
+        lists::write(&db, &instance, ListKind::Admin, &ids).unwrap();
+
+        let renamed = rename(&paths, &db, "old-name", "new-name").unwrap();
+
+        assert!(!paths.instance_dir("old-name").exists());
+        assert!(renamed.dir.exists());
+        assert_eq!(renamed.state.installed_mods.len(), 1);
+        assert_eq!(lists::read(&db, &renamed, ListKind::Admin).unwrap(), ids);
     }
 }

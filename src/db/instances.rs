@@ -43,6 +43,26 @@ pub fn save_clone(
     Ok(())
 }
 
+/// Moves an instance to a new name while preserving its installed mods and
+/// access lists. The replacement row, list move, and old-row deletion share
+/// one transaction so observers cannot see a partially renamed instance.
+pub fn rename(db: &Db, old_name: &str, state: &InstanceState) -> Result<()> {
+    let mut conn = db.conn();
+    let tx = conn
+        .transaction()
+        .context("failed to start rename transaction")?;
+    save_in_tx(&tx, state)?;
+    tx.execute(
+        "UPDATE access_list_entries SET instance_name = ?1 WHERE instance_name = ?2",
+        params![state.name, old_name],
+    )
+    .with_context(|| format!("failed to move access lists from '{old_name}'"))?;
+    tx.execute("DELETE FROM instances WHERE name = ?1", params![old_name])
+        .with_context(|| format!("failed to delete previous instance '{old_name}'"))?;
+    tx.commit().context("failed to commit rename transaction")?;
+    Ok(())
+}
+
 /// Same as [`save`], but against an already-open transaction — used by the
 /// bootstrap importer so several instances land atomically in one go.
 pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> {
@@ -360,6 +380,31 @@ mod tests {
         let loaded = load(&db, "my-server").unwrap().unwrap();
         assert_eq!(loaded.installed_mods.len(), 1);
         assert_eq!(loaded.installed_mods[0].mod_id, "other-mod");
+    }
+
+    #[test]
+    fn rename_preserves_installed_mods_and_access_lists() {
+        let db = temp_db("rename");
+        let old = sample("old-name");
+        save(&db, &old).unwrap();
+        let admin_ids = vec!["76561197960287930".to_string()];
+        crate::db::lists::replace(&db, "old-name", "admin", &admin_ids).unwrap();
+
+        let mut renamed = old.clone();
+        renamed.name = "new-name".to_string();
+        rename(&db, "old-name", &renamed).unwrap();
+
+        assert!(load(&db, "old-name").unwrap().is_none());
+        let loaded = load(&db, "new-name").unwrap().unwrap();
+        assert_eq!(loaded.installed_mods.len(), 1);
+        assert_eq!(loaded.installed_mods[0].mod_id, "owner-mod");
+        assert_eq!(loaded.installed_mods[0].version, "1.0.0");
+        assert!(loaded.installed_mods[0].enabled);
+        assert!(!loaded.installed_mods[0].pinned);
+        assert_eq!(
+            crate::db::lists::read(&db, "new-name", "admin").unwrap(),
+            admin_ids
+        );
     }
 
     #[test]

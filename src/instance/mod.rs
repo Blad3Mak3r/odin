@@ -118,6 +118,8 @@ pub fn clone_configuration(
         return Err(InstanceError::InvalidWorldName.into());
     }
 
+    let _locks = lifecycle::LifecycleLocks::acquire(paths, &[source_name, target_name])?;
+
     let source = Instance::load_existing(paths, db, source_name)?;
     if lifecycle::is_running(&source)? {
         return Err(InstanceError::AlreadyRunning(source_name.to_string()).into());

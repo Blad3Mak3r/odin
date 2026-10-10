@@ -25,7 +25,7 @@ pub fn run(paths: &Paths, db: &Db, server_name: &str, yes: bool, keep_backups: b
         }
     }
 
-    lifecycle::delete(db, &instance, keep_backups)?;
+    lifecycle::delete(paths, db, server_name, keep_backups)?;
 
     println!("deleted '{server_name}'");
     Ok(())

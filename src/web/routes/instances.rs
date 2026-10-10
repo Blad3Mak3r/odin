@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::activity::ActivityKind;
 use crate::db::Db;
 use crate::instance::state::InstanceState;
-use crate::instance::{self, Instance, InstanceError, lifecycle};
+use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
 use crate::supervisor::client;
 use crate::supervisor::protocol::Response;
@@ -208,11 +208,7 @@ pub async fn delete_instance(
     let activity = state.activity.clone();
     let delete_name = name.clone();
     run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &delete_name)?;
-        if lifecycle::is_running(&instance)? {
-            return Err(InstanceError::AlreadyRunning(delete_name).into());
-        }
-        lifecycle::delete(&db, &instance, query.keep_backups)?;
+        lifecycle::delete(&paths, &db, &delete_name, query.keep_backups)?;
         activity.record(ActivityKind::InstanceDeleted, Some(delete_name));
         Ok(())
     })

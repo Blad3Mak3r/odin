@@ -135,6 +135,20 @@ fn validate_version(version: &str) -> Result<()> {
     Ok(())
 }
 
+/// Mod ids become directory and symlink names, so they must remain one normal
+/// path component.
+fn validate_mod_id(mod_id: &str) -> Result<()> {
+    let mut components = Path::new(mod_id).components();
+    if mod_id.is_empty()
+        || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+        || mod_id.contains('\\')
+    {
+        anyhow::bail!("'{mod_id}' is not a safe mod id");
+    }
+    Ok(())
+}
+
 pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
     if lifecycle::is_running(&instance)? {
@@ -784,6 +798,7 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
 /// Removes a mod's payload from the global store. Refuses if any instance
 /// still references it — it must be removed per-instance first via `remove`.
 pub fn prune_global(paths: &Paths, db: &Db, mod_id: &str) -> Result<()> {
+    validate_mod_id(mod_id)?;
     let in_use = crate::instance::list_all(paths, db)?
         .into_iter()
         .any(|instance| {
@@ -811,6 +826,7 @@ pub fn prune_global(paths: &Paths, db: &Db, mod_id: &str) -> Result<()> {
 /// Removes one cached version while preserving the other versions of the
 /// same mod. Refuses while any instance still references the exact payload.
 pub fn prune_version(paths: &Paths, db: &Db, mod_id: &str, version: &str) -> Result<()> {
+    validate_mod_id(mod_id)?;
     validate_version(version)?;
     let in_use = crate::instance::list_all(paths, db)?
         .into_iter()
@@ -882,6 +898,7 @@ fn ensure_global_mod(
     version_number: &str,
     payload: ModPayload,
 ) -> Result<PathBuf> {
+    validate_mod_id(mod_id)?;
     validate_version(version_number)?;
     let final_dir = paths.mod_version_dir(mod_id, version_number);
     if crate::db::global_mods::contains(db, mod_id, version_number)? && final_dir.is_dir() {
@@ -1153,6 +1170,17 @@ mod tests {
 
         assert!(!dir.join("evil.txt").exists());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validate_mod_id_rejects_path_traversal() {
+        for mod_id in ["", ".", "..", "../mods", "/tmp/mod", r"..\\mods"] {
+            assert!(
+                validate_mod_id(mod_id).is_err(),
+                "{mod_id:?} must be rejected"
+            );
+        }
+        assert!(validate_mod_id("local:my-mod-ab12cd34").is_ok());
     }
 
     fn temp_paths(label: &str) -> Paths {

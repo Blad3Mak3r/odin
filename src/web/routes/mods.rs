@@ -4,6 +4,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::{Path as FsPath, PathBuf};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
@@ -415,7 +416,7 @@ pub async fn upload_mod(
 ) -> ApiResult<Json<JobHandle>> {
     let mut mod_name: Option<String> = None;
     let mut mod_version: Option<String> = None;
-    let mut zip_path: Option<std::path::PathBuf> = None;
+    let mut zip_file: Option<UploadTempFile> = None;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -448,6 +449,7 @@ pub async fn upload_mod(
                     tokio::fs::create_dir_all(parent).await?;
                 }
                 let mut out = tokio::fs::File::create(&dest).await?;
+                zip_file = Some(UploadTempFile(dest));
                 while let Some(chunk) = field
                     .chunk()
                     .await
@@ -456,7 +458,6 @@ pub async fn upload_mod(
                     out.write_all(&chunk).await?;
                 }
                 out.flush().await?;
-                zip_path = Some(dest);
             }
             _ => {}
         }
@@ -468,12 +469,9 @@ pub async fn upload_mod(
     let mod_version = mod_version
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
-    let zip_path = zip_path.ok_or_else(|| BadRequest("no file was uploaded".to_string()))?;
+    let zip_file = zip_file.ok_or_else(|| BadRequest("no file was uploaded".to_string()))?;
 
-    if let Err(e) = check_not_running(&state, &name).await {
-        tokio::fs::remove_file(&zip_path).await.ok();
-        return Err(e);
-    }
+    check_not_running(&state, &name).await?;
 
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -485,7 +483,7 @@ pub async fn upload_mod(
         },
         move |logger| {
             logger.line(format!("installing uploaded mod '{mod_name}' on '{name}'"));
-            match mods::add_local(&paths, &db, &name, &mod_name, &mod_version, &zip_path) {
+            match mods::add_local(&paths, &db, &name, &mod_name, &mod_version, zip_file.path()) {
                 Ok(mod_id) => {
                     logger.line("done");
                     activity.record(ActivityKind::ModInstalled { mod_id }, Some(name.clone()));
@@ -505,4 +503,90 @@ pub async fn upload_mod_by_id(
 ) -> ApiResult<Json<JobHandle>> {
     let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
     upload_mod(State(state), Path(name), multipart).await
+}
+
+/// Removes an uploaded staging file unless ownership reaches the background
+/// job, which keeps this guard until `mods::add_local` has finished with it.
+struct UploadTempFile(PathBuf);
+
+impl UploadTempFile {
+    fn path(&self) -> &FsPath {
+        &self.0
+    }
+}
+
+impl Drop for UploadTempFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.0)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.0.display(), %error, "failed to remove uploaded mod staging file");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::db::Db;
+    use crate::paths::Paths;
+
+    #[tokio::test]
+    async fn upload_without_name_removes_the_staged_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-mod-upload-test-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = crate::instance::Instance::create(&paths, &db, "test").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "test",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
+        let app = crate::web::router::build_router(AppState::new(paths.clone(), db));
+        let boundary = "odin-upload-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"mod.zip\"\r\n\r\npayload\r\n--{boundary}--\r\n"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/instances/{id}/valheim/mods/upload"))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let staged = std::fs::read_dir(paths.mods_dir()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".upload-tmp-")
+        });
+        assert!(!staged);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

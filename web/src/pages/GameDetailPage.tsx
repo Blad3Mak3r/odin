@@ -101,12 +101,12 @@ function GameInstances({ game }: { game: GameView }) {
 function GameHeader({ game }: { game: GameView }) {
   return (
     <section
-      className="relative overflow-hidden rounded-2xl border bg-cover bg-center p-6 sm:p-8"
+      className="relative overflow-hidden border bg-cover bg-center p-6 sm:p-8"
       style={{ backgroundImage: `linear-gradient(90deg, var(--card), color-mix(in oklab, var(--card) 72%, transparent), transparent), url(${GAME_BANNERS[game.id]})` }}
     >
       <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent" />
       <div className="relative flex items-center gap-5">
-        <GameIcon game={game.id} className="size-20 rounded-2xl shadow-lg" />
+        <GameIcon game={game.id} className="size-20" />
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">{game.name}</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{GAME_DESCRIPTIONS[game.id]}</p>
@@ -125,15 +125,15 @@ function GameTabs({ game }: { game: GameView }) {
 
   return (
     <nav aria-label={`${game.name} sections`} className="overflow-x-auto">
-      <div className="inline-flex h-8 items-center rounded-lg bg-muted p-[3px] text-muted-foreground">
+      <div className="inline-flex h-8 items-center border-b text-muted-foreground">
         {tabs.map((tab) => (
           <NavLink
             key={tab.to}
             to={tab.to}
             end={tab.end}
             className={({ isActive }) => cn(
-              'inline-flex h-[calc(100%-1px)] items-center justify-center rounded-md px-2.5 py-0.5 text-sm font-medium whitespace-nowrap transition-all',
-              isActive ? 'bg-background text-foreground shadow-sm dark:border dark:border-input dark:bg-input/30' : 'text-foreground/60 hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground',
+              'inline-flex h-[calc(100%+1px)] items-center justify-center border-b-2 border-transparent px-2.5 py-0.5 text-sm font-medium whitespace-nowrap transition-colors',
+              isActive ? 'border-foreground text-foreground' : 'text-foreground/60 hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground',
             )}
           >
             {tab.label}

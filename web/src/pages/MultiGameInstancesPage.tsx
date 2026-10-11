@@ -104,7 +104,7 @@ function CreateManagedInstanceDialog({ games }: { games: GameView[] }) {
           <Field>
             <Select.Root value={selectedGame} onValueChange={(value) => value && setGame(value as GameId)}>
               <Select.Label className="text-sm font-medium">Game</Select.Label>
-              <Select.Trigger className="flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm outline-none hover:bg-accent focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+              <Select.Trigger className="flex h-9 w-full items-center justify-between gap-2 rounded-none border bg-background px-3 text-sm outline-none hover:bg-accent focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
                 <Select.Value className="flex items-center gap-2">
                   {(value: GameId | null) => {
                     const selected = games.find(({ id }) => id === value)
@@ -115,10 +115,10 @@ function CreateManagedInstanceDialog({ games }: { games: GameView[] }) {
               </Select.Trigger>
               <Select.Portal>
                 <Select.Positioner sideOffset={4} className="z-50">
-                  <Select.Popup className="min-w-[var(--anchor-width)] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
+                  <Select.Popup className="min-w-[var(--anchor-width)] overflow-hidden rounded-none border bg-popover p-1 text-popover-foreground outline-none">
                     <Select.List>
                       {games.map((availableGame) => (
-                        <Select.Item key={availableGame.id} value={availableGame.id} className="grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground">
+                        <Select.Item key={availableGame.id} value={availableGame.id} className="grid cursor-default grid-cols-[1rem_1fr] items-center gap-2 rounded-none px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground">
                           <Select.ItemIndicator><Check className="size-4" /></Select.ItemIndicator>
                           <Select.ItemText className="flex items-center gap-2"><GameIcon game={availableGame.id} />{availableGame.name}</Select.ItemText>
                         </Select.Item>

@@ -70,10 +70,10 @@ function SidebarNav({
             onClick={onNavigate}
             className={({ isActive }) =>
               cn(
-                'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                'flex items-center gap-2 border-l-2 border-transparent px-3 py-2 text-sm font-medium transition-colors',
                 isActive
-                  ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                  ? 'border-sidebar-foreground bg-sidebar-accent/60 text-sidebar-accent-foreground'
+                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
               )
             }
           >

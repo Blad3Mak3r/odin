@@ -56,7 +56,7 @@ export function SevenDaysSandboxCodeEditor({ value, disabled, onChange }: { valu
       <p className="mb-3 text-sm font-medium">Common rules</p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {CURATED_RULES.map((rule) => <label key={rule.code} className="flex flex-col gap-1 text-sm font-medium">{rule.label}
-          <select className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-50" disabled={disabled} value={encodedValue(value || 'A', rule)} onChange={(event) => onChange(updateRule(value || 'A', rule, event.target.value))}>{rule.values.map((option) => <option key={option} value={option}>{option}</option>)}</select>
+          <select className="h-9 rounded-none border border-input bg-transparent px-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50" disabled={disabled} value={encodedValue(value || 'A', rule)} onChange={(event) => onChange(updateRule(value || 'A', rule, event.target.value))}>{rule.values.map((option) => <option key={option} value={option}>{option}</option>)}</select>
         </label>)}
       </div>
       <p className="mt-3 text-xs text-muted-foreground">Experimental V3 compatibility subset. Use the code field for rules not shown here or for a game version whose SandboxCode format differs.</p>

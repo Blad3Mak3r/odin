@@ -1,6 +1,6 @@
 # Runtime image for one Podman-managed game server.  The game payload is not
 # included: each instance keeps SteamCMD and Valheim in its private bind mount.
-FROM debian:bookworm-slim
+FROM debian:13.6-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -1349,14 +1349,13 @@ mod tests {
             data_dir: dir.clone(),
             config_dir: dir,
         };
-        crate::config::GlobalConfig {
-            data_dir: None,
-            podman: Some(crate::config::PodmanConfig {
-                socket: paths.config_dir.join("unavailable-podman.sock"),
-                runtime_image: None,
-            }),
-        }
-        .save(&paths)
+        std::fs::write(
+            paths.config_file(),
+            format!(
+                "[podman]\nsocket = \"{}\"\n",
+                paths.config_dir.join("unavailable-podman.sock").display()
+            ),
+        )
         .unwrap();
         let db = Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();

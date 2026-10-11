@@ -15,6 +15,7 @@ use crate::web::state::AppState;
 pub struct SettingsView {
     pub nexus_api_key_configured: bool,
     pub instance_defaults: settings::InstanceDefaults,
+    pub config_file: String,
     pub podman: PodmanSettingsView,
 }
 
@@ -37,6 +38,7 @@ pub struct PodmanStatusView {
 pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<SettingsView>> {
     let db = state.db.clone();
     let paths = state.paths.clone();
+    let config_file = paths.config_file().display().to_string();
     let (configured, instance_defaults, podman) = run_blocking(move || {
         Ok((
             settings::get(&db, settings::NEXUS_API_KEY)?.is_some(),
@@ -48,6 +50,7 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Setti
     Ok(Json(SettingsView {
         nexus_api_key_configured: configured,
         instance_defaults,
+        config_file,
         podman: podman_settings(podman).await,
     }))
 }
@@ -101,41 +104,6 @@ async fn podman_settings(config: Option<PodmanConfig>) -> PodmanSettingsView {
         runtime_image,
         status,
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SetPodmanSettingsRequest {
-    #[serde(default)]
-    pub socket: Option<String>,
-    #[serde(default)]
-    pub runtime_image: Option<String>,
-}
-
-pub async fn set_podman_settings(
-    State(state): State<AppState>,
-    Json(request): Json<SetPodmanSettingsRequest>,
-) -> ApiResult<Json<PodmanSettingsView>> {
-    let paths = state.paths.clone();
-    let socket = request.socket.and_then(|socket| {
-        let socket = socket.trim().to_string();
-        (!socket.is_empty()).then_some(socket)
-    });
-    let runtime_image = request.runtime_image.and_then(|image| {
-        let image = image.trim().to_string();
-        (!image.is_empty()).then_some(image)
-    });
-    let config = run_blocking(move || {
-        let mut config = GlobalConfig::load(&paths)?;
-        config.podman = socket.map(|socket| PodmanConfig {
-            socket: socket.into(),
-            runtime_image,
-        });
-        config.save(&paths)?;
-        Ok(config.podman)
-    })
-    .await?;
-    Ok(Json(podman_settings(config).await))
 }
 
 pub async fn set_instance_defaults(

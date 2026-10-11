@@ -379,7 +379,6 @@ pub fn build_router(state: AppState) -> Router {
             "/settings/nexus-api-key",
             put(settings::set_nexus_api_key).delete(settings::clear_nexus_api_key),
         )
-        .route("/settings/podman", put(settings::set_podman_settings))
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))
         .route("/jobs/{id}/sse", get(jobs::job_sse))
@@ -488,6 +487,31 @@ mod tests {
         let db = Arc::new(Db::open(&paths).unwrap());
         let state = AppState::new(paths, db);
         let _ = build_router(state);
+    }
+
+    #[tokio::test]
+    async fn podman_settings_route_is_not_exposed() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-settings-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let app = build_router(AppState::new(paths, db));
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/api/settings/podman")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

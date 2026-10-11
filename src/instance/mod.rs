@@ -9,7 +9,6 @@ pub mod lists;
 pub mod process;
 pub mod state;
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -87,7 +86,7 @@ impl Instance {
     fn create_new(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
 
-        let port = next_available_port(paths, db)?;
+        let port = next_available_port(db)?;
 
         let dir = paths.instance_dir(name);
         // The DB save below has no filesystem side effect (unlike the old
@@ -194,7 +193,7 @@ fn clone_state(
     target_name: &str,
     world_name: &str,
 ) -> Result<Instance> {
-    let mut state = InstanceState::new(target_name, next_available_port(paths, db)?);
+    let mut state = InstanceState::new(target_name, next_available_port(db)?);
     state.world_name = world_name.to_string();
     state.public = source.public;
     state.auto_restart = source.auto_restart;
@@ -225,20 +224,8 @@ fn clone_state(
     })
 }
 
-fn next_available_port(paths: &Paths, db: &Db) -> Result<u16> {
-    let mut reserved_ports = HashSet::new();
-    for instance in list_all(paths, db)? {
-        reserved_ports.extend(crate::game::ports::block(
-            crate::game::GameId::Valheim,
-            instance.state.port,
-        )?);
-    }
-
-    for instance in crate::db::game_instances::list_rust(db)? {
-        reserved_ports.insert(instance.config.port);
-        reserved_ports.insert(instance.config.query_port);
-    }
-
+fn next_available_port(db: &Db) -> Result<u16> {
+    let reserved_ports = crate::db::game_instances::configured_ports(db)?;
     let mut port = DEFAULT_BASE_PORT;
     loop {
         let candidate = crate::game::ports::block(crate::game::GameId::Valheim, port)?;
@@ -398,6 +385,33 @@ mod tests {
         std::fs::create_dir_all(source.dir.join("backups")).unwrap();
         std::fs::write(source.dir.join("backups/old.zip"), "backup").unwrap();
         source
+    }
+
+    #[test]
+    fn create_skips_ports_configured_for_other_games() {
+        let (paths, db) = temp_context("cross-game-port");
+        let palworld = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::Palworld,
+            "palworld",
+        )
+        .unwrap();
+        let config = crate::db::game_instances::GenericGameConfig {
+            port: DEFAULT_BASE_PORT,
+            ..palworld.config
+        };
+        crate::db::game_instances::update_generic_config(
+            &db,
+            crate::game::GameId::Palworld,
+            "palworld",
+            &config,
+        )
+        .unwrap();
+
+        let valheim = Instance::create(&paths, &db, "valheim").unwrap();
+
+        assert_eq!(valheim.state.port, DEFAULT_BASE_PORT + PORT_STRIDE);
     }
 
     #[test]

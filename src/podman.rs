@@ -100,11 +100,20 @@ impl PodmanClient {
     pub async fn pull_image(&self, image: &str) -> Result<()> {
         let response = self
             .client
-            .post(format!("{API_PREFIX}/images/pull?reference={image}"))
+            .post(format!(
+                "{API_PREFIX}/images/pull?reference={image}&quiet=true"
+            ))
             .send()
             .await
             .context("failed to pull Podman runtime image")?;
-        success(response).await?;
+        let pull: PullImageResponse = success(response)
+            .await?
+            .json()
+            .await
+            .context("failed to decode Podman image pull response")?;
+        if let Some(error) = pull.error {
+            bail!("Podman failed to pull image {image}: {error}");
+        }
         Ok(())
     }
 
@@ -114,7 +123,12 @@ impl PodmanClient {
         }
         self.pull_image(image)
             .await
-            .with_context(|| format!("failed to pull runtime image {image}"))
+            .with_context(|| format!("failed to pull runtime image {image}"))?;
+        anyhow::ensure!(
+            self.image_exists(image).await?,
+            "Podman completed the pull but image {image} is unavailable"
+        );
+        Ok(())
     }
 
     pub async fn inspect(&self, name: &str) -> Result<Option<ContainerState>> {
@@ -326,6 +340,11 @@ struct InspectState {
     running: bool,
     #[serde(rename = "Status")]
     status: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PullImageResponse {
+    error: Option<String>,
 }
 
 /// Data written by the host and consumed exclusively by `odin run` inside
@@ -681,6 +700,43 @@ mod tests {
         );
         std::fs::remove_file(socket).ok();
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn client_reports_an_error_embedded_in_an_image_pull_response() {
+        let socket =
+            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            let body = r#"{"error":"manifest unknown"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            request
+        });
+
+        let error = PodmanClient::new(&socket)
+            .unwrap()
+            .pull_image("ghcr.io/example/odin-srv:missing")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("manifest unknown"));
+        assert!(server.join().unwrap().starts_with(
+            "POST /v4.0.0/libpod/images/pull?reference=ghcr.io/example/odin-srv:missing&quiet=true "
+        ));
+        std::fs::remove_file(socket).ok();
     }
 
     #[tokio::test]

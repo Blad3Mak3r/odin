@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-10-11
+
+### What's Changed
+- fix: wait for Podman image pulls by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/124
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.15.1...v0.15.2
+
 ## [0.15.1] - 2026-10-11
 
 ### What's Changed

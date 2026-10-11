@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-11
+
+### What's Changed
+- fix: harden Podman runtime integration by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/123
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.15.0...v0.15.1
+
 ## [0.15.0] - 2026-10-11
 
 ### What's Changed

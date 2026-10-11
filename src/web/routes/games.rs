@@ -1154,11 +1154,11 @@ fn valheim_view(
     };
     Ok(ManagedInstanceView {
         identity,
-        running: if migrated {
-            crate::podman::valheim::is_running(paths, db, &instance)?
-        } else {
-            false
-        },
+        running: migrated
+            && crate::podman::valheim::is_running(paths, db, &instance).unwrap_or_else(|error| {
+                tracing::debug!(instance = %instance.state.name, %error, "failed to inspect Podman container for instance view");
+                false
+            }),
         odin_version,
         capabilities: game::driver(GameId::Valheim).capabilities(),
         config: serde_json::json!({
@@ -1339,6 +1339,38 @@ mod tests {
         assert!(view.config["admin_port"].is_null());
         assert!(view.config.get("admin_password").is_none());
         assert!(view.config.get("server_password").is_none());
+    }
+
+    #[test]
+    fn valheim_view_stays_available_when_podman_is_unreachable() {
+        let dir = std::env::temp_dir().join(format!("odin-games-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        std::fs::write(
+            paths.config_file(),
+            format!(
+                "[podman]\nsocket = \"{}\"\n",
+                paths.config_dir.join("unavailable-podman.sock").display()
+            ),
+        )
+        .unwrap();
+        let db = Db::open(&paths).unwrap();
+        let instance = Instance::create(&paths, &db, "valheim").unwrap();
+        let identity = game_instances::ensure_valheim_identity(
+            &db,
+            &instance.state.name,
+            instance.state.created_at,
+        )
+        .unwrap();
+        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+
+        let view = valheim_view(&paths, &db, instance).unwrap();
+
+        assert!(!view.running);
+        std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 
     fn list_all_for_test(paths: &Paths, db: &Db) -> anyhow::Result<Vec<ManagedInstanceView>> {

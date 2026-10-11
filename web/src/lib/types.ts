@@ -510,6 +510,7 @@ export interface WebhookView {
 export interface SettingsView {
   nexus_api_key_configured: boolean
   instance_defaults: InstanceDefaults
+  config_file: string
   podman: PodmanSettingsView
 }
 
@@ -525,11 +526,6 @@ export interface PodmanStatusView {
   compatible: boolean
   version: string | null
   error: string | null
-}
-
-export interface SetPodmanSettingsRequest {
-  socket: string | null
-  runtime_image: string | null
 }
 
 export interface InstanceDefaults {

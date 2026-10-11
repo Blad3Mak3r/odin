@@ -48,7 +48,6 @@ import type {
   SaveFileEntry,
   SevenDaysPlayer,
   SettingsView,
-  SetPodmanSettingsRequest,
   ValheimRuntimeHealth,
   UptimeScheduleRequest,
   UptimeScheduleView,
@@ -1047,15 +1046,6 @@ export function useSetInstanceDefaults() {
   return useMutation({
     mutationFn: (defaults: InstanceDefaults) =>
       api.put<InstanceDefaults>('/settings/instance-defaults', defaults),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
-  })
-}
-
-export function useSetPodmanSettings() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (settings: SetPodmanSettingsRequest) =>
-      api.put<SettingsView['podman']>('/settings/podman', settings),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   })
 }

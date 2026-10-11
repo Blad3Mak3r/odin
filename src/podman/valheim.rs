@@ -542,6 +542,22 @@ mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 
+    fn write_podman_config(paths: &Paths, socket: std::path::PathBuf) {
+        std::fs::create_dir_all(&paths.config_dir).unwrap();
+        let config = crate::config::GlobalConfig {
+            data_dir: None,
+            podman: Some(crate::config::PodmanConfig {
+                socket,
+                runtime_image: None,
+            }),
+        };
+        std::fs::write(
+            paths.config_file(),
+            toml::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn clean_socket_dir_removes_only_unix_sockets() {
         let directory =
@@ -625,15 +641,7 @@ mod tests {
             }
             requests
         });
-        crate::config::GlobalConfig {
-            data_dir: None,
-            podman: Some(crate::config::PodmanConfig {
-                socket: podman_socket.clone(),
-                runtime_image: None,
-            }),
-        }
-        .save(&paths)
-        .unwrap();
+        write_podman_config(&paths, podman_socket.clone());
 
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
@@ -739,15 +747,7 @@ mod tests {
             }
             requests
         });
-        crate::config::GlobalConfig {
-            data_dir: None,
-            podman: Some(crate::config::PodmanConfig {
-                socket: podman_socket,
-                runtime_image: None,
-            }),
-        }
-        .save(&paths)
-        .unwrap();
+        write_podman_config(&paths, podman_socket);
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
         let identity = identity(&db, &instance).unwrap();

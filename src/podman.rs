@@ -439,11 +439,14 @@ impl ContainerSpec {
                     "--instance-id".to_string(),
                     identity.id.clone(),
                 ],
-                env: vec![
-                    "ODIN_RUNTIME_SPEC=/srv/odin/runtime/runtime.json".to_string(),
-                    "ODIN_RUNTIME_DIR=/run/odin".to_string(),
-                    "HOME=/srv/odin/runtime".to_string(),
-                ],
+                env: std::collections::BTreeMap::from([
+                    (
+                        "ODIN_RUNTIME_SPEC".to_string(),
+                        "/srv/odin/runtime/runtime.json".to_string(),
+                    ),
+                    ("ODIN_RUNTIME_DIR".to_string(), "/run/odin".to_string()),
+                    ("HOME".to_string(), "/srv/odin/runtime".to_string()),
+                ]),
                 labels,
                 user,
                 host_config: HostConfig {
@@ -475,7 +478,7 @@ pub struct CreateContainerRequest {
     pub image: String,
     pub entrypoint: Vec<String>,
     pub command: Vec<String>,
-    pub env: Vec<String>,
+    pub env: std::collections::BTreeMap<String, String>,
     pub labels: std::collections::BTreeMap<String, String>,
     pub user: String,
     pub host_config: HostConfig,
@@ -572,6 +575,10 @@ mod tests {
         );
         assert_eq!(spec.request.host_config.cpu_quota, Some(125_500));
         assert_eq!(spec.request.host_config.memory, Some(123));
+        assert_eq!(
+            spec.request.env.get("ODIN_RUNTIME_SPEC"),
+            Some(&"/srv/odin/runtime/runtime.json".to_string())
+        );
     }
 
     #[test]
@@ -597,9 +604,8 @@ mod tests {
 
     #[tokio::test]
     async fn client_sends_create_request_over_the_configured_unix_socket() {
-        let socket = std::env::current_dir()
-            .unwrap()
-            .join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let socket =
+            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
         let listener = match UnixListener::bind(&socket) {
             Ok(listener) => listener,
             // Some restricted test sandboxes deny AF_UNIX bind entirely.
@@ -663,17 +669,24 @@ mod tests {
             "POST /v4.0.0/libpod/containers/create?name={} ",
             spec.name
         )));
-        assert!(body.contains("\"entrypoint\":[\"/usr/local/bin/odin\"]"));
-        assert!(body.contains("\"network_mode\":\"host\""));
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            body["entrypoint"],
+            serde_json::json!(["/usr/local/bin/odin"])
+        );
+        assert_eq!(body["host_config"]["network_mode"], "host");
+        assert_eq!(
+            body["env"]["ODIN_RUNTIME_SPEC"],
+            "/srv/odin/runtime/runtime.json"
+        );
         std::fs::remove_file(socket).ok();
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[tokio::test]
     async fn client_removes_a_stopped_container_over_the_configured_unix_socket() {
-        let socket = std::env::current_dir()
-            .unwrap()
-            .join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let socket =
+            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
         let listener = match UnixListener::bind(&socket) {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,

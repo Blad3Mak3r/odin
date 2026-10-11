@@ -43,9 +43,10 @@ pub fn save_clone(
     Ok(())
 }
 
-/// Moves an instance to a new name while preserving its installed mods and
-/// access lists. The replacement row, list move, and old-row deletion share
-/// one transaction so observers cannot see a partially renamed instance.
+/// Moves an instance to a new name while preserving every piece of state that
+/// belongs to it. The replacement row, related-record moves, and old-row
+/// deletion share one transaction so observers cannot see a partially renamed
+/// instance.
 pub fn rename(db: &Db, old_name: &str, state: &InstanceState) -> Result<()> {
     let mut conn = db.conn();
     let tx = conn
@@ -57,6 +58,18 @@ pub fn rename(db: &Db, old_name: &str, state: &InstanceState) -> Result<()> {
         params![state.name, old_name],
     )
     .with_context(|| format!("failed to move access lists from '{old_name}'"))?;
+    for table in [
+        "backups",
+        "backup_schedules",
+        "backup_storage_configs",
+        "resource_samples",
+    ] {
+        tx.execute(
+            &format!("UPDATE {table} SET instance_name = ?1 WHERE instance_name = ?2"),
+            params![state.name, old_name],
+        )
+        .with_context(|| format!("failed to move {table} from '{old_name}'"))?;
+    }
     tx.execute("DELETE FROM instances WHERE name = ?1", params![old_name])
         .with_context(|| format!("failed to delete previous instance '{old_name}'"))?;
     tx.commit().context("failed to commit rename transaction")?;
@@ -389,6 +402,34 @@ mod tests {
         save(&db, &old).unwrap();
         let admin_ids = vec!["76561197960287930".to_string()];
         crate::db::lists::replace(&db, "old-name", "admin", &admin_ids).unwrap();
+        let conn = db.conn();
+        conn.execute(
+            "INSERT INTO backups (id, instance_name, created_at, size_bytes)
+             VALUES ('backup-id', 'old-name', '2024-01-01T00:00:00Z', 42)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO backup_schedules
+             (instance_name, interval_hours, retain_count, enabled)
+             VALUES ('old-name', 24, 7, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO backup_storage_configs
+             (instance_name, provider, endpoint, region, bucket, access_key_id, secret_access_key)
+             VALUES ('old-name', 'aws_s3', 'https://s3.example.test', 'us-east-1', 'backups', 'key', 'secret')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes)
+             VALUES ('old-name', '2024-01-01T00:00:00Z', 2.5, 42)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
 
         let mut renamed = old.clone();
         renamed.name = "new-name".to_string();
@@ -405,6 +446,22 @@ mod tests {
             crate::db::lists::read(&db, "new-name", "admin").unwrap(),
             admin_ids
         );
+        let conn = db.conn();
+        for table in [
+            "backups",
+            "backup_schedules",
+            "backup_storage_configs",
+            "resource_samples",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE instance_name = 'new-name'"),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "{table} should follow the rename");
+        }
     }
 
     #[test]

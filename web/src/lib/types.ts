@@ -36,6 +36,27 @@ export interface ManagedInstanceView {
   migration_required: boolean
 }
 
+export interface ValheimRuntimeHealth {
+  podman: {
+    configured: boolean
+    connected: boolean
+    compatible: boolean
+    version: string | null
+    error: string | null
+  }
+  container: {
+    status: 'missing' | 'created' | 'exited' | 'running' | 'unknown' | 'unavailable'
+    error: string | null
+  }
+  socket: {
+    status: 'missing' | 'orphaned' | 'responding' | 'unreachable'
+    protocol_version: number | null
+    odin_version: string | null
+    error: string | null
+  }
+  guidance: string[]
+}
+
 export interface RustConfigUpdateRequest {
   port?: number
   query_port?: number

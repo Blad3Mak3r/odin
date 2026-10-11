@@ -334,6 +334,11 @@ pub async fn update_socket(control_socket: &std::path::Path) -> Result<()> {
     }
 }
 
+/// Pings a runtime control socket once without waiting for startup retries.
+pub async fn ping_socket(control_socket: &std::path::Path) -> Result<Response> {
+    request_socket(control_socket, &Request::Ping, CONTROL_REQUEST_TIMEOUT).await
+}
+
 pub async fn ping_socket_with_retry(
     control_socket: &std::path::Path,
     timeout: Duration,

@@ -476,6 +476,13 @@ or newer before Valheim operations are available. Do not grant unrelated users
 access to this socket: it grants authority over its containers. Odin uses the
 Unix API directly; it does not require the `podman` CLI in the service path.
 
+Each migrated Valheim instance shows its container and runtime-socket health on
+its detail page. **Repair** is available only while the instance is stopped:
+it regenerates Odin's private runtime specification, removes stale sockets,
+and deletes the stopped UUID-named container so the next **Start** recreates
+it. It never downloads Valheim, starts the instance, or changes saves,
+backups, mods, or the legacy shared installation.
+
 Odin stores everything under a single **data directory**. Which mode it
 runs in is detected automatically from whether `/etc/odin/config.toml`
 exists (it does after a system-wide `.deb`/`.rpm` install, and does not

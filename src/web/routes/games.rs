@@ -916,6 +916,34 @@ pub async fn migrate_valheim_instance_by_id(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn get_valheim_runtime_health_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::podman::valheim::RuntimeHealth>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    let health = crate::podman::valheim::runtime_health(&state.paths, &state.db, &identity.name)
+        .await
+        .map_err(|error| BadRequest(error.to_string()))?;
+    Ok(Json(health))
+}
+
+pub async fn repair_valheim_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    crate::podman::valheim::repair(&state.paths, &state.db, &identity.name)
+        .await
+        .map_err(|error| BadRequest(error.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn update_valheim_instance_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,

@@ -202,6 +202,20 @@ impl PodmanClient {
         Ok(())
     }
 
+    pub async fn remove(&self, name: &str, force: bool) -> Result<()> {
+        let response = self
+            .client
+            .delete(format!("{API_PREFIX}/containers/{name}?force={force}"))
+            .send()
+            .await
+            .context("failed to remove Podman container")?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        success(response).await?;
+        Ok(())
+    }
+
     pub async fn update_limits(&self, name: &str, limits: &ResourceLimits) -> Result<()> {
         limits.validate()?;
         let request = PodmanResources::from(limits);
@@ -277,6 +291,15 @@ pub enum ContainerState {
 impl ContainerState {
     pub fn is_running(self) -> bool {
         self == Self::Running
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Created => "created",
+            Self::Exited => "exited",
+            Self::Unknown => "unknown",
+        }
     }
 
     fn from_inspect(response: InspectResponse) -> Self {
@@ -644,6 +667,42 @@ mod tests {
         assert!(body.contains("\"network_mode\":\"host\""));
         std::fs::remove_file(socket).ok();
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn client_removes_a_stopped_container_over_the_configured_unix_socket() {
+        let socket = std::env::current_dir()
+            .unwrap()
+            .join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request_line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request_line)
+                .unwrap();
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            request_line
+        });
+
+        PodmanClient::new(&socket)
+            .unwrap()
+            .remove("odin-valheim-instance", false)
+            .await
+            .unwrap();
+        assert!(
+            server
+                .join()
+                .unwrap()
+                .starts_with("DELETE /v4.0.0/libpod/containers/odin-valheim-instance?force=false ")
+        );
+        std::fs::remove_file(socket).ok();
     }
 
     #[test]

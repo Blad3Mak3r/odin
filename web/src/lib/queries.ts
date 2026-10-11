@@ -49,6 +49,7 @@ import type {
   SevenDaysPlayer,
   SettingsView,
   SetPodmanSettingsRequest,
+  ValheimRuntimeHealth,
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
@@ -341,6 +342,26 @@ export function useUpdateValheimInstance() {
     onSuccess: (_job, id) => {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
+export function useValheimRuntimeHealth(id: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'valheim-runtime-health'],
+    queryFn: () => api.get<ValheimRuntimeHealth>(`/instances/${id}/valheim/runtime-health`),
+    enabled: enabled && Boolean(id),
+  })
+}
+
+export function useRepairValheimInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/instances/${id}/valheim/repair`),
+    onSuccess: (_result, id) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'valheim-runtime-health'] })
     },
   })
 }

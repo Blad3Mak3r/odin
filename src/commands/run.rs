@@ -22,3 +22,11 @@ pub fn run(paths: &Paths, instance_id: String) -> Result<()> {
             instance_id,
         ))
 }
+
+pub fn run_container(spec_path: &std::path::Path, instance_id: String) -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to start async runtime")?
+        .block_on(crate::podman::runtime::run(spec_path, &instance_id))
+}

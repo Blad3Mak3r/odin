@@ -116,6 +116,22 @@ impl Paths {
         self.data_dir.join("mods")
     }
 
+    /// Persistent runtime payload for a containerized Valheim instance.
+    /// Unlike `runtime_dir`, this is intentionally under the data root: it
+    /// contains the private SteamCMD and game installation and survives a
+    /// container recreation.
+    pub fn valheim_runtime_dir(&self, instance_id: &str) -> PathBuf {
+        self.data_dir
+            .join("runtimes")
+            .join("valheim")
+            .join(instance_id)
+    }
+
+    /// Host-side directory bind-mounted as `/run/odin` in one container.
+    pub fn valheim_socket_dir(&self, instance_id: &str) -> PathBuf {
+        self.runtime_dir().join("containers").join(instance_id)
+    }
+
     /// Root of every cached version of one mod.
     pub fn mod_dir(&self, mod_id: &str) -> PathBuf {
         self.mods_dir().join(mod_id)
@@ -146,6 +162,9 @@ impl Paths {
     /// other `Paths` method already derives purely from `self`, and this
     /// one should too.
     pub fn runtime_dir(&self) -> PathBuf {
+        if let Some(path) = std::env::var_os("ODIN_RUNTIME_DIR") {
+            return PathBuf::from(path);
+        }
         if self.config_dir == std::path::Path::new(SYSTEM_CONFIG_DIR) {
             return PathBuf::from("/run/odin");
         }

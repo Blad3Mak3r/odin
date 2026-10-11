@@ -4,8 +4,9 @@ use anyhow::Result;
 use chrono::Utc;
 
 use crate::db::Db;
-use crate::instance::{self, lifecycle};
+use crate::instance::{self};
 use crate::paths::Paths;
+use crate::podman::valheim;
 
 pub fn run(paths: &Paths, db: &Db) -> Result<()> {
     let instances = instance::list_all(paths, db)?;
@@ -24,7 +25,7 @@ pub fn run(paths: &Paths, db: &Db) -> Result<()> {
         "NAME", "STATUS", "ADDRESS", "WORLD", "UPTIME", "MODS"
     );
     for inst in &instances {
-        let running = lifecycle::is_running(inst)?;
+        let running = valheim::is_running(paths, db, inst)?;
         let status = if running { "running" } else { "stopped" };
         let uptime = if running {
             inst.state

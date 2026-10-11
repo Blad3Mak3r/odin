@@ -455,6 +455,30 @@ your own `systemctl --user`/init setup.
 
 ## Configuration
 
+### Podman runtime for Valheim
+
+Valheim instances run in an `odin-srv` Podman container. Existing instances
+must be stopped and migrated from their instance page before they can start;
+new Valheim instances are created for Podman automatically. Each instance owns
+its own persistent SteamCMD and game payload under
+`<data>/runtimes/valheim/<uuid>/`; Odin never copies or removes the old shared
+installation during migration.
+
+Configure the Podman API socket in Odin's configuration file:
+
+```toml
+[podman]
+socket = "/run/user/1000/podman/podman.sock"
+# runtime_image = "ghcr.io/blad3mak3r/odin-srv:0.14.10"
+```
+
+Enable the matching Podman socket for the user that runs the Odin service, for
+example `systemctl --user enable --now podman.socket` for a rootless service.
+For a system service use the socket owned by that service's Podman
+installation. Do not grant unrelated users access to this socket: it gives
+them authority over that user's containers. Odin uses the API over the Unix
+socket directly; it does not require the `podman` CLI in the service path.
+
 Odin stores everything under a single **data directory**. Which mode it
 runs in is detected automatically from whether `/etc/odin/config.toml`
 exists (it does after a system-wide `.deb`/`.rpm` install, and does not

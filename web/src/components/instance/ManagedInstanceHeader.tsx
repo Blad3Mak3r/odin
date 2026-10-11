@@ -5,7 +5,7 @@ import { GameIcon } from '@/components/GameIcon'
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useManagedInstanceAction, useManagedInstanceTransition, useManagedResources } from '@/lib/queries'
+import { useManagedInstanceAction, useManagedInstanceTransition, useManagedResources, useMigrateValheimInstance, useUpdateValheimInstance } from '@/lib/queries'
 import type { ManagedInstanceView } from '@/lib/types'
 
 export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceView }) {
@@ -13,9 +13,11 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
+  const migrate = useMigrateValheimInstance()
+  const update = useUpdateValheimInstance()
   const transition = useManagedInstanceTransition(instance.id, instance.game, instance.name)
   const resources = useManagedResources(instance.id, instance.running && instance.capabilities.readiness)
-  const busy = start.isPending || stop.isPending || restart.isPending || transition.data !== null
+  const busy = start.isPending || stop.isPending || restart.isPending || migrate.isPending || update.isPending || transition.data !== null
   const action = { id: instance.id }
   const port = numberConfig(instance.config, 'port')
   const queryPort = numberConfig(instance.config, 'query_port')
@@ -45,11 +47,32 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
           <Badge variant={instance.running ? 'default' : 'secondary'}>
             {transition.data ?? (instance.running ? 'running' : 'stopped')}
           </Badge>
+          {instance.game === 'valheim' && <Badge variant="outline">{instance.execution}</Badge>}
           {instance.running && instance.capabilities.readiness && resources.data && <Badge variant={resources.data.ready ? 'default' : 'secondary'}>{resources.data.ready ? 'ready' : 'starting'}</Badge>}
           {instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {instance.game === 'valheim' && instance.migration_required ? (
+            <Button
+              size="sm"
+              disabled={busy || instance.running}
+              onClick={() => migrate.mutate(instance.id, { onSuccess: () => toast.success('Valheim instance migrated to Podman'), onError: (error) => toast.error(error.message) })}
+            >
+              {migrate.isPending && <Loader2 className="size-4 animate-spin" />}
+              Migrate to Podman
+            </Button>
+          ) : instance.game === 'valheim' && instance.running ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => update.mutate(instance.id, { onSuccess: () => toast.success('Valheim update queued'), onError: (error) => toast.error(error.message) })}
+            >
+              {update.isPending && <Loader2 className="size-4 animate-spin" />}
+              Update
+            </Button>
+          ) : null}
           {instance.running ? (
             <>
               <Button

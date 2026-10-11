@@ -32,6 +32,8 @@ export interface ManagedInstanceView {
   odin_version: string | null
   capabilities: GameCapabilities
   config: Record<string, unknown>
+  execution: 'direct' | 'podman'
+  migration_required: boolean
 }
 
 export interface RustConfigUpdateRequest {
@@ -272,6 +274,7 @@ export interface JobSummary {
 
 export type JobKindDescr =
   | { kind: 'steamcmd_install'; game: GameId }
+  | { kind: 'valheim_update'; instance: string }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }

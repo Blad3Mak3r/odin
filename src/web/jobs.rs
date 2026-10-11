@@ -35,6 +35,9 @@ pub enum JobKindDescr {
         #[serde(default = "valheim_game")]
         game: GameId,
     },
+    ValheimUpdate {
+        instance: String,
+    },
     ModAdd {
         instance: String,
         mod_id: String,

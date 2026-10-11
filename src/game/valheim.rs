@@ -21,12 +21,26 @@ fn colon_prepend(var: &str, prefix: &str) -> String {
 /// Builds Valheim Dedicated Server's command without spawning it. Process
 /// ownership, PID tracking, and signals are game-neutral in `instance::process`.
 pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
-    let install_dir = paths.shared_install_dir();
-    let console_log = paths::instance_logs_dir(&instance.dir).join("console.log");
+    build_command_at(
+        instance,
+        &paths.shared_install_dir(),
+        &paths::instance_saves_dir(&instance.dir),
+        &paths::instance_logs_dir(&instance.dir).join("console.log"),
+    )
+}
+
+/// Same official launch contract as [`build_command`], with paths supplied
+/// by the Podman runtime rather than the host's shared Valheim installation.
+pub fn build_command_at(
+    instance: &Instance,
+    install_dir: &std::path::Path,
+    saves_dir: &std::path::Path,
+    console_log: &std::path::Path,
+) -> Result<Command> {
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&console_log)
+        .open(console_log)
         .with_context(|| format!("failed to open {}", console_log.display()))?;
     let stderr = stdout
         .try_clone()
@@ -34,7 +48,7 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
 
     let mut command = Command::new(install_dir.join("valheim_server.x86_64"));
     command
-        .current_dir(&install_dir)
+        .current_dir(install_dir)
         .env(
             "LD_LIBRARY_PATH",
             colon_prepend(
@@ -84,7 +98,7 @@ pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
         .arg("-world")
         .arg(&instance.state.world_name)
         .arg("-savedir")
-        .arg(paths::instance_saves_dir(&instance.dir))
+        .arg(saves_dir)
         .arg("-public")
         .arg(if instance.state.public { "1" } else { "0" });
     if let Some(password) = &instance.state.password {

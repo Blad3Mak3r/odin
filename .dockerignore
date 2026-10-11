@@ -1,5 +1,8 @@
 **
 !Containerfile
+!containers/
+!containers/odin-srv/
+!containers/odin-srv/Dockerfile
 !packaging/
 packaging/*
 !packaging/config.toml.default

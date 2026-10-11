@@ -112,6 +112,14 @@ pub fn build_router(state: AppState) -> Router {
             post(instances::clone_instance_by_id),
         )
         .route(
+            "/instances/{id}/valheim/migrate",
+            post(games::migrate_valheim_instance_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/update",
+            post(games::update_valheim_instance_by_id),
+        )
+        .route(
             "/instances/{id}/valheim/last-exit",
             get(diagnostics::get_last_exit_by_id),
         )

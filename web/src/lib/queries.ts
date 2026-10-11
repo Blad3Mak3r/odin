@@ -322,6 +322,28 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   })
 }
 
+export function useMigrateValheimInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/instances/${id}/valheim/migrate`),
+    onSuccess: (_result, id) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
+export function useUpdateValheimInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<JobHandle>(`/instances/${id}/valheim/update`),
+    onSuccess: (_job, id) => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
 export function useUptimeSchedule(id: string) {
   return useQuery({
     queryKey: ['managed-instances', id, 'uptime-schedule'],

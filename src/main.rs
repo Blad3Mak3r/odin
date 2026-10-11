@@ -15,6 +15,7 @@ mod mods;
 mod odin_update;
 mod paths;
 mod player_events;
+mod podman;
 mod readiness_events;
 mod save_events;
 mod steamcmd;
@@ -46,6 +47,17 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+
+    // Container runtime mode deliberately does not open the host database:
+    // the bind-mounted runtime spec is its complete typed launch contract.
+    if let Command::Run { instance_id } = &cli.command
+        && let Some(spec_path) = std::env::var_os("ODIN_RUNTIME_SPEC")
+    {
+        return commands::run::run_container(
+            &std::path::PathBuf::from(spec_path),
+            instance_id.clone(),
+        );
+    }
 
     let paths = Paths::resolve(None)?;
     let cfg = config::GlobalConfig::load(&paths)?;

@@ -180,6 +180,43 @@ pub(crate) fn compute_instance_snapshot(
     state: &AppState,
     instance: &Instance,
 ) -> anyhow::Result<InstanceSnapshot> {
+    let identity = crate::db::game_instances::ensure_valheim_identity(
+        &state.db,
+        &instance.state.name,
+        instance.state.created_at,
+    )?;
+    if crate::db::container_instances::is_valheim_podman(&state.db, &identity.id)? {
+        let socket = state
+            .paths
+            .valheim_socket_dir(&identity.id)
+            .join(format!("valheim-{}.control.sock", identity.name));
+        let running = crate::podman::valheim::is_running(&state.paths, &state.db, instance)?;
+        if !running {
+            return Ok(InstanceSnapshot::default());
+        }
+        let ping =
+            crate::supervisor::client::ping_socket_blocking(&socket, SUPERVISOR_PING_TIMEOUT);
+        let ready = matches!(
+            ping,
+            Ok(crate::supervisor::protocol::Response::Pong { ready: true, .. })
+        );
+        let (cpu_percent, memory_bytes) = match crate::supervisor::client::stats_socket_blocking(
+            &socket,
+            SUPERVISOR_PING_TIMEOUT,
+        ) {
+            Ok(crate::supervisor::protocol::Response::Stats {
+                cpu_percent,
+                memory_bytes,
+            }) => (cpu_percent, memory_bytes),
+            _ => (0.0, 0),
+        };
+        return Ok(InstanceSnapshot {
+            running,
+            ready,
+            cpu_percent,
+            memory_bytes,
+        });
+    }
     // Ping the live supervisor first — it's a more direct signal than the
     // sysinfo/pid-fingerprint check (no reliance on a periodic full-process
     // refresh), and correctly reports "running" even in the moment right

@@ -214,6 +214,20 @@ pub fn stats_blocking(
     request_blocking(paths, game, instance_name, timeout, &Request::Stats)
 }
 
+pub fn ping_socket_blocking(
+    control_socket: &std::path::Path,
+    timeout: Duration,
+) -> Result<Response> {
+    request_socket_blocking(control_socket, timeout, &Request::Ping)
+}
+
+pub fn stats_socket_blocking(
+    control_socket: &std::path::Path,
+    timeout: Duration,
+) -> Result<Response> {
+    request_socket_blocking(control_socket, timeout, &Request::Stats)
+}
+
 /// Shared body for the blocking request variants: connect, write one
 /// request frame, read one response frame. See `ping_blocking`'s doc
 /// comment for why this stays plain blocking I/O rather than tokio.
@@ -224,11 +238,23 @@ fn request_blocking(
     timeout: Duration,
     req: &Request,
 ) -> Result<Response> {
+    request_socket_blocking(
+        &super::control_sock_path(paths, game, instance_name),
+        timeout,
+        req,
+    )
+}
+
+fn request_socket_blocking(
+    control_socket: &std::path::Path,
+    timeout: Duration,
+    req: &Request,
+) -> Result<Response> {
     use std::io::{BufRead, Write};
     use std::os::unix::net::UnixStream as StdUnixStream;
 
-    let mut stream = StdUnixStream::connect(super::control_sock_path(paths, game, instance_name))
-        .context("failed to connect to control socket")?;
+    let mut stream =
+        StdUnixStream::connect(control_socket).context("failed to connect to control socket")?;
     stream
         .set_read_timeout(Some(timeout))
         .context("failed to set read timeout")?;
@@ -278,6 +304,61 @@ pub async fn stop(
     }
 }
 
+/// Variant used by a Podman-backed Valheim instance, whose socket lives in a
+/// UUID-private host directory rather than the legacy global runtime dir.
+pub async fn stop_socket(control_socket: &std::path::Path, timeout_secs: u64) -> Result<()> {
+    match request_socket(
+        control_socket,
+        &Request::Stop { timeout_secs },
+        CONTROL_REQUEST_TIMEOUT,
+    )
+    .await?
+    {
+        Response::Stopped => Ok(()),
+        Response::Error { message, .. } => bail!(message),
+        other => bail!("unexpected response to Stop: {other:?}"),
+    }
+}
+
+pub async fn update_socket(control_socket: &std::path::Path) -> Result<()> {
+    match request_socket(
+        control_socket,
+        &Request::Update,
+        Duration::from_secs(15 * 60),
+    )
+    .await?
+    {
+        Response::Updated => Ok(()),
+        Response::Error { message, .. } => bail!(message),
+        other => bail!("unexpected response to Update: {other:?}"),
+    }
+}
+
+pub async fn ping_socket_with_retry(
+    control_socket: &std::path::Path,
+    timeout: Duration,
+) -> Result<Response> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let attempt = request_socket(
+            control_socket,
+            &Request::Ping,
+            remaining.min(CONTROL_REQUEST_TIMEOUT),
+        )
+        .await;
+        match attempt {
+            Ok(response) => return Ok(response),
+            Err(_) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
+            }
+            Err(error) => {
+                return Err(error).context("timed out waiting for container runtime socket");
+            }
+        }
+    }
+}
+
 async fn request_path(
     paths: &Paths,
     game: GameId,
@@ -287,6 +368,21 @@ async fn request_path(
 ) -> Result<Response> {
     tokio::time::timeout(timeout, async {
         let mut stream = UnixStream::connect(super::control_sock_path(paths, game, instance_name))
+            .await
+            .context("failed to connect to control socket")?;
+        request(&mut stream, req).await
+    })
+    .await
+    .context("timed out waiting for supervisor control response")?
+}
+
+async fn request_socket(
+    control_socket: &std::path::Path,
+    req: &Request,
+    timeout: Duration,
+) -> Result<Response> {
+    tokio::time::timeout(timeout, async {
+        let mut stream = UnixStream::connect(control_socket)
             .await
             .context("failed to connect to control socket")?;
         request(&mut stream, req).await

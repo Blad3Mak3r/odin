@@ -58,6 +58,8 @@ impl PodmanClient {
     pub async fn version(&self) -> Result<PodmanVersion> {
         let response = self
             .client
+            // The client is pinned to a Unix socket, so this is an HTTP
+            // request target, not an unencrypted network connection.
             .get("http://d/version")
             .send()
             .await

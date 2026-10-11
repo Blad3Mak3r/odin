@@ -4,6 +4,19 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.14.10] - 2026-10-11
+
+### What's Changed
+- fix: validate mod store path components by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/115
+- fix: clean up failed mod uploads by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/116
+- fix: prevent overlapping Valheim port ranges by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/117
+- test: preserve saves when restore extraction fails by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/118
+- fix: serialize instance mutations by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/119
+- refactor: redesign dashboard as operations panel by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/120
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.14.9...v0.14.10
+
 ## [0.14.9] - 2026-10-08
 
 ### What's Changed

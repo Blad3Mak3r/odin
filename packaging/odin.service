@@ -5,8 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=odin
-Group=odin
 WorkingDirectory=/var/lib/odin
 ExecStart=/usr/bin/odin serve --bind 127.0.0.1 --port 7331
 Restart=on-failure

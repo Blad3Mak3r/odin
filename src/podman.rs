@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use reqwest::StatusCode;
-use reqwest::blocking::{Client, Response};
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::config::PodmanConfig;
@@ -23,13 +23,17 @@ use crate::paths::Paths;
 pub mod runtime;
 pub mod valheim;
 
-const API_PREFIX: &str = "http://d/v6.0.0/libpod";
+/// Podman keeps the Libpod API backwards compatible within a major release.
+/// v4.0.0 is the oldest server Odin supports, so this path works both there
+/// and on newer Podman releases without tying the client to their API level.
+const API_PREFIX: &str = "http://d/v4.0.0/libpod";
 const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CONTAINER_ROOT: &str = "/srv/odin";
 
 #[derive(Clone)]
 pub struct PodmanClient {
     client: Client,
+    socket: PathBuf,
 }
 
 impl PodmanClient {
@@ -41,126 +45,223 @@ impl PodmanClient {
             .unix_socket(socket)
             .build()
             .context("failed to create Podman Unix-socket client")?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            socket: socket.to_path_buf(),
+        })
     }
 
     pub fn from_config(config: &PodmanConfig) -> Result<Self> {
         Self::new(&config.socket)
     }
 
-    pub fn image_exists(&self, image: &str) -> Result<bool> {
+    pub async fn version(&self) -> Result<PodmanVersion> {
+        let response = self
+            .client
+            .get("http://d/version")
+            .send()
+            .await
+            .context("failed to contact Podman version API")?;
+        success(response)
+            .await?
+            .json()
+            .await
+            .context("failed to decode Podman version response")
+    }
+
+    pub async fn ensure_supported(&self) -> Result<()> {
+        let version = self.version().await?;
+        if version.is_supported() {
+            Ok(())
+        } else {
+            bail!(
+                "Podman {} is unsupported; Odin requires Podman 4.0.0 or newer",
+                version.version
+            )
+        }
+    }
+
+    pub async fn image_exists(&self, image: &str) -> Result<bool> {
         let response = self
             .client
             .get(format!("{API_PREFIX}/images/{image}/exists"))
-            .send();
+            .send()
+            .await;
         match response {
             Ok(response) if response.status().is_success() => Ok(true),
             Ok(response) if response.status() == StatusCode::NOT_FOUND => Ok(false),
-            Ok(response) => Err(status_error(response)),
+            Ok(response) => Err(status_error(response).await),
             Err(error) => Err(error).context("failed to contact Podman image API"),
         }
     }
 
-    pub fn pull_image(&self, image: &str) -> Result<()> {
-        self.client
+    pub async fn pull_image(&self, image: &str) -> Result<()> {
+        let response = self
+            .client
             .post(format!("{API_PREFIX}/images/pull?reference={image}"))
             .send()
-            .context("failed to pull Podman runtime image")
-            .and_then(success)?;
+            .await
+            .context("failed to pull Podman runtime image")?;
+        success(response).await?;
         Ok(())
     }
 
-    pub fn ensure_image(&self, image: &str) -> Result<()> {
-        if self.image_exists(image)? {
+    pub async fn ensure_image(&self, image: &str) -> Result<()> {
+        if self.image_exists(image).await? {
             return Ok(());
         }
         self.pull_image(image)
+            .await
             .with_context(|| format!("failed to pull runtime image {image}"))
     }
 
-    pub fn inspect(&self, name: &str) -> Result<Option<ContainerState>> {
+    pub async fn inspect(&self, name: &str) -> Result<Option<ContainerState>> {
         let response = self
             .client
+            .get(format!("{API_PREFIX}/containers/{name}/json"))
+            .send()
+            .await
+            .context("failed to inspect Podman container")?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let inspect: InspectResponse = success(response)
+            .await?
+            .json()
+            .await
+            .context("failed to decode Podman inspect response")?;
+        Ok(Some(ContainerState::from_inspect(inspect)))
+    }
+
+    /// Synchronous status probe for legacy CLI paths and the telemetry worker,
+    /// both of which already run outside Tokio's request workers. Lifecycle
+    /// and dashboard mutations use the async methods above.
+    pub fn inspect_blocking(&self, name: &str) -> Result<Option<ContainerState>> {
+        let response = self
+            .blocking_client()?
             .get(format!("{API_PREFIX}/containers/{name}/json"))
             .send()
             .context("failed to inspect Podman container")?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        let inspect: InspectResponse = success(response)?
+        let inspect: InspectResponse = blocking_success(response)?
             .json()
             .context("failed to decode Podman inspect response")?;
         Ok(Some(ContainerState::from_inspect(inspect)))
     }
 
-    pub fn create(&self, spec: &ContainerSpec) -> Result<()> {
-        self.client
+    pub async fn create(&self, spec: &ContainerSpec) -> Result<()> {
+        let response = self
+            .client
             .post(format!("{API_PREFIX}/containers/create?name={}", spec.name))
             .json(&spec.request)
             .send()
-            .context("failed to create Podman container")
-            .and_then(success)?;
+            .await
+            .context("failed to create Podman container")?;
+        success(response).await?;
         Ok(())
     }
 
-    pub fn start(&self, name: &str) -> Result<()> {
-        self.client
+    pub async fn start(&self, name: &str) -> Result<()> {
+        let response = self
+            .client
             .post(format!("{API_PREFIX}/containers/{name}/start"))
             .send()
-            .context("failed to start Podman container")
-            .and_then(success)?;
+            .await
+            .context("failed to start Podman container")?;
+        success(response).await?;
         Ok(())
     }
 
-    pub fn stop(&self, name: &str, timeout_secs: u64) -> Result<()> {
-        self.client
+    pub async fn stop(&self, name: &str, timeout_secs: u64) -> Result<()> {
+        let response = self
+            .client
             .post(format!(
                 "{API_PREFIX}/containers/{name}/stop?t={timeout_secs}"
             ))
             .send()
-            .context("failed to stop Podman container")
-            .and_then(success)?;
+            .await
+            .context("failed to stop Podman container")?;
+        success(response).await?;
         Ok(())
     }
 
-    pub fn remove(&self, name: &str, force: bool) -> Result<()> {
+    pub fn remove_blocking(&self, name: &str, force: bool) -> Result<()> {
         let response = self
-            .client
+            .blocking_client()?
             .delete(format!("{API_PREFIX}/containers/{name}?force={force}"))
             .send()
             .context("failed to remove Podman container")?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(());
         }
-        success(response)?;
+        blocking_success(response)?;
         Ok(())
     }
 
-    pub fn update_limits(&self, name: &str, limits: &ResourceLimits) -> Result<()> {
+    pub async fn update_limits(&self, name: &str, limits: &ResourceLimits) -> Result<()> {
         limits.validate()?;
         let request = PodmanResources::from(limits);
-        self.client
+        let response = self
+            .client
             .post(format!("{API_PREFIX}/containers/{name}/update"))
             .json(&request)
             .send()
-            .context("failed to update Podman resource limits")
-            .and_then(success)?;
+            .await
+            .context("failed to update Podman resource limits")?;
+        success(response).await?;
         Ok(())
+    }
+
+    fn blocking_client(&self) -> Result<reqwest::blocking::Client> {
+        reqwest::blocking::Client::builder()
+            .unix_socket(self.socket.as_path())
+            .build()
+            .context("failed to create blocking Podman Unix-socket client")
     }
 }
 
-fn success(response: Response) -> Result<Response> {
+async fn success(response: Response) -> Result<Response> {
     if response.status().is_success() {
         Ok(response)
     } else {
-        Err(status_error(response))
+        Err(status_error(response).await)
     }
 }
 
-fn status_error(response: Response) -> anyhow::Error {
+async fn status_error(response: Response) -> anyhow::Error {
     let status = response.status();
-    let body = response.text().unwrap_or_default();
+    let body = response.text().await.unwrap_or_default();
     anyhow::anyhow!("Podman API returned {status}: {body}")
+}
+
+fn blocking_success(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Response> {
+    if response.status().is_success() {
+        Ok(response)
+    } else {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        Err(anyhow::anyhow!("Podman API returned {status}: {body}"))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PodmanVersion {
+    #[serde(rename = "Version")]
+    pub version: String,
+    #[serde(rename = "ApiVersion")]
+    pub api_version: String,
+}
+
+impl PodmanVersion {
+    pub fn is_supported(&self) -> bool {
+        self.version
+            .split('.')
+            .next()
+            .and_then(|major| major.parse::<u64>().ok())
+            .is_some_and(|major| major >= 4)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -469,8 +570,8 @@ mod tests {
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
-    #[test]
-    fn client_sends_create_request_over_the_configured_unix_socket() {
+    #[tokio::test]
+    async fn client_sends_create_request_over_the_configured_unix_socket() {
         let socket = std::env::current_dir()
             .unwrap()
             .join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
@@ -527,10 +628,14 @@ mod tests {
             "example/odin-srv:1".into(),
             &ResourceLimits::default(),
         );
-        PodmanClient::new(&socket).unwrap().create(&spec).unwrap();
+        PodmanClient::new(&socket)
+            .unwrap()
+            .create(&spec)
+            .await
+            .unwrap();
         let (line, body) = server.join().unwrap();
         assert!(line.starts_with(&format!(
-            "POST /v6.0.0/libpod/containers/create?name={} ",
+            "POST /v4.0.0/libpod/containers/create?name={} ",
             spec.name
         )));
         assert!(body.contains("\"entrypoint\":[\"/usr/local/bin/odin\"]"));

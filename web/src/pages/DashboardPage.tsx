@@ -14,6 +14,7 @@ import {
   useHostResourceHistory,
   useHostResources,
   useJobs,
+  useSettings,
 } from '@/lib/queries'
 import type { CheckResult } from '@/lib/types'
 import { formatBytes, formatRelativeTime } from '@/lib/utils'
@@ -38,12 +39,42 @@ export function DashboardPage() {
   const history = useHostResourceHistory()
   const jobs = useJobs()
   const activity = useActivityFeed()
+  const settings = useSettings(true)
+  const podman = settings.data?.podman
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Dashboard" description="Environment status and host resources." />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Podman</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-sm">
+            {settings.isLoading && <Skeleton className="h-5 w-28" />}
+            {settings.isError && <QueryError error={settings.error} />}
+            {podman && (
+              <>
+                <Badge variant={podman.status.compatible ? 'default' : 'destructive'} className="w-fit">
+                  {podman.status.compatible ? `connected (${podman.status.version})` : 'unavailable'}
+                </Badge>
+                <span className="break-all text-xs text-muted-foreground">
+                  {podman.socket ?? 'Socket not configured'}
+                </span>
+                {podman.status.error && (
+                  <span className="text-xs text-muted-foreground">{podman.status.error}</span>
+                )}
+                {!podman.status.configured && (
+                  <Link to="/settings" className="text-xs underline">
+                    Configure Podman
+                  </Link>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Dependency status</CardTitle>

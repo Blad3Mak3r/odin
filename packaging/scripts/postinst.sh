@@ -1,27 +1,22 @@
 #!/bin/sh
 set -e
 
-getent group odin >/dev/null 2>&1 || groupadd --system odin
-id -u odin >/dev/null 2>&1 || useradd --system --gid odin --no-create-home \
-    --home-dir /var/lib/odin --shell /usr/sbin/nologin \
-    --comment "Odin Valheim server manager" odin
-
-install -d -m 0750 -o odin -g odin /var/lib/odin
+install -d -m 0750 -o root -g root /var/lib/odin
 # /etc/odin itself must stay world-traversable: Paths::resolve() detects
 # system mode by stat()-ing config.toml, which any user must be able to do
 # regardless of sudo/group membership. Only the file's own content is
 # access-restricted below.
-install -d -m 0755 -o root -g odin /etc/odin
+install -d -m 0755 -o root -g root /etc/odin
 if [ -f /etc/odin/config.toml ]; then
-    chown root:odin /etc/odin/config.toml
-    chmod 0640 /etc/odin/config.toml
+    chown root:root /etc/odin/config.toml
+    chmod 0600 /etc/odin/config.toml
 fi
 
 if [ -d /run/systemd/system ]; then
     # /run/odin (the supervisor.rs Unix control/events sockets live there —
     # see Paths::runtime_dir) is provisioned by the tmpfiles.d config below
-    # rather than created on demand: /run itself is root:root 0755, so the
-    # unprivileged odin user can't create a subdirectory there itself.
+    # rather than created on demand, preserving the expected permissions
+    # before the root service starts its first instance.
     # --create applies it now, in addition to the usual on-boot pass, so a
     # fresh install/upgrade doesn't need a reboot before instances can start.
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/odin.conf || true
@@ -37,6 +32,6 @@ if [ -d /run/systemd/system ]; then
     fi
 fi
 
-echo "Odin installed. The 'odin' system account owns /etc/odin and /var/lib/odin."
+echo "Odin installed. Root owns /etc/odin and /var/lib/odin."
 echo "Start the dashboard with:  sudo systemctl start odin.service"
-echo "Run instance commands directly with:  sudo -u odin odin <command>"
+echo "Run instance commands directly with:  sudo odin <command>"

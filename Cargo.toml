@@ -67,7 +67,7 @@ assets = [
     ["target/release/odin", "usr/bin/odin", "755"],
     ["packaging/odin.service", "usr/lib/systemd/system/odin.service", "644"],
     ["packaging/odin.tmpfiles.conf", "usr/lib/tmpfiles.d/odin.conf", "644"],
-    ["packaging/config.toml.default", "etc/odin/config.toml", "640"],
+    ["packaging/config.toml.default", "etc/odin/config.toml", "600"],
     ["README.md", "usr/share/doc/odin/README.md", "644"],
 ]
 
@@ -77,7 +77,7 @@ assets = [
     { source = "target/release/odin", dest = "/usr/bin/odin", mode = "755" },
     { source = "packaging/odin.service", dest = "/usr/lib/systemd/system/odin.service", mode = "644" },
     { source = "packaging/odin.tmpfiles.conf", dest = "/usr/lib/tmpfiles.d/odin.conf", mode = "644" },
-    { source = "packaging/config.toml.default", dest = "/etc/odin/config.toml", mode = "640", config = "noreplace" },
+    { source = "packaging/config.toml.default", dest = "/etc/odin/config.toml", mode = "600", config = "noreplace" },
     { source = "README.md", dest = "/usr/share/doc/odin/README.md", mode = "644", doc = true },
 ]
 post_install_script = "packaging/scripts/postinst.sh"

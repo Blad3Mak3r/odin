@@ -294,7 +294,7 @@ jobs:
           docker volume create "$volume" >/dev/null
           docker run --detach --name "$container" \
             --publish 127.0.0.1:17331:7331 \
-            --tmpfs /run/odin:rw,nosuid,nodev,noexec,size=16m,mode=0750,uid=10001,gid=10001 \
+            --tmpfs /run/odin:rw,nosuid,nodev,noexec,size=16m,mode=0750 \
             --volume "$volume:/var/lib/odin" \
             odin:release-test serve --bind 0.0.0.0 --port 7331 >/dev/null
 
@@ -313,7 +313,7 @@ jobs:
           done
           test "$(docker inspect --format '{{.State.Health.Status}}' "$container")" = healthy
           curl --fail --silent --show-error http://127.0.0.1:17331/ >/dev/null
-          test "$(docker exec "$container" id --user)" = 10001
+          test "$(docker exec "$container" id --user)" = 0
           docker exec "$container" test -w /var/lib/odin
           docker exec "$container" test -w /run/odin
           docker exec "$container" touch /var/lib/odin/container-volume-probe

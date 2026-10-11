@@ -371,6 +371,7 @@ pub fn build_router(state: AppState) -> Router {
             "/settings/nexus-api-key",
             put(settings::set_nexus_api_key).delete(settings::clear_nexus_api_key),
         )
+        .route("/settings/podman", put(settings::set_podman_settings))
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))
         .route("/jobs/{id}/sse", get(jobs::job_sse))

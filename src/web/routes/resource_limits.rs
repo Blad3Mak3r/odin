@@ -29,14 +29,11 @@ pub async fn set_resource_limits(
     let identity = games::resolve_instance_id(&state, &id).await?;
     let db = state.db.clone();
     let paths = state.paths.clone();
-    let saved = run_blocking(move || {
-        let saved = resource_limits::save(&db, &id, &limits)?;
-        if identity.game == crate::game::GameId::Valheim {
-            crate::podman::valheim::update_limits(&paths, &db, &id)?;
-        }
-        Ok(saved)
-    })
-    .await?;
+    let saved_id = id.clone();
+    let saved = run_blocking(move || resource_limits::save(&db, &saved_id, &limits)).await?;
+    if identity.game == crate::game::GameId::Valheim {
+        crate::podman::valheim::update_limits(&paths, &state.db, &id).await?;
+    }
     Ok(Json(saved))
 }
 

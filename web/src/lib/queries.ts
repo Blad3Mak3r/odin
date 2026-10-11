@@ -48,6 +48,7 @@ import type {
   SaveFileEntry,
   SevenDaysPlayer,
   SettingsView,
+  SetPodmanSettingsRequest,
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
@@ -1004,10 +1005,11 @@ export function useUploadMod() {
   })
 }
 
-export function useSettings() {
+export function useSettings(live = false) {
   return useQuery({
     queryKey: ['settings'],
     queryFn: () => api.get<SettingsView>('/settings'),
+    refetchInterval: live ? 10_000 : false,
   })
 }
 
@@ -1024,6 +1026,15 @@ export function useSetInstanceDefaults() {
   return useMutation({
     mutationFn: (defaults: InstanceDefaults) =>
       api.put<InstanceDefaults>('/settings/instance-defaults', defaults),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  })
+}
+
+export function useSetPodmanSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (settings: SetPodmanSettingsRequest) =>
+      api.put<SettingsView['podman']>('/settings/podman', settings),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   })
 }

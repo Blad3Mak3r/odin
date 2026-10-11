@@ -98,10 +98,24 @@ pub fn is_running(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
     if !container_instances::is_valheim_podman(db, &identity.id)? {
         return lifecycle::is_running(instance);
     }
-    let config = config(paths)?;
+    let Some(config) = GlobalConfig::load(paths)?.podman else {
+        return Ok(false);
+    };
     let client = PodmanClient::from_config(&config)?;
     Ok(client
-        .inspect(&container_name(&identity.id))?
+        .inspect_blocking(&container_name(&identity.id))?
+        .is_some_and(ContainerState::is_running))
+}
+
+async fn is_running_async(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
+    let identity = identity(db, instance)?;
+    if !container_instances::is_valheim_podman(db, &identity.id)? {
+        return lifecycle::is_running(instance);
+    }
+    let client = PodmanClient::from_config(&config(paths)?)?;
+    Ok(client
+        .inspect(&container_name(&identity.id))
+        .await?
         .is_some_and(ContainerState::is_running))
 }
 
@@ -120,28 +134,23 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 
     let config = config(paths)?;
     let client = PodmanClient::from_config(&config)?;
+    client.ensure_supported().await?;
     let limits = resource_limits::load(db, &identity.id)?;
     let container = container_name(&identity.id);
     let image = config.runtime_image();
     let spec = ContainerSpec::valheim(paths, &identity, &instance, image.clone(), &limits);
-    let start_name = name.to_string();
-    let start_container = container.clone();
-    // reqwest's Unix-socket client is blocking. Keep it off axum's async
-    // workers while the runtime may pull a large image or wait for Podman.
-    tokio::task::spawn_blocking(move || match client.inspect(&start_container)? {
-        Some(state) if state.is_running() => bail!(InstanceError::AlreadyRunning(start_name)),
+    match client.inspect(&container).await? {
+        Some(state) if state.is_running() => bail!(InstanceError::AlreadyRunning(name.to_string())),
         Some(_) => {
-            client.update_limits(&start_container, &limits)?;
-            client.start(&start_container)
+            client.update_limits(&container, &limits).await?;
+            client.start(&container).await?;
         }
         None => {
-            client.ensure_image(&image)?;
-            client.create(&spec)?;
-            client.start(&start_container)
+            client.ensure_image(&image).await?;
+            client.create(&spec).await?;
+            client.start(&container).await?;
         }
-    })
-    .await
-    .context("Podman start task failed")??;
+    }
     let response = supervisor::client::ping_socket_with_retry(
         &control_socket(paths, &identity),
         START_TIMEOUT,
@@ -173,11 +182,7 @@ pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     let config = config(paths)?;
     let client = PodmanClient::from_config(&config)?;
     let container = container_name(&identity.id);
-    let inspect_client = client.clone();
-    let inspect_container = container.clone();
-    let state = tokio::task::spawn_blocking(move || inspect_client.inspect(&inspect_container))
-        .await
-        .context("Podman inspect task failed")??;
+    let state = client.inspect(&container).await?;
     let Some(state) = state else {
         bail!(InstanceError::NotRunning(name.to_string()));
     };
@@ -189,16 +194,14 @@ pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
         .await
         .is_err()
     {
-        tokio::task::spawn_blocking(move || client.stop(&container, STOP_TIMEOUT_SECS))
-            .await
-            .context("Podman stop task failed")??;
+        client.stop(&container, STOP_TIMEOUT_SECS).await?;
     }
     Ok(())
 }
 
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     let instance = Instance::load_existing(paths, db, name)?;
-    if is_running(paths, db, &instance)? {
+    if is_running_async(paths, db, &instance).await? {
         stop(paths, db, name).await?;
     }
     start(paths, db, name).await
@@ -210,23 +213,29 @@ pub async fn update(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     let instance = Instance::load_existing(paths, db, name)?;
     let identity = identity(db, &instance)?;
     require_migrated(db, &identity)?;
-    if !is_running(paths, db, &instance)? {
+    if !is_running_async(paths, db, &instance).await? {
         bail!("Valheim update requires a running instance; Odin will not start it implicitly");
     }
     supervisor::client::update_socket(&control_socket(paths, &identity)).await
 }
 
-pub fn update_limits(paths: &Paths, db: &Db, instance_id: &str) -> Result<()> {
+pub async fn update_limits(paths: &Paths, db: &Db, instance_id: &str) -> Result<()> {
     if !container_instances::is_valheim_podman(db, instance_id)? {
         return Ok(());
     }
     let config = config(paths)?;
     let client = PodmanClient::from_config(&config)?;
-    if client.inspect(&container_name(instance_id))?.is_none() {
+    if client
+        .inspect(&container_name(instance_id))
+        .await?
+        .is_none()
+    {
         return Ok(());
     }
     let limits = resource_limits::load(db, instance_id)?;
-    client.update_limits(&container_name(instance_id), &limits)
+    client
+        .update_limits(&container_name(instance_id), &limits)
+        .await
 }
 
 pub fn remove(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
@@ -235,7 +244,7 @@ pub fn remove(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
         return Ok(());
     }
     let config = config(paths)?;
-    PodmanClient::from_config(&config)?.remove(&container_name(&identity.id), true)
+    PodmanClient::from_config(&config)?.remove_blocking(&container_name(&identity.id), true)
 }
 
 fn control_socket(paths: &Paths, identity: &GameInstanceIdentity) -> std::path::PathBuf {

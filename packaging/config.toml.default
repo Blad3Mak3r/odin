@@ -2,9 +2,10 @@
 # Uncomment to override the data directory (default: /var/lib/odin).
 # data_dir = "/var/lib/odin"
 
-# Podman is required for Valheim. The socket grants authority over the
-# service user's containers; do not make it accessible to untrusted users.
+# Podman is required only when operating Valheim. Odin can run without this
+# configuration, but Valheim actions remain unavailable until it is set.
+# The root service uses the rootful Podman socket by default.
 # [podman]
-# socket = "/run/user/1000/podman/podman.sock"
+# socket = "/run/podman/podman.sock"
 # Optional; defaults to ghcr.io/blad3mak3r/odin-srv:<odin version>.
 # runtime_image = "ghcr.io/blad3mak3r/odin-srv:0.14.10"

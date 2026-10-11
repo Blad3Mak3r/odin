@@ -62,23 +62,28 @@ impl GlobalConfig {
         let config_file = paths.config_file();
         let temporary = config_file.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
         let content = toml::to_string_pretty(self).context("failed to encode configuration")?;
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)
-            .with_context(|| format!("failed to create {}", temporary.display()))?;
-        file.write_all(content.as_bytes())
-            .with_context(|| format!("failed to write {}", temporary.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync {}", temporary.display()))?;
-        std::fs::rename(&temporary, &config_file).with_context(|| {
-            format!(
-                "failed to atomically activate configuration {}",
-                config_file.display()
-            )
-        })?;
-        Ok(())
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&temporary)
+                .with_context(|| format!("failed to create {}", temporary.display()))?;
+            file.write_all(content.as_bytes())
+                .with_context(|| format!("failed to write {}", temporary.display()))?;
+            file.sync_all()
+                .with_context(|| format!("failed to sync {}", temporary.display()))?;
+            std::fs::rename(&temporary, &config_file).with_context(|| {
+                format!(
+                    "failed to atomically activate configuration {}",
+                    config_file.display()
+                )
+            })
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
     }
 }
 
@@ -124,5 +129,22 @@ mod tests {
             }),
         };
         assert!(config.save(&paths).is_err());
+    }
+
+    #[test]
+    fn save_removes_its_temporary_file_when_activation_fails() {
+        let paths = paths();
+        std::fs::create_dir_all(paths.config_file()).unwrap();
+
+        assert!(GlobalConfig::default().save(&paths).is_err());
+        assert!(std::fs::read_dir(&paths.config_dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp")
+        }));
+
+        std::fs::remove_dir_all(paths.config_dir).unwrap();
     }
 }

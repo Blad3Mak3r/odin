@@ -5,6 +5,117 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
+export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'
+
+export interface GameCapabilities {
+  backups: boolean
+  players: boolean
+  mods: boolean
+  access_lists: boolean
+  readiness: boolean
+}
+
+export interface GameView {
+  id: GameId
+  name: string
+  steam_app_id: string
+  capabilities: GameCapabilities
+}
+
+export interface ManagedInstanceView {
+  tags: string[]
+  id: string
+  game: GameId
+  name: string
+  created_at: string
+  running: boolean
+  odin_version: string | null
+  capabilities: GameCapabilities
+  config: Record<string, unknown>
+}
+
+export interface RustConfigUpdateRequest {
+  port?: number
+  query_port?: number
+  rcon_port?: number
+  rcon_password?: string
+  auto_restart?: boolean
+}
+
+export interface GenericConfigUpdateRequest {
+  port: number
+  query_port: number | null
+  admin_port: number | null
+  auto_restart: boolean
+}
+
+export interface AdvancedConfigEntry {
+  key: string
+  label: string
+  value: string
+  sensitive: boolean
+  configured: boolean
+  managed: boolean
+}
+
+export interface AdvancedConfigSection {
+  id: string
+  label: string
+  entries: AdvancedConfigEntry[]
+}
+
+export interface AdvancedConfigFile {
+  id: string
+  path: string
+  format: string
+  exists: boolean
+  allows_new_keys: boolean
+  sections: AdvancedConfigSection[]
+}
+
+export interface AdvancedConfigView {
+  files: AdvancedConfigFile[]
+}
+
+export interface AdvancedConfigChange {
+  file: string
+  key: string
+  value: string
+  delete?: boolean
+}
+
+export type SevenDaysTemplateChangeKind = 'added' | 'removed' | 'default_changed' | 'conflict'
+
+export interface SevenDaysTemplateChange {
+  key: string
+  kind: SevenDaysTemplateChangeKind
+  applyable: boolean
+}
+
+export interface SevenDaysTemplateReview {
+  instance_config_exists: boolean
+  template_exists: boolean
+  baseline_exists: boolean
+  changes: SevenDaysTemplateChange[]
+}
+
+export interface ResourceLimits {
+  cpu_percent: number | null
+  memory_max_bytes: number | null
+}
+
+export interface RconCommandResponse {
+    output: string
+}
+
+export interface SevenDaysPlayer {
+  entity_id: string
+  name: string
+  platform_id: string | null
+}
+
+export type VRisingAccessListKind = 'admin' | 'banned'
+
 export interface ChangelogSection {
   title: string
   changes: string[]
@@ -70,6 +181,31 @@ export interface ConfigView {
   password: string | null
   public: boolean
   auto_restart: boolean
+  save_interval: number | null
+  backups: number | null
+  backup_short: number | null
+  backup_long: number | null
+  crossplay: boolean
+  playfab_instance_id: string | null
+  preset: ValheimPreset | null
+  modifiers: ValheimModifiers
+  set_keys: ValheimSetKey[]
+}
+
+export type ValheimPreset = 'normal' | 'casual' | 'easy' | 'hard' | 'hardcore' | 'immersive' | 'hammer'
+export type ValheimCombatModifier = 'veryeasy' | 'easy' | 'hard' | 'veryhard'
+export type ValheimDeathPenaltyModifier = 'casual' | 'veryeasy' | 'easy' | 'hard' | 'hardcore'
+export type ValheimResourceModifier = 'muchless' | 'less' | 'more' | 'muchmore' | 'most'
+export type ValheimRaidModifier = 'none' | 'muchless' | 'less' | 'more' | 'muchmore'
+export type ValheimPortalModifier = 'casual' | 'hard' | 'veryhard'
+export type ValheimSetKey = 'nobuildcost' | 'playerevents' | 'passivemobs' | 'nomap'
+
+export interface ValheimModifiers {
+  combat: ValheimCombatModifier | null
+  death_penalty: ValheimDeathPenaltyModifier | null
+  resources: ValheimResourceModifier | null
+  raids: ValheimRaidModifier | null
+  portals: ValheimPortalModifier | null
 }
 
 export interface ConfigUpdateRequest {
@@ -78,6 +214,15 @@ export interface ConfigUpdateRequest {
   password?: string
   public?: boolean
   auto_restart?: boolean
+  save_interval?: number | null
+  backups?: number | null
+  backup_short?: number | null
+  backup_long?: number | null
+  crossplay?: boolean
+  playfab_instance_id?: string | null
+  preset?: ValheimPreset | null
+  modifiers?: ValheimModifiers
+  set_keys?: ValheimSetKey[]
 }
 
 export interface LogsView {
@@ -126,12 +271,15 @@ export interface JobSummary {
 }
 
 export type JobKindDescr =
-  | { kind: 'steamcmd_install' }
+  | { kind: 'steamcmd_install'; game: GameId }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }
-  | { kind: 'backup_create'; instance: string }
-  | { kind: 'backup_restore'; instance: string; backup_id: string }
+  | { kind: 'backup_create'; game: GameId; instance: string }
+  | { kind: 'backup_restore'; game: GameId; instance: string; backup_id: string }
+  | { kind: 'map_wipe'; instance: string }
+  | { kind: 'full_wipe'; instance: string }
+  | { kind: 'bepinex_install'; instance: string; to_version: string }
   | { kind: 'bepinex_update'; instance: string; from_version: string | null; to_version: string }
 
 export interface GlobalModInstanceEntry {
@@ -172,6 +320,18 @@ export interface BackupScheduleView {
   last_run_at: string | null
 }
 
+export interface UptimeScheduleView {
+  enabled: boolean
+  start_time: string
+  stop_time: string
+}
+
+export interface UptimeScheduleRequest {
+  enabled: boolean
+  start_time: string
+  stop_time: string
+}
+
 export type BackupStorageProvider = 'aws_s3' | 'cloudflare_r2'
 
 export interface BackupStorageView {
@@ -202,6 +362,7 @@ export interface ConfigFileView {
 }
 
 export type ListKind = 'admin' | 'banned' | 'permitted'
+export type RustAccessListKind = 'owner' | 'moderator' | 'banned'
 
 export interface HostResources {
   cpu_percent: number
@@ -221,6 +382,15 @@ export interface InstanceResources {
 export type InstanceTransition = 'starting' | 'stopping' | 'restarting' | 'cloning' | 'updating_bepinex'
 export type InstanceTransitions = Record<string, InstanceTransition>
 
+export interface GameInstanceTransition {
+  id: string | null
+  game: GameId
+  name: string
+  transition: InstanceTransition
+}
+
+export type GameInstanceTransitions = GameInstanceTransition[]
+
 export interface ResourceSample {
   at: string
   cpu_percent: number
@@ -229,10 +399,27 @@ export interface ResourceSample {
 
 export interface PlayerInfo {
   name: string
+  steam_id: string | null
   connected_at: string
 }
 
+export interface PlayerSession {
+  id: string
+  name: string
+  steam_id: string | null
+  joined_at: string
+  left_at: string | null
+}
+
+export interface SaveFileEntry {
+  path: string
+  size_bytes: number
+  modified_at: string | null
+}
+
 export interface InstanceResourceEntry {
+  id: string | null
+  game: GameId
   name: string
   running: boolean
   ready: boolean
@@ -263,13 +450,17 @@ export type ActivityKind =
   | { kind: 'backup_created'; backup_id: string }
   | { kind: 'backup_restored'; backup_id: string }
   | { kind: 'backup_pruned'; backup_id: string }
+  | { kind: 'map_wiped' }
+  | { kind: 'full_wiped' }
   | { kind: 'player_joined'; name: string }
   | { kind: 'player_left'; name: string }
 
 export interface ActivityEvent {
   id: string
   at: string
+  game: GameId
   instance: string | null
+  instance_id?: string
   kind: ActivityKind
 }
 
@@ -294,4 +485,12 @@ export interface WebhookView {
 
 export interface SettingsView {
   nexus_api_key_configured: boolean
+  instance_defaults: InstanceDefaults
+}
+
+export interface InstanceDefaults {
+  auto_restart: boolean
+  backup_enabled: boolean
+  backup_interval_hours: number
+  backup_retain_count: number
 }

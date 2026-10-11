@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, Transaction, params};
 
 use super::Db;
-use crate::instance::state::{InstalledMod, InstanceState};
+use crate::instance::state::{InstalledMod, InstanceState, ValheimPreset};
 
 /// Upserts an instance and wholesale-replaces its installed mods, mirroring
 /// how the old file-based `InstanceState::save` just overwrote the whole
@@ -24,6 +24,7 @@ pub fn save(db: &Db, state: &InstanceState) -> Result<()> {
 pub fn save_clone(
     db: &Db,
     state: &InstanceState,
+    source_name: &str,
     access_lists: &[(&str, &[String])],
 ) -> Result<()> {
     let mut conn = db.conn();
@@ -31,48 +32,26 @@ pub fn save_clone(
         .transaction()
         .context("failed to start clone transaction")?;
     save_in_tx(&tx, state)?;
+    tx.execute(
+        "INSERT INTO instance_resource_limits (instance_id, cpu_percent, memory_max_bytes) \
+         SELECT target.id, source_limits.cpu_percent, source_limits.memory_max_bytes \
+         FROM instance_resource_limits source_limits \
+         JOIN game_instances source ON source.id = source_limits.instance_id \
+         JOIN game_instances target ON target.game = 'valheim' AND target.name = ?1 \
+         WHERE source.game = 'valheim' AND source.name = ?2",
+        params![state.name, source_name],
+    )?;
     for (kind, ids) in access_lists {
         for id in *ids {
             tx.execute(
-                "INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES (?1, ?2, ?3)",
+                "INSERT INTO access_list_entries (instance_name, instance_id, kind, steam_id) \
+                 SELECT ?1, id, ?2, ?3 FROM game_instances \
+                 WHERE game = 'valheim' AND name = ?1",
                 params![state.name, kind, id],
             )?;
         }
     }
     tx.commit().context("failed to commit clone transaction")?;
-    Ok(())
-}
-
-/// Moves an instance to a new name while preserving every piece of state that
-/// belongs to it. The replacement row, related-record moves, and old-row
-/// deletion share one transaction so observers cannot see a partially renamed
-/// instance.
-pub fn rename(db: &Db, old_name: &str, state: &InstanceState) -> Result<()> {
-    let mut conn = db.conn();
-    let tx = conn
-        .transaction()
-        .context("failed to start rename transaction")?;
-    save_in_tx(&tx, state)?;
-    tx.execute(
-        "UPDATE access_list_entries SET instance_name = ?1 WHERE instance_name = ?2",
-        params![state.name, old_name],
-    )
-    .with_context(|| format!("failed to move access lists from '{old_name}'"))?;
-    for table in [
-        "backups",
-        "backup_schedules",
-        "backup_storage_configs",
-        "resource_samples",
-    ] {
-        tx.execute(
-            &format!("UPDATE {table} SET instance_name = ?1 WHERE instance_name = ?2"),
-            params![state.name, old_name],
-        )
-        .with_context(|| format!("failed to move {table} from '{old_name}'"))?;
-    }
-    tx.execute("DELETE FROM instances WHERE name = ?1", params![old_name])
-        .with_context(|| format!("failed to delete previous instance '{old_name}'"))?;
-    tx.commit().context("failed to commit rename transaction")?;
     Ok(())
 }
 
@@ -115,14 +94,33 @@ pub(super) fn save_in_tx(tx: &Transaction, state: &InstanceState) -> Result<()> 
     .with_context(|| format!("failed to upsert instance '{}'", state.name))?;
 
     tx.execute(
+        "INSERT OR IGNORE INTO game_instances (id, game, name, created_at) VALUES (lower(hex(randomblob(16))), 'valheim', ?1, ?2)",
+        params![state.name, state.created_at],
+    )?;
+    tx.execute(
+        "INSERT INTO valheim_instance_configs \
+            (instance_id, port, world_name, password, public, save_interval, backups, backup_short, backup_long, crossplay, playfab_instance_id, preset, modifiers_json, set_keys_json, last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version) \
+         SELECT id, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21 FROM game_instances WHERE game = 'valheim' AND name = ?1 \
+         ON CONFLICT(instance_id) DO UPDATE SET \
+            port = excluded.port, world_name = excluded.world_name, password = excluded.password, public = excluded.public, \
+            save_interval = excluded.save_interval, backups = excluded.backups, backup_short = excluded.backup_short, backup_long = excluded.backup_long, \
+            crossplay = excluded.crossplay, playfab_instance_id = excluded.playfab_instance_id, preset = excluded.preset, \
+            modifiers_json = excluded.modifiers_json, set_keys_json = excluded.set_keys_json, \
+            last_started_at = excluded.last_started_at, last_stopped_at = excluded.last_stopped_at, pid = excluded.pid, pid_started_at = excluded.pid_started_at, \
+            bepinex_installed = excluded.bepinex_installed, auto_restart = excluded.auto_restart, bepinex_version = excluded.bepinex_version",
+        params![state.name, state.port, state.world_name, state.password, state.public, state.save_interval, state.backups, state.backup_short, state.backup_long, state.crossplay, state.playfab_instance_id, state.preset.map(|value| value.as_arg()), serde_json::to_string(&state.modifiers)?, serde_json::to_string(&state.set_keys)?, state.last_started_at, state.last_stopped_at, state.pid, state.pid_started_at, state.bepinex_installed, state.auto_restart, state.bepinex_version],
+    )?;
+
+    tx.execute(
         "DELETE FROM installed_mods WHERE instance_name = ?1",
         params![state.name],
     )
     .with_context(|| format!("failed to clear installed mods for '{}'", state.name))?;
     for m in &state.installed_mods {
         tx.execute(
-            "INSERT INTO installed_mods (instance_name, mod_id, version, installed_at, enabled, pinned) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO installed_mods (instance_name, instance_id, mod_id, version, installed_at, enabled, pinned) \
+             SELECT ?1, id, ?2, ?3, ?4, ?5, ?6 FROM game_instances \
+             WHERE game = 'valheim' AND name = ?1",
             params![
                 state.name,
                 m.mod_id,
@@ -175,18 +173,28 @@ pub fn list_all(db: &Db) -> Result<Vec<InstanceState>> {
 /// Deletes an instance's row; `installed_mods` cascades via the schema's
 /// `ON DELETE CASCADE`. A no-op if the instance doesn't exist.
 pub fn delete(db: &Db, name: &str) -> Result<()> {
-    db.conn()
-        .execute("DELETE FROM instances WHERE name = ?1", params![name])
+    let conn = db.conn();
+    conn.execute("DELETE FROM instances WHERE name = ?1", params![name])
+        .and_then(|_| {
+            conn.execute(
+                "DELETE FROM game_instances WHERE game = 'valheim' AND name = ?1",
+                params![name],
+            )
+        })
         .with_context(|| format!("failed to delete instance '{name}'"))?;
     Ok(())
 }
 
-const SELECT_INSTANCE: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version \
-     FROM instances WHERE name = ?1";
-const SELECT_ALL_INSTANCES: &str = "SELECT name, port, world_name, password, public, created_at, \
-     last_started_at, last_stopped_at, pid, pid_started_at, bepinex_installed, auto_restart, bepinex_version \
-     FROM instances ORDER BY name";
+const SELECT_INSTANCE: &str = "SELECT g.name, v.port, v.world_name, v.password, v.public, g.created_at, \
+     v.save_interval, v.backups, v.backup_short, v.backup_long, v.crossplay, v.playfab_instance_id, v.preset, v.modifiers_json, v.set_keys_json, \
+     v.last_started_at, v.last_stopped_at, v.pid, v.pid_started_at, v.bepinex_installed, v.auto_restart, v.bepinex_version \
+     FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id \
+     WHERE g.game = 'valheim' AND g.name = ?1";
+const SELECT_ALL_INSTANCES: &str = "SELECT g.name, v.port, v.world_name, v.password, v.public, g.created_at, \
+     v.save_interval, v.backups, v.backup_short, v.backup_long, v.crossplay, v.playfab_instance_id, v.preset, v.modifiers_json, v.set_keys_json, \
+     v.last_started_at, v.last_stopped_at, v.pid, v.pid_started_at, v.bepinex_installed, v.auto_restart, v.bepinex_version \
+     FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id \
+     WHERE g.game = 'valheim' ORDER BY g.name";
 
 fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
     Ok(InstanceState {
@@ -196,13 +204,25 @@ fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
         password: row.get(3)?,
         public: row.get(4)?,
         created_at: row.get(5)?,
-        last_started_at: row.get(6)?,
-        last_stopped_at: row.get(7)?,
-        pid: row.get(8)?,
-        pid_started_at: row.get(9)?,
-        bepinex_installed: row.get(10)?,
-        auto_restart: row.get(11)?,
-        bepinex_version: row.get(12)?,
+        save_interval: row.get(6)?,
+        backups: row.get(7)?,
+        backup_short: row.get(8)?,
+        backup_long: row.get(9)?,
+        crossplay: row.get(10)?,
+        playfab_instance_id: row.get(11)?,
+        preset: row
+            .get::<_, Option<String>>(12)?
+            .as_deref()
+            .and_then(ValheimPreset::from_arg),
+        modifiers: serde_json::from_str(&row.get::<_, String>(13)?).unwrap_or_default(),
+        set_keys: serde_json::from_str(&row.get::<_, String>(14)?).unwrap_or_default(),
+        last_started_at: row.get(15)?,
+        last_stopped_at: row.get(16)?,
+        pid: row.get(17)?,
+        pid_started_at: row.get(18)?,
+        bepinex_installed: row.get(19)?,
+        auto_restart: row.get(20)?,
+        bepinex_version: row.get(21)?,
         installed_mods: Vec::new(),
     })
 }
@@ -211,7 +231,7 @@ fn row_to_state(row: &Row) -> rusqlite::Result<InstanceState> {
 pub fn set_bepinex(db: &Db, name: &str, installed: bool, version: Option<&str>) -> Result<()> {
     db.conn()
         .execute(
-            "UPDATE instances SET bepinex_installed = ?2, bepinex_version = ?3 WHERE name = ?1",
+            "UPDATE valheim_instance_configs SET bepinex_installed = ?2, bepinex_version = ?3 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![name, installed, version],
         )
         .with_context(|| format!("failed to update BepInEx state for '{name}'"))?;
@@ -230,7 +250,7 @@ pub fn set_pid(
 ) -> Result<()> {
     db.conn()
         .execute(
-            "UPDATE instances SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE name = ?1",
+            "UPDATE valheim_instance_configs SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![name, pid, pid_started_at, started_at],
         )
         .with_context(|| format!("failed to record pid for instance '{name}'"))?;
@@ -243,7 +263,7 @@ pub fn set_pid(
 pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
     db.conn()
         .execute(
-            "UPDATE instances SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE name = ?1",
+            "UPDATE valheim_instance_configs SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
             params![name, stopped_at],
         )
         .with_context(|| format!("failed to clear pid for instance '{name}'"))?;
@@ -252,8 +272,9 @@ pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
 
 fn load_installed_mods(conn: &Connection, instance_name: &str) -> Result<Vec<InstalledMod>> {
     let mut stmt = conn.prepare(
-        "SELECT mod_id, version, installed_at, enabled, pinned FROM installed_mods \
-         WHERE instance_name = ?1 ORDER BY mod_id",
+        "SELECT m.mod_id, m.version, m.installed_at, m.enabled, m.pinned FROM installed_mods m \
+         JOIN game_instances g ON g.id = m.instance_id \
+         WHERE g.game = 'valheim' AND g.name = ?1 ORDER BY m.mod_id",
     )?;
     let mods = stmt
         .query_map(params![instance_name], |row| {
@@ -304,12 +325,22 @@ mod tests {
     #[test]
     fn save_then_load_round_trips() {
         let db = temp_db("roundtrip");
-        let original = sample("my-server");
+        let mut original = sample("my-server");
+        original.save_interval = Some(900);
+        original.crossplay = true;
+        original.preset = Some(crate::instance::state::ValheimPreset::Immersive);
+        original.modifiers.combat = Some(crate::instance::state::ValheimCombatModifier::Hard);
+        original.set_keys = vec![crate::instance::state::ValheimSetKey::NoMap];
         save(&db, &original).unwrap();
 
         let loaded = load(&db, "my-server").unwrap().unwrap();
         assert_eq!(loaded.name, original.name);
         assert_eq!(loaded.port, original.port);
+        assert_eq!(loaded.save_interval, Some(900));
+        assert!(loaded.crossplay);
+        assert_eq!(loaded.preset, original.preset);
+        assert_eq!(loaded.modifiers, original.modifiers);
+        assert_eq!(loaded.set_keys, original.set_keys);
         assert_eq!(loaded.installed_mods.len(), 1);
         assert_eq!(loaded.installed_mods[0].mod_id, "owner-mod");
     }
@@ -393,75 +424,6 @@ mod tests {
         let loaded = load(&db, "my-server").unwrap().unwrap();
         assert_eq!(loaded.installed_mods.len(), 1);
         assert_eq!(loaded.installed_mods[0].mod_id, "other-mod");
-    }
-
-    #[test]
-    fn rename_preserves_installed_mods_and_access_lists() {
-        let db = temp_db("rename");
-        let old = sample("old-name");
-        save(&db, &old).unwrap();
-        let admin_ids = vec!["76561197960287930".to_string()];
-        crate::db::lists::replace(&db, "old-name", "admin", &admin_ids).unwrap();
-        let conn = db.conn();
-        conn.execute(
-            "INSERT INTO backups (id, instance_name, created_at, size_bytes)
-             VALUES ('backup-id', 'old-name', '2024-01-01T00:00:00Z', 42)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO backup_schedules
-             (instance_name, interval_hours, retain_count, enabled)
-             VALUES ('old-name', 24, 7, 1)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO backup_storage_configs
-             (instance_name, provider, endpoint, region, bucket, access_key_id, secret_access_key)
-             VALUES ('old-name', 'aws_s3', 'https://s3.example.test', 'us-east-1', 'backups', 'key', 'secret')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes)
-             VALUES ('old-name', '2024-01-01T00:00:00Z', 2.5, 42)",
-            [],
-        )
-        .unwrap();
-        drop(conn);
-
-        let mut renamed = old.clone();
-        renamed.name = "new-name".to_string();
-        rename(&db, "old-name", &renamed).unwrap();
-
-        assert!(load(&db, "old-name").unwrap().is_none());
-        let loaded = load(&db, "new-name").unwrap().unwrap();
-        assert_eq!(loaded.installed_mods.len(), 1);
-        assert_eq!(loaded.installed_mods[0].mod_id, "owner-mod");
-        assert_eq!(loaded.installed_mods[0].version, "1.0.0");
-        assert!(loaded.installed_mods[0].enabled);
-        assert!(!loaded.installed_mods[0].pinned);
-        assert_eq!(
-            crate::db::lists::read(&db, "new-name", "admin").unwrap(),
-            admin_ids
-        );
-        let conn = db.conn();
-        for table in [
-            "backups",
-            "backup_schedules",
-            "backup_storage_configs",
-            "resource_samples",
-        ] {
-            let count: i64 = conn
-                .query_row(
-                    &format!("SELECT COUNT(*) FROM {table} WHERE instance_name = 'new-name'"),
-                    [],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(count, 1, "{table} should follow the rename");
-        }
     }
 
     #[test]

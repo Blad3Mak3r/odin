@@ -34,3 +34,14 @@ export function formatRelativeTime(iso: string): string {
   }
   return relativeTimeFormat.format(diffSeconds, "second")
 }
+
+export function formatUptime(startedAt: string, now = Date.now()): string {
+  let seconds = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000))
+  const days = Math.floor(seconds / 86_400)
+  seconds %= 86_400
+  const hours = Math.floor(seconds / 3_600)
+  seconds %= 3_600
+  const minutes = Math.floor(seconds / 60)
+
+  return `${days ? `${days}d ` : ''}${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m ${String(seconds % 60).padStart(2, '0')}s`
+}

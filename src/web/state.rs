@@ -33,12 +33,12 @@ impl AppState {
         let runtime = RuntimeRegistry::new(db.clone());
         Self {
             paths: Arc::new(paths),
-            db,
+            db: db.clone(),
             jobs,
             resources: Arc::new(Mutex::new(System::new_all())),
             runtime,
             activity,
-            players: PlayerRegistry::new(),
+            players: PlayerRegistry::load(db),
             world_saves: WorldSaveRegistry::new(),
             supervisor: Supervisor::new(),
             log_tail: LogTailRegistry::new(),

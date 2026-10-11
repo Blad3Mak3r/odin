@@ -8,105 +8,146 @@ web
 
 ## Users
 
-Community and game-server admins running Valheim dedicated servers — often
-several at once, sometimes alongside other game servers — for a player base
-larger than just themselves (a guild, a community, a group of friends they're
-responsible for keeping online). They are comfortable with a terminal and a
-Linux host, but are operating this more like light ops than a personal
-hobby project: uptime, mod curation, and being able to hand out connect info
-matter because other people depend on it.
+Community and game-server administrators running one or more dedicated game
+servers on a Linux host they control: a home server, VPS, or dedicated
+machine. They may manage a guild, community, or group of friends and need
+servers to remain available, updated, and independently configured without
+manually coordinating SteamCMD, shell scripts, ports, and background
+processes.
 
 ## Product Purpose
 
-Odin manages the full lifecycle of Valheim dedicated servers on Linux from
-one dependency-light binary: installing/updating the game via SteamCMD,
-running multiple independent named instances as supervised background
-processes, per-instance config and access lists, backups, and BepInEx mod
-installs from Thunderstore through a shared, deduplicated global mod store.
-Success is not babysitting SteamCMD invocations, terminal multiplexers, and
-shell scripts by hand to keep one or many servers alive, updated, and
-moddable.
+Odin is a self-hosted Linux service and embedded web dashboard for managing
+the lifecycle of dedicated game servers from one Rust binary. It installs and
+updates supported servers through SteamCMD, runs isolated named instances,
+supervises their processes, exposes each game's configuration, and provides
+backups plus the game-specific capabilities Odin supports.
+
+The currently compiled game drivers are Valheim, Rust, V Rising, Palworld,
+RuneScape: Dragonwilds, and 7 Days to Die. Odin is not a general-purpose
+plugin host: supported games ship as compiled drivers with explicit launch,
+storage, and configuration contracts.
 
 ## Positioning
 
-A single, dependency-light binary (no Python, no Docker, no terminal
-multiplexer, no database) that runs many independent named Valheim
-instances side by side, sharing one SteamCMD-installed copy of the game
-binaries and one deduplicated mod store, with an embedded web dashboard
-compiled directly into the binary rather than a separate hosted service.
+A dependency-light, self-hosted control plane for several dedicated games on
+one Linux host. It combines a single compiled binary, an embedded dashboard,
+SQLite for Odin's own metadata, shared game installs, and isolated instance
+data. It does not require Python, Docker, a terminal multiplexer, a hosted
+service, or an external database.
+
+The dashboard is the primary product interface. The bundled CLI remains for
+existing scripts and one-off operations, but is legacy: new user-facing
+capabilities are built in the web API and dashboard.
 
 ## Operating Context
 
-- Runs on a Linux host (x86_64) the admin controls directly — a home box,
-  a VPS, or a dedicated system-wide install with its own `odin` service
-  user.
-- Two install modes: system-wide (`.deb`/`.rpm`, `/etc/odin` +
-  `/var/lib/odin`, a systemd `odin.service`) and per-user (`~/.local/bin`,
-  XDG paths) — the same product, different deployment footprint.
-- `odin serve` ships with **no authentication** and binds to `127.0.0.1` by
-  default; reaching it remotely is expected to go through an SSH tunnel or
-  the admin's own reverse proxy, not a built-in login. UI/UX should not
-  imply accounts, sessions, or login exist.
-- Instances are managed side by side: creating/starting/stopping/renaming,
-  per-instance config (world, port, password, public/private visibility),
-  access lists (admin/banned/permitted), backups/restore, and mod
-  install/enable/disable — all per named instance, against shared global
-  game binaries and a shared global mod store.
-- A live console/log tail and host + per-instance CPU/RAM usage are part of
-  day-to-day operation, not just setup.
+- Odin runs on a Linux x86_64 host controlled by the administrator. It
+  supports system-wide package installs using `/etc/odin` and `/var/lib/odin`,
+  and per-user installs using XDG paths.
+- `odin serve` binds to `127.0.0.1` by default and has no built-in
+  authentication. Remote access belongs behind an SSH tunnel or an
+  administrator-provided authenticated reverse proxy.
+- Servers are managed as independent instances, scoped by both game and
+  name. Instances can share a display name across different games, but never
+  share save data, logs, runtime paths, identity, or reserved ports.
+- Odin shares immutable install files per game where the game's runtime
+  allows it, while deriving instance-owned data, logs, runtime directories,
+  and process identity. Each instance is directly supervised by Odin.
+- Running state is derived from the operating system process and its start
+  time, not from a stored boolean. The dashboard also provides live logs and
+  host/per-instance resource information.
+- Odin stores its metadata, lifecycle records, schedules, and process
+  arguments in SQLite. Game-owned settings remain in each game's documented
+  native configuration files; the dashboard edits those files without
+  creating an Odin-specific mirror.
 
-## Capabilities and Constraints
+## Current Capabilities and Constraints
 
-- Linux-only; no Windows/macOS support.
-- Single compiled binary; the dashboard frontend is embedded static assets
-  (`rust-embed`), not a separate process or database.
-- The CLI (`src/commands/`) is being deprecated in favor of the web
-  dashboard: per this repo's AGENTS.md, "the web dashboard is where this
-  project is headed: it's the primary, and increasingly the *only*,
-  supported way to operate Odin." New user-facing capabilities land as web
-  API + dashboard UI, not new CLI subcommands.
-- Instance names are DNS-friendly (lowercase, digits, hyphens; no leading/
-  trailing hyphen) — a real constraint surfaced anywhere a name is entered.
-- Mods are versioned once per shared store entry, not per instance — two
-  instances can't currently pin two different versions of the same mod
-  simultaneously; `odin mods update` affects every instance linking that
-  mod.
-- An instance's running/stopped state is always derived live from the OS
-  process (pid + start time), never trusted from a stored flag.
+- Every supported driver can create, start, stop, restart, rename, delete,
+  install/update, configure, and back up isolated instances through the
+  dashboard.
+- All currently supported games expose backups. Player views, mod management,
+  access-list management, and readiness signals are intentionally
+  game-specific rather than universal.
+  - Valheim supports players, BepInEx/Thunderstore mods, access lists, and
+    readiness.
+  - Rust supports access lists and RCON-backed administration, but not Odin
+    mod management, player views, or readiness detection.
+  - V Rising supports access lists and RCON-backed administration.
+  - Palworld supports player and access-list operations through its local,
+    authenticated REST API, plus readiness detection.
+  - RuneScape: Dragonwilds supports access-list operations.
+  - 7 Days to Die supports player views, mod management, and readiness
+    detection.
+- Game configuration follows the native contract for each server. Odin keeps
+  lifecycle-critical process arguments and metadata in SQLite; all other
+  game settings belong to native files or, when a server has no equivalent
+  file, documented typed launch arguments.
+- Configuration documents are initialized from installed game templates when
+  applicable. Existing files are preserved, advanced edits only change keys
+  already present, and changes require a stopped server and use atomic file
+  replacement.
+- Valheim's shared BepInEx and Thunderstore store is deduplicated globally.
+  This mod model is specific to Valheim; mod support is not presumed for the
+  other games.
+- Linux only; there is no Windows or macOS host support. V Rising runs its
+  Windows dedicated server through an Odin-managed Proton-GE runtime.
+- Odin's dashboard assets are embedded in the binary. Node.js is needed to
+  build those assets, not to run the resulting service.
+
+## Roadmap and Product Direction
+
+1. The web dashboard is the front door going forward. New operational
+   capability belongs in the web API and dashboard rather than new CLI-only
+   commands.
+2. Additional game support must use compiled drivers and the native
+   configuration model: validate the launch contract against official
+   documentation, official launch scripts/images, and installed templates;
+   isolate all instance-owned data; and keep game settings in native files.
+3. New game configuration work must preserve existing instances. Migrations
+   must be resumable, must not overwrite newer native-file edits, and must
+   leave retired configuration data recoverable.
+4. Capability differences remain visible and honest. The UI must expose only
+   the lifecycle, configuration, player, mod, backup, access-list, and
+   readiness features a particular driver actually implements.
 
 ## Brand Commitments
 
-- Name: **Odin** — the Norse All-Father who watches over the nine realms;
-  the product "watches over your Valheim realms." The naming/mythology
-  framing (realms, instances as servers under one all-father) is an
-  existing, intentional identity element, not incidental.
-- An existing logo, favicon, and a shadcn/ui `base-nova`-styled dashboard
-  (Vite + React + TypeScript + Tailwind) are the confirmed, current visual
-  baseline (`web/public/logo.png`, `web/public/favicon.ico`,
-  `web/components.json`) — treated as the incumbent world for any future
-  design work, not something this init redoes or opens for revision.
+- Name: **Odin** — the Norse All-Father who watches over many realms. The
+  product watches over several independent game-server instances under one
+  administrator.
+- The existing logo, favicon, and shadcn/ui `base-nova` dashboard style are
+  the current visual baseline (`web/public/logo.png`,
+  `web/public/favicon.ico`, and `web/components.json`). They are incumbent
+  product assets, not a request to redesign the brand.
 
 ## Evidence on Hand
 
-- `README.md` is the authoritative, current feature/command reference —
-  installation, full CLI surface, data directory layout, dashboard
-  description, and systemd service setup.
-- No testimonials, case studies, press, pricing, or usage benchmarks exist;
-  future work must not fabricate them. Odin is open-source (MIT) and free.
+- `README.md` is the user-facing reference for installation, supported games,
+  CLI compatibility, data layout, dashboard operation, and systemd setup.
+- `AGENTS.md` defines the implementation direction: dashboard-first work,
+  native game configuration, official-source verification, and isolation
+  requirements for future game drivers.
+- No testimonials, case studies, pricing, or usage benchmarks are available.
+  Odin is open source under the MIT license; product work must not fabricate
+  external validation or commercial claims.
 
 ## Product Principles
 
-1. One binary, minimal runtime dependencies — never design toward a
-   posture (hosted service, required cloud dependency, always-on account
-   system) the product doesn't actually have.
-2. Multi-instance is core, not an edge case — flows and UI should assume an
-   admin managing several servers side by side, not just one.
-3. The dashboard is the front door going forward — new capability and
-   design investment target `odin serve`, not the legacy CLI.
-4. State must always be trustworthy over convenient — status, uptime, and
-   resource numbers are derived live, never cached optimistically; design
-   should preserve that honesty rather than paper over it with assumed
-   state.
-5. No accounts, no login — respect the no-auth-by-design posture; don't
-   design UI that implies identity/session management the product
-   deliberately doesn't have.
+1. One self-hosted binary, minimal runtime dependencies — do not design
+   toward accounts, hosted control planes, or required cloud services that
+   Odin does not provide.
+2. Multi-game and multi-instance operation are core workflows. Isolation is
+   part of correctness: one instance must not alter another instance's save,
+   configuration, identity, logs, or ports.
+3. The dashboard is the primary interface; the CLI is carried for
+   compatibility, not expanded as the default surface for new product work.
+4. Native game configuration is authoritative. Odin manages the process and
+   isolation boundary while retaining the server's documented configuration
+   format and precedence rules.
+5. State must be trustworthy over convenient. Lifecycle state, resource
+   usage, and server capability must reflect live process information and the
+   selected driver's actual implementation.
+6. No accounts, no login. Preserve the loopback-by-default, no-auth product
+   posture and do not imply identity or session management in the UI.

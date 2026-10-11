@@ -6,15 +6,28 @@ use rusqlite::{OptionalExtension, params};
 use super::Db;
 use crate::backup::{BackupEntry, BackupRecord, BackupStorage};
 use crate::backup_storage::{RemoteObject, StorageProvider};
+use crate::game::GameId;
 
 /// Records one backup, replacing any existing row with the same id (an id is
 /// a timestamp, so a collision would mean the same backup being re-recorded,
 /// e.g. by the bootstrap importer running against an already-known entry).
 pub fn insert(db: &Db, instance_name: &str, entry: &BackupEntry) -> Result<()> {
+    insert_for_game(db, GameId::Valheim, instance_name, entry)
+}
+
+pub fn insert_for_game(
+    db: &Db,
+    game: GameId,
+    instance_name: &str,
+    entry: &BackupEntry,
+) -> Result<()> {
     db.conn()
         .execute(
-            "INSERT INTO backups (id, instance_name, created_at, size_bytes) VALUES (?1, ?2, ?3, ?4) \
-             ON CONFLICT(instance_name, id) DO UPDATE SET \
+            "INSERT INTO backups (id, instance_name, instance_id, created_at, size_bytes) \
+             SELECT ?2, ?3, id, ?4, ?5 FROM game_instances \
+             WHERE game = ?1 AND name = ?3 \
+             ON CONFLICT(instance_id, id) DO UPDATE SET \
+                instance_id = excluded.instance_id, \
                 created_at = excluded.created_at, \
                 size_bytes = excluded.size_bytes, \
                 remote_provider = NULL, \
@@ -22,22 +35,38 @@ pub fn insert(db: &Db, instance_name: &str, entry: &BackupEntry) -> Result<()> {
                 remote_region = NULL, \
                 remote_bucket = NULL, \
                 remote_key = NULL",
-            params![entry.id, instance_name, entry.created_at, entry.size_bytes as i64],
+            params![
+                game.as_str(),
+                entry.id,
+                instance_name,
+                entry.created_at,
+                entry.size_bytes as i64
+            ],
         )
-        .with_context(|| format!("failed to record backup '{}' for '{instance_name}'", entry.id))?;
+        .with_context(|| {
+            format!(
+                "failed to record backup '{}' for '{instance_name}'",
+                entry.id
+            )
+        })?;
     Ok(())
 }
 
 /// Lists an instance's backups, newest first.
 pub fn list(db: &Db, instance_name: &str) -> Result<Vec<BackupEntry>> {
+    list_for_game(db, GameId::Valheim, instance_name)
+}
+
+pub fn list_for_game(db: &Db, game: GameId, instance_name: &str) -> Result<Vec<BackupEntry>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, created_at, size_bytes, remote_provider, remote_endpoint, remote_region, \
-                remote_bucket, remote_key FROM backups \
-         WHERE instance_name = ?1 ORDER BY created_at DESC",
+        "SELECT b.id, b.created_at, b.size_bytes, b.remote_provider, b.remote_endpoint, b.remote_region, \
+                b.remote_bucket, b.remote_key FROM backups b \
+         JOIN game_instances g ON g.id = b.instance_id \
+         WHERE g.game = ?1 AND g.name = ?2 ORDER BY b.created_at DESC",
     )?;
     let rows = stmt
-        .query_map(params![instance_name], stored_row)?
+        .query_map(params![game.as_str(), instance_name], stored_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(decode_record)
@@ -45,32 +74,39 @@ pub fn list(db: &Db, instance_name: &str) -> Result<Vec<BackupEntry>> {
         .collect()
 }
 
-pub(crate) fn get(db: &Db, instance_name: &str, id: &str) -> Result<Option<BackupRecord>> {
+pub(crate) fn get_for_game(
+    db: &Db,
+    game: GameId,
+    instance_name: &str,
+    id: &str,
+) -> Result<Option<BackupRecord>> {
     let row = db
         .conn()
         .query_row(
-            "SELECT id, created_at, size_bytes, remote_provider, remote_endpoint, remote_region, \
-                    remote_bucket, remote_key FROM backups \
-             WHERE instance_name = ?1 AND id = ?2",
-            params![instance_name, id],
+            "SELECT b.id, b.created_at, b.size_bytes, b.remote_provider, b.remote_endpoint, b.remote_region, \
+                    b.remote_bucket, b.remote_key FROM backups b \
+             JOIN game_instances g ON g.id = b.instance_id \
+             WHERE g.game = ?1 AND g.name = ?2 AND b.id = ?3",
+            params![game.as_str(), instance_name, id],
             stored_row,
         )
         .optional()?;
     row.map(decode_record).transpose()
 }
 
-pub(crate) fn mark_remote(
+pub(crate) fn mark_remote_for_game(
     db: &Db,
+    game: GameId,
     instance_name: &str,
     id: &str,
     object: &RemoteObject,
 ) -> Result<()> {
     db.conn()
         .execute(
-            "UPDATE backups SET remote_provider = ?3, remote_endpoint = ?4, remote_region = ?5, \
-                    remote_bucket = ?6, remote_key = ?7 \
-             WHERE instance_name = ?1 AND id = ?2",
-            params![
+            "UPDATE backups SET remote_provider = ?4, remote_endpoint = ?5, remote_region = ?6, \
+                    remote_bucket = ?7, remote_key = ?8 \
+             WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2) AND id = ?3",
+            params![game.as_str(),
                 instance_name,
                 id,
                 object.provider.as_db(),
@@ -86,11 +122,11 @@ pub(crate) fn mark_remote(
 
 /// Removes a backup's row. The caller is responsible for removing the zip
 /// file itself.
-pub fn delete(db: &Db, instance_name: &str, id: &str) -> Result<()> {
+pub fn delete_for_game(db: &Db, game: GameId, instance_name: &str, id: &str) -> Result<()> {
     db.conn()
         .execute(
-            "DELETE FROM backups WHERE instance_name = ?1 AND id = ?2",
-            params![instance_name, id],
+            "DELETE FROM backups WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2) AND id = ?3",
+            params![game.as_str(), instance_name, id],
         )
         .with_context(|| format!("failed to delete backup '{id}' for '{instance_name}'"))?;
     Ok(())
@@ -233,9 +269,11 @@ mod tests {
             key: "odin/my-server/20260101T000000Z.zip".to_string(),
         };
 
-        mark_remote(&db, "my-server", &entry.id, &object).unwrap();
+        mark_remote_for_game(&db, GameId::Valheim, "my-server", &entry.id, &object).unwrap();
 
-        let stored = get(&db, "my-server", &entry.id).unwrap().unwrap();
+        let stored = get_for_game(&db, GameId::Valheim, "my-server", &entry.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             (stored.entry.storage, stored.remote),
             (BackupStorage::CloudflareR2, Some(object))

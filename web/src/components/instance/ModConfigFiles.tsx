@@ -34,8 +34,8 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024).toFixed(1)} KB`
 }
 
-export function ModConfigFiles({ name }: { name: string }) {
-  const files = useConfigFiles(name)
+export function ModConfigFiles({ id }: { id: string }) {
+  const files = useConfigFiles(id)
   const [editingFilename, setEditingFilename] = useState<string | null>(null)
 
   return (
@@ -78,7 +78,7 @@ export function ModConfigFiles({ name }: { name: string }) {
       {editingFilename && (
         <ConfigFileEditDialog
           key={editingFilename}
-          name={name}
+          id={id}
           filename={editingFilename}
           onClose={() => setEditingFilename(null)}
         />
@@ -88,17 +88,17 @@ export function ModConfigFiles({ name }: { name: string }) {
 }
 
 function ConfigFileEditDialog({
-  name,
+  id,
   filename,
   onClose,
 }: {
-  name: string
+  id: string
   filename: string
   onClose: () => void
 }) {
   const { resolvedTheme } = useTheme()
-  const content = useConfigFileContent(name, filename)
-  const setContent = useSetConfigFileContent(name)
+  const content = useConfigFileContent(id, filename)
+  const setContent = useSetConfigFileContent(id)
   const [draft, setDraft] = useState<string | null>(null)
 
   const original = content.data?.content ?? null

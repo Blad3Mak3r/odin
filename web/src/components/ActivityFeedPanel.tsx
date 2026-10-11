@@ -14,11 +14,11 @@ function ActivityRow({ event }: { event: ActivityEvent }) {
     <div className="flex items-start gap-3 border-b py-3 last:border-b-0">
       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-sm">{describeActivity(event.kind)}</span>
+        <span className="text-sm">{describeActivity(event.kind, event.game)}</span>
         <span className="text-xs text-muted-foreground">
           {event.instance && (
             <>
-              <Link to={`/instances/${event.instance}`} className="hover:underline">
+              <Link to={`/instances/${event.game}/${event.instance}`} className="hover:underline">
                 {event.instance}
               </Link>
               {' · '}

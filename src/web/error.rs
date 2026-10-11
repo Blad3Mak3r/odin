@@ -10,10 +10,12 @@ use thiserror::Error;
 
 use crate::backup::BackupError;
 use crate::db::webhooks::WebhookError;
+use crate::game::rust::access_lists::RustAccessListError;
 use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
 use crate::mods::nexus::NexusError;
+use crate::web::routes::saves::SaveFileError;
 
 /// A catch-all for ad-hoc input validation in route handlers that doesn't
 /// warrant its own domain error type (e.g. "password too short"). Always
@@ -51,7 +53,21 @@ impl IntoResponse for ApiError {
 }
 
 fn classify(err: &anyhow::Error) -> StatusCode {
-    if err.downcast_ref::<ListsError>().is_some() || err.downcast_ref::<BadRequest>().is_some() {
+    match err.downcast_ref::<SaveFileError>() {
+        Some(SaveFileError::InvalidPath) => return StatusCode::BAD_REQUEST,
+        Some(SaveFileError::NotFound(_)) => return StatusCode::NOT_FOUND,
+        None => {}
+    }
+    if err.downcast_ref::<ListsError>().is_some()
+        || err.downcast_ref::<RustAccessListError>().is_some()
+        || err.downcast_ref::<BadRequest>().is_some()
+        || err
+            .downcast_ref::<crate::db::game_instances::InvalidRustConfig>()
+            .is_some()
+        || err
+            .downcast_ref::<crate::db::game_instances::InvalidGenericConfig>()
+            .is_some()
+    {
         return StatusCode::BAD_REQUEST;
     }
     match err.downcast_ref::<ConfigFileError>() {

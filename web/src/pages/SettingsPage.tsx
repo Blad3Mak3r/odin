@@ -7,7 +7,81 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useClearNexusApiKey, useSetNexusApiKey, useSettings } from '@/lib/queries'
+import { Switch } from '@/components/ui/switch'
+import {
+  useClearNexusApiKey,
+  useSetInstanceDefaults,
+  useSetNexusApiKey,
+  useSettings,
+} from '@/lib/queries'
+import type { InstanceDefaults } from '@/lib/types'
+
+function InstanceDefaultsForm({ defaults }: { defaults: InstanceDefaults }) {
+  const saveDefaults = useSetInstanceDefaults()
+  const [autoRestart, setAutoRestart] = useState(defaults.auto_restart)
+  const [backupEnabled, setBackupEnabled] = useState(defaults.backup_enabled)
+  const [intervalHours, setIntervalHours] = useState(String(defaults.backup_interval_hours))
+  const [retainCount, setRetainCount] = useState(String(defaults.backup_retain_count))
+  const interval = Number(intervalHours)
+  const retain = Number(retainCount)
+  const invalid = !Number.isInteger(interval) || interval < 1 || !Number.isInteger(retain) || retain < 1
+
+  return (
+    <form
+      className="flex max-w-md flex-col gap-4 rounded-xl border p-4"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (invalid) return
+        saveDefaults.mutate(
+          {
+            auto_restart: autoRestart,
+            backup_enabled: backupEnabled,
+            backup_interval_hours: interval,
+            backup_retain_count: retain,
+          },
+          {
+            onSuccess: () => toast.success('Instance defaults saved'),
+            onError: (error) => toast.error(error.message),
+          },
+        )
+      }}
+    >
+      <div>
+        <h2 className="text-sm font-medium">New instance defaults</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Applied when a Valheim or Rust server is created. Existing servers keep their settings.
+        </p>
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <Label htmlFor="default-auto-restart">Automatic restart</Label>
+          <p className="text-xs text-muted-foreground">Restart after an unexpected server exit.</p>
+        </div>
+        <Switch id="default-auto-restart" checked={autoRestart} onCheckedChange={setAutoRestart} />
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <Label htmlFor="default-backups">Automatic backups</Label>
+          <p className="text-xs text-muted-foreground">Create a schedule for every new server.</p>
+        </div>
+        <Switch id="default-backups" checked={backupEnabled} onCheckedChange={setBackupEnabled} />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="default-backup-interval">Every (hours)</Label>
+          <Input id="default-backup-interval" type="number" min={1} step={1} value={intervalHours} onChange={(event) => setIntervalHours(event.target.value)} />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="default-backup-retain">Keep last</Label>
+          <Input id="default-backup-retain" type="number" min={1} step={1} value={retainCount} onChange={(event) => setRetainCount(event.target.value)} />
+        </div>
+      </div>
+      <Button className="w-fit" type="submit" disabled={invalid || saveDefaults.isPending}>
+        Save defaults
+      </Button>
+    </form>
+  )
+}
 
 export function SettingsPage() {
   const settings = useSettings()
@@ -38,6 +112,15 @@ export function SettingsPage() {
       <PageHeader title="Settings" description="Global configuration shared across all instances." />
 
       {settings.isError && <QueryError error={settings.error} />}
+
+      {settings.isLoading ? (
+        <Skeleton className="h-72 w-full max-w-md" />
+      ) : settings.data ? (
+        <InstanceDefaultsForm
+          key={JSON.stringify(settings.data.instance_defaults)}
+          defaults={settings.data.instance_defaults}
+        />
+      ) : null}
 
       <div className="flex max-w-md flex-col gap-4 rounded-xl border p-4">
         <div className="flex items-center justify-between">

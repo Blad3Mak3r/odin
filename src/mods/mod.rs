@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::Serialize;
 
@@ -135,6 +135,20 @@ fn validate_version(version: &str) -> Result<()> {
     Ok(())
 }
 
+/// Mod ids become directory and symlink names, so they must remain one normal
+/// path component.
+fn validate_mod_id(mod_id: &str) -> Result<()> {
+    let mut components = Path::new(mod_id).components();
+    if mod_id.is_empty()
+        || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+        || mod_id.contains('\\')
+    {
+        anyhow::bail!("'{mod_id}' is not a safe mod id");
+    }
+    Ok(())
+}
+
 pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
     if lifecycle::is_running(&instance)? {
@@ -231,6 +245,20 @@ fn ensure_bepinex(db: &Db, instance: &mut Instance) -> Result<()> {
     Ok(())
 }
 
+/// Installs the Valheim BepInEx bootstrap without adding a mod. This is used
+/// by the dashboard's game-level mod administration page.
+pub fn install_bepinex(paths: &Paths, db: &Db, server_name: &str) -> Result<String> {
+    let mut instance = Instance::load_existing(paths, db, server_name)?;
+    if lifecycle::is_running(&instance)? {
+        return Err(InstanceError::ModsLocked(server_name.to_string()).into());
+    }
+    if instance.state.bepinex_installed {
+        bail!("BepInEx is already installed on '{server_name}'");
+    }
+    ensure_bepinex(db, &mut instance)?;
+    Ok(instance.state.bepinex_version.unwrap_or_default())
+}
+
 /// Reads the configured Nexus Mods API key, or a clear error if none has
 /// been set yet (see `crate::web::routes::settings`). Also used directly by
 /// the web layer's Nexus lookup/trending routes, which need a key before
@@ -268,7 +296,14 @@ fn link_and_record(
     instance.save(db)
 }
 
-pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModUpdate {
+    pub mod_id: String,
+    pub from_version: String,
+    pub to_version: String,
+}
+
+pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<ModUpdate>> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
 
     // Mod ids are collected up front (rather than cloning the whole
@@ -295,6 +330,7 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
     };
 
     let mut any_updated = false;
+    let mut updates = Vec::new();
     for mod_id in mod_ids {
         // Nothing to update a locally uploaded mod against — it has no
         // external source to check for a newer version.
@@ -345,6 +381,11 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
             to = latest_version,
             "updating mod"
         );
+        updates.push(ModUpdate {
+            mod_id: mod_id.clone(),
+            from_version: installed.version.clone(),
+            to_version: latest_version.clone(),
+        });
 
         let global_dir = ensure_global_mod(
             paths,
@@ -376,7 +417,7 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(updates)
 }
 
 /// Reads an instance's installed mods from its state — no network call.
@@ -757,6 +798,7 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
 /// Removes a mod's payload from the global store. Refuses if any instance
 /// still references it — it must be removed per-instance first via `remove`.
 pub fn prune_global(paths: &Paths, db: &Db, mod_id: &str) -> Result<()> {
+    validate_mod_id(mod_id)?;
     let in_use = crate::instance::list_all(paths, db)?
         .into_iter()
         .any(|instance| {
@@ -784,6 +826,7 @@ pub fn prune_global(paths: &Paths, db: &Db, mod_id: &str) -> Result<()> {
 /// Removes one cached version while preserving the other versions of the
 /// same mod. Refuses while any instance still references the exact payload.
 pub fn prune_version(paths: &Paths, db: &Db, mod_id: &str, version: &str) -> Result<()> {
+    validate_mod_id(mod_id)?;
     validate_version(version)?;
     let in_use = crate::instance::list_all(paths, db)?
         .into_iter()
@@ -855,6 +898,7 @@ fn ensure_global_mod(
     version_number: &str,
     payload: ModPayload,
 ) -> Result<PathBuf> {
+    validate_mod_id(mod_id)?;
     validate_version(version_number)?;
     let final_dir = paths.mod_version_dir(mod_id, version_number);
     if crate::db::global_mods::contains(db, mod_id, version_number)? && final_dir.is_dir() {
@@ -1126,6 +1170,17 @@ mod tests {
 
         assert!(!dir.join("evil.txt").exists());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validate_mod_id_rejects_path_traversal() {
+        for mod_id in ["", ".", "..", "../mods", "/tmp/mod", r"..\\mods"] {
+            assert!(
+                validate_mod_id(mod_id).is_err(),
+                "{mod_id:?} must be rejected"
+            );
+        }
+        assert!(validate_mod_id("local:my-mod-ab12cd34").is_ok());
     }
 
     fn temp_paths(label: &str) -> Paths {

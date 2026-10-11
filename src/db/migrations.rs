@@ -4,12 +4,36 @@
 //! few embedded `.sql` files is simpler than a new dependency.
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use std::path::Path;
+
+use rusqlite::{Connection, params};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "src/db/migrations"]
 struct Migrations;
+
+/// Takes one consistent SQLite snapshot immediately before the first
+/// multi-game migration. `VACUUM INTO` includes WAL content, unlike copying
+/// the main database file while another Odin process is active.
+pub fn backup_before_game_instances(conn: &Connection, db_path: &Path) -> Result<()> {
+    const GAME_INSTANCES_VERSION: i64 = 12;
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current == 0 || current >= GAME_INSTANCES_VERSION {
+        return Ok(());
+    }
+
+    let backup_path = db_path.with_file_name("odin.pre-game-instances.db");
+    if backup_path.exists() {
+        return Ok(());
+    }
+    conn.execute(
+        "VACUUM INTO ?1",
+        params![backup_path.to_string_lossy().as_ref()],
+    )
+    .context("failed to create pre-multi-game database backup")?;
+    Ok(())
+}
 
 /// Applies every embedded migration newer than the DB's current
 /// `user_version`, in filename order, each inside its own transaction.
@@ -33,11 +57,24 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         let sql = std::str::from_utf8(&sql.data)
             .with_context(|| format!("migration '{file}' is not valid UTF-8"))?;
 
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)
-            .with_context(|| format!("failed to apply migration '{file}'"))?;
-        tx.pragma_update(None, "user_version", version)?;
-        tx.commit()?;
+        // 0021 replaces the parent identity table in order to widen its
+        // SQLite CHECK constraint. SQLite only permits that operation with
+        // foreign keys disabled before a transaction begins.
+        if version == 21 || version == 23 {
+            conn.pragma_update(None, "foreign_keys", "OFF")?;
+            let result = conn
+                .execute_batch(sql)
+                .with_context(|| format!("failed to apply migration '{file}'"));
+            conn.pragma_update(None, "foreign_keys", "ON")?;
+            result?;
+            conn.pragma_update(None, "user_version", version)?;
+        } else {
+            let tx = conn.transaction()?;
+            tx.execute_batch(sql)
+                .with_context(|| format!("failed to apply migration '{file}'"))?;
+            tx.pragma_update(None, "user_version", version)?;
+            tx.commit()?;
+        }
         tracing::info!(migration = file, "applied database migration");
     }
 
@@ -71,6 +108,155 @@ mod tests {
             )
             .unwrap();
         assert!(table_exists);
+    }
+
+    #[test]
+    fn latest_schema_includes_rust_rcon_configuration() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).unwrap();
+
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('rust_instance_configs')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+
+        assert!(columns.contains(&"rcon_port".to_string()));
+        assert!(columns.contains(&"rcon_password".to_string()));
+    }
+
+    #[test]
+    fn v20_assigns_existing_rust_instances_non_conflicting_rcon_ports() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 20 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('first', 'rust', 'first', '2026-01-01T00:00:00Z'),
+                ('second', 'rust', 'second', '2026-01-01T00:00:00Z');
+             INSERT INTO rust_instance_configs (instance_id, port, query_port, hostname, level, seed, world_size, max_players, auto_restart) VALUES
+                ('first', 28015, 28016, 'first', 'Procedural Map', 1, 3000, 50, 0),
+                ('second', 28017, 28018, 'second', 'Procedural Map', 2, 3000, 50, 0);",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let rcon: Vec<(u16, String)> = conn
+            .prepare(
+                "SELECT rcon_port, rcon_password FROM rust_instance_configs ORDER BY instance_id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rcon.len(), 2);
+        assert_ne!(rcon[0].0, rcon[1].0);
+        assert!(
+            rcon.iter()
+                .all(|(port, _)| ![28015, 28016, 28017, 28018].contains(port))
+        );
+        assert!(rcon.iter().all(|(_, password)| password.len() == 32));
+    }
+
+    #[test]
+    fn v21_expands_the_game_catalog_without_losing_existing_instances() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 21 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('legacy-rust', 'rust', 'legacy', '2026-01-01T00:00:00Z');
+             INSERT INTO rust_instance_configs (instance_id, port, query_port, rcon_port, rcon_password, hostname, level, seed, world_size, max_players, auto_restart)
+                VALUES ('legacy-rust', 28015, 28016, 28017, 'secret', 'legacy', 'Barren', 1, 3000, 50, 0);",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let existing: String = conn
+            .query_row(
+                "SELECT game FROM game_instances WHERE id = 'legacy-rust'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(existing, "rust");
+        conn.execute(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES ('pal', 'palworld', 'pal', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO generic_game_instance_configs (instance_id, port, config_json) VALUES ('pal', 8211, '{}')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn v25_assigns_distinct_query_ports_to_existing_palworld_instances() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 25 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('first', 'palworld', 'first', '2026-01-01T00:00:00Z'),
+                ('second', 'palworld', 'second', '2026-01-01T00:00:00Z'),
+                ('vrising', 'vrising', 'vrising', '2026-01-01T00:00:00Z');
+             INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port, config_json) VALUES
+                ('first', 8211, NULL, 8212, '{}'),
+                ('second', 8221, NULL, 8222, '{}'),
+                ('vrising', 27015, 27016, 25575, '{}');",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let query_ports: Vec<u16> = conn
+            .prepare(
+                "SELECT query_port FROM generic_game_instance_configs
+                 WHERE instance_id IN ('first', 'second') ORDER BY instance_id",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(query_ports, vec![27017, 27018]);
     }
 
     #[test]
@@ -157,6 +343,154 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state, (true, None));
+    }
+
+    #[test]
+    fn valheim_config_moves_under_the_generic_identity() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 12 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO instances (name, port, world_name, public, created_at) VALUES ('legacy', 2456, 'legacy-world', 1, '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let config: (String, u16, String) = conn
+            .query_row(
+                "SELECT g.id, v.port, v.world_name FROM game_instances g JOIN valheim_instance_configs v ON v.instance_id = g.id WHERE g.game = 'valheim' AND g.name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(!config.0.is_empty());
+        assert_eq!(config.1, 2456);
+        assert_eq!(config.2, "legacy-world");
+    }
+
+    #[test]
+    fn valheim_references_gain_the_generic_identity() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 12 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO instances (name, port, world_name, public, created_at) VALUES ('legacy', 2456, 'legacy', 1, '2024-01-01T00:00:00Z');
+             INSERT INTO installed_mods (instance_name, mod_id, version, installed_at, enabled) VALUES ('legacy', 'owner-mod', '1.0.0', '2024-01-01T00:00:00Z', 1);
+             INSERT INTO access_list_entries (instance_name, kind, steam_id) VALUES ('legacy', 'admin', '76561197960287930');
+             INSERT INTO backups (id, instance_name, created_at, size_bytes) VALUES ('backup', 'legacy', '2024-01-01T00:00:00Z', 1);
+             INSERT INTO backup_schedules (instance_name, interval_hours, retain_count, enabled) VALUES ('legacy', 24, 7, 1);
+             INSERT INTO backup_storage_configs (instance_name, provider, endpoint, region, bucket, access_key_id, secret_access_key) VALUES ('legacy', 'aws_s3', 'endpoint', 'region', 'bucket', 'key', 'secret');
+             INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes) VALUES ('legacy', '2024-01-01T00:00:00Z', 1, 1);
+             INSERT INTO activity_events (id, at, instance, kind) VALUES ('event', '2024-01-01T00:00:00Z', 'legacy', 'instance_started');",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let missing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (
+                    SELECT instance_id FROM installed_mods
+                    UNION ALL SELECT instance_id FROM access_list_entries
+                    UNION ALL SELECT instance_id FROM backups
+                    UNION ALL SELECT instance_id FROM backup_schedules
+                    UNION ALL SELECT instance_id FROM backup_storage_configs
+                    UNION ALL SELECT instance_id FROM resource_samples
+                    UNION ALL SELECT instance_id FROM activity_events
+                 ) WHERE instance_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(missing, 0);
+        let config: (String, u16) = conn
+            .query_row(
+                "SELECT world_name, port FROM valheim_instance_configs v \
+                 JOIN game_instances g ON g.id = v.instance_id \
+                 WHERE g.game = 'valheim' AND g.name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(config, ("legacy".to_string(), 2456));
+        let mod_version: String = conn
+            .query_row(
+                "SELECT version FROM installed_mods WHERE mod_id = 'owner-mod'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mod_version, "1.0.0");
+        let access_id: String = conn
+            .query_row(
+                "SELECT steam_id FROM access_list_entries WHERE kind = 'admin'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(access_id, "76561197960287930");
+        let backup_size: u64 = conn
+            .query_row(
+                "SELECT size_bytes FROM backups WHERE id = 'backup'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backup_size, 1);
+        let schedule: (u32, u32, bool) = conn
+            .query_row(
+                "SELECT interval_hours, retain_count, enabled FROM backup_schedules WHERE instance_name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(schedule, (24, 7, true));
+        let credentials: (String, String) = conn
+            .query_row(
+                "SELECT access_key_id, secret_access_key FROM backup_storage_configs WHERE instance_name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(credentials, ("key".to_string(), "secret".to_string()));
+        let telemetry: (f32, u64) = conn
+            .query_row(
+                "SELECT cpu_percent, memory_bytes FROM resource_samples WHERE instance_name = 'legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(telemetry, (1.0, 1));
+        let game: String = conn
+            .query_row(
+                "SELECT game FROM activity_events WHERE id = 'event'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(game, "valheim");
     }
 
     #[test]

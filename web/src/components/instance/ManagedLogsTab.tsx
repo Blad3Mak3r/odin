@@ -5,37 +5,27 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useLogSocket } from '@/hooks/useLogSocket'
-import { useLastExit, useLogs } from '@/lib/queries'
-import { formatRelativeTime } from '@/lib/utils'
+import { useManagedInstanceLogs } from '@/lib/queries'
 
 const LINE_OPTIONS = [100, 200, 500, 1000]
-// Matches the backend WS's fixed replay length (`TAIL_LINES` in `web::ws`) —
-// picking a count above this switches to a static REST snapshot instead of
-// the live tail, since the socket alone can't show more history than that.
 const LIVE_TAIL_LINES = 200
 
-export function LogsTab({ name }: { name: string }) {
+export function ManagedLogsTab({ id }: { id: string }) {
   const [lineCount, setLineCount] = useState(200)
   const [filter, setFilter] = useState('')
-  const logs = useLogs(name, lineCount)
-  const lastExit = useLastExit(name)
-  const socket = useLogSocket(name)
+  const logs = useManagedInstanceLogs(id, lineCount)
+  const socket = useLogSocket(id)
   const scrollRef = useRef<HTMLDivElement>(null)
-
   const showExpandedHistory = lineCount > LIVE_TAIL_LINES
   const live = !showExpandedHistory && (socket.connected || socket.lines.length > 0)
-  const restLines = logs.data?.lines
   const allLines = useMemo(
-    () => (live ? socket.lines : (restLines ?? [])),
-    [live, socket.lines, restLines],
+    () => (live ? socket.lines : (logs.data?.lines ?? [])),
+    [live, socket.lines, logs.data?.lines],
   )
-
   const lines = useMemo(() => {
     const needle = filter.trim().toLowerCase()
-    if (!needle) return allLines
-    return allLines.filter((line) => line.toLowerCase().includes(needle))
+    return needle ? allLines.filter((line) => line.toLowerCase().includes(needle)) : allLines
   }, [allLines, filter])
-
   const virtualizer = useVirtualizer({
     count: lines.length,
     getScrollElement: () => scrollRef.current,
@@ -44,9 +34,8 @@ export function LogsTab({ name }: { name: string }) {
   })
 
   useEffect(() => {
-    if (lines.length === 0) return
-    virtualizer.scrollToIndex(lines.length - 1, { align: 'end' })
-    // Only re-run when the line count changes, not on every virtualizer identity change.
+    if (lines.length > 0) virtualizer.scrollToIndex(lines.length - 1, { align: 'end' })
+    // Scroll when new output arrives, not on every virtualizer identity change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines.length])
 
@@ -57,51 +46,21 @@ export function LogsTab({ name }: { name: string }) {
           {live ? 'Live console log.' : `Last ${lineCount} lines (not live).`}
         </p>
         <div className="flex items-center gap-2">
-          {live && (
-            <Badge variant={socket.connected ? 'default' : 'secondary'}>
-              {socket.connected ? 'connected' : 'disconnected'}
-            </Badge>
-          )}
+          {live && <Badge variant={socket.connected ? 'default' : 'secondary'}>{socket.connected ? 'connected' : 'disconnected'}</Badge>}
           <div className="flex gap-1">
-            {LINE_OPTIONS.map((n) => (
-              <Button
-                key={n}
-                size="sm"
-                variant={lineCount === n ? 'default' : 'outline'}
-                onClick={() => setLineCount(n)}
-              >
-                {n}
+            {LINE_OPTIONS.map((count) => (
+              <Button key={count} size="sm" variant={lineCount === count ? 'default' : 'outline'} onClick={() => setLineCount(count)}>
+                {count}
               </Button>
             ))}
           </div>
         </div>
       </div>
-
-      {lastExit.data && (
-        <p className="text-sm text-muted-foreground">
-          Last exit: {lastExit.data.code === null ? 'killed by signal' : `code ${lastExit.data.code}`}
-          {' · '}
-          {formatRelativeTime(lastExit.data.at)}
-        </p>
-      )}
-
-      <Input
-        placeholder="Filter lines…"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
-
-      <div
-        ref={scrollRef}
-        className="h-96 overflow-y-auto rounded-xl border bg-muted/30 p-3 font-mono text-xs"
-      >
+      <Input placeholder="Filter lines…" value={filter} onChange={(event) => setFilter(event.target.value)} />
+      <div ref={scrollRef} className="h-96 overflow-y-auto rounded-xl border bg-muted/30 p-3 font-mono text-xs">
         {logs.isLoading && !live && <p className="text-muted-foreground">Loading…</p>}
         {logs.isError && !live && <QueryError error={logs.error} />}
-        {lines.length === 0 && (
-          <p className="text-muted-foreground">
-            {filter ? 'No lines match the filter.' : 'No logs yet — start the instance first.'}
-          </p>
-        )}
+        {lines.length === 0 && <p className="text-muted-foreground">{filter ? 'No lines match the filter.' : 'No logs yet — start the instance first.'}</p>}
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((item) => (
             <div

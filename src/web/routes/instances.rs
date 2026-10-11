@@ -1,13 +1,12 @@
 use std::time::Duration;
 
 use axum::Json;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityKind;
 use crate::db::Db;
-use crate::instance::state::InstanceState;
+use crate::instance::state::{InstanceState, ValheimModifiers, ValheimPreset, ValheimSetKey};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
 use crate::supervisor::client;
@@ -27,7 +26,12 @@ pub struct InstanceView {
 fn view(paths: &Paths, instance: Instance) -> anyhow::Result<InstanceView> {
     let running = lifecycle::is_running(&instance)?;
     let odin_version = if running {
-        match client::ping_blocking(paths, &instance.state.name, Duration::from_millis(300)) {
+        match client::ping_blocking(
+            paths,
+            crate::game::GameId::Valheim,
+            &instance.state.name,
+            Duration::from_millis(300),
+        ) {
             Ok(Response::Pong { odin_version, .. }) => odin_version,
             _ => None,
         }
@@ -69,7 +73,11 @@ pub async fn create_instance(
     let activity = state.activity.clone();
     let name = req.name.clone();
     let created = run_blocking(move || {
-        let instance = Instance::create(&paths, &db, &req.name)?;
+        let crate::game::instances::GameInstance::Valheim(instance) =
+            crate::game::instances::create(&paths, &db, crate::game::GameId::Valheim, &req.name)?
+        else {
+            unreachable!("Valheim creation returned a different game")
+        };
         activity.record(ActivityKind::InstanceCreated, Some(name));
         Ok(instance)
     })
@@ -122,99 +130,18 @@ pub async fn clone_instance(
     Ok(Json(instance_view))
 }
 
-pub async fn get_instance(
+pub async fn clone_instance_by_id(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path(id): Path<String>,
+    Json(req): Json<CloneInstanceRequest>,
 ) -> ApiResult<Json<InstanceView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let instance_view = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &name)?;
-        view(&paths, instance)
-    })
-    .await?;
-    Ok(Json(instance_view))
-}
-
-pub async fn start_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<InstanceView>> {
-    let _transition = state
-        .runtime
-        .begin_transition(&name, InstanceTransition::Starting)?;
-    let started = lifecycle::start(&state.paths, &state.db, &name).await?;
-    let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, started)).await?;
-    Ok(Json(instance_view))
-}
-
-pub async fn stop_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<StatusCode> {
-    let _transition = state
-        .runtime
-        .begin_transition(&name, InstanceTransition::Stopping)?;
-    lifecycle::stop(&state.paths, &state.db, &name).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn restart_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<InstanceView>> {
-    let _transition = state
-        .runtime
-        .begin_transition(&name, InstanceTransition::Restarting)?;
-    let restarted = lifecycle::restart(&state.paths, &state.db, &name).await?;
-    let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, restarted)).await?;
-    Ok(Json(instance_view))
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    clone_instance(State(state), Path(name), Json(req)).await
 }
 
 #[derive(Deserialize)]
 pub struct RenameRequest {
     pub new_name: String,
-}
-
-pub async fn rename_instance(
-    State(state): State<AppState>,
-    Path(old_name): Path<String>,
-    Json(req): Json<RenameRequest>,
-) -> ApiResult<Json<InstanceView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let renamed =
-        run_blocking(move || lifecycle::rename(&paths, &db, &old_name, &req.new_name)).await?;
-    let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, renamed)).await?;
-    Ok(Json(instance_view))
-}
-
-#[derive(Deserialize)]
-pub struct DeleteQuery {
-    #[serde(default)]
-    pub keep_backups: bool,
-}
-
-pub async fn delete_instance(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Query(query): Query<DeleteQuery>,
-) -> ApiResult<StatusCode> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let activity = state.activity.clone();
-    let delete_name = name.clone();
-    run_blocking(move || {
-        lifecycle::delete(&paths, &db, &delete_name, query.keep_backups)?;
-        activity.record(ActivityKind::InstanceDeleted, Some(delete_name));
-        Ok(())
-    })
-    .await?;
-    state.runtime.remove_instance(&name);
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]
@@ -224,6 +151,34 @@ pub struct ConfigView {
     pub password: Option<String>,
     pub public: bool,
     pub auto_restart: bool,
+    pub save_interval: Option<u32>,
+    pub backups: Option<u16>,
+    pub backup_short: Option<u32>,
+    pub backup_long: Option<u32>,
+    pub crossplay: bool,
+    pub playfab_instance_id: Option<String>,
+    pub preset: Option<ValheimPreset>,
+    pub modifiers: ValheimModifiers,
+    pub set_keys: Vec<ValheimSetKey>,
+}
+
+fn config_view(state: &InstanceState) -> ConfigView {
+    ConfigView {
+        world_name: state.world_name.clone(),
+        port: state.port,
+        password: state.password.clone(),
+        public: state.public,
+        auto_restart: state.auto_restart,
+        save_interval: state.save_interval,
+        backups: state.backups,
+        backup_short: state.backup_short,
+        backup_long: state.backup_long,
+        crossplay: state.crossplay,
+        playfab_instance_id: state.playfab_instance_id.clone(),
+        preset: state.preset,
+        modifiers: state.modifiers.clone(),
+        set_keys: state.set_keys.clone(),
+    }
 }
 
 pub async fn get_config(
@@ -233,13 +188,15 @@ pub async fn get_config(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let instance = run_blocking(move || Instance::load_existing(&paths, &db, &name)).await?;
-    Ok(Json(ConfigView {
-        world_name: instance.state.world_name,
-        port: instance.state.port,
-        password: instance.state.password,
-        public: instance.state.public,
-        auto_restart: instance.state.auto_restart,
-    }))
+    Ok(Json(config_view(&instance.state)))
+}
+
+pub async fn get_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ConfigView>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    get_config(State(state), Path(name)).await
 }
 
 #[derive(Deserialize)]
@@ -249,6 +206,34 @@ pub struct ConfigUpdateRequest {
     pub password: Option<String>,
     pub public: Option<bool>,
     pub auto_restart: Option<bool>,
+    #[serde(default)]
+    save_interval: OptionalUpdate<u32>,
+    #[serde(default)]
+    backups: OptionalUpdate<u16>,
+    #[serde(default)]
+    backup_short: OptionalUpdate<u32>,
+    #[serde(default)]
+    backup_long: OptionalUpdate<u32>,
+    pub crossplay: Option<bool>,
+    #[serde(default)]
+    playfab_instance_id: OptionalUpdate<String>,
+    #[serde(default)]
+    preset: OptionalUpdate<ValheimPreset>,
+    pub modifiers: Option<ValheimModifiers>,
+    pub set_keys: Option<Vec<ValheimSetKey>>,
+}
+
+#[derive(Default)]
+enum OptionalUpdate<T> {
+    #[default]
+    Unset,
+    Set(Option<T>),
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for OptionalUpdate<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Self::Set)
+    }
 }
 
 pub async fn set_config(
@@ -259,13 +244,16 @@ pub async fn set_config(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let instance = run_blocking(move || update_config(&paths, &db, &name, req)).await?;
-    Ok(Json(ConfigView {
-        world_name: instance.state.world_name,
-        port: instance.state.port,
-        password: instance.state.password,
-        public: instance.state.public,
-        auto_restart: instance.state.auto_restart,
-    }))
+    Ok(Json(config_view(&instance.state)))
+}
+
+pub async fn set_config_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ConfigUpdateRequest>,
+) -> ApiResult<Json<ConfigView>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    set_config(State(state), Path(name), Json(req)).await
 }
 
 fn update_config(
@@ -300,8 +288,48 @@ fn update_config(
     if let Some(auto_restart) = req.auto_restart {
         instance.state.auto_restart = auto_restart;
     }
+    if let OptionalUpdate::Set(value) = req.save_interval {
+        instance.state.save_interval = positive_optional("save interval", value)?;
+    }
+    if let OptionalUpdate::Set(value) = req.backups {
+        instance.state.backups = positive_optional("backup count", value)?;
+    }
+    if let OptionalUpdate::Set(value) = req.backup_short {
+        instance.state.backup_short = positive_optional("short backup interval", value)?;
+    }
+    if let OptionalUpdate::Set(value) = req.backup_long {
+        instance.state.backup_long = positive_optional("long backup interval", value)?;
+    }
+    if let Some(crossplay) = req.crossplay {
+        instance.state.crossplay = crossplay;
+    }
+    if let OptionalUpdate::Set(value) = req.playfab_instance_id {
+        instance.state.playfab_instance_id = value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
+    if let OptionalUpdate::Set(value) = req.preset {
+        instance.state.preset = value;
+    }
+    if let Some(modifiers) = req.modifiers {
+        instance.state.modifiers = modifiers;
+    }
+    if let Some(mut set_keys) = req.set_keys {
+        set_keys.dedup();
+        instance.state.set_keys = set_keys;
+    }
     instance.save(db)?;
     Ok(instance)
+}
+
+fn positive_optional<T>(label: &str, value: Option<T>) -> anyhow::Result<Option<T>>
+where
+    T: Copy + PartialEq + From<u8>,
+{
+    if value == Some(T::from(0)) {
+        return Err(BadRequest(format!("{label} must be greater than zero")).into());
+    }
+    Ok(value)
 }
 
 #[derive(Deserialize)]
@@ -337,11 +365,18 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        Instance::create(&paths, &db, "source").unwrap();
+        let source = Instance::create(&paths, &db, "source").unwrap();
+        let source_id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "source",
+            source.state.created_at,
+        )
+        .unwrap()
+        .id;
         let app = crate::web::router::build_router(AppState::new(paths.clone(), db.clone()));
         let request = Request::builder()
             .method("POST")
-            .uri("/api/instances/source/clone")
+            .uri(format!("/api/instances/{source_id}/valheim/clone"))
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"name":"target","world_name":"target-world"}"#,
@@ -369,7 +404,14 @@ mod tests {
             config_dir: dir,
         };
         let db = Arc::new(Db::open(&paths).unwrap());
-        Instance::create(&paths, &db, "source").unwrap();
+        let source = Instance::create(&paths, &db, "source").unwrap();
+        let source_id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "source",
+            source.state.created_at,
+        )
+        .unwrap()
+        .id;
         let state = AppState::new(paths, db);
         let _transition = state
             .runtime
@@ -378,7 +420,7 @@ mod tests {
         let app = crate::web::router::build_router(state);
         let request = Request::builder()
             .method("POST")
-            .uri("/api/instances/source/clone")
+            .uri(format!("/api/instances/{source_id}/valheim/clone"))
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"name":"target","world_name":"target-world"}"#,
@@ -394,25 +436,4 @@ mod tests {
 #[derive(Serialize)]
 pub struct LogsView {
     pub lines: Vec<String>,
-}
-
-pub async fn get_logs(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-    Query(query): Query<LogsQuery>,
-) -> ApiResult<Json<LogsView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let tail = run_blocking(move || {
-        let instance = Instance::load_existing(&paths, &db, &name)?;
-        let log_file = crate::paths::instance_logs_dir(&instance.dir).join("console.log");
-        if !log_file.is_file() {
-            return Ok(String::new());
-        }
-        Ok(crate::commands::logs::read_tail(&log_file, query.lines)?)
-    })
-    .await?;
-    Ok(Json(LogsView {
-        lines: tail.lines().map(str::to_string).collect(),
-    }))
 }

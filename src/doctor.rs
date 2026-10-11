@@ -34,6 +34,15 @@ pub fn run_checks(paths: &Paths) -> Vec<CheckResult> {
             detail: None,
         },
         CheckResult {
+            label: "Rust dedicated server installed",
+            ok: paths
+                .game_install_dir(crate::game::GameId::Rust)
+                .join("RustDedicated")
+                .is_file(),
+            critical: false,
+            detail: None,
+        },
+        CheckResult {
             label: "data directory writable",
             ok: is_writable(&paths.data_dir),
             critical: true,

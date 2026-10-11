@@ -31,6 +31,69 @@ CLI-only functionality, and don't hold new web-only features back for lack
 of CLI parity. When in doubt about where a capability belongs, it belongs
 in the web API and dashboard.
 
+## Game server configuration policy
+
+Every new managed game must follow Odin's native-configuration model. Verify
+the server's launch and configuration contract from primary sources before
+designing or changing its driver: the publisher's dedicated-server
+documentation, the official server image or launch script when one exists,
+and the templates shipped by the installed server. Match the documented
+server version. Community reports may help diagnose a compatibility gap, but
+must not replace an official source for the normal contract.
+
+- Keep in SQLite only Odin metadata and settings that Odin must pass directly
+  to the process (for example, documented listener ports and RCON transport
+  arguments). Keep game settings in the game's native configuration files.
+  Do not create a JSON mirror, an Odin-specific settings schema, or duplicate
+  game-owned values in the database.
+- Derive per-instance data paths, log paths, identities, headless flags, and
+  other isolation-critical arguments in the driver. They are not operator
+  settings and must not become freely configurable database fields.
+- Use the game-provided template to initialize a missing native document and
+  never overwrite an existing operator file. The advanced editor may update
+  only keys that already exist in the file, must write atomically, and must
+  require the server to be stopped. Do not invent missing keys during normal
+  editing.
+- If a game has no native server configuration document, represent its
+  documented launch arguments as typed, validated fields. Omit newly added
+  optional arguments by default so existing instances retain their launch
+  behavior.
+- Preserve existing instances during a migration: native file values take
+  precedence when the game documents that precedence. Add only missing
+  migrated values, back up retired data without importing it over newer file
+  edits, and make any filesystem/database migration safe to resume after a
+  failed startup.
+- Add tests that assert the complete process command, native document paths,
+  initialization behavior, and migration precedence. Cite the official
+  sources used to establish the contract in the pull request description.
+
+## Agent workflow and engineering principles
+
+- Prefer the smallest clear change that solves the stated problem. Do not
+  introduce speculative extensibility, new layers, indirection, or dependencies
+  without a concrete current need.
+- Inspect the relevant code before editing it. Reuse and extend existing
+  domain types, helpers, API clients, and UI components where they fit; do not
+  duplicate logic or create parallel implementations of an existing concept.
+  Extract an abstraction only when it removes genuine repeated complexity and
+  leaves the call sites easier to understand.
+- Use the available specialist skills when they match the task:
+  - `ponytail` for repository-aware implementation workflows and task
+    execution.
+  - `rust-best-practices` for Rust design, error handling, async, testing,
+    and idiomatic code decisions.
+  - `vercel-react-best-practices` for dashboard React architecture,
+    rendering, state, and performance decisions.
+  These skills complement this file; repository-specific rules here take
+  precedence.
+- When the Context7 MCP is available, consult it before implementing against
+  third-party libraries or frameworks. Use its version-appropriate
+  documentation rather than relying on memory. If it is unavailable, use the
+  project's installed versions and the upstream primary documentation.
+- Keep changes narrowly scoped. Do not refactor unrelated code merely because
+  it is nearby, and do not change generated files or dependency lockfiles
+  unless the task requires it.
+
 ## Repository layout
 
 - `src/` — the Rust CLI (edition 2024, no workspace, single binary crate).
@@ -55,7 +118,8 @@ Everything is driven through the root `Makefile`:
 - `make test` — `cargo test`.
 - `make lint` — `cargo clippy --all-targets -- -D warnings` (all warnings are errors).
 - `make fmt` / `make fmt-check` — `cargo fmt` / `cargo fmt --check`.
-- `make check` — fmt-check + lint + test; run this before opening a PR.
+- `make check` — fmt-check + lint + test; use for cross-cutting or
+  high-risk changes, release validation, or when explicitly requested.
 - `make web-install` — `npm --prefix web ci`.
 - `make web-build` — installs and builds the frontend only.
 - `make web-dev` — Vite dev server (proxies `/api` to `127.0.0.1:7331`, i.e. a locally running `odin serve`).
@@ -64,9 +128,21 @@ Frontend-only commands (from `web/`): `npm run build` (`tsc -b && vite
 build` — this also typechecks), `npm run lint` (`oxlint`, not
 ESLint/Prettier), `npm run dev`.
 
-There is no CI configured in this repo, so `make check` plus a frontend
-build/typecheck/lint is the only signal an agent gets before a PR is
-reviewed by a human — run all of it.
+There is no CI configured in this repo. Validate changes proportionally
+instead of running the entire suite by habit:
+
+- Test and lint only the affected Rust module(s), test target(s), or frontend
+  package first. For Rust, prefer targeted `cargo test <filter>` invocations
+  when an applicable test filter exists; for frontend-only work, run the
+  relevant `npm run lint` and/or `npm run build` command from `web/`.
+- Run formatting checks for the files you changed. Do not run tests for
+  unrelated modules solely as a routine step.
+- Broaden validation to `make check` and a frontend build/typecheck only
+  when the change crosses subsystem boundaries, changes shared infrastructure
+  or public interfaces, is release-sensitive, or the user explicitly asks for
+  full verification.
+- State exactly which checks were run and any checks intentionally not run,
+  with the reason.
 
 ## Manually running `odin serve` locally
 

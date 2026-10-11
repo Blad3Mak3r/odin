@@ -1,7 +1,7 @@
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import {
   Bell,
-  Blocks,
+  Gamepad2,
   LayoutDashboard,
   ListChecks,
   Menu,
@@ -21,8 +21,8 @@ import { ThemeToggle } from './ThemeToggle'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/games', label: 'Games', icon: Gamepad2, end: false },
   { to: '/instances', label: 'Instances', icon: Server, end: false },
-  { to: '/mods', label: 'Mods', icon: Blocks, end: false },
   { to: '/jobs', label: 'Jobs', icon: ListChecks, end: false },
   { to: '/webhooks', label: 'Webhooks', icon: Webhook, end: false },
   { to: '/settings', label: 'Settings', icon: Settings, end: false },
@@ -58,7 +58,7 @@ function SidebarNav({
               </NavLink>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">Valheim server dashboard</p>
+          <p className="text-xs text-muted-foreground">Game server dashboard</p>
         </div>
       </div>
       <nav className="flex flex-col gap-1 px-2">

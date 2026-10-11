@@ -28,6 +28,7 @@ struct ConnectedPlayer {
 pub struct PlayerRegistry {
     instances: Arc<Mutex<HashMap<String, Vec<ConnectedPlayer>>>>,
     parsers: Arc<Mutex<HashMap<String, PlayerEventParser>>>,
+    db: Option<Arc<crate::db::Db>>,
 }
 
 impl PlayerRegistry {
@@ -35,6 +36,15 @@ impl PlayerRegistry {
         Self {
             instances: Arc::new(Mutex::new(HashMap::new())),
             parsers: Arc::new(Mutex::new(HashMap::new())),
+            db: None,
+        }
+    }
+
+    pub fn load(db: Arc<crate::db::Db>) -> Self {
+        Self {
+            instances: Arc::new(Mutex::new(HashMap::new())),
+            parsers: Arc::new(Mutex::new(HashMap::new())),
+            db: Some(db),
         }
     }
 
@@ -55,6 +65,11 @@ impl PlayerRegistry {
             .lock()
             .expect("players registry lock poisoned")
             .remove(instance);
+        if let Some(db) = &self.db
+            && let Err(error) = crate::db::player_sessions::close_active(db, instance, Utc::now())
+        {
+            tracing::warn!(%error, %instance, "failed to close active player sessions");
+        }
         self.parsers
             .lock()
             .expect("player parsers lock poisoned")
@@ -95,13 +110,17 @@ impl PlayerRegistry {
                     player.peer = Some(peer);
                     return None;
                 }
+                let connected_at = Utc::now();
+                let steam_id = crate::player_events::steam_id_from_peer(&peer);
                 players.push(ConnectedPlayer {
-                    peer: Some(peer),
+                    peer: Some(peer.clone()),
                     info: PlayerInfo {
                         name: name.clone(),
-                        connected_at: Utc::now(),
+                        steam_id: steam_id.clone(),
+                        connected_at,
                     },
                 });
+                self.record_join(instance, &name, steam_id.as_deref(), connected_at);
                 Some(ActivityKind::PlayerJoined { name })
             }
             PlayerEvent::Left { peer } => {
@@ -109,6 +128,12 @@ impl PlayerRegistry {
                     .iter()
                     .position(|p| p.peer.as_deref() == Some(&*peer))?;
                 let removed = players.remove(index);
+                self.record_leave(
+                    instance,
+                    &removed.info.name,
+                    removed.info.steam_id.as_deref(),
+                    Utc::now(),
+                );
                 Some(ActivityKind::PlayerLeft {
                     name: removed.info.name,
                 })
@@ -121,25 +146,35 @@ impl PlayerRegistry {
     /// try_bridge_events`) — the supervisor already resolved the peer id
     /// internally, so this is keyed by name, deduplicated the same way
     /// `apply`'s peer-keyed path is.
-    pub fn mark_joined(&self, instance: &str, name: String) -> Option<ActivityKind> {
+    pub fn mark_joined(
+        &self,
+        instance: &str,
+        name: String,
+        steam_id: Option<String>,
+    ) -> Option<ActivityKind> {
         let mut instances = self
             .instances
             .lock()
             .expect("players registry lock poisoned");
         let players = instances.entry(instance.to_string()).or_default();
-        if players
-            .iter()
-            .any(|p| p.peer.is_none() && p.info.name == name)
-        {
+        if players.iter().any(|p| {
+            steam_id
+                .as_deref()
+                .is_some_and(|id| p.peer.as_deref() == Some(id))
+                || p.info.name == name
+        }) {
             return None;
         }
+        let connected_at = Utc::now();
         players.push(ConnectedPlayer {
-            peer: None,
+            peer: steam_id.clone(),
             info: PlayerInfo {
                 name: name.clone(),
-                connected_at: Utc::now(),
+                steam_id: steam_id.clone(),
+                connected_at,
             },
         });
+        self.record_join(instance, &name, steam_id.as_deref(), connected_at);
         Some(ActivityKind::PlayerJoined { name })
     }
 
@@ -150,10 +185,14 @@ impl PlayerRegistry {
             .lock()
             .expect("players registry lock poisoned");
         let players = instances.entry(instance.to_string()).or_default();
-        let index = players
-            .iter()
-            .position(|p| p.peer.is_none() && p.info.name == name)?;
+        let index = players.iter().position(|p| p.info.name == name)?;
         let removed = players.remove(index);
+        self.record_leave(
+            instance,
+            &removed.info.name,
+            removed.info.steam_id.as_deref(),
+            Utc::now(),
+        );
         Some(ActivityKind::PlayerLeft {
             name: removed.info.name,
         })
@@ -165,6 +204,14 @@ impl PlayerRegistry {
     /// anyone who joined before this subscription started (e.g. `odin
     /// serve` restarted while the game kept running).
     pub fn replace_snapshot(&self, instance: &str, players: Vec<PlayerInfo>) {
+        for player in &players {
+            self.record_join(
+                instance,
+                &player.name,
+                player.steam_id.as_deref(),
+                player.connected_at,
+            );
+        }
         self.instances
             .lock()
             .expect("players registry lock poisoned")
@@ -172,9 +219,40 @@ impl PlayerRegistry {
                 instance.to_string(),
                 players
                     .into_iter()
-                    .map(|info| ConnectedPlayer { peer: None, info })
+                    .map(|info| ConnectedPlayer {
+                        peer: info.steam_id.clone(),
+                        info,
+                    })
                     .collect(),
             );
+    }
+
+    fn record_join(
+        &self,
+        instance: &str,
+        name: &str,
+        steam_id: Option<&str>,
+        at: chrono::DateTime<Utc>,
+    ) {
+        if let Some(db) = &self.db
+            && let Err(error) = crate::db::player_sessions::joined(db, instance, name, steam_id, at)
+        {
+            tracing::warn!(%error, %instance, %name, "failed to persist player join");
+        }
+    }
+
+    fn record_leave(
+        &self,
+        instance: &str,
+        name: &str,
+        steam_id: Option<&str>,
+        at: chrono::DateTime<Utc>,
+    ) {
+        if let Some(db) = &self.db
+            && let Err(error) = crate::db::player_sessions::left(db, instance, name, steam_id, at)
+        {
+            tracing::warn!(%error, %instance, %name, "failed to persist player leave");
+        }
     }
 }
 
@@ -232,7 +310,11 @@ mod tests {
     fn mark_joined_then_mark_left_round_trips() {
         let registry = PlayerRegistry::new();
 
-        let joined = registry.mark_joined("my-server", "Bjorn".to_string());
+        let joined = registry.mark_joined(
+            "my-server",
+            "Bjorn".to_string(),
+            Some("76561198000000000".to_string()),
+        );
         assert!(matches!(joined, Some(ActivityKind::PlayerJoined { name }) if name == "Bjorn"));
         assert_eq!(registry.snapshot("my-server").len(), 1);
 
@@ -240,7 +322,11 @@ mod tests {
         // peer-keyed dedup.
         assert!(
             registry
-                .mark_joined("my-server", "Bjorn".to_string())
+                .mark_joined(
+                    "my-server",
+                    "Bjorn".to_string(),
+                    Some("76561198000000000".to_string()),
+                )
                 .is_none()
         );
         assert_eq!(registry.snapshot("my-server").len(), 1);
@@ -265,6 +351,7 @@ mod tests {
             "my-server",
             vec![PlayerInfo {
                 name: "Bjorn".to_string(),
+                steam_id: Some("76561198000000000".to_string()),
                 connected_at: Utc::now(),
             }],
         );

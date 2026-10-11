@@ -1,12 +1,14 @@
 # Odin
 
-**Odin** is a self-hosted web service for orchestrating [Valheim](https://www.valheimgame.com/)
-dedicated servers on Linux. In Norse mythology, Odin is the All-Father who
-watches over the nine realms; this Odin watches over your Valheim realms —
-installing and updating the game server, running and supervising multiple
-server instances, managing their mods, config, backups, and access lists —
-all from one binary and one web dashboard, so you don't have to babysit
-background processes and SteamCMD invocations by hand.
+**Odin** is a self-hosted web service for orchestrating dedicated game
+servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/),
+Rust, V Rising, Palworld, RuneScape: Dragonwilds, and 7 Days to Die from one binary and one
+web dashboard. In Norse mythology, Odin is
+the All-Father who watches over the nine realms; this Odin watches over your
+game servers — installing and updating them, running and supervising named
+instances, and managing each game's configuration, backups, and supported
+features without making you babysit background processes and SteamCMD
+invocations by hand.
 
 Odin ships as a single binary with an embedded web dashboard
 (`odin serve`) — that dashboard is the primary, actively developed way to
@@ -16,17 +18,15 @@ but new capabilities land in the web API and dashboard, not the CLI. See
 
 ## Why Odin exists
 
-Running a Valheim dedicated server on Linux usually means stitching together
-several separate tools yourself: SteamCMD to install and update the server,
-some way to keep it running after you log out, manual `BepInEx`/Thunderstore
-downloads if you want mods, and a pile of shell scripts or ad-hoc notes to
-remember port numbers, world names, and passwords across restarts — and it
-only gets messier once you're running more than one server. Odin folds all
-of that into one small binary that runs as a background service and exposes
-a single web dashboard for orchestrating a whole fleet of servers side by
-side: creating and controlling instances, installing mods, editing config
-and access lists, watching live consoles and logs, and taking backups —
-all from a browser, on one host or several.
+Running dedicated servers on Linux usually means stitching together several
+separate tools: SteamCMD to install and update a server, something to keep it
+running after logout, and scripts or notes to track ports and configuration.
+Valheim adds `BepInEx`/Thunderstore when you want mods. Odin folds that into
+one background service and dashboard for creating and controlling servers,
+watching logs, editing game-specific configuration, and taking backups. Game
+capabilities appear only where they apply: Valheim includes mods, player
+state, and readiness; both games include their native access lists, while
+Rust v1 otherwise focuses on core operation.
 
 ## Features
 
@@ -40,16 +40,22 @@ all from a browser, on one host or several.
 - **One binary, no runtime dependencies** beyond (transparently managed)
   SteamCMD and a handful of OS shared libraries — no Python, no Docker, no
   terminal multiplexer required.
-- **Multiple named instances.** Orchestrate several independent Valheim
-  servers on one host, each with its own world, port, password,
-  visibility, and mod set, sharing a single downloaded copy of the game
-  binaries.
+- **Multiple games and UUID-addressed instances.** Orchestrate Valheim, Rust,
+  V Rising, Palworld, RuneScape: Dragonwilds, and 7 Days to Die side by side on one host.
+  Each instance has a persistent UUID for dashboard navigation and API calls;
+  names remain editable labels and may be reused by another game without
+  sharing data or ports.
+
+- **Compiled game drivers.** Odin ships drivers rather than loading plugins:
+  V Rising runs in an isolated Proton-GE prefix; Palworld uses its local,
+  authenticated REST API; and Dragonwilds uses isolated runtime/config/save
+  trees with separate game and beacon UDP ports.
 - **Detached by default, and restart-proof.** Every instance runs as its
   own directly-supervised background process, so it keeps running after you
   disconnect — and after `odin serve` itself is restarted or upgraded.
   Watch it live from the dashboard's console view, or with `odin logs
   --follow` via the legacy CLI.
-- **Mod support out of the box.** Bootstraps
+- **Valheim mod support out of the box.** Bootstraps
   [BepInEx](https://github.com/BepInEx/BepInEx) automatically and installs
   mods straight from the [Thunderstore](https://thunderstore.io/c/valheim)
   API by name — no manual unzipping into the right folder. Mods download
@@ -59,16 +65,15 @@ all from a browser, on one host or several.
   The dashboard also detects newer BepInEx releases per instance and can
   update one stopped server or a selected group while preserving local
   plugin and configuration files.
-- **Ready-to-share connect info.** The dashboard (and `odin status`) shows
+- **Ready-to-share Valheim connect info.** The dashboard (and `odin status`) shows
   each instance's public address and password alongside its live state, so
   getting a friend into your world doesn't mean a round-trip through raw
   config and "what's my IP".
-- **Backups with a safety net.** Snapshot a world's save files to a zip
-  archive at any time; restoring always takes a fresh snapshot of the
-  current state first, so a restore is never a one-way, unrecoverable
-  action. Per-instance remote storage can send new backups to AWS S3 or
-  Cloudflare R2; Odin removes the temporary local zip only after the upload
-  succeeds and keeps it locally if the upload fails.
+- **Backups with a safety net.** Snapshot server data to a zip archive and
+  restore from it only after Odin first snapshots the current data. Rust v1
+  requires its server to be stopped for create and restore operations.
+  Both games support schedules, retention, and per-instance remote storage
+  through AWS S3 or Cloudflare R2.
 - **State you can trust.** An instance's "running" status is always derived
   live from the OS process itself (its pid, cross-checked against its own
   start time so a reused pid never lies to you), never from a flag that can
@@ -95,9 +100,9 @@ legacy — don't expect new features to show up there first.
 
 ## Requirements
 
-- **Linux only** (x86_64). Odin spawns the Valheim dedicated server
-  directly and shells out to SteamCMD's Linux distribution; there is no
-  Windows or macOS support.
+- **Linux only** (x86_64). Odin spawns dedicated game servers directly and
+  shells out to SteamCMD's Linux distribution; there is no Windows or macOS
+  support.
 - **SteamCMD is handled for you.** Odin downloads and installs it
   automatically on first `odin install`; you don't need to have it set up
   beforehand.
@@ -192,7 +197,7 @@ The container filesystem contract is intentionally small:
 
 | Path | Persistence | Purpose |
 |---|---|---|
-| `/var/lib/odin` | Required volume | Database, SteamCMD, shared Valheim install, worlds, backups, mods, and logs. |
+| `/var/lib/odin` | Required volume | Database, SteamCMD, game installs, worlds, backups, mods, and logs. |
 | `/etc/odin/config.toml` | Image default; optional read-only bind mount | Global configuration. Its default data directory is `/var/lib/odin`. |
 | `/run/odin` | Ephemeral `tmpfs` | Per-instance supervisor sockets and pidfiles. |
 
@@ -246,13 +251,14 @@ help`](#development) for every available target.
 odin serve
 ```
 
-Then open `http://127.0.0.1:7331` in a browser: install/update the game
-server, create and start named instances, search and install mods, edit
-config and access lists, watch a live console, and take backups — all from
-the dashboard. See [Web dashboard](#web-dashboard) for details.
+Then open `http://127.0.0.1:7331` in a browser: install/update the supported
+games, create and start instances, edit game-specific configuration, watch
+logs, and take backups. Rust and V Rising support access lists; Valheim
+additionally offers mods, live player state, and readiness. See [Web
+dashboard](#web-dashboard) for details.
 
-For scripting or quick one-off changes, the legacy CLI covers the same
-ground:
+For scripting or quick one-off Valheim changes, the legacy CLI remains
+available:
 
 ```sh
 # Install SteamCMD and the Valheim dedicated server (safe to re-run to update later)
@@ -368,16 +374,56 @@ odin serve                            # binds 127.0.0.1:7331 by default
 odin serve --bind 0.0.0.0 --port 8080  # or pick your own address/port
 ```
 
-It covers dependency status, instance
-create/start/stop/restart/rename/delete, per-instance config, mod
-search/install/enable via Thunderstore, per-instance and bulk BepInEx update
-checks, a live console and log tail, and
-editing `adminlist.txt`/`bannedlist.txt`/`permittedlist.txt` — plus live
-host and per-instance CPU/RAM usage that isn't exposed by the CLI at all.
-Each instance's Backups tab also configures automatic backups and optional
-AWS S3 or Cloudflare R2 storage. Remote backups remain listed and can be
-restored or deleted from Odin; restores download a temporary zip and remove
-it again when the operation finishes.
+It covers dependency status, fleet search, tags, bulk lifecycle actions,
+instance create/start/stop/restart/rename/clone/delete, game-specific
+configuration, live logs, downloadable save files, scheduled backups, and
+live plus historical CPU/RAM usage with CSV export. Each instance also has a
+**Limits** tab for optional CPU and memory ceilings: CPU is expressed as a
+percentage of one core (so `200%` permits two full cores), and memory is
+entered in GiB. Limits take effect on the next start, including an automatic
+restart. Memory pressure begins at 90% of the selected maximum; at 100% the
+kernel may terminate a game process to enforce the hard limit. Leaving either
+field empty leaves that resource unlimited.
+
+Resource limits require cgroup v2 and systemd 254 or newer. Packaged installs
+configure the required delegation automatically; if an installation cannot
+enforce a configured limit, Odin refuses to start that instance rather than
+running it without the requested protection. Global settings define
+automatic restart and backup defaults for every newly created game server.
+
+### Instance API identity
+
+The dashboard routes instances as `/instance/<uuid>` and the public API uses
+`/api/instances/<uuid>/…`. Treat the UUID returned by the instance list as the
+canonical identifier for lifecycle, configuration, logs, saves, backups, and
+game-specific administration. The former game/name API paths have been
+removed; integrations must resolve and retain the UUID from the instance list.
+Historical dashboard URLs are redirected to their UUID route, so a rename
+never changes a bookmark's target.
+
+V Rising uses a managed, cached Proton-GE runtime and keeps its persistent
+data and RCON listener per instance. Palworld's administrative REST API is
+called only on its loopback port by Odin; it is never proxied directly to the
+network. Dragonwilds configuration is editable only while stopped, because
+the game discards live edits; its game and beacon UDP ports are configured
+independently. Creating a Dragonwilds configuration requires an owner ID,
+server name, default world, and administration password before it can start.
+
+For games with a declared server configuration document (7 Days to Die, V
+Rising, Palworld, and Dragonwilds), the Configuration tab also has a collapsed
+**Advanced configuration** section. It reads only Odin-declared XML, JSON, or
+INI files, separates settings Odin manages from settings supplied by the game,
+and lets an operator change existing unmanaged values while the instance is
+stopped. Odin validates the complete change set and writes it atomically; it
+does not discover arbitrary files, mod configuration, or permit adding and
+deleting keys.
+
+Rust access lists manage owners, moderators, and bans while the server is
+stopped. Valheim adds Thunderstore mod management, BepInEx update checks,
+live players, and recent player-session history. Every instance's Backups tab
+can use local storage, AWS S3, or Cloudflare R2. Remote backups remain listed
+and can be restored or deleted from Odin; restores download a temporary
+archive and remove it again when the operation finishes.
 
 **There is no authentication.** `odin serve` binds to `127.0.0.1` by
 default for exactly this reason; if you want to reach it from another
@@ -441,18 +487,60 @@ In both modes, the data dir is resolved in this order:
     logs/console.log              # captured console output, tailed by `odin logs`
     console.in                    # named pipe carrying console input (`odin exec`/dashboard)
     BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>/<version>  # exact enabled version
+  games/rust/
+    install/                     # Rust Dedicated Server binaries
+    instances/<name>/            # Rust configuration, identity, logs, and backups
+  games/7d2d/
+    install/                     # shared 7 Days to Die Dedicated Server binaries
+    instances/<name>/
+      config/serverconfig.xml    # instance-local server configuration
+      Mods/<mod-name>/ModInfo.xml # instance-local uploaded 7D2D mods
+      Saves/                      # isolated 7D2D saves
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
 
-Each instance's game binaries are a symlink into one shared, SteamCMD-managed
-install — so every instance always runs the same game version, and updating
-is a single `odin install` rather than one download per server. Mods work
-the same way, but versioned: `odin mods add` downloads each `(mod, version)`
+Each Valheim instance's game binaries are a symlink into one shared,
+SteamCMD-managed install — so every Valheim instance always runs the same
+game version, and updating is a single `odin install` rather than one
+download per server. Rust uses its own isolated install under `games/rust/`.
+All Rust instances run that same installation with distinct `server.identity`
+values. Odin also maintains `$HOME/.steam/sdk64/steamclient.so` as a hardlink
+to SteamCMD's 64-bit client library (or a symlink when the paths cross
+filesystems), repairing it before every Rust start so Steamworks can initialize.
+Valheim mods are versioned: `odin mods add` downloads each `(mod, version)`
 once into the shared `mods/` store, and every enabled instance symlinks to
 its exact version. Updating one instance creates or reuses the newer payload
 and only repoints that instance; pinned instances remain unchanged. The
 dashboard can switch back to any cached version and prune versions no longer
 used by an instance.
+
+7 Days to Die uses the internal game identifier `7d2d`. Its instances reserve
+UDP ports `26900–26902` by default and load user-uploaded ZIP mods from each
+instance's own `Mods/` directory. Odin requires a stopped 7D2D server before
+creating a backup or changing mods.
+
+Each 7D2D instance starts from the installed `serverconfig.xml` template. When
+an installed game update changes that template, the dashboard offers a review
+of added, removed, and changed defaults. Applying a review is explicit: Odin
+never overwrites an instance value that differs from its original template.
+Existing instances can adopt their current configuration as the baseline for
+future reviews.
+
+On 7 Days to Die V3 and later, gameplay rules are represented by the game's
+single `SandboxCode` value rather than individual XML properties. Odin exposes
+the complete value and a small visual editor for common V3 rules; it preserves
+unrecognised encoded rules. Copy the complete code from the game's Sandbox
+Options screen when using a newer or otherwise different game schema.
+
+Odin can also enable 7D2D's password-protected console for an instance. It
+uses a separate instance port and Odin connects to it through `127.0.0.1`; the
+password is never returned by the API. Keep that port blocked from external
+networks because the game does not provide Odin with a console bind-address
+setting. Once enabled, the dashboard Console and Players tabs can run server
+commands, show version/build and memory information, list connected players,
+record recent sessions, and manage bans, administrators, and the whitelist.
+The dashboard also reports a 7D2D instance as *ready* only after a game-start log
+line, rather than merely when the process exists.
 
 On the first start after upgrading, Odin automatically moves the legacy
 single-version mod store into this layout and repoints every existing instance;

@@ -22,6 +22,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerInfo {
     pub name: String,
+    #[serde(default)]
+    pub steam_id: Option<String>,
     pub connected_at: DateTime<Utc>,
 }
 
@@ -29,6 +31,10 @@ pub struct PlayerInfo {
 pub enum PlayerEvent {
     Joined { peer: String, name: String },
     Left { peer: String },
+}
+
+pub fn steam_id_from_peer(peer: &str) -> Option<String> {
+    (peer.len() >= 16 && peer.bytes().all(|byte| byte.is_ascii_digit())).then(|| peer.to_string())
 }
 
 static LEGACY_ZDOID_RE: LazyLock<Regex> =

@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use super::Db;
+use crate::game::GameId;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceSampleRow {
@@ -28,10 +29,35 @@ pub fn insert(
     cpu_percent: f32,
     memory_bytes: u64,
 ) -> Result<()> {
+    match instance_name {
+        Some(name) => {
+            insert_for_instance(db, GameId::Valheim, name, at, cpu_percent, memory_bytes)?
+        }
+        None => {
+            db.conn().execute(
+                "INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes) \
+                 VALUES (NULL, ?1, ?2, ?3)",
+                params![at, cpu_percent, memory_bytes],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Records one downsampled sample for a specific game instance.
+pub fn insert_for_instance(
+    db: &Db,
+    game: GameId,
+    name: &str,
+    at: DateTime<Utc>,
+    cpu_percent: f32,
+    memory_bytes: u64,
+) -> Result<()> {
     db.conn().execute(
-        "INSERT INTO resource_samples (instance_name, at, cpu_percent, memory_bytes) \
-         VALUES (?1, ?2, ?3, ?4)",
-        params![instance_name, at, cpu_percent, memory_bytes],
+        "INSERT INTO resource_samples (instance_name, instance_id, at, cpu_percent, memory_bytes) \
+         SELECT CASE WHEN ?1 = 'valheim' THEN ?2 END, id, ?3, ?4, ?5 \
+         FROM game_instances WHERE game = ?1 AND name = ?2",
+        params![game.as_str(), name, at, cpu_percent, memory_bytes],
     )?;
     Ok(())
 }
@@ -44,18 +70,52 @@ pub fn range(
     since: DateTime<Utc>,
 ) -> Result<Vec<ResourceSampleRow>> {
     let conn = db.conn();
+    let samples = match instance_name {
+        Some(name) => {
+            let mut stmt = conn.prepare(
+                "SELECT at, cpu_percent, memory_bytes FROM resource_samples \
+                 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1) \
+                 AND at >= ?2 ORDER BY at ASC",
+            )?;
+            stmt.query_map(params![name, since], row_to_sample)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT at, cpu_percent, memory_bytes FROM resource_samples \
+                 WHERE instance_id IS NULL AND instance_name IS NULL AND at >= ?1 ORDER BY at ASC",
+            )?;
+            stmt.query_map(params![since], row_to_sample)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        }
+    };
+    Ok(samples)
+}
+
+/// Returns samples for one game instance at or after `since`, oldest first.
+pub fn range_for_instance(
+    db: &Db,
+    game: GameId,
+    name: &str,
+    since: DateTime<Utc>,
+) -> Result<Vec<ResourceSampleRow>> {
+    let conn = db.conn();
     let mut stmt = conn.prepare(
         "SELECT at, cpu_percent, memory_bytes FROM resource_samples \
-         WHERE instance_name IS ?1 AND at >= ?2 ORDER BY at ASC",
+         WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2) \
+         AND at >= ?3 ORDER BY at ASC",
     )?;
-    let rows = stmt.query_map(params![instance_name, since], |row| {
-        Ok(ResourceSampleRow {
-            at: row.get(0)?,
-            cpu_percent: row.get(1)?,
-            memory_bytes: row.get(2)?,
-        })
-    })?;
-    rows.map(|r| r.map_err(Into::into)).collect()
+    stmt.query_map(params![game.as_str(), name, since], row_to_sample)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+fn row_to_sample(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResourceSampleRow> {
+    Ok(ResourceSampleRow {
+        at: row.get(0)?,
+        cpu_percent: row.get(1)?,
+        memory_bytes: row.get(2)?,
+    })
 }
 
 /// Deletes every sample older than `before`, across every series.
@@ -70,6 +130,7 @@ pub fn prune_older_than(db: &Db, before: DateTime<Utc>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instance::state::InstanceState;
     use crate::paths::Paths;
 
     fn temp_db(label: &str) -> Db {
@@ -89,13 +150,7 @@ mod tests {
     #[test]
     fn host_and_instance_series_are_independent() {
         let db = temp_db("series");
-        db.conn()
-            .execute(
-                "INSERT INTO instances (name, port, world_name, public, created_at) \
-                 VALUES ('my-server', 2456, 'my-server', 1, '2024-01-01T00:00:00Z')",
-                [],
-            )
-            .unwrap();
+        crate::db::instances::save(&db, &InstanceState::new("my-server", 2456)).unwrap();
         let now = Utc::now();
 
         insert(&db, None, now, 10.0, 1000).unwrap();
@@ -120,6 +175,48 @@ mod tests {
         let recent = range(&db, None, now - chrono::Duration::hours(1)).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].cpu_percent, 2.0);
+    }
+
+    #[test]
+    fn game_instances_with_the_same_name_keep_separate_samples() {
+        let db = temp_db("same-name");
+        crate::db::instances::save(&db, &InstanceState::new("shared", 2456)).unwrap();
+        db.conn()
+            .execute_batch(
+                "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                 ('rust-shared', 'rust', 'shared', '2024-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        let now = Utc::now();
+
+        insert_for_instance(&db, GameId::Valheim, "shared", now, 10.0, 1000).unwrap();
+        insert_for_instance(&db, GameId::Rust, "shared", now, 20.0, 2000).unwrap();
+
+        let rust_cpu: f32 = db
+            .conn()
+            .query_row(
+                "SELECT cpu_percent FROM resource_samples WHERE instance_id = 'rust-shared'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rust_cpu, 20.0);
+    }
+
+    #[test]
+    fn rust_samples_do_not_require_a_valheim_instance() {
+        let db = temp_db("rust-only");
+        db.conn()
+            .execute(
+                "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                 ('rust-only', 'rust', 'rust-only', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+
+        let result = insert_for_instance(&db, GameId::Rust, "rust-only", Utc::now(), 1.0, 1);
+
+        assert!(result.is_ok());
     }
 
     #[test]

@@ -18,6 +18,66 @@ fn default_enabled() -> bool {
     true
 }
 
+macro_rules! valheim_enum {
+    ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+        pub enum $name { $(#[serde(rename = $value)] $variant),+ }
+
+        impl $name {
+            pub const fn as_arg(self) -> &'static str {
+                match self { $(Self::$variant => $value),+ }
+            }
+        }
+    };
+}
+
+valheim_enum!(ValheimPreset {
+    Normal => "normal", Casual => "casual", Easy => "easy", Hard => "hard",
+    Hardcore => "hardcore", Immersive => "immersive", Hammer => "hammer"
+});
+impl ValheimPreset {
+    pub fn from_arg(value: &str) -> Option<Self> {
+        match value {
+            "normal" => Some(Self::Normal),
+            "casual" => Some(Self::Casual),
+            "easy" => Some(Self::Easy),
+            "hard" => Some(Self::Hard),
+            "hardcore" => Some(Self::Hardcore),
+            "immersive" => Some(Self::Immersive),
+            "hammer" => Some(Self::Hammer),
+            _ => None,
+        }
+    }
+}
+valheim_enum!(ValheimCombatModifier {
+    VeryEasy => "veryeasy", Easy => "easy", Hard => "hard", VeryHard => "veryhard"
+});
+valheim_enum!(ValheimDeathPenaltyModifier {
+    Casual => "casual", VeryEasy => "veryeasy", Easy => "easy", Hard => "hard", Hardcore => "hardcore"
+});
+valheim_enum!(ValheimResourceModifier {
+    MuchLess => "muchless", Less => "less", More => "more", MuchMore => "muchmore", Most => "most"
+});
+valheim_enum!(ValheimRaidModifier {
+    None => "none", MuchLess => "muchless", Less => "less", More => "more", MuchMore => "muchmore"
+});
+valheim_enum!(ValheimPortalModifier {
+    Casual => "casual", Hard => "hard", VeryHard => "veryhard"
+});
+valheim_enum!(ValheimSetKey {
+    NoBuildCost => "nobuildcost", PlayerEvents => "playerevents",
+    PassiveMobs => "passivemobs", NoMap => "nomap"
+});
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ValheimModifiers {
+    pub combat: Option<ValheimCombatModifier>,
+    pub death_penalty: Option<ValheimDeathPenaltyModifier>,
+    pub resources: Option<ValheimResourceModifier>,
+    pub raids: Option<ValheimRaidModifier>,
+    pub portals: Option<ValheimPortalModifier>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledMod {
     /// Thunderstore package id, `<namespace>-<name>`.
@@ -40,6 +100,24 @@ pub struct InstanceState {
     pub world_name: String,
     pub password: Option<String>,
     pub public: bool,
+    #[serde(default)]
+    pub save_interval: Option<u32>,
+    #[serde(default)]
+    pub backups: Option<u16>,
+    #[serde(default)]
+    pub backup_short: Option<u32>,
+    #[serde(default)]
+    pub backup_long: Option<u32>,
+    #[serde(default)]
+    pub crossplay: bool,
+    #[serde(default)]
+    pub playfab_instance_id: Option<String>,
+    #[serde(default)]
+    pub preset: Option<ValheimPreset>,
+    #[serde(default)]
+    pub modifiers: ValheimModifiers,
+    #[serde(default)]
+    pub set_keys: Vec<ValheimSetKey>,
     pub created_at: DateTime<Utc>,
     pub last_started_at: Option<DateTime<Utc>>,
     pub last_stopped_at: Option<DateTime<Utc>>,
@@ -80,6 +158,15 @@ impl InstanceState {
             // once, on creation, via `status`/`start` output.
             password: Some(generate_password()),
             public: true,
+            save_interval: None,
+            backups: None,
+            backup_short: None,
+            backup_long: None,
+            crossplay: false,
+            playfab_instance_id: None,
+            preset: None,
+            modifiers: ValheimModifiers::default(),
+            set_keys: Vec::new(),
             created_at: Utc::now(),
             last_started_at: None,
             last_stopped_at: None,

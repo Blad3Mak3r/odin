@@ -124,8 +124,8 @@ pub enum Command {
     /// not for direct/manual use.
     #[command(hide = true)]
     Run {
-        #[arg(long, value_parser = parse_instance_name)]
-        instance: String,
+        #[arg(long, env = "ODIN_SUPERVISOR_INSTANCE_ID")]
+        instance_id: String,
     },
 }
 

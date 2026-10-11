@@ -86,7 +86,7 @@ impl Instance {
     fn create_new(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
 
-        let port = next_available_port(paths, db)?;
+        let port = next_available_port(db)?;
 
         let dir = paths.instance_dir(name);
         // The DB save below has no filesystem side effect (unlike the old
@@ -118,7 +118,11 @@ pub fn clone_configuration(
         return Err(InstanceError::InvalidWorldName.into());
     }
 
-    let _locks = lifecycle::LifecycleLocks::acquire(paths, &[source_name, target_name])?;
+    let _locks = lifecycle::LifecycleLocks::acquire(
+        paths,
+        crate::game::GameId::Valheim,
+        &[source_name, target_name],
+    )?;
 
     let source = Instance::load_existing(paths, db, source_name)?;
     if lifecycle::is_running(&source)? {
@@ -179,7 +183,8 @@ pub fn clone_configuration(
         .iter()
         .map(|(kind, ids)| (kind.db_value(), ids.as_slice()))
         .collect();
-    if let Err(error) = crate::db::instances::save_clone(db, &target.state, &db_lists) {
+    if let Err(error) = crate::db::instances::save_clone(db, &target.state, source_name, &db_lists)
+    {
         let _ = std::fs::remove_dir_all(&target_dir);
         return Err(error);
     }
@@ -194,10 +199,18 @@ fn clone_state(
     target_name: &str,
     world_name: &str,
 ) -> Result<Instance> {
-    let mut state = InstanceState::new(target_name, next_available_port(paths, db)?);
+    let mut state = InstanceState::new(target_name, next_available_port(db)?);
     state.world_name = world_name.to_string();
     state.public = source.public;
     state.auto_restart = source.auto_restart;
+    state.save_interval = source.save_interval;
+    state.backups = source.backups;
+    state.backup_short = source.backup_short;
+    state.backup_long = source.backup_long;
+    state.crossplay = source.crossplay;
+    state.preset = source.preset;
+    state.modifiers = source.modifiers.clone();
+    state.set_keys = source.set_keys.clone();
     state.bepinex_installed = source.bepinex_installed;
     state.bepinex_version = source.bepinex_version.clone();
     state.installed_mods = source
@@ -217,15 +230,18 @@ fn clone_state(
     })
 }
 
-fn next_available_port(paths: &Paths, db: &Db) -> Result<u16> {
-    let used_ports: Vec<u16> = list_all(paths, db)?.iter().map(|i| i.state.port).collect();
+fn next_available_port(db: &Db) -> Result<u16> {
+    let reserved_ports = crate::db::game_instances::configured_ports(db)?;
     let mut port = DEFAULT_BASE_PORT;
-    while used_ports.contains(&port) {
+    loop {
+        let candidate = crate::game::ports::block(crate::game::GameId::Valheim, port)?;
+        if candidate.iter().all(|port| !reserved_ports.contains(port)) {
+            return Ok(port);
+        }
         port = port
             .checked_add(PORT_STRIDE)
             .context("no available Valheim port block remains")?;
     }
-    Ok(port)
 }
 
 fn copy_bepinex_configuration(source_dir: &Path, target_dir: &Path) -> Result<()> {
@@ -325,6 +341,9 @@ mod tests {
         let mut source = Instance::create(paths, db, "source").unwrap();
         source.state.public = false;
         source.state.auto_restart = true;
+        source.state.crossplay = true;
+        source.state.save_interval = Some(900);
+        source.state.preset = Some(crate::instance::state::ValheimPreset::Hard);
         source.state.bepinex_installed = true;
         source.state.bepinex_version = Some("5.4.2202".to_string());
         source.state.installed_mods = vec![
@@ -375,9 +394,44 @@ mod tests {
     }
 
     #[test]
+    fn create_skips_ports_configured_for_other_games() {
+        let (paths, db) = temp_context("cross-game-port");
+        let palworld = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::Palworld,
+            "palworld",
+        )
+        .unwrap();
+        let config = crate::db::game_instances::GenericGameConfig {
+            port: DEFAULT_BASE_PORT,
+            ..palworld.config
+        };
+        crate::db::game_instances::update_generic_config(
+            &db,
+            crate::game::GameId::Palworld,
+            "palworld",
+            &config,
+        )
+        .unwrap();
+
+        let valheim = Instance::create(&paths, &db, "valheim").unwrap();
+
+        assert_eq!(valheim.state.port, DEFAULT_BASE_PORT + PORT_STRIDE);
+    }
+
+    #[test]
     fn clone_copies_operational_configuration_but_not_world_data() {
         let (paths, db) = temp_context("complete");
         let source = configured_source(&paths, &db);
+        let source_id = crate::db::game_instances::valheim_identity(&db, "source")
+            .unwrap()
+            .id;
+        let source_limits = crate::db::resource_limits::ResourceLimits {
+            cpu_percent: Some(175.0),
+            memory_max_bytes: Some(3 * 1024 * 1024 * 1024),
+        };
+        crate::db::resource_limits::save(&db, &source_id, &source_limits).unwrap();
 
         let target = clone_configuration(
             &paths,
@@ -391,6 +445,9 @@ mod tests {
         assert_eq!(target.state.world_name, "season-two-world");
         assert_eq!(target.state.public, source.state.public);
         assert_eq!(target.state.auto_restart, source.state.auto_restart);
+        assert_eq!(target.state.crossplay, source.state.crossplay);
+        assert_eq!(target.state.save_interval, source.state.save_interval);
+        assert_eq!(target.state.preset, source.state.preset);
         assert_eq!(target.state.bepinex_version, source.state.bepinex_version);
         assert_ne!(target.state.port, source.state.port);
         assert_ne!(target.state.password, source.state.password);
@@ -430,6 +487,13 @@ mod tests {
         assert_eq!(save_entries.len(), 3);
         assert!(!target.dir.join("backups").exists());
         assert!(!target.dir.join("logs").exists());
+        let target_id = crate::db::game_instances::valheim_identity(&db, "season-two")
+            .unwrap()
+            .id;
+        assert_eq!(
+            crate::db::resource_limits::load(&db, &target_id).unwrap(),
+            source_limits
+        );
     }
 
     #[test]

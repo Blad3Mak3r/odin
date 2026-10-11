@@ -4,6 +4,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::{Path as FsPath, PathBuf};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
@@ -83,6 +84,14 @@ pub async fn list_mods(
     Ok(Json(views))
 }
 
+pub async fn list_mods_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<InstalledModView>>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    list_mods(State(state), Path(name)).await
+}
+
 /// Streams a zip of every currently-enabled mod's files for the instance,
 /// ready to extract into a player's client `BepInEx/plugins` folder.
 pub async fn download_modpack(
@@ -104,6 +113,14 @@ pub async fn download_modpack(
         bytes,
     )
         .into_response())
+}
+
+pub async fn download_modpack_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    download_modpack(State(state), Path(name)).await
 }
 
 #[derive(Deserialize)]
@@ -149,6 +166,15 @@ pub async fn add_mod(
     Ok(Json(JobHandle { id }))
 }
 
+pub async fn add_mod_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<AddModRequest>,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    add_mod(State(state), Path(name), Json(req)).await
+}
+
 /// Fails fast with a 409 if the instance is running, instead of spawning a
 /// job that's doomed to fail inside `mods::add`/`add_local` once it runs.
 async fn check_not_running(state: &AppState, name: &str) -> ApiResult<()> {
@@ -188,6 +214,14 @@ pub async fn remove_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn remove_mod_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    remove_mod(State(state), Path((name, mod_id))).await
+}
+
 pub async fn enable_mod(
     State(state): State<AppState>,
     Path((name, mod_id)): Path<(String, String)>,
@@ -198,6 +232,14 @@ pub async fn enable_mod(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn enable_mod_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    enable_mod(State(state), Path((name, mod_id))).await
+}
+
 pub async fn disable_mod(
     State(state): State<AppState>,
     Path((name, mod_id)): Path<(String, String)>,
@@ -206,6 +248,14 @@ pub async fn disable_mod(
     let db = state.db.clone();
     run_blocking(move || mods::set_enabled(&paths, &db, &name, &mod_id, false)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn disable_mod_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    disable_mod(State(state), Path((name, mod_id))).await
 }
 
 #[derive(Deserialize)]
@@ -224,6 +274,15 @@ pub async fn select_mod_version(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn select_mod_version_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+    Json(req): Json<SelectVersionRequest>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    select_mod_version(State(state), Path((name, mod_id)), Json(req)).await
+}
+
 #[derive(Deserialize)]
 pub struct SetPinnedRequest {
     pub pinned: bool,
@@ -240,6 +299,15 @@ pub async fn set_mod_pinned(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn set_mod_pinned_by_id(
+    State(state): State<AppState>,
+    Path((id, mod_id)): Path<(String, String)>,
+    Json(req): Json<SetPinnedRequest>,
+) -> ApiResult<StatusCode> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    set_mod_pinned(State(state), Path((name, mod_id)), Json(req)).await
+}
+
 /// Spawns the "update mods for one instance" job. Its own function (rather
 /// than inlined in `update_mods`) so `routes::bulk::bulk_update_mods` can
 /// fan out over it per instance without duplicating the job body.
@@ -254,11 +322,20 @@ pub(crate) fn spawn_mod_update_job(state: &AppState, name: String) -> String {
         move |logger| {
             logger.line(format!("updating mods for '{name}'"));
             let result = mods::update(&paths, &db, &name);
-            if result.is_ok() {
+            if let Ok(updates) = &result {
+                if updates.is_empty() {
+                    logger.line("all mods are already up to date");
+                }
+                for update in updates {
+                    logger.line(format!(
+                        "{}: {} -> {}",
+                        update.mod_id, update.from_version, update.to_version
+                    ));
+                }
                 logger.line("done");
                 activity.record(ActivityKind::ModsUpdated, Some(name.clone()));
             }
-            result
+            result.map(|_| ())
         },
     )
 }
@@ -273,6 +350,14 @@ pub async fn update_mods(
     Json(JobHandle {
         id: spawn_mod_update_job(&state, name),
     })
+}
+
+pub async fn update_mods_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    Ok(update_mods(State(state), Path(name)).await)
 }
 
 #[derive(Deserialize)]
@@ -331,7 +416,7 @@ pub async fn upload_mod(
 ) -> ApiResult<Json<JobHandle>> {
     let mut mod_name: Option<String> = None;
     let mut mod_version: Option<String> = None;
-    let mut zip_path: Option<std::path::PathBuf> = None;
+    let mut zip_file: Option<UploadTempFile> = None;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -364,6 +449,7 @@ pub async fn upload_mod(
                     tokio::fs::create_dir_all(parent).await?;
                 }
                 let mut out = tokio::fs::File::create(&dest).await?;
+                zip_file = Some(UploadTempFile(dest));
                 while let Some(chunk) = field
                     .chunk()
                     .await
@@ -372,7 +458,6 @@ pub async fn upload_mod(
                     out.write_all(&chunk).await?;
                 }
                 out.flush().await?;
-                zip_path = Some(dest);
             }
             _ => {}
         }
@@ -384,12 +469,9 @@ pub async fn upload_mod(
     let mod_version = mod_version
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
-    let zip_path = zip_path.ok_or_else(|| BadRequest("no file was uploaded".to_string()))?;
+    let zip_file = zip_file.ok_or_else(|| BadRequest("no file was uploaded".to_string()))?;
 
-    if let Err(e) = check_not_running(&state, &name).await {
-        tokio::fs::remove_file(&zip_path).await.ok();
-        return Err(e);
-    }
+    check_not_running(&state, &name).await?;
 
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -401,7 +483,7 @@ pub async fn upload_mod(
         },
         move |logger| {
             logger.line(format!("installing uploaded mod '{mod_name}' on '{name}'"));
-            match mods::add_local(&paths, &db, &name, &mod_name, &mod_version, &zip_path) {
+            match mods::add_local(&paths, &db, &name, &mod_name, &mod_version, zip_file.path()) {
                 Ok(mod_id) => {
                     logger.line("done");
                     activity.record(ActivityKind::ModInstalled { mod_id }, Some(name.clone()));
@@ -412,4 +494,99 @@ pub async fn upload_mod(
         },
     );
     Ok(Json(JobHandle { id }))
+}
+
+pub async fn upload_mod_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    multipart: Multipart,
+) -> ApiResult<Json<JobHandle>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    upload_mod(State(state), Path(name), multipart).await
+}
+
+/// Removes an uploaded staging file unless ownership reaches the background
+/// job, which keeps this guard until `mods::add_local` has finished with it.
+struct UploadTempFile(PathBuf);
+
+impl UploadTempFile {
+    fn path(&self) -> &FsPath {
+        &self.0
+    }
+}
+
+impl Drop for UploadTempFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.0)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.0.display(), %error, "failed to remove uploaded mod staging file");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::db::Db;
+    use crate::paths::Paths;
+
+    #[tokio::test]
+    async fn upload_without_name_removes_the_staged_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-mod-upload-test-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = crate::instance::Instance::create(&paths, &db, "test").unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "test",
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
+        let app = crate::web::router::build_router(AppState::new(paths.clone(), db));
+        let boundary = "odin-upload-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"mod.zip\"\r\n\r\npayload\r\n--{boundary}--\r\n"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/instances/{id}/valheim/mods/upload"))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let staged = std::fs::read_dir(paths.mods_dir()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".upload-tmp-")
+        });
+        assert!(!staged);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

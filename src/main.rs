@@ -1,11 +1,13 @@
 mod activity;
 mod backup;
 mod backup_storage;
+mod cgroup;
 mod cli;
 mod commands;
 mod config;
 mod db;
 mod doctor;
+mod game;
 mod http;
 mod instance;
 mod log_poll;
@@ -17,7 +19,6 @@ mod readiness_events;
 mod save_events;
 mod steamcmd;
 mod supervisor;
-mod valheim_update;
 mod web;
 
 use std::process::ExitCode;
@@ -127,6 +128,6 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::Serve { bind, port } => commands::serve::run(&paths, &bind, port),
-        Command::Run { instance } => commands::run::run(&paths, &instance),
+        Command::Run { instance_id } => commands::run::run(&paths, instance_id),
     }
 }

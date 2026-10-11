@@ -9,10 +9,10 @@ import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { useAddListEntry, useList, useRemoveListEntry } from '@/lib/queries'
 import type { ListKind } from '@/lib/types'
 
-export function SteamIdListEditor({ name, kind }: { name: string; kind: ListKind }) {
-  const list = useList(name, kind)
-  const addEntry = useAddListEntry(name, kind)
-  const removeEntry = useRemoveListEntry(name, kind)
+export function SteamIdListEditor({ id, kind }: { id: string; kind: ListKind }) {
+  const list = useList(id, kind)
+  const addEntry = useAddListEntry(id, kind)
+  const removeEntry = useRemoveListEntry(id, kind)
   const [newId, setNewId] = useState('')
   const { confirm, dialog } = useConfirmDialog()
 

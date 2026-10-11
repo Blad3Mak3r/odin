@@ -1,0 +1,1 @@
+ALTER TABLE game_instances ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';

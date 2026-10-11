@@ -15,9 +15,17 @@ pub async fn get_last_exit(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Json<Option<LastExitInfo>> {
-    let info = match client::last_exit(&state.paths, &name).await {
+    let info = match client::last_exit(&state.paths, crate::game::GameId::Valheim, &name).await {
         Ok(Response::LastExit { info }) => info,
         _ => None,
     };
     Json(info)
+}
+
+pub async fn get_last_exit_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> crate::web::error::ApiResult<Json<Option<LastExitInfo>>> {
+    let name = crate::web::routes::games::resolve_valheim_instance_name(&state, &id).await?;
+    Ok(get_last_exit(State(state), Path(name)).await)
 }

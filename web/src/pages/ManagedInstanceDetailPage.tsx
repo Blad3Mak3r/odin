@@ -21,6 +21,7 @@ import { ManagedInstanceHeader } from '@/components/instance/ManagedInstanceHead
 import { ManagedLogsTab } from '@/components/instance/ManagedLogsTab'
 import { ManagedResourcesTab } from '@/components/instance/ManagedResourcesTab'
 import { ResourceLimitsTab } from '@/components/instance/ResourceLimitsTab'
+import { ValheimRuntimeHealthCard } from '@/components/instance/ValheimRuntimeHealthCard'
 import { LiveLogOutput } from '@/components/instance/LiveLogOutput'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -308,6 +309,7 @@ export function ManagedInstanceDetailPage() {
   return (
     <div className="flex flex-col gap-6">
       <ManagedInstanceHeader instance={detail} />
+      {detail.game === 'valheim' && detail.execution === 'podman' && <ValheimRuntimeHealthCard id={detail.id} running={detail.running} />}
       <Tabs value={tab} onValueChange={(value) => navigate(value === 'lists' ? `/instance/${id}/lists/${defaultListTab}` : `/instance/${id}/${value}`)}>
         <div className="overflow-x-auto">
           <TabsList className="w-max">

@@ -15,7 +15,7 @@ use crate::player_events::PlayerInfo;
 /// Current wire-protocol version. New fields must remain decodable by older
 /// peers, and callers should use this value to decide whether an optional
 /// operation is supported.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Maximum encoded frame size, including its trailing newline.
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
@@ -37,6 +37,9 @@ pub enum Request {
     /// Stop the Valheim process (SIGINT, then SIGKILL after `timeout_secs`)
     /// and exit once it's gone.
     Stop { timeout_secs: u64 },
+    /// Update the private game payload, keeping the Odin runtime container
+    /// alive while its Valheim child is stopped and restarted.
+    Update,
     /// Current resource usage of the Valheim child and its true
     /// descendants, as last computed by the supervisor's own background
     /// refresher — never computed synchronously on request, so this can't
@@ -93,6 +96,7 @@ pub enum Response {
         ready: bool,
     },
     Stopped,
+    Updated,
     /// Summed CPU/memory for the Valheim process plus any real child
     /// processes it has (never threads — see
     /// `instance::process::descendant_pids`). Replied with `Error` instead

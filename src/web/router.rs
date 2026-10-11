@@ -112,6 +112,22 @@ pub fn build_router(state: AppState) -> Router {
             post(instances::clone_instance_by_id),
         )
         .route(
+            "/instances/{id}/valheim/migrate",
+            post(games::migrate_valheim_instance_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/runtime-health",
+            get(games::get_valheim_runtime_health_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/repair",
+            post(games::repair_valheim_instance_by_id),
+        )
+        .route(
+            "/instances/{id}/valheim/update",
+            post(games::update_valheim_instance_by_id),
+        )
+        .route(
             "/instances/{id}/valheim/last-exit",
             get(diagnostics::get_last_exit_by_id),
         )
@@ -363,6 +379,7 @@ pub fn build_router(state: AppState) -> Router {
             "/settings/nexus-api-key",
             put(settings::set_nexus_api_key).delete(settings::clear_nexus_api_key),
         )
+        .route("/settings/podman", put(settings::set_podman_settings))
         .route("/jobs", get(jobs::list_jobs))
         .route("/jobs/{id}", get(jobs::get_job))
         .route("/jobs/{id}/sse", get(jobs::job_sse))
@@ -1223,5 +1240,52 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn valheim_runtime_health_route_reports_unconfigured_podman() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-valheim-runtime-health-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = Instance::create(&paths, &db, "valheim").unwrap();
+        let identity = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            &instance.state.name,
+            instance.state.created_at,
+        )
+        .unwrap();
+        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        let app = build_router(AppState::new(paths.clone(), db));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/instances/{}/valheim/runtime-health",
+                        identity.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["podman"]["configured"],
+            false
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

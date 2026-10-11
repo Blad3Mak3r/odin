@@ -11,6 +11,7 @@ use crate::db::Db;
 use crate::db::game_instances::{self, GenericGameInstance, RustInstance};
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
+use crate::podman::valheim as podman_valheim;
 
 use super::{GameId, generic, rust};
 
@@ -47,6 +48,10 @@ pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameIn
         GameInstance::Valheim(mut instance) => {
             instance.state.auto_restart = defaults.auto_restart;
             instance.save(db)?;
+            // New Valheim instances are born containerized. Existing rows do
+            // not receive this marker during a migration and therefore still
+            // require an explicit stopped-instance migration.
+            podman_valheim::mark_new_instance(db, &instance)?;
             GameInstance::Valheim(instance)
         }
         GameInstance::Rust(instance) => {
@@ -91,7 +96,7 @@ pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInst
 /// lifecycle operation is needed.
 pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
     match load(paths, db, game, name)? {
-        GameInstance::Valheim(instance) => lifecycle::is_running(&instance),
+        GameInstance::Valheim(instance) => podman_valheim::is_running(paths, db, &instance),
         GameInstance::Rust(instance) => Ok(instance.is_running()),
         GameInstance::Generic(instance) => Ok(instance.is_running()),
     }
@@ -99,7 +104,7 @@ pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bo
 
 pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
     match game {
-        GameId::Valheim => lifecycle::start(paths, db, name)
+        GameId::Valheim => podman_valheim::start(paths, db, name)
             .await
             .map(GameInstance::Valheim),
         GameId::Rust => {
@@ -122,7 +127,7 @@ pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<G
 
 pub async fn stop(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
     match game {
-        GameId::Valheim => lifecycle::stop(paths, db, name).await,
+        GameId::Valheim => podman_valheim::stop(paths, db, name).await,
         GameId::Rust => {
             let instance = load(paths, db, game, name)?;
             let GameInstance::Rust(instance) = instance else {
@@ -147,7 +152,7 @@ pub async fn stop(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()
 
 pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
     match game {
-        GameId::Valheim => lifecycle::restart(paths, db, name)
+        GameId::Valheim => podman_valheim::restart(paths, db, name)
             .await
             .map(GameInstance::Valheim),
         GameId::Rust => {
@@ -183,7 +188,16 @@ pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
 
 pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bool) -> Result<()> {
     match game {
-        GameId::Valheim => lifecycle::delete(paths, db, name, keep_backups),
+        GameId::Valheim => {
+            let instance = Instance::load_existing(paths, db, name)?;
+            if podman_valheim::is_running(paths, db, &instance)? {
+                anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
+                    name.to_string()
+                ));
+            }
+            podman_valheim::remove(paths, db, &instance)?;
+            lifecycle::delete(paths, db, name, keep_backups)
+        }
         GameId::Rust => {
             let instance =
                 game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
@@ -295,7 +309,7 @@ pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Res
     let _locks = lifecycle::LifecycleLocks::acquire(paths, game, &[old, new])?;
     let instance = load(paths, db, game, old)?;
     let running = match &instance {
-        GameInstance::Valheim(i) => lifecycle::is_running(i)?,
+        GameInstance::Valheim(i) => podman_valheim::is_running(paths, db, i)?,
         GameInstance::Rust(i) => i.is_running(),
         GameInstance::Generic(i) => i.is_running(),
     };
@@ -316,7 +330,11 @@ pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Res
             .context("could not recover original directory after rename failure")?;
         return Err(error);
     }
-    load(paths, db, game, new)
+    let renamed = load(paths, db, game, new)?;
+    if let GameInstance::Valheim(instance) = &renamed {
+        podman_valheim::sync_spec(paths, db, instance)?;
+    }
+    Ok(renamed)
 }
 
 pub fn clone_rust(paths: &Paths, db: &Db, source: &str, target: &str) -> Result<RustInstance> {

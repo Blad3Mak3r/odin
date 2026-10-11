@@ -32,6 +32,29 @@ export interface ManagedInstanceView {
   odin_version: string | null
   capabilities: GameCapabilities
   config: Record<string, unknown>
+  execution: 'direct' | 'podman'
+  migration_required: boolean
+}
+
+export interface ValheimRuntimeHealth {
+  podman: {
+    configured: boolean
+    connected: boolean
+    compatible: boolean
+    version: string | null
+    error: string | null
+  }
+  container: {
+    status: 'missing' | 'created' | 'exited' | 'running' | 'unknown' | 'unavailable'
+    error: string | null
+  }
+  socket: {
+    status: 'missing' | 'orphaned' | 'responding' | 'unreachable'
+    protocol_version: number | null
+    odin_version: string | null
+    error: string | null
+  }
+  guidance: string[]
 }
 
 export interface RustConfigUpdateRequest {
@@ -272,6 +295,7 @@ export interface JobSummary {
 
 export type JobKindDescr =
   | { kind: 'steamcmd_install'; game: GameId }
+  | { kind: 'valheim_update'; instance: string }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }
@@ -486,6 +510,26 @@ export interface WebhookView {
 export interface SettingsView {
   nexus_api_key_configured: boolean
   instance_defaults: InstanceDefaults
+  podman: PodmanSettingsView
+}
+
+export interface PodmanSettingsView {
+  socket: string | null
+  runtime_image: string | null
+  status: PodmanStatusView
+}
+
+export interface PodmanStatusView {
+  configured: boolean
+  connected: boolean
+  compatible: boolean
+  version: string | null
+  error: string | null
+}
+
+export interface SetPodmanSettingsRequest {
+  socket: string | null
+  runtime_image: string | null
 }
 
 export interface InstanceDefaults {

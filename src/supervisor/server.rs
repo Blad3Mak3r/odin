@@ -555,6 +555,10 @@ async fn handle_control_connection(
             let _ = stop_tx.send(timeout_secs).await;
             Response::Stopped
         }
+        Request::Update => Response::Error {
+            code: ErrorCode::Unknown,
+            message: "in-place update is only available in the Podman Valheim runtime".to_string(),
+        },
         Request::Stats => match *stats.lock().expect("stats lock poisoned") {
             Some((cpu_percent, memory_bytes)) => Response::Stats {
                 cpu_percent,

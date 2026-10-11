@@ -31,8 +31,7 @@ if [ "$is_final_removal" = "true" ]; then
         systemctl daemon-reload || true
     fi
 
-    echo "Odin removed. /var/lib/odin (world saves, backups, mods) and the 'odin'"
-    echo "system account were left in place. To remove them entirely, run:"
+    echo "Odin removed. /var/lib/odin (world saves, backups, mods) was left in place."
+    echo "To remove it entirely, run:"
     echo "  sudo rm -rf /var/lib/odin /etc/odin"
-    echo "  sudo userdel odin && sudo groupdel odin"
 fi

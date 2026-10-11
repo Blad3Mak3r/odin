@@ -12,9 +12,10 @@ import {
   useClearNexusApiKey,
   useSetInstanceDefaults,
   useSetNexusApiKey,
+  useSetPodmanSettings,
   useSettings,
 } from '@/lib/queries'
-import type { InstanceDefaults } from '@/lib/types'
+import type { InstanceDefaults, PodmanSettingsView } from '@/lib/types'
 
 function InstanceDefaultsForm({ defaults }: { defaults: InstanceDefaults }) {
   const saveDefaults = useSetInstanceDefaults()
@@ -83,6 +84,62 @@ function InstanceDefaultsForm({ defaults }: { defaults: InstanceDefaults }) {
   )
 }
 
+function PodmanSettingsForm({ podman }: { podman: PodmanSettingsView }) {
+  const savePodman = useSetPodmanSettings()
+  const [socket, setSocket] = useState(podman.socket ?? '')
+  const [runtimeImage, setRuntimeImage] = useState(podman.runtime_image ?? '')
+
+  return (
+    <form
+      className="flex max-w-md flex-col gap-4 rounded-xl border p-4"
+      onSubmit={(event) => {
+        event.preventDefault()
+        savePodman.mutate(
+          {
+            socket: socket.trim() || null,
+            runtime_image: runtimeImage.trim() || null,
+          },
+          {
+            onSuccess: () => toast.success('Podman settings saved'),
+            onError: (error) => toast.error(error.message),
+          },
+        )
+      }}
+    >
+      <div>
+        <h2 className="text-sm font-medium">Podman</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Required for Valheim. The system service normally uses the rootful socket at /run/podman/podman.sock.
+        </p>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="podman-socket">Unix socket</Label>
+        <Input
+          id="podman-socket"
+          placeholder="/run/podman/podman.sock"
+          value={socket}
+          onChange={(event) => setSocket(event.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="podman-runtime-image">Runtime image (optional)</Label>
+        <Input
+          id="podman-runtime-image"
+          placeholder="ghcr.io/blad3mak3r/odin-srv:version"
+          value={runtimeImage}
+          onChange={(event) => setRuntimeImage(event.target.value)}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Leave the socket empty to run Odin without Podman. Valheim actions will remain unavailable until it is configured.
+      </p>
+      <Button className="w-fit" type="submit" disabled={savePodman.isPending}>
+        Save Podman settings
+      </Button>
+    </form>
+  )
+}
+
 export function SettingsPage() {
   const settings = useSettings()
   const setApiKey = useSetNexusApiKey()
@@ -116,10 +173,13 @@ export function SettingsPage() {
       {settings.isLoading ? (
         <Skeleton className="h-72 w-full max-w-md" />
       ) : settings.data ? (
-        <InstanceDefaultsForm
-          key={JSON.stringify(settings.data.instance_defaults)}
-          defaults={settings.data.instance_defaults}
-        />
+        <>
+          <PodmanSettingsForm key={JSON.stringify(settings.data.podman)} podman={settings.data.podman} />
+          <InstanceDefaultsForm
+            key={JSON.stringify(settings.data.instance_defaults)}
+            defaults={settings.data.instance_defaults}
+          />
+        </>
       ) : null}
 
       <div className="flex max-w-md flex-col gap-4 rounded-xl border p-4">

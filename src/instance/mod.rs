@@ -188,6 +188,7 @@ pub fn clone_configuration(
         let _ = std::fs::remove_dir_all(&target_dir);
         return Err(error);
     }
+    crate::podman::valheim::mark_new_instance(db, &target)?;
 
     Ok(target)
 }

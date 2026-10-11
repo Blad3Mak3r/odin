@@ -36,6 +36,10 @@ pub struct ManagedInstanceView {
     pub odin_version: Option<String>,
     pub capabilities: crate::game::GameCapabilities,
     pub config: Value,
+    /// `podman` for migrated Valheim instances, `direct` for all remaining
+    /// drivers and for legacy Valheim rows awaiting explicit migration.
+    pub execution: &'static str,
+    pub migration_required: bool,
 }
 
 #[derive(Deserialize)]
@@ -153,7 +157,16 @@ pub async fn get_install_status(
 pub async fn install_game(
     State(state): State<AppState>,
     Path(game): Path<GameId>,
-) -> Json<JobHandle> {
+) -> ApiResult<Json<JobHandle>> {
+    if game == GameId::Valheim {
+        // There is no shared Valheim installation once instances own their
+        // private payloads. Updates are deliberately performed in a running
+        // instance runtime instead.
+        return Err(BadRequest(
+            "Valheim is updated per running instance; use that instance's Update action".into(),
+        )
+        .into());
+    }
     let paths = state.paths.clone();
     let db = state.db.clone();
     let activity = state.activity.clone();
@@ -217,7 +230,7 @@ pub async fn install_game(
             logger.line("done");
             Ok(())
         });
-    Json(JobHandle { id })
+    Ok(Json(JobHandle { id }))
 }
 
 pub async fn list_all_instances(
@@ -888,6 +901,75 @@ pub async fn restart_instance_by_id(
     restart_instance_for(state, identity.game, identity.name).await
 }
 
+pub async fn migrate_valheim_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let name = identity.name;
+    run_blocking(move || crate::podman::valheim::migrate(&paths, &db, &name)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn get_valheim_runtime_health_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::podman::valheim::RuntimeHealth>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    let health = crate::podman::valheim::runtime_health(&state.paths, &state.db, &identity.name)
+        .await
+        .map_err(|error| BadRequest(error.to_string()))?;
+    Ok(Json(health))
+}
+
+pub async fn repair_valheim_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    crate::podman::valheim::repair(&state.paths, &state.db, &identity.name)
+        .await
+        .map_err(|error| BadRequest(error.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn update_valheim_instance_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<JobHandle>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game != GameId::Valheim {
+        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    }
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let name = identity.name.clone();
+    let job = state.jobs.spawn(
+        JobKindDescr::ValheimUpdate { instance: name },
+        move |logger| {
+            logger.line("requesting in-place Valheim update from the container runtime");
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(crate::podman::valheim::update(&paths, &db, &identity.name))?;
+            logger.line("update completed");
+            Ok(())
+        },
+    );
+    Ok(Json(JobHandle { id: job }))
+}
+
 async fn restart_instance_for(
     state: AppState,
     game: GameId,
@@ -1054,10 +1136,30 @@ fn valheim_view(
         &instance.state.name,
         instance.state.created_at,
     )?;
+    let migrated = crate::podman::valheim::is_migrated(db, &instance)?;
+    let odin_version = if migrated {
+        crate::supervisor::client::ping_socket_blocking(
+            &paths
+                .valheim_socket_dir(&identity.id)
+                .join(format!("valheim-{}.control.sock", identity.name)),
+            Duration::from_millis(300),
+        )
+        .ok()
+        .and_then(|response| match response {
+            crate::supervisor::protocol::Response::Pong { odin_version, .. } => odin_version,
+            _ => None,
+        })
+    } else {
+        supervisor_version(paths, GameId::Valheim, &instance.state.name)
+    };
     Ok(ManagedInstanceView {
         identity,
-        running: lifecycle::is_running(&instance)?,
-        odin_version: supervisor_version(paths, GameId::Valheim, &instance.state.name),
+        running: if migrated {
+            crate::podman::valheim::is_running(paths, db, &instance)?
+        } else {
+            false
+        },
+        odin_version,
         capabilities: game::driver(GameId::Valheim).capabilities(),
         config: serde_json::json!({
             "world_name": instance.state.world_name,
@@ -1075,6 +1177,8 @@ fn valheim_view(
             "modifiers": instance.state.modifiers,
             "set_keys": instance.state.set_keys,
         }),
+        execution: if migrated { "podman" } else { "direct" },
+        migration_required: !migrated,
     })
 }
 
@@ -1100,6 +1204,8 @@ fn rust_view(paths: &Paths, instance: RustInstance) -> ManagedInstanceView {
             "rcon_password": instance.config.rcon_password,
             "auto_restart": instance.config.auto_restart,
         }),
+        execution: "direct",
+        migration_required: false,
     }
 }
 
@@ -1129,6 +1235,8 @@ fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstance
         capabilities: game::driver(game).capabilities(),
         identity: instance.identity,
         config,
+        execution: "direct",
+        migration_required: false,
     }
 }
 

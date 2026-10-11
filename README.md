@@ -82,12 +82,10 @@ Rust v1 otherwise focuses on core operation.
   install, disk permissions, network reachability) so a broken setup fails
   with a clear diagnosis instead of a cryptic error three commands later.
 - **Optional system-wide install.** The `.deb`/`.rpm` packages (`make
-  install`) set up a dedicated `odin` system account, `/etc/odin` +
-  `/var/lib/odin`, and a system `odin.service` running the dashboard as a
-  long-lived orchestration service — run ad-hoc instance commands as that
-  account with `sudo -u odin odin <command>` (`nologin` only blocks
-  interactive login, not `sudo -u` exec), or manage everything from the
-  dashboard day to day.
+  install`) set up root-owned `/etc/odin` + `/var/lib/odin` and a system
+  `odin.service` running the dashboard as a long-lived orchestration
+  service. This lets Odin use the rootful Podman socket without a separate
+  rootless account; manage it from the dashboard day to day.
 
 ## Project direction
 
@@ -138,10 +136,9 @@ does before running it:
 curl -sSL https://raw.githubusercontent.com/Blad3Mak3r/odin/main/install.sh | sh
 ```
 
-This installs the same system package described below: a dedicated `odin`
-system user, `/etc/odin` and `/var/lib/odin`, and a system `odin.service`
-systemd unit running the dashboard as that user (see [Running as a
-systemd service](#running-as-a-systemd-service)).
+This installs the same system package described below: root-owned
+`/etc/odin` and `/var/lib/odin`, plus a root-run `odin.service` systemd unit
+(see [Running as a systemd service](#running-as-a-systemd-service)).
 
 Alternatively, grab the `.deb`/`.rpm` yourself from the [Releases
 page](https://github.com/Blad3Mak3r/odin/releases) and install it with
@@ -162,7 +159,7 @@ docker run -d \
   --restart unless-stopped \
   --network host \
   --stop-timeout 60 \
-  --tmpfs /run/odin:rw,nosuid,nodev,noexec,size=16m,mode=0750,uid=10001,gid=10001 \
+  --tmpfs /run/odin:rw,nosuid,nodev,noexec,size=16m,mode=0750 \
   --mount source=odin-data,target=/var/lib/odin \
   "$ODIN_IMAGE"
 ```
@@ -438,9 +435,9 @@ separate step from `cargo build` — see [Development](#development).
 ### Running as a systemd service
 
 A system-wide install (via `make install`/the `.deb`/`.rpm` package)
-already ships a system `odin.service`, running `odin serve --bind
-127.0.0.1 --port 7331` as the dedicated `odin` user and enabled (but not
-auto-started) by the package's postinst:
+already ships a root-run system `odin.service`, running `odin serve --bind
+127.0.0.1 --port 7331` and enabled (but not auto-started) by the package's
+postinst:
 
 ```sh
 sudo systemctl start odin.service    # start now
@@ -454,6 +451,37 @@ system service; run `odin serve` directly, or manage it yourself under
 your own `systemctl --user`/init setup.
 
 ## Configuration
+
+### Podman runtime for Valheim
+
+Valheim instances run in an `odin-srv` Podman container. Existing instances
+must be stopped and migrated from their instance page before they can start;
+new Valheim instances are created for Podman automatically. Each instance owns
+its own persistent SteamCMD and game payload under
+`<data>/runtimes/valheim/<uuid>/`; Odin never copies or removes the old shared
+installation during migration.
+
+Odin itself starts without Podman configured. To use Valheim, set the socket
+in **Settings** or in Odin's configuration file:
+
+```toml
+[podman]
+socket = "/run/podman/podman.sock"
+# runtime_image = "ghcr.io/blad3mak3r/odin-srv:0.14.10"
+```
+
+Enable the rootful Podman socket with `sudo systemctl enable --now
+podman.socket`. The dashboard checks connectivity and requires Podman 4.0.0
+or newer before Valheim operations are available. Do not grant unrelated users
+access to this socket: it grants authority over its containers. Odin uses the
+Unix API directly; it does not require the `podman` CLI in the service path.
+
+Each migrated Valheim instance shows its container and runtime-socket health on
+its detail page. **Repair** is available only while the instance is stopped:
+it regenerates Odin's private runtime specification, removes stale sockets,
+and deletes the stopped UUID-named container so the next **Start** recreates
+it. It never downloads Valheim, starts the instance, or changes saves,
+backups, mods, or the legacy shared installation.
 
 Odin stores everything under a single **data directory**. Which mode it
 runs in is detected automatically from whether `/etc/odin/config.toml`

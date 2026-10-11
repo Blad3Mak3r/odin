@@ -2,13 +2,15 @@ use anyhow::{Result, bail};
 
 use crate::commands::confirm;
 use crate::db::Db;
-use crate::instance::{Instance, lifecycle};
+use crate::game::{GameId, instances};
+use crate::instance::Instance;
 use crate::paths::Paths;
+use crate::podman::valheim;
 
 pub fn run(paths: &Paths, db: &Db, server_name: &str, yes: bool, keep_backups: bool) -> Result<()> {
     let instance = Instance::load_existing(paths, db, server_name)?;
 
-    if lifecycle::is_running(&instance)? {
+    if valheim::is_running(paths, db, &instance)? {
         bail!("'{server_name}' is running; stop it first with `odin stop {server_name}`");
     }
 
@@ -25,7 +27,7 @@ pub fn run(paths: &Paths, db: &Db, server_name: &str, yes: bool, keep_backups: b
         }
     }
 
-    lifecycle::delete(paths, db, server_name, keep_backups)?;
+    instances::delete(paths, db, GameId::Valheim, server_name, keep_backups)?;
 
     println!("deleted '{server_name}'");
     Ok(())

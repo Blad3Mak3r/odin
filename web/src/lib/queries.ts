@@ -48,6 +48,8 @@ import type {
   SaveFileEntry,
   SevenDaysPlayer,
   SettingsView,
+  SetPodmanSettingsRequest,
+  ValheimRuntimeHealth,
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
@@ -318,6 +320,48 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
     onSuccess: (_instance, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
+export function useMigrateValheimInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/instances/${id}/valheim/migrate`),
+    onSuccess: (_result, id) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
+export function useUpdateValheimInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<JobHandle>(`/instances/${id}/valheim/update`),
+    onSuccess: (_job, id) => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+    },
+  })
+}
+
+export function useValheimRuntimeHealth(id: string, enabled = true) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'valheim-runtime-health'],
+    queryFn: () => api.get<ValheimRuntimeHealth>(`/instances/${id}/valheim/runtime-health`),
+    enabled: enabled && Boolean(id),
+  })
+}
+
+export function useRepairValheimInstance() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/instances/${id}/valheim/repair`),
+    onSuccess: (_result, id) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'valheim-runtime-health'] })
     },
   })
 }
@@ -982,10 +1026,11 @@ export function useUploadMod() {
   })
 }
 
-export function useSettings() {
+export function useSettings(live = false) {
   return useQuery({
     queryKey: ['settings'],
     queryFn: () => api.get<SettingsView>('/settings'),
+    refetchInterval: live ? 10_000 : false,
   })
 }
 
@@ -1002,6 +1047,15 @@ export function useSetInstanceDefaults() {
   return useMutation({
     mutationFn: (defaults: InstanceDefaults) =>
       api.put<InstanceDefaults>('/settings/instance-defaults', defaults),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  })
+}
+
+export function useSetPodmanSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (settings: SetPodmanSettingsRequest) =>
+      api.put<SettingsView['podman']>('/settings/podman', settings),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   })
 }

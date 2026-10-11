@@ -182,10 +182,20 @@ pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
 }
 
 pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bool) -> Result<()> {
-    match load(paths, db, game, name)? {
-        GameInstance::Valheim(instance) => lifecycle::delete(db, &instance, keep_backups),
-        GameInstance::Rust(instance) => rust::delete(paths, db, &instance, keep_backups),
-        GameInstance::Generic(instance) => {
+    match game {
+        GameId::Valheim => lifecycle::delete(paths, db, name, keep_backups),
+        GameId::Rust => {
+            let instance =
+                game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
+            rust::delete(paths, db, &instance, keep_backups)
+        }
+        GameId::VRising
+        | GameId::Palworld
+        | GameId::RunescapeDragonwilds
+        | GameId::SevenDaysToDie => {
+            let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
+            let instance = game_instances::load_generic(db, game, name)?
+                .context("game instance does not exist")?;
             if instance.identity.game == GameId::SevenDaysToDie && instance.is_running() {
                 anyhow::bail!("7 Days to Die backups require a stopped server");
             }
@@ -282,8 +292,7 @@ pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Res
         old != new,
         crate::instance::InstanceError::InvalidName("Choose a different name".into())
     );
-    let _source_lock = lifecycle::LifecycleLock::acquire(paths, game, old)?;
-    let _target_lock = lifecycle::LifecycleLock::acquire(paths, game, new)?;
+    let _locks = lifecycle::LifecycleLocks::acquire(paths, game, &[old, new])?;
     let instance = load(paths, db, game, old)?;
     let running = match &instance {
         GameInstance::Valheim(i) => lifecycle::is_running(i)?,
@@ -311,8 +320,7 @@ pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Res
 }
 
 pub fn clone_rust(paths: &Paths, db: &Db, source: &str, target: &str) -> Result<RustInstance> {
-    let _source_lock = lifecycle::LifecycleLock::acquire(paths, GameId::Rust, source)?;
-    let _target_lock = lifecycle::LifecycleLock::acquire(paths, GameId::Rust, target)?;
+    let _locks = lifecycle::LifecycleLocks::acquire(paths, GameId::Rust, &[source, target])?;
     let original =
         game_instances::load_rust(db, source)?.context("Rust instance does not exist")?;
     let cloned = game_instances::create_rust(paths, db, target)?;

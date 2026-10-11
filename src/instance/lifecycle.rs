@@ -69,6 +69,27 @@ fn lock_filename(paths: &Paths, game: GameId, name: &str) -> String {
     filename
 }
 
+/// A set of lifecycle locks acquired in lexical name order. Taking the locks
+/// in a fixed order lets operations that affect two instances (such as rename
+/// and clone) run concurrently with unrelated instances without deadlocking.
+pub(crate) struct LifecycleLocks {
+    _locks: Vec<LifecycleLock>,
+}
+
+impl LifecycleLocks {
+    pub(crate) fn acquire(paths: &Paths, game: GameId, names: &[&str]) -> Result<Self> {
+        let mut names = names.to_vec();
+        names.sort_unstable();
+        names.dedup();
+
+        let mut locks = Vec::with_capacity(names.len());
+        for name in names {
+            locks.push(LifecycleLock::acquire(paths, game, name)?);
+        }
+        Ok(Self { _locks: locks })
+    }
+}
+
 /// The single canonical liveness check: a live `(pid, pid_started_at)`
 /// comparison against the OS process table, never a cached/in-memory
 /// value. Correct standalone (no `odin serve` needed) and from the web
@@ -223,9 +244,20 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
 
 /// Removes an instance's on-disk directory — optionally preserving its
 /// `backups` subdirectory — and its row from the database. Shared by
-/// `commands::delete::run` and `web::routes::instances::delete_instance`,
-/// which differ only in how they gate/confirm the call, not in what it does.
-pub fn delete(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
+/// `commands::delete::run` and `game::instances::delete`.
+/// It locks and rechecks liveness itself so a concurrent start cannot race
+/// between a caller's confirmation and deletion.
+pub fn delete(paths: &Paths, db: &Db, name: &str, keep_backups: bool) -> Result<()> {
+    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
+    let instance = Instance::load_existing(paths, db, name)?;
+    if is_running(&instance)? {
+        bail!(InstanceError::AlreadyRunning(name.to_string()));
+    }
+
+    delete_unlocked(db, &instance, keep_backups)
+}
+
+fn delete_unlocked(db: &Db, instance: &Instance, keep_backups: bool) -> Result<()> {
     delete_instance_dir(&instance.dir, keep_backups)?;
     crate::db::instances::delete(db, &instance.state.name)?;
     Ok(())
@@ -301,6 +333,8 @@ fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instance::lists::{self, ListKind};
+    use crate::instance::state::InstalledMod;
 
     fn temp_paths(label: &str) -> Paths {
         let dir = std::env::temp_dir().join(format!(
@@ -350,5 +384,29 @@ mod tests {
                 .bytes()
                 .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.')
         );
+    }
+
+    #[test]
+    fn rename_moves_directory_and_preserves_access_lists() {
+        let paths = temp_paths("rename");
+        let db = Db::open(&paths).unwrap();
+        let mut instance = Instance::create(&paths, &db, "old-name").unwrap();
+        instance.state.installed_mods.push(InstalledMod {
+            mod_id: "author-mod".to_string(),
+            version: "1.0.0".to_string(),
+            installed_at: Utc::now(),
+            enabled: true,
+            pinned: false,
+        });
+        instance.save(&db).unwrap();
+        let ids = vec!["76561197960287930".to_string()];
+        lists::write(&db, &instance, ListKind::Admin, &ids).unwrap();
+
+        let renamed = rename(&paths, &db, "old-name", "new-name").unwrap();
+
+        assert!(!paths.instance_dir("old-name").exists());
+        assert!(renamed.dir.exists());
+        assert_eq!(renamed.state.installed_mods.len(), 1);
+        assert_eq!(lists::read(&db, &renamed, ListKind::Admin).unwrap(), ids);
     }
 }

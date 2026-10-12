@@ -4,6 +4,16 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-12
+
+### What's Changed
+- fix: show SteamCMD logs for Podman-managed Rust instances by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/133
+- feature: browse, upload and delete save files from the dashboard by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/134
+- ci: run CodeQL only for languages with changed files by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/135
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.17.0...v0.17.1
+
 ## [0.17.0] - 2026-10-12
 
 ### What's Changed

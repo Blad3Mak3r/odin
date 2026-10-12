@@ -6,7 +6,6 @@ pub mod config_files;
 pub mod doctor;
 pub mod events;
 pub mod games;
-pub mod install;
 pub mod instances;
 pub mod jobs;
 pub mod lists;

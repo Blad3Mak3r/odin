@@ -1,69 +1,19 @@
-import { Loader2 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
 import { Navigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
 import { GameBackdrop } from '@/components/GameBackdrop'
 import { GameIcon } from '@/components/GameIcon'
 import { CreateManagedInstanceDialog } from '@/components/instance/CreateManagedInstanceDialog'
 import { ManagedInstancesTable } from '@/components/instance/ManagedInstancesTable'
 import { QueryError } from '@/components/QueryError'
 import { RouteTabs } from '@/components/RouteTabs'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
 import { GAME_DESCRIPTIONS } from '@/lib/games'
-import { useGameInstallStatus, useGames, useInstallGame, useJobs, useManagedInstances } from '@/lib/queries'
+import { useGames, useManagedInstances } from '@/lib/queries'
 import type { GameView } from '@/lib/types'
 
-function InstallStatusCard({ game }: { game: GameView }) {
-  const status = useGameInstallStatus(game.id)
-  const install = useInstallGame()
-  const jobs = useJobs()
-  const wasRunning = useRef(false)
-  const runningJob = jobs.data?.find(
-    (job) => job.kind.kind === 'steamcmd_install' && job.kind.game === game.id &&
-      (job.status.status === 'queued' || job.status.status === 'running'),
-  )
-
-  useEffect(() => {
-    if (wasRunning.current && !runningJob) status.refetch()
-    wasRunning.current = Boolean(runningJob)
-  }, [runningJob, status])
-
-  const label = !status.data?.installed
-    ? 'Not installed'
-    : status.data.update_available
-      ? `Update available: ${status.data.installed_build_id} → ${status.data.latest_build_id}`
-      : `Up to date (build ${status.data.installed_build_id})`
-
-  return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0">
-        <div>
-          <CardTitle>Installation</CardTitle>
-          <CardDescription>Steam App ID {game.steam_app_id}</CardDescription>
-        </div>
-        <Button
-          disabled={install.isPending || Boolean(runningJob)}
-          onClick={() => install.mutate(game.id, { onError: (error) => toast.error(error.message) })}
-        >
-          {(install.isPending || runningJob) && <Loader2 className="size-4 animate-spin" />}
-          Install / update
-        </Button>
-      </CardHeader>
-      <CardContent>
-        {status.isError
-          ? <QueryError error={status.error} />
-          : <Badge variant={status.data?.update_available ? 'secondary' : 'outline'}>{label}</Badge>}
-      </CardContent>
-    </Card>
-  )
-}
-
 function RuntimeCard({ game }: { game: GameView }) {
-  return <Card><CardHeader><CardTitle>Per-instance runtime</CardTitle><CardDescription>{game.name} is installed and updated inside each running Podman runtime. Create an instance, migrate any stopped legacy instance, then use its Update action.</CardDescription></CardHeader></Card>
+  return <Card><CardHeader><CardTitle>Per-instance runtime</CardTitle><CardDescription>{game.name} is installed and updated inside each running Podman runtime. Create an instance, start it, then use its Update action.</CardDescription></CardHeader></Card>
 }
 
 function GameInstances({ game }: { game: GameView }) {
@@ -136,7 +86,7 @@ export function GameDetailPage() {
           ...(hasGlobalMods(game) ? [{ label: 'Mods', to: `/games/${game.id}/mods` }] : []),
         ]}
       />
-      {activeTab === 'overview' && (game.capabilities.container_runtime ? <RuntimeCard game={game} /> : <InstallStatusCard game={game} />)}
+      {activeTab === 'overview' && <RuntimeCard game={game} />}
       {activeTab === 'instances' && <GameInstances game={game} />}
       {activeTab === 'mods' && <ValheimModsTab path={nestedPath} />}
     </div>

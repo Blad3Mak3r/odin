@@ -2,14 +2,15 @@
 
 ## Status
 
-Implemented for Podman-managed instances (Valheim, Rust, 7 Days to Die and Palworld), where there is no
-host pid at all. `podman_instances.desired_running` is set after a successful
-start and cleared before an operator stop; restarts and host shutdowns keep it
-(`StopReason`). The telemetry loop restarts an instance found stopped while
-`auto_restart && desired_running`, which also recovers instances after a host
-reboot, one at a time and subject to the existing cooldown. Instances that were
-already running when the column was added are tracked from their next start.
-The direct (pid-based) path described below is unchanged.
+Implemented for every game (Valheim, Rust, 7 Days to Die and Palworld), which
+all run in Podman containers. `instance_runtime_state.desired_running` is set
+after a successful start and cleared before an operator stop; restarts and host
+shutdowns keep it (`StopReason`). The telemetry loop restarts an instance found
+stopped while `auto_restart && desired_running`, which also recovers instances
+after a host reboot, one at a time and subject to the existing cooldown.
+
+The sections below are the original design, written for the host-process model
+that no longer exists. They are kept for the reasoning behind the state model.
 
 ## Problem
 

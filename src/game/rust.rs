@@ -118,8 +118,7 @@ pub fn ensure_layout(paths: &Paths, instance: &RustInstance) -> Result<()> {
     Ok(())
 }
 
-/// Whether the server is alive: its container for a Podman-managed
-/// instance, its host process otherwise.
+/// Whether the server's container is running.
 pub fn is_running(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<bool> {
     crate::podman::rust::is_running(paths, db, instance)
 }

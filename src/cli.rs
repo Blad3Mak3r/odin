@@ -11,10 +11,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Install SteamCMD (if missing) and install/update the Valheim dedicated server.
-    /// Refuses to run while any instance is currently running.
-    Install,
-
     /// Create a new instance (auto-assigning a port and password) without starting it.
     Create {
         #[arg(value_parser = parse_instance_name)]

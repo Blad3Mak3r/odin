@@ -11,7 +11,6 @@ pub mod config_cmd;
 pub mod create;
 pub mod delete;
 pub mod doctor;
-pub mod install;
 pub mod logs;
 pub mod mods_add;
 pub mod mods_disable;

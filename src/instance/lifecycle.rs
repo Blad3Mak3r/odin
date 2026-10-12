@@ -145,13 +145,6 @@ pub(crate) fn delete_instance_dir(
     Ok(())
 }
 
-// The real-Valheim-binary end-to-end test that used to live here moved to
-// `supervisor::server`'s test module: `start`'s spawn step now re-execs
-// odin's own binary (`std::env::current_exe()`) as `odin run`, which only
-// resolves to the real `odin` binary outside a `cargo test` harness — the
-// equivalent coverage now drives `supervisor::server::run_instance`
-// directly (as `odin run` itself would) instead of going through `start`.
-
 #[cfg(test)]
 mod tests {
     use super::*;

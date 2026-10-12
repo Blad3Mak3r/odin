@@ -12,7 +12,6 @@ pub mod palworld;
 pub mod ports;
 pub mod rust;
 pub mod seven_days_to_die;
-pub mod update;
 pub mod valheim;
 
 pub const SEVEN_DAYS_TEMPLATE_BASELINE_FILE: &str = ".odin-serverconfig-template.xml";
@@ -65,8 +64,6 @@ pub struct GameCapabilities {
     pub mods: bool,
     pub access_lists: bool,
     pub readiness: bool,
-    /// Whether instances run in their own Podman container.
-    pub container_runtime: bool,
 }
 
 /// Ports claimed by one default instance of a game. This belongs to the
@@ -122,7 +119,6 @@ impl GameDriver for ValheimDriver {
             mods: true,
             access_lists: true,
             readiness: true,
-            container_runtime: true,
         }
     }
 
@@ -155,7 +151,6 @@ impl GameDriver for RustDriver {
             mods: false,
             access_lists: true,
             readiness: false,
-            container_runtime: true,
         }
     }
 
@@ -190,7 +185,6 @@ impl GameDriver for PalworldDriver {
             mods: false,
             access_lists: true,
             readiness: true,
-            container_runtime: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -222,7 +216,6 @@ impl GameDriver for SevenDaysToDieDriver {
             mods: true,
             access_lists: false,
             readiness: true,
-            container_runtime: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {

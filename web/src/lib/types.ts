@@ -13,7 +13,6 @@ export interface GameCapabilities {
   mods: boolean
   access_lists: boolean
   readiness: boolean
-  container_runtime: boolean
 }
 
 export interface GameView {
@@ -33,8 +32,6 @@ export interface ManagedInstanceView {
   odin_version: string | null
   capabilities: GameCapabilities
   config: Record<string, unknown>
-  execution: 'direct' | 'podman'
-  migration_required: boolean
 }
 
 export interface RuntimeHealth {
@@ -156,13 +153,6 @@ export interface CheckResult {
   detail: string | null
 }
 
-export interface InstallStatusView {
-  installed: boolean
-  installed_build_id: number | null
-  latest_build_id: number | null
-  update_available: boolean
-}
-
 export interface BepInExStatus {
   installed: boolean
   installed_version: string | null
@@ -251,12 +241,6 @@ export interface LogsView {
   lines: string[]
 }
 
-export interface LastExitInfo {
-  code: number | null
-  at: string
-  recent_lines: string[]
-}
-
 export interface ModSearchResult {
   mod_id: string
   name: string
@@ -293,7 +277,6 @@ export interface JobSummary {
 }
 
 export type JobKindDescr =
-  | { kind: 'steamcmd_install'; game: GameId }
   | { kind: 'runtime_update'; game: GameId; instance: string }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }

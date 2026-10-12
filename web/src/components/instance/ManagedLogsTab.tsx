@@ -12,11 +12,11 @@ import { useManagedInstanceLogs } from '@/lib/queries'
 const LINE_OPTIONS = [100, 200, 500, 1000]
 const LIVE_TAIL_LINES = 200
 
-export function ManagedLogsTab({ id, hasInstallLog = false }: { id: string; hasInstallLog?: boolean }) {
+export function ManagedLogsTab({ id }: { id: string }) {
   const [lineCount, setLineCount] = useState(200)
   const [filter, setFilter] = useState('')
   const [source, setSource] = useState<LogSource>('console')
-  const installLog = hasInstallLog && source === 'update'
+  const installLog = source === 'update'
   const logs = useManagedInstanceLogs(id, lineCount)
   const socket = useLogSocket(id, installLog ? 'update' : 'console')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -50,12 +50,10 @@ export function ManagedLogsTab({ id, hasInstallLog = false }: { id: string; hasI
           {installLog ? 'Live SteamCMD install log.' : live ? 'Live console log.' : `Last ${lineCount} lines (not live).`}
         </p>
         <div className="flex items-center gap-2">
-          {hasInstallLog && (
-            <div className="flex gap-1">
-              <Button size="sm" variant={installLog ? 'outline' : 'default'} onClick={() => setSource('console')}>Console</Button>
-              <Button size="sm" variant={installLog ? 'default' : 'outline'} onClick={() => setSource('update')}>SteamCMD</Button>
-            </div>
-          )}
+          <div className="flex gap-1">
+            <Button size="sm" variant={installLog ? 'outline' : 'default'} onClick={() => setSource('console')}>Console</Button>
+            <Button size="sm" variant={installLog ? 'default' : 'outline'} onClick={() => setSource('update')}>SteamCMD</Button>
+          </div>
           {live && <Badge variant={socket.connected ? 'default' : 'secondary'}>{socket.connected ? 'connected' : 'disconnected'}</Badge>}
           {!installLog && <div className="flex gap-1">
             {LINE_OPTIONS.map((count) => (

@@ -4,9 +4,9 @@ use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bepinex, bulk, changelog, config_files, doctor, events, games, install, instances,
-    jobs, lists, mods, nexus, palworld, players, resource_limits, resources, rust_access_lists,
-    saves, settings, seven_days_to_die, uptime_schedules, version, webhooks,
+    backups, bepinex, bulk, changelog, config_files, doctor, events, games, instances, jobs, lists,
+    mods, nexus, palworld, players, resource_limits, resources, rust_access_lists, saves, settings,
+    seven_days_to_die, uptime_schedules, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -21,8 +21,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/version", get(version::get_version))
         .route("/changelog", get(changelog::get_changelog))
         .route("/doctor", get(doctor::get_doctor))
-        .route("/install", post(install::install_server))
-        .route("/install/status", get(install::get_install_status))
         .route("/games", get(games::list_games))
         .route("/games/7d2d/worlds", get(games::list_seven_days_worlds))
         .route(
@@ -326,11 +324,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{id}/saves/{*path}",
             get(saves::download_save_file_by_id).delete(saves::delete_save_file_by_id),
-        )
-        .route("/games/{game}/install", post(games::install_game))
-        .route(
-            "/games/{game}/install/status",
-            get(games::get_install_status),
         )
         .route(
             "/games/{game}/instances",

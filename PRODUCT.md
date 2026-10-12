@@ -19,8 +19,8 @@ processes.
 
 Odin is a self-hosted Linux service and embedded web dashboard for managing
 the lifecycle of dedicated game servers from one Rust binary. It installs and
-updates supported servers through SteamCMD, runs isolated named instances,
-supervises their processes, exposes each game's configuration, and provides
+updates supported servers through SteamCMD, runs each isolated named instance
+in its own Podman container, exposes each game's configuration, and provides
 backups plus the game-specific capabilities Odin supports.
 
 The currently compiled game drivers are Valheim, Rust, Palworld, and
@@ -51,11 +51,11 @@ capabilities are built in the web API and dashboard.
 - Servers are managed as independent instances, scoped by both game and
   name. Instances can share a display name across different games, but never
   share save data, logs, runtime paths, identity, or reserved ports.
-- Odin shares immutable install files per game where the game's runtime
-  allows it, while deriving instance-owned data, logs, runtime directories,
-  and process identity. Each instance is directly supervised by Odin.
-- Running state is derived from the operating system process and its start
-  time, not from a stored boolean. The dashboard also provides live logs and
+- Each instance runs in its own Podman container with a private copy of the
+  game, while Odin derives instance-owned data, logs, runtime directories, and
+  process identity.
+- Running state is derived from the instance's container, not from a stored
+  boolean. The dashboard also provides live logs and
   host/per-instance resource information.
 - Odin stores its metadata, lifecycle records, schedules, and process
   arguments in SQLite. Game-owned settings remain in each game's documented

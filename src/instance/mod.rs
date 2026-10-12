@@ -295,17 +295,6 @@ pub fn list_all(paths: &Paths, db: &Db) -> Result<Vec<Instance>> {
         .collect())
 }
 
-/// Names (only, not full state) of every instance currently running.
-pub fn running_instance_names(paths: &Paths, db: &Db) -> Result<Vec<String>> {
-    let mut running = Vec::new();
-    for instance in list_all(paths, db)? {
-        if crate::podman::valheim::is_running(paths, db, &instance)? {
-            running.push(instance.state.name);
-        }
-    }
-    Ok(running)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

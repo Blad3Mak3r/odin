@@ -73,9 +73,7 @@ impl PlayerRegistry {
 
     /// Recognizes a join/leave in a `console.log` line (see
     /// `crate::player_events::PlayerEventParser`) and applies it, returning the
-    /// activity to record if the line mattered. Used by `web::log_tail`'s
-    /// fallback poller, for an instance with no reachable supervisor to
-    /// push structured events instead.
+    /// activity to record if the line mattered. Used by `web::log_tail`.
     pub fn apply_line(&self, instance: &str, line: &str) -> Option<ActivityKind> {
         let event = self
             .parsers

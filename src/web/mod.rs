@@ -15,7 +15,6 @@ mod runtime;
 mod sse;
 mod state;
 mod static_files;
-mod update_monitor;
 mod uptime_scheduler;
 mod webhooks;
 mod world_saves;
@@ -50,7 +49,6 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     retention::run_once(&state);
     retention::spawn(state.clone());
     webhooks::spawn(state.clone());
-    update_monitor::spawn(state.clone());
     spawn_telemetry(state.clone());
     backup_scheduler::spawn(state.clone());
     uptime_scheduler::spawn(state.clone());

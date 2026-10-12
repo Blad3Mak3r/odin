@@ -101,24 +101,20 @@ pub struct SevenDaysWorldsView {
 }
 
 /// Worlds the game ships with. Each container instance holds its own copy of
-/// the game, so the union over all of them is offered, plus the legacy shared
-/// installation of instances that have not been migrated yet.
+/// the game, so the union over all of them is offered.
 pub async fn list_seven_days_worlds(
     State(state): State<AppState>,
 ) -> ApiResult<Json<SevenDaysWorldsView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
     let worlds = run_blocking(move || {
-        let mut directories = vec![paths.game_install_dir(GameId::SevenDaysToDie)];
-        for instance in game_instances::list_generic(&db, GameId::SevenDaysToDie)? {
-            directories.push(
+        let mut worlds = game_instances::list_generic(&db, GameId::SevenDaysToDie)?
+            .into_iter()
+            .map(|instance| {
                 paths
                     .container_runtime_dir(GameId::SevenDaysToDie, &instance.identity.id)
-                    .join(GameId::SevenDaysToDie.as_str()),
-            );
-        }
-        let mut worlds = directories
-            .into_iter()
+                    .join(GameId::SevenDaysToDie.as_str())
+            })
             .filter_map(|install| std::fs::read_dir(install.join("Data/Worlds")).ok())
             .flatten()
             .filter_map(|entry| {
@@ -139,72 +135,6 @@ pub async fn list_seven_days_worlds(
     })
     .await?;
     Ok(Json(SevenDaysWorldsView { worlds }))
-}
-
-#[derive(Serialize)]
-pub struct GameInstallStatusView {
-    pub installed: bool,
-    pub installed_build_id: Option<u64>,
-    pub latest_build_id: Option<u64>,
-    pub update_available: bool,
-}
-
-pub async fn get_install_status(
-    State(state): State<AppState>,
-    Path(game): Path<GameId>,
-) -> ApiResult<Json<GameInstallStatusView>> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    let status = run_blocking(move || crate::game::update::check(&paths, &db, game)).await?;
-    Ok(Json(GameInstallStatusView {
-        installed: status.installed_build_id.is_some(),
-        installed_build_id: status.installed_build_id,
-        latest_build_id: status.latest_build_id,
-        update_available: status.update_available,
-    }))
-}
-
-pub async fn install_game(
-    State(state): State<AppState>,
-    Path(game): Path<GameId>,
-) -> ApiResult<Json<JobHandle>> {
-    if game::driver(game).capabilities().container_runtime {
-        // There is no shared installation once instances own their private
-        // payloads. Updates are deliberately performed in a running instance
-        // runtime instead.
-        return Err(BadRequest(format!(
-            "{} is updated per running instance; use that instance's Update action",
-            game::driver(game).display_name()
-        ))
-        .into());
-    }
-    let paths = state.paths.clone();
-    let activity = state.activity.clone();
-    let id = state
-        .jobs
-        .spawn(JobKindDescr::SteamcmdInstall { game }, move |logger| {
-            match game {
-                GameId::Valheim | GameId::Rust | GameId::Palworld | GameId::SevenDaysToDie => {}
-            }
-            let driver = game::driver(game);
-            let install_dir = paths.game_install_dir(game);
-            let log_file = paths
-                .data_dir
-                .join("logs")
-                .join(format!("steamcmd-{}-install.log", driver.id()));
-            let steamcmd = crate::steamcmd::SteamCmd::new(paths.steamcmd_dir());
-            steamcmd.update_app_expect_file(
-                driver.steam_app_id(),
-                &install_dir,
-                &log_file,
-                install_dir.join(driver.server_binary()),
-                |line| logger.line(line),
-            )?;
-            activity.record_for(game, crate::activity::ActivityKind::ServerInstalled, None);
-            logger.line("done");
-            Ok(())
-        });
-    Ok(Json(JobHandle { id }))
 }
 
 pub async fn list_all_instances(

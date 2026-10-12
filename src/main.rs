@@ -72,7 +72,6 @@ fn run() -> Result<()> {
     let db = db::Db::open(&paths)?;
 
     match cli.command {
-        Command::Install => commands::install::run(&paths, &db),
         Command::Create { server_name } => commands::create::run(&paths, &db, &server_name),
         Command::Start { server_name } => commands::start::run(&paths, &db, &server_name),
         Command::Stop { server_name } => commands::stop::run(&paths, &db, &server_name),

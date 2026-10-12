@@ -3,8 +3,6 @@ import type { JobKindDescr, JobStatus } from './types'
 
 export function describeJobKind(kind: JobKindDescr): string {
   switch (kind.kind) {
-    case 'steamcmd_install':
-      return `Install/update ${gameLabel(kind.game)} server files`
     case 'runtime_update':
       return `Update ${gameLabel(kind.game)} / ${kind.instance} in its container`
     case 'mod_add':

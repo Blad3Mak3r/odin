@@ -5,7 +5,7 @@ import { GameIcon } from '@/components/GameIcon'
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useManagedInstanceAction, useManagedInstanceTransition, useManagedResources, useMigrateRuntime, useUpdateRuntime } from '@/lib/queries'
+import { useManagedInstanceAction, useManagedInstanceTransition, useManagedResources, useUpdateRuntime } from '@/lib/queries'
 import { gameLabel } from '@/lib/games'
 import type { ManagedInstanceView } from '@/lib/types'
 
@@ -14,11 +14,10 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
-  const migrate = useMigrateRuntime()
   const update = useUpdateRuntime()
   const transition = useManagedInstanceTransition(instance.id, instance.game, instance.name)
   const resources = useManagedResources(instance.id, instance.running && instance.capabilities.readiness)
-  const busy = start.isPending || stop.isPending || restart.isPending || migrate.isPending || update.isPending || transition.data !== null
+  const busy = start.isPending || stop.isPending || restart.isPending || update.isPending || transition.data !== null
   const action = { id: instance.id }
   const port = numberConfig(instance.config, 'port')
   const queryPort = numberConfig(instance.config, 'query_port')
@@ -46,23 +45,12 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
           <Badge variant={instance.running ? 'default' : 'secondary'}>
             {transition.data ?? (instance.running ? 'running' : 'stopped')}
           </Badge>
-          {instance.capabilities.container_runtime && <Badge variant="outline">{instance.execution}</Badge>}
           {instance.running && instance.capabilities.readiness && resources.data && <Badge variant={resources.data.ready ? 'default' : 'secondary'}>{resources.data.ready ? 'ready' : 'starting'}</Badge>}
           {instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {instance.migration_required ? (
-            <Button
-              size="sm"
-              className="max-sm:h-11"
-              disabled={busy || instance.running}
-              onClick={() => migrate.mutate(instance.id, { onSuccess: () => toast.success(`${gameLabel(instance.game)} instance migrated to Podman`), onError: (error) => toast.error(error.message) })}
-            >
-              {migrate.isPending && <Loader2 className="size-4 animate-spin" />}
-              Migrate to Podman
-            </Button>
-          ) : instance.execution === 'podman' && instance.running ? (
+          {instance.running ? (
             <Button
               size="sm"
               className="max-sm:h-11"

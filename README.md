@@ -37,9 +37,10 @@ Rust v1 otherwise focuses on core operation.
   access lists, search and install mods, watch a live console and logs, and
   see host/instance resource usage. See [Web dashboard](#web-dashboard)
   below.
-- **One binary, no runtime dependencies** beyond (transparently managed)
-  SteamCMD and a handful of OS shared libraries — no Python, no Docker, no
-  terminal multiplexer required.
+- **One binary, and Podman.** Every game server runs in its own container
+  started through Podman's Unix API, with SteamCMD and the game installed
+  inside it — no Python or terminal multiplexer, and no game libraries on the
+  host.
 - **Multiple games and UUID-addressed instances.** Orchestrate Valheim, Rust,
   Palworld, and 7 Days to Die side by side on one host.
   Each instance has a persistent UUID for dashboard navigation and API calls;
@@ -49,11 +50,10 @@ Rust v1 otherwise focuses on core operation.
 - **Compiled game drivers.** Odin ships drivers rather than loading plugins:
   Palworld uses its local, authenticated REST API and an isolated
   runtime/config/save tree.
-- **Detached by default, and restart-proof.** Every instance runs as its
-  own directly-supervised background process, so it keeps running after you
-  disconnect — and after `odin serve` itself is restarted or upgraded.
-  Watch it live from the dashboard's console view, or with `odin logs
-  --follow` via the legacy CLI.
+- **Detached by default, and restart-proof.** Every instance runs in its
+  own container, so it keeps running after you disconnect — and after `odin
+  serve` itself is restarted or upgraded. Watch it live from the dashboard's
+  console view, or with `odin logs --follow` via the legacy CLI.
 - **Valheim mod support out of the box.** Bootstraps
   [BepInEx](https://github.com/BepInEx/BepInEx) automatically and installs
   mods straight from the [Thunderstore](https://thunderstore.io/c/valheim)
@@ -97,24 +97,14 @@ legacy — don't expect new features to show up there first.
 
 ## Requirements
 
-- **Linux only** (x86_64). Odin spawns dedicated game servers directly and
-  shells out to SteamCMD's Linux distribution; there is no Windows or macOS
-  support.
-- **SteamCMD is handled for you.** Odin downloads and installs it
-  automatically on first `odin install`; you don't need to have it set up
-  beforehand.
+- **Linux only** (x86_64), with **Podman 5.0.0 or newer** and its Unix
+  socket enabled (see [Podman runtime](#podman-runtime)). There is no Windows
+  or macOS support.
+- **SteamCMD is handled for you.** Each instance's container downloads it and
+  the game on its first start; you don't need to have it set up beforehand.
 - **Outbound network access** to Steam's content servers (to install/update
   the game) and to `thunderstore.io` (to install/update mods), plus the
   configured AWS S3 or Cloudflare R2 endpoint when remote backups are enabled.
-- **A handful of OS shared libraries.** SteamCMD's Linux distribution ships
-  a 32-bit binary (needs `lib32gcc-s1`/`lib32gcc1` + `lib32stdc++6` on
-  Debian/Ubuntu, or `glibc.i686` + `libstdc++.i686` on Fedora/RHEL), and
-  Valheim's Unity engine loads ALSA/PulseAudio for its audio backend even
-  headless (`libasound2`/`libasound2t64` + `libpulse0` on Debian/Ubuntu, or
-  `alsa-lib` + `pulseaudio-libs` on Fedora/RHEL). The `.deb`/`.rpm`
-  packages declare these as dependencies and apt/dnf install them for you;
-  this only matters if you're building/installing from source on a
-  minimal system.
 - **[Node.js](https://nodejs.org/) is only needed to build the web
   dashboard's frontend** (`make web-build`, run automatically by `make
   build`/`release`). The compiled `odin` binary itself has no Node.js or
@@ -195,11 +185,11 @@ The container filesystem contract is intentionally small:
 |---|---|---|
 | `/var/lib/odin` | Required volume | Database, SteamCMD, game installs, worlds, backups, mods, and logs. |
 | `/etc/odin/config.toml` | Image default; optional read-only bind mount | Global configuration. Its default data directory is `/var/lib/odin`. |
-| `/run/odin` | Ephemeral `tmpfs` | Per-instance supervisor sockets and pidfiles. |
+| `/run/odin` | Ephemeral `tmpfs` | Per-instance runtime control sockets. |
 
-Keep `/var/lib/odin` as one volume: Odin's shared install and mod store use
-links into per-instance directories, and the SQLite database coordinates all
-of that state. The image runs as the fixed unprivileged user and group
+Keep `/var/lib/odin` as one volume: Odin's mod store uses links into
+per-instance directories, and the SQLite database coordinates all of that
+state. The image runs as the fixed unprivileged user and group
 `10001:10001`; a host bind mount must be writable by that identity. The
 binary and configuration remain owned by root inside the image.
 
@@ -257,18 +247,12 @@ For scripting or quick one-off Valheim changes, the legacy CLI remains
 available:
 
 ```sh
-# Install SteamCMD and the Valheim dedicated server (safe to re-run to update later)
-odin install
-
-# Create and start a server named "my-server" (always runs detached in the background)
+# Create and start a server named "my-server" (always runs detached, in its container)
 odin start my-server
 
 # Check on it
 odin status
 odin logs my-server --follow
-
-# Send it a console command without attaching to anything
-odin exec my-server "save"
 
 # Add a mod and restart to load it
 odin mods search my-server valheim-plus
@@ -294,19 +278,13 @@ Server names are positional arguments (never a `-n`/`--name` flag) and must
 be **DNS-friendly**: lowercase letters, digits, and hyphens only, and they
 can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
-### Server binaries
-
-| Command | Description |
-|---|---|
-| `odin install` | Install SteamCMD if missing, then install/update the Valheim dedicated server. Refuses to run while any instance is currently running (updating binaries under a live server is unsafe), and safe to re-run any time to pick up a new game version. |
-
 ### Instance lifecycle
 
 | Command | Description |
 |---|---|
 | `odin create <server-name>` | Create a new instance (auto-assigning a free port and a random password) without starting it. Fails if the name is already taken — use this when you want to `config set` a world/port/password before the first start. |
-| `odin start <server-name>` | Create the instance if it doesn't exist yet (auto-assigning a free port and a random password) and start it, always detached as its own supervised background process. |
-| `odin stop <server-name>` | Gracefully stop a running instance (sends `SIGINT` for a clean world save, then `SIGKILL`s it if it doesn't exit in time). |
+| `odin start <server-name>` | Create the instance if it doesn't exist yet (auto-assigning a free port and a random password) and start it in its Podman container. |
+| `odin stop <server-name>` | Gracefully stop a running instance (the game saves its world before its container exits; it is killed if it doesn't stop in time). |
 | `odin restart <server-name>` | Stop the instance if it's running, then start it again. Useful after installing mods or changing config. |
 | `odin rename <old-name> <new-name>` | Rename an instance. Must be stopped first. Only its identity changes — the world name and save files are left untouched. |
 | `odin delete <server-name> [-y\|--yes] [--keep-backups]` | Permanently delete an instance. Must be stopped first, and asks for confirmation unless `-y` is given. `--keep-backups` deletes everything except the `backups/` directory. |
@@ -447,17 +425,14 @@ your own `systemctl --user`/init setup.
 
 ## Configuration
 
-### Podman runtime for Valheim, Rust, 7 Days to Die and Palworld
+### Podman runtime
 
-Valheim, Rust, 7 Days to Die and Palworld instances run in an `odin-srv` Podman container. Existing
-instances must be stopped and migrated from their instance page before they
-can start; new instances are created for Podman automatically. Each instance
-owns its own persistent SteamCMD and game payload under
+Every instance runs in an `odin-srv` Podman container. Each one owns its own
+persistent SteamCMD and game payload under
 `<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
-start (Rust's, 7 Days to Die's and Palworld's are several gigabytes, so that first start
-takes a while); Odin
-never copies or removes the old shared installation during migration, and
-deleting an instance removes its runtime volume. With **auto restart** enabled,
+start (Rust's, 7 Days to Die's and Palworld's are several gigabytes, so that
+first start takes a while), and deleting an instance removes its runtime
+volume. With **auto restart** enabled,
 Odin restarts a container that stopped without an operator asking for it, including
 after a host reboot; an operator **Stop** is respected. World data, configuration and
 backups stay in the instance directory.
@@ -471,8 +446,8 @@ Palworld keeps its saves and `PalWorldSettings.ini` in the instance directory
 under `runtime/Pal/Saved/`; inside the container the game's own `Pal/Saved`
 is a link to it. Odin creates `PalWorldSettings.ini` from the server's shipped
 `DefaultPalWorldSettings.ini` on the first start and never replaces an existing
-file. The files that the old host launch left in `runtime/` besides `Pal/Saved/`
-are unused after migration and can be deleted.
+file. Files that earlier versions left in `runtime/` besides `Pal/Saved/` are
+unused and can be deleted.
 
 Odin itself starts without Podman configured. To use these games, set the
 socket in **Settings** or in Odin's configuration file:
@@ -489,12 +464,20 @@ or newer before container operations are available. Do not grant unrelated users
 access to this socket: it grants authority over its containers. Odin uses the
 Unix API directly; it does not require the `podman` CLI in the service path.
 
-Each migrated instance shows its container and runtime-socket health on
-its detail page. **Repair** is available only while the instance is stopped:
-it regenerates Odin's private runtime specification, removes stale sockets,
-and deletes the stopped UUID-named container so the next **Start** recreates
-it. It never downloads the game, starts the instance, or changes saves,
-backups, mods, or the legacy shared installation.
+Each instance shows its container and runtime-socket health on its detail
+page. **Repair** is available only while the instance is stopped: it
+regenerates Odin's private runtime specification, removes stale sockets, and
+deletes the stopped UUID-named container so the next **Start** recreates it. It
+never downloads the game, starts the instance, or changes saves, backups, or
+mods.
+
+> **Upgrading from a version that ran games as host processes?** Stop those
+> instances before upgrading. Odin now only manages containers: a server still
+> running outside one is no longer tracked, and its ports stay taken until you
+> stop it. Its data is untouched; start it again from the dashboard and its
+> container downloads a private copy of the game. Shared installs under
+> `<data>/install/` and `<data>/games/*/install/` are no longer used and can
+> be deleted.
 
 Odin stores everything under a single **data directory**. Which mode it
 runs in is detected automatically from whether `/etc/odin/config.toml`
@@ -516,28 +499,20 @@ In both modes, the data dir is resolved in this order:
 
 ```
 <data_dir>/
-  steamcmd/                     # SteamCMD installation
-  install/valheim/               # shared Valheim dedicated server binaries — every instance
-                                  # symlinks to this, so `odin install` updates them all at once
   mods/<mod-id>/<version>/       # immutable shared payload — one download per exact version
   servers/<name>/
     state.json                   # instance metadata: port, world, password, visibility, mods, timestamps
-    server -> ../../install/valheim
     saves/                       # the world's save files
     backups/<id>.zip              # local snapshots; remote uploads are removed after success
     logs/console.log              # captured console output, tailed by `odin logs`
-    console.in                    # named pipe carrying console input (`odin exec`/dashboard)
     BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>/<version>  # exact enabled version
   games/rust/
-    install/                     # legacy shared Rust binaries (instances not yet migrated to Podman)
     instances/<name>/            # Rust configuration, identity, logs, and backups
   runtimes/<game>/<uuid>/        # a Podman instance's private SteamCMD and game payload
   games/palworld/
-    install/                     # legacy shared binaries (instances not yet migrated to Podman)
     instances/<name>/
       runtime/Pal/Saved/         # saves and Config/LinuxServer/PalWorldSettings.ini
   games/7d2d/
-    install/                     # legacy shared binaries (instances not yet migrated to Podman)
     instances/<name>/
       config/serverconfig.xml    # instance-local server configuration
       Mods/<mod-name>/ModInfo.xml # instance-local uploaded 7D2D mods
@@ -545,18 +520,13 @@ In both modes, the data dir is resolved in this order:
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
 
-Each Valheim instance's game binaries are a symlink into one shared,
-SteamCMD-managed install — so every Valheim instance always runs the same
-game version, and updating is a single `odin install` rather than one
-download per server. These shared installs are what instances not yet migrated
-to Podman use; a Podman instance has its own copy under `runtimes/`.
-Legacy Rust instances run one installation under `games/rust/` with distinct
-`server.identity` values. Before every Rust start, on the host and inside its
-container, Odin maintains `$HOME/.steam/sdk64/steamclient.so` as a hardlink to
-SteamCMD's 64-bit client library (or a symlink when the paths cross
-filesystems) so Steamworks can initialize. Inside a container, Odin stops Rust
-through its console `quit` command, which saves the world; a plain signal does
-not.
+Each instance has its own copy of its game under `runtimes/`, updated from
+the instance page while it runs. Rust instances use distinct
+`server.identity` values. Before every Rust start, inside its container, Odin
+maintains `$HOME/.steam/sdk64/steamclient.so` as a hardlink to SteamCMD's
+64-bit client library (or a symlink when the paths cross filesystems) so
+Steamworks can initialize. Odin stops Rust through its console `quit` command,
+which saves the world; a plain signal does not.
 Valheim mods are versioned: `odin mods add` downloads each `(mod, version)`
 once into the shared `mods/` store, and every enabled instance symlinks to
 its exact version. Updating one instance creates or reuses the newer payload
@@ -591,19 +561,16 @@ networks because the game does not provide Odin with a console bind-address
 setting. Once enabled, the dashboard Console and Players tabs can run server
 commands, show version/build and memory information, list connected players,
 record recent sessions, and manage bans, administrators, and the whitelist.
-An instance that still runs as a host process is reported as *ready* only after
-a game-start log line; a containerized one is reported as ready once its game
-process has started.
+An instance is reported as *ready* once its game process has started.
 
 On the first start after upgrading, Odin automatically moves the legacy
 single-version mod store into this layout and repoints every existing instance;
 no migration command or dashboard action is required.
 
 An instance's **running/stopped status is never trusted from a stored
-flag** — it's always derived on demand by checking whether its recorded
-process id is still alive, cross-checked against that process's own start
-time so a reused pid can never lie to you. That way `odin status` can never
-be wrong after a crash, a manual `kill -9`, or a host reboot.
+flag** — it's always derived on demand by asking Podman whether its container
+is running. That way `odin status` can never be wrong after a crash or a host
+reboot.
 
 ## Development
 

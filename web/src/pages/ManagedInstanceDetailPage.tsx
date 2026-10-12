@@ -315,10 +315,10 @@ export function ManagedInstanceDetailPage() {
     <div className="relative isolate flex flex-col gap-6">
       <GameBackdrop game={detail.game} />
       <ManagedInstanceHeader instance={detail} />
-      {detail.execution === 'podman' && <RuntimeHealthCard id={detail.id} game={detail.game} running={detail.running} />}
+      <RuntimeHealthCard id={detail.id} game={detail.game} running={detail.running} />
       <RouteTabs label="Instance sections" tabs={tabs.map((item) => ({ label: item.label, to: `/instance/${id}/${item.id}` }))} />
       <div className="flex flex-col gap-2">
-        <TabPanel active={tab === 'logs'}><ManagedLogsTab id={detail.id} hasInstallLog={detail.execution === 'podman'} /></TabPanel>
+        <TabPanel active={tab === 'logs'}><ManagedLogsTab id={detail.id} /></TabPanel>
         {detail.game === 'rust' && <TabPanel active={tab === 'rcon'}><RustRconTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.game === '7d2d' && <TabPanel active={tab === 'console'}><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.game === '7d2d' && <TabPanel active={tab === 'players'}><SevenDaysPlayersTab id={detail.id} running={detail.running} /></TabPanel>}

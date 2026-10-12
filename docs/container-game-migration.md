@@ -1,9 +1,9 @@
-# Migrating a game to the Podman runtime
+# Adding a game to the Podman runtime
 
-This guide is for agents and contributors moving a game from "directly
-supervised host process" to "runs in an `odin-srv` Podman container". Valheim,
-Rust, 7 Days to Die and Palworld are already migrated; read the code of the one
-closest to your game before starting:
+This guide is for agents and contributors adding a game that runs in an
+`odin-srv` Podman container. Every game does: Valheim, Rust, 7 Days to Die and
+Palworld are already there, and there is no host-process mode. Read the code of
+the one closest to your game before starting:
 
 | If your game... | Copy |
 |---|---|
@@ -11,7 +11,7 @@ closest to your game before starting:
 | has typed Odin settings in SQLite (`RustInstance`, Valheim's `InstanceState`) | `src/podman/rust.rs` / `src/podman/valheim.rs` |
 
 Read [AGENTS.md](../AGENTS.md) first: its *Game server configuration policy*
-applies to every migration. This guide only adds the container-specific part.
+applies to every game. This guide only adds the container-specific part.
 
 ## 1. Mental model
 
@@ -39,8 +39,8 @@ host                                          container (host network)
   `runtimes/<game>/` directory, the install dir `/srv/odin/runtime/<game>` and
   the serde tag of the `Launch` variant. They must all agree (see §3).
 - Liveness, restart-after-crash (`auto_restart` + `desired_running`), resource
-  limits, host-shutdown handling, the dashboard badge/banner/health card and
-  the SteamCMD log view are **already game-neutral**. A new game gets them by
+  limits, host-shutdown handling, the dashboard health card and the SteamCMD
+  log view are **already game-neutral**. A new game gets them by
   being registered, not by new code.
 
 ## 2. Step 0: establish the contract from primary sources
@@ -68,7 +68,7 @@ as typed, validated fields and omit new optional ones by default.
 ## 3. Code checklist
 
 Work through these in order. File names are those used by the 7d2d/Palworld
-migrations.
+drivers.
 
 1. **Launch contract: `src/game/<game>.rs`.**
    - A `<Game>Launch` struct (`Serialize`/`Deserialize`) with exactly what the
@@ -80,8 +80,8 @@ migrations.
    - `prepare_runtime(install_dir, instance_dir)`: *container-side* work run
      before every launch (see §4). It must be idempotent.
    - `template_path(paths, identity)` if the game ships a config template: the
-     instance's private runtime copy first, the shared install as fallback (an
-     instance that is not migrated yet still uses the shared install).
+     instance's private runtime copy once it is installed, otherwise a template
+     placed in the host install directory.
    - A graceful-stop function that takes **only paths** (see §4).
 2. **Lifecycle: `src/podman/<game>.rs`.** `pub(super) struct <Game>;`
    implementing `ContainerGame` (`src/podman/lifecycle.rs`): `load`,
@@ -89,39 +89,27 @@ migrations.
    (create instance subdirs + runtime dir + socket dir, then
    `write_runtime_spec`; never create the game's document and never call
    `prepare_runtime`, which runs in the container), `extra_mounts` (usually
-   empty), `running_directly` (`is_running_directly()`), `stop_directly`
-   (the old host stop, used for instances not migrated yet). Add
-   `pub mod <game>;` in `src/podman.rs`.
+   empty). Add `pub mod <game>;` in `src/podman.rs`.
 3. **`src/podman.rs`.** Add a `Launch::<Game>(<Game>Launch)` variant and its
    arms in `game`, `name`, `server_command` (calls `prepare_runtime` then
    `build_command_at`) and `request_graceful_stop`. The variant tag is
    `GameId::as_str()` converted by `rename_all = "snake_case"`; if the id is
    not valid snake_case (`7d2d`), add `#[serde(rename = "...")]`.
-4. **`src/podman/dispatch.rs`.** Add the `for_container_game!` arm and remove
-   the game from `otherwise`. The test `container_games_match_the_capability_flag`
-   fails if this and the driver disagree.
-5. **Driver: `src/game/mod.rs`.** `container_runtime: true`, and
+4. **`src/podman/dispatch.rs`.** Add the `for_container_game!` arm; the match is
+   exhaustive, so the compiler points at the other places that name every game.
+5. **Driver: `src/game/mod.rs`.** Register the driver, and set
    `stop_timeout_secs()` if the game needs more than 30 s to save (the ceiling
    used so far is 120 s).
-6. **Retire the host launch: `src/game/generic.rs`.** `prepare_start` bails with
-   "runs in Podman; start it through its container runtime", `build_command`
-   becomes `unreachable!` for the game, and per-game helpers that only served
-   the host launch are removed. **Keep** the host stop (`generic::stop`): it is
-   `stop_directly` for instances that have not been migrated yet. Move the
-   command tests to the new `build_command_at`.
-7. **Config documents: `src/game/config_documents.rs`.** Make `initialize`
+6. **Config documents: `src/game/config_documents.rs`.** Make `initialize`
    read the template through `template_path`. Add a path-based value reader
    (`xml_value`, `palworld_value`) if graceful stop needs a setting.
-8. **Liveness call sites.** Anything that asks "is this running?" must use
-   `crate::game::instances::is_running(paths, db, game, name)`. A bare
-   `GenericGameInstance::is_running_directly()` is a bug for a containerized
-   game (it only sees host pids). `grep -rn is_running_directly src` and review
-   every hit. Palworld's pre-backup save flush was one.
-9. **Frontend.** nothing to do unless the game has its own tabs; the badge, migration banner, runtime health card, update button and
-   SteamCMD log are driven by `capabilities.container_runtime` and
-   `execution`/`migration_required` from the API.
+7. **Liveness call sites.** Anything that asks "is this running?" must use
+   `crate::game::instances::is_running(paths, db, game, name)`; it asks the
+   container. There is no host pid to check.
+8. **Frontend.** Nothing to do unless the game has its own tabs; the runtime
+   health card, update button and SteamCMD log are game-neutral.
 
-Things that look necessary but are **not**: DB migrations (`podman_instances`
+Things that look necessary but are **not**: DB migrations (`instance_runtime_state`
 is game-neutral), `containers/` changes (unless the server needs an apt
 package the image lacks), `CHANGELOG.md` (written by release commits),
 `web/src` game-id branches, new CLI commands.
@@ -170,25 +158,18 @@ runs with `HOME=/srv/odin/runtime`. Rust additionally maintains the link before
 every start because Steamworks needs it; only add that for a game that is
 shown to need it (`SteamCmd::ensure_sdk64_client_at`).
 
-## 5. Migrating existing instances
+## 5. Existing data
 
-`lifecycle::migrate::<G>` is generic and **resumable**: it takes the lifecycle
-lock, refuses a server still running on the host, runs `prepare_layout`
-(idempotent) and writes the `podman_instances` marker last. A failure leaves
-the instance unmigrated and a retry safe. For your game:
+When a game's layout changes, existing instances keep working:
 
 - Keep existing paths whenever possible so no files move. Where they must
   move, the move has to be safe to resume after a failed startup.
 - Native file values keep precedence; only add values that are missing. Back
   up retired data instead of importing it over newer file edits.
-- Never copy, modify or delete the shared host installation. The container
-  downloads its own copy; the shared one becomes unused.
-- Files created by the old host launch stay on disk (for example Palworld's
-  hardlink tree under `<instance>/runtime/`). They are inert; do not delete
-  data automatically.
-- New instances are born containerized (`mark_new_instance` from
-  `instances::create`), and instance creation must work offline with no game
-  installed and no document written.
+- Never delete data automatically; leftovers of an earlier layout stay on disk
+  and are inert.
+- Instance creation must work offline with no game installed and no document
+  written.
 
 ## 6. Easy-to-miss details
 
@@ -202,7 +183,9 @@ the instance unmigrated and a retry safe. For your game:
   already cover shared behaviour; add one case for the new game only where the
   behaviour depends on it.
 - All Podman API tests bind a fake Unix socket and **return early on
-  `PermissionDenied`** (restricted sandboxes). Copy that guard.
+  `PermissionDenied`** (restricted sandboxes). Copy that guard. To make an
+  instance count as running in a route-level test use
+  `test_support::podman_reporting_running`.
 - Writing everything in English applies to code, comments, commits and PRs.
 
 ## 7. Tests to add
@@ -217,10 +200,9 @@ Assert the complete behaviour, not fragments. Reuse `src/podman/test_support.rs`
   only when a document is needed; `template_path` prefers the private copy.
 - `src/podman/<game>.rs`: start creates `odin-<game>-<uuid>` with the
   `io.odin.game` label, host netns and the three mounts, writes a spec with the
-  expected fields and leaves an operator document untouched; migration prepares
-  the layout before marking, is idempotent, keeps existing data, and refuses a
-  host-running server; stop sends the control request with the driver's
-  `timeout_secs` and clears `desired_running`.
+  expected fields and leaves an operator document untouched; preparing the
+  layout is idempotent and keeps existing data; stop sends the control request
+  with the driver's `timeout_secs` and clears `desired_running`.
 - `src/podman.rs`: the runtime spec round-trips under the game's id (guards the
   serde tag against `GameId::as_str`).
 - `src/podman/runtime.rs`: graceful stop uses the game's own command and sends
@@ -240,7 +222,7 @@ Assert the complete behaviour, not fragments. Reuse `src/podman/test_support.rs`
   ./target/debug/odin serve --port 7332`); never port 7331. A real container
   start needs Podman 5 and downloads the game; say explicitly when you could
   not run it.
-- Update `README.md` (Podman section title/text and the data layout) and
+- Update `README.md` (Podman section text and the data layout) and
   `docs/auto-start-after-reboot.md` (list of container games).
 - Branch `feature/<game>-podman-runtime`, incremental commits, PR text citing
   the official sources used for the contract, no AI authorship in commits or PR.

@@ -1,4 +1,5 @@
-import type { GameId, JobKindDescr, JobStatus } from './types'
+import { gameLabel } from './games'
+import type { JobKindDescr, JobStatus } from './types'
 
 export function describeJobKind(kind: JobKindDescr): string {
   switch (kind.kind) {
@@ -27,10 +28,6 @@ export function describeJobKind(kind: JobKindDescr): string {
     default:
       return (kind as { kind: string }).kind
   }
-}
-
-export function gameLabel(game: GameId) {
-  return { valheim: 'Valheim', rust: 'Rust', vrising: 'V Rising', palworld: 'Palworld', 'runescape-dragonwilds': 'RuneScape: Dragonwilds', '7d2d': '7 Days to Die' }[game]
 }
 
 export function jobStatusVariant(status: JobStatus): 'destructive' | 'secondary' {

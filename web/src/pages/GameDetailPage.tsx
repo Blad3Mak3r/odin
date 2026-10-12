@@ -1,42 +1,21 @@
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { NavLink, Navigate, useParams } from 'react-router-dom'
+import { Navigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import sevenDaysBanner from '@/assets/game-banners/7d2d.webp'
-import palworldBanner from '@/assets/game-banners/palworld.webp'
-import runescapeDragonwildsBanner from '@/assets/game-banners/runescape-dragonwilds.webp'
-import rustBanner from '@/assets/game-banners/rust.webp'
-import valheimBanner from '@/assets/game-banners/valheim.webp'
-import vrisingBanner from '@/assets/game-banners/vrising.webp'
+import { GameBackdrop } from '@/components/GameBackdrop'
 import { GameIcon } from '@/components/GameIcon'
+import { CreateManagedInstanceDialog } from '@/components/instance/CreateManagedInstanceDialog'
 import { ManagedInstancesTable } from '@/components/instance/ManagedInstancesTable'
 import { QueryError } from '@/components/QueryError'
+import { RouteTabs } from '@/components/RouteTabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
+import { GAME_DESCRIPTIONS } from '@/lib/games'
 import { useGameInstallStatus, useGames, useInstallGame, useJobs, useManagedInstances } from '@/lib/queries'
-import type { GameId, GameView } from '@/lib/types'
-import { cn } from '@/lib/utils'
-
-const GAME_DESCRIPTIONS: Record<GameId, string> = {
-  valheim: 'Build, explore, and survive with a dedicated Valheim server.',
-  rust: 'Host and manage your Rust dedicated servers.',
-  vrising: 'Run your V Rising server and manage its world.',
-  palworld: 'Operate your Palworld dedicated server from one place.',
-  'runescape-dragonwilds': 'Host your RuneScape: Dragonwilds server.',
-  '7d2d': 'Run and manage your 7 Days to Die dedicated servers.',
-}
-
-const GAME_BANNERS: Record<GameId, string> = {
-  valheim: valheimBanner,
-  rust: rustBanner,
-  vrising: vrisingBanner,
-  palworld: palworldBanner,
-  'runescape-dragonwilds': runescapeDragonwildsBanner,
-  '7d2d': sevenDaysBanner,
-}
+import type { GameView } from '@/lib/types'
 
 function InstallStatusCard({ game }: { game: GameView }) {
   const status = useGameInstallStatus(game.id)
@@ -102,50 +81,32 @@ function GameInstances({ game }: { game: GameView }) {
   )
 }
 
-function GameHeader({ game }: { game: GameView }) {
+function GameHeader({ game, games }: { game: GameView; games: GameView[] }) {
+  const instances = useManagedInstances()
+  const mine = instances.data?.filter((instance) => instance.game === game.id)
+  const running = mine?.filter((instance) => instance.running).length ?? 0
+
   return (
-    <section
-      className="relative overflow-hidden border bg-cover bg-center p-6 sm:p-8"
-      style={{ backgroundImage: `linear-gradient(90deg, var(--card), color-mix(in oklab, var(--card) 72%, transparent), transparent), url(${GAME_BANNERS[game.id]})` }}
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent" />
-      <div className="relative flex items-center gap-5">
-        <GameIcon game={game.id} className="size-20" />
+    <header className="flex flex-col gap-4 pt-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex items-center gap-4 sm:gap-5">
+        <GameIcon game={game.id} className="size-16 sm:size-20" />
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">{game.name}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{GAME_DESCRIPTIONS[game.id]}</p>
+          <p className="mt-2 max-w-2xl text-sm text-foreground/80">{GAME_DESCRIPTIONS[game.id]}</p>
+          {mine && (
+            <p className="mt-1 text-sm tabular-nums text-foreground/80">
+              {mine.length} {mine.length === 1 ? 'instance' : 'instances'} · {running} running
+            </p>
+          )}
         </div>
       </div>
-    </section>
+      <CreateManagedInstanceDialog games={games} defaultGame={game.id} />
+    </header>
   )
 }
 
-function GameTabs({ game }: { game: GameView }) {
-  const tabs = [
-    { label: 'Overview', to: `/games/${game.id}`, end: true },
-    { label: 'Instances', to: `/games/${game.id}/instances`, end: false },
-    ...(game.capabilities.mods ? [{ label: 'Mods', to: `/games/${game.id}/mods`, end: false }] : []),
-  ]
-
-  return (
-    <nav aria-label={`${game.name} sections`} className="overflow-x-auto">
-      <div className="inline-flex h-8 items-center border-b text-muted-foreground">
-        {tabs.map((tab) => (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.end}
-            className={({ isActive }) => cn(
-              'inline-flex h-[calc(100%+1px)] items-center justify-center border-b-2 border-transparent px-2.5 py-0.5 text-sm font-medium whitespace-nowrap transition-colors',
-              isActive ? 'border-foreground text-foreground' : 'text-foreground/60 hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground',
-            )}
-          >
-            {tab.label}
-          </NavLink>
-        ))}
-      </div>
-    </nav>
-  )
+function hasGlobalMods(game: GameView) {
+  return game.id === 'valheim' && game.capabilities.mods
 }
 
 export function GameDetailPage() {
@@ -159,17 +120,25 @@ export function GameDetailPage() {
   if (games.isLoading) return <Skeleton className="h-56" />
   if (!game) return <Navigate replace to="/games" />
   if (tab === 'overview' && nestedPath.length === 0) return <Navigate replace to={`/games/${game.id}`} />
-  if (!['overview', 'instances', 'mods'].includes(activeTab) || (nestedPath.length > 0 && activeTab !== 'mods') || (activeTab === 'mods' && !game.capabilities.mods)) {
+  if (!['overview', 'instances', 'mods'].includes(activeTab) || (nestedPath.length > 0 && activeTab !== 'mods') || (activeTab === 'mods' && !hasGlobalMods(game))) {
     return <Navigate replace to={`/games/${game.id}`} />
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <GameHeader game={game} />
-      <GameTabs game={game} />
+    <div className="relative isolate flex flex-col gap-6">
+      <GameBackdrop game={game.id} />
+      <GameHeader game={game} games={games.data ?? []} />
+      <RouteTabs
+        label={`${game.name} sections`}
+        tabs={[
+          { label: 'Overview', to: `/games/${game.id}`, end: true },
+          { label: 'Instances', to: `/games/${game.id}/instances` },
+          ...(hasGlobalMods(game) ? [{ label: 'Mods', to: `/games/${game.id}/mods` }] : []),
+        ]}
+      />
       {activeTab === 'overview' && (game.capabilities.container_runtime ? <RuntimeCard game={game} /> : <InstallStatusCard game={game} />)}
       {activeTab === 'instances' && <GameInstances game={game} />}
-      {activeTab === 'mods' && game.id === 'valheim' && <ValheimModsTab path={nestedPath} />}
+      {activeTab === 'mods' && <ValheimModsTab path={nestedPath} />}
     </div>
   )
 }

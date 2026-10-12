@@ -18,6 +18,7 @@ import {
   UserPlus,
 } from 'lucide-react'
 import type { ActivityKind, GameId } from './types'
+import { gameLabel } from './games'
 
 export function describeActivity(kind: ActivityKind, game: GameId): string {
   switch (kind.kind) {
@@ -60,10 +61,6 @@ export function describeActivity(kind: ActivityKind, game: GameId): string {
     case 'player_left':
       return `${kind.name} left`
   }
-}
-
-function gameLabel(game: GameId) {
-  return { valheim: 'Valheim', rust: 'Rust', vrising: 'V Rising', palworld: 'Palworld', 'runescape-dragonwilds': 'RuneScape: Dragonwilds', '7d2d': '7 Days to Die' }[game]
 }
 
 // Short, payload-independent labels for picking which activity kinds a

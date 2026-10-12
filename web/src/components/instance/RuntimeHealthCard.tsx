@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useRepairRuntime, useRuntimeHealth } from '@/lib/queries'
-import { gameLabel } from '@/lib/jobs'
+import { gameLabel } from '@/lib/games'
 import type { GameId } from '@/lib/types'
 
 function label(value: string) {

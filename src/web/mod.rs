@@ -100,12 +100,21 @@ async fn shutdown_signal() -> Result<()> {
 }
 
 async fn stop_running_instances(state: &AppState) -> Result<()> {
-    let valheim_names = instance::running_instance_names(&state.paths, &state.db)?;
-    let valheim_results = join_all(
-        valheim_names
-            .iter()
-            .map(|name| instance::lifecycle::stop(&state.paths, &state.db, name)),
-    )
+    let valheim_instances = instance::list_all(&state.paths, &state.db)?;
+    let valheim_names = valheim_instances
+        .iter()
+        .map(|instance| instance.state.name.clone())
+        .collect::<Vec<_>>();
+    let valheim_results = join_all(valheim_instances.iter().map(|instance| async {
+        if !crate::podman::valheim::is_running_async(&state.paths, &state.db, instance).await? {
+            return Ok(());
+        }
+        if crate::podman::valheim::is_migrated(&state.db, instance)? {
+            crate::podman::valheim::stop(&state.paths, &state.db, &instance.state.name).await
+        } else {
+            instance::lifecycle::stop(&state.paths, &state.db, &instance.state.name).await
+        }
+    }))
     .await;
     let mut failures = valheim_names
         .iter()
@@ -653,7 +662,14 @@ async fn reconcile_log_tailers(
 
 #[cfg(test)]
 mod tests {
-    use super::shutdown_flag_enabled;
+    use super::{shutdown_flag_enabled, stop_running_instances};
+    use crate::db::Db;
+    use crate::instance::Instance;
+    use crate::paths::Paths;
+    use crate::web::state::AppState;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::sync::Arc;
 
     #[test]
     fn shutdown_flag_is_enabled_for_one() {
@@ -668,5 +684,72 @@ mod tests {
     #[test]
     fn shutdown_flag_is_disabled_when_missing() {
         assert!(!shutdown_flag_enabled(None));
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_a_running_podman_valheim_instance() {
+        let root = std::env::temp_dir().join(format!("odin-web-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = Paths {
+            config_dir: root.clone(),
+            data_dir: root.clone(),
+        };
+        let socket = root.join("podman.sock");
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                std::fs::remove_dir_all(root).ok();
+                return;
+            }
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut request)
+                    .unwrap();
+                let (status, body) = if request.starts_with("GET ") {
+                    ("200 OK", r#"{"State":{"Running":true,"Status":"running"}}"#)
+                } else {
+                    ("204 No Content", "")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        std::fs::write(
+            paths.config_file(),
+            format!("[podman]\nsocket = \"{}\"\n", socket.display()),
+        )
+        .unwrap();
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = Instance::create(&paths, &db, "valheim").unwrap();
+        let identity = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            &instance.state.name,
+            instance.state.created_at,
+        )
+        .unwrap();
+        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        let state = AppState::new(paths.clone(), db);
+
+        stop_running_instances(&state).await.unwrap();
+
+        assert!(
+            server
+                .join()
+                .unwrap()
+                .iter()
+                .any(|request| request.starts_with("POST /v4.0.0/libpod/containers/"))
+        );
+        std::fs::remove_dir_all(root).ok();
     }
 }

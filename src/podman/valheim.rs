@@ -24,6 +24,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const STOP_TIMEOUT_SECS: u64 = 30;
 const CONTAINER_CREATE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const STOP_TIMEOUT: Duration = Duration::from_secs(STOP_TIMEOUT_SECS + 5);
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Serialize)]
 pub struct RuntimeHealth {
@@ -282,7 +284,7 @@ pub fn is_running(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
         .is_some_and(ContainerState::is_running))
 }
 
-async fn is_running_async(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
+pub async fn is_running_async(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
     let identity = identity(db, instance)?;
     if !container_instances::is_valheim_podman(db, &identity.id)? {
         return lifecycle::is_running(instance);
@@ -378,17 +380,40 @@ pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     let Some(state) = state else {
         bail!(InstanceError::NotRunning(name.to_string()));
     };
-    if !state.is_running() {
-        bail!(InstanceError::NotRunning(name.to_string()));
-    }
-    let socket = control_socket(paths, &identity);
-    if supervisor::client::stop_socket(&socket, STOP_TIMEOUT_SECS)
-        .await
-        .is_err()
-    {
-        client.stop(&container, STOP_TIMEOUT_SECS).await?;
+    match state {
+        ContainerState::Created | ContainerState::Exited => {
+            bail!(InstanceError::NotRunning(name.to_string()));
+        }
+        ContainerState::Running | ContainerState::Unknown => {
+            let socket = control_socket(paths, &identity);
+            if supervisor::client::stop_socket(&socket, STOP_TIMEOUT_SECS)
+                .await
+                .is_ok()
+                && wait_for_container_stop(&client, &container).await.is_ok()
+            {
+                return Ok(());
+            }
+            client.stop(&container, STOP_TIMEOUT_SECS).await?;
+        }
     }
     Ok(())
+}
+
+async fn wait_for_container_stop(client: &PodmanClient, name: &str) -> Result<()> {
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    loop {
+        match client.inspect(name).await? {
+            None | Some(ContainerState::Created | ContainerState::Exited) => return Ok(()),
+            Some(ContainerState::Running | ContainerState::Unknown) => {}
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "Podman container {name} did not stop within {} seconds",
+                STOP_TIMEOUT.as_secs()
+            );
+        }
+        sleep(STOP_POLL_INTERVAL).await;
+    }
 }
 
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
@@ -664,6 +689,44 @@ mod tests {
         assert!(requests.iter().all(|request| {
             request.starts_with("GET /v4.0.0/libpod/containers/odin-valheim-instance/json ")
         }));
+        std::fs::remove_file(socket).ok();
+    }
+
+    #[tokio::test]
+    async fn wait_for_container_stop_waits_for_the_runtime_to_exit() {
+        let socket =
+            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            for body in [
+                r#"{"State":{"Running":true,"Status":"running"}}"#,
+                r#"{"State":{"Running":false,"Status":"exited"}}"#,
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut request)
+                    .unwrap();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+
+        wait_for_container_stop(
+            &PodmanClient::new(&socket).unwrap(),
+            "odin-valheim-instance",
+        )
+        .await
+        .unwrap();
+
+        server.join().unwrap();
         std::fs::remove_file(socket).ok();
     }
 

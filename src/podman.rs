@@ -198,7 +198,7 @@ impl PodmanClient {
         let response = self
             .client
             .post(format!(
-                "{API_PREFIX}/containers/{name}/stop?t={timeout_secs}"
+                "{API_PREFIX}/containers/{name}/stop?timeout={timeout_secs}&ignore=true"
             ))
             .send()
             .await
@@ -775,6 +775,39 @@ mod tests {
                 .unwrap()
                 .starts_with("DELETE /v4.0.0/libpod/containers/odin-valheim-instance?force=false ")
         );
+        std::fs::remove_file(socket).ok();
+    }
+
+    #[tokio::test]
+    async fn client_stops_a_container_with_the_libpod_timeout_parameter() {
+        let socket =
+            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            request
+        });
+
+        PodmanClient::new(&socket)
+            .unwrap()
+            .stop("odin-valheim-instance", 30)
+            .await
+            .unwrap();
+
+        assert!(server.join().unwrap().starts_with(
+            "POST /v4.0.0/libpod/containers/odin-valheim-instance/stop?timeout=30&ignore=true "
+        ));
         std::fs::remove_file(socket).ok();
     }
 

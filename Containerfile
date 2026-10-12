@@ -7,6 +7,7 @@ RUN apt-get update \
         lib32gcc-s1 \
         lib32stdc++6 \
         libatomic1 \
+        libpulse-mainloop-glib0 \
         libpulse0 \
         tini \
     && rm -rf /var/lib/apt/lists/* \

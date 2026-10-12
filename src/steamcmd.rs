@@ -20,6 +20,11 @@ pub enum SteamCmdError {
     BinaryMissingAfterUpdate(String),
 }
 
+/// SteamCMD's first run on a fresh install often ends in "Missing
+/// configuration" and succeeds when simply run again.
+const APP_UPDATE_ATTEMPTS: u32 = 3;
+const APP_UPDATE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub struct SteamCmd {
     steamcmd_dir: PathBuf,
 }
@@ -211,6 +216,38 @@ impl SteamCmd {
                 .with_context(|| format!("failed to create log dir {}", parent.display()))?;
         }
 
+        for attempt in 1..=APP_UPDATE_ATTEMPTS {
+            if attempt > 1 {
+                on_line("steamcmd failed; retrying (a first run often needs a second)");
+                std::thread::sleep(APP_UPDATE_RETRY_DELAY);
+            }
+            match self.run_app_update(app_id, install_dir, log_file, attempt > 1, &mut on_line) {
+                Ok(()) => break,
+                Err(error) if attempt == APP_UPDATE_ATTEMPTS => return Err(error),
+                Err(error) => tracing::warn!(app_id, attempt, %error, "steamcmd app_update failed"),
+            }
+        }
+
+        if !expected_file.is_file() {
+            bail!(SteamCmdError::BinaryMissingAfterUpdate(
+                expected_file.display().to_string()
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// One `app_update` run, streaming its output to `on_line` and the log
+    /// file (appended to when this is a retry, so the first failure stays
+    /// visible).
+    fn run_app_update(
+        &self,
+        app_id: &str,
+        install_dir: &Path,
+        log_file: &Path,
+        append: bool,
+        on_line: &mut impl FnMut(&str),
+    ) -> Result<()> {
         let install_dir_str = install_dir.to_string_lossy();
         tracing::info!(app_id, install_dir = %install_dir_str, "running steamcmd app_update");
 
@@ -224,7 +261,12 @@ impl SteamCmd {
             .spawn()
             .context("failed to invoke steamcmd.sh")?;
 
-        let mut log_file_handle = std::fs::File::create(log_file)
+        let mut log_file_handle = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(append)
+            .truncate(!append)
+            .open(log_file)
             .with_context(|| format!("failed to create log file {}", log_file.display()))?;
 
         let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -249,13 +291,6 @@ impl SteamCmd {
                 log_file.display()
             )));
         }
-
-        if !expected_file.is_file() {
-            bail!(SteamCmdError::BinaryMissingAfterUpdate(
-                expected_file.display().to_string()
-            ));
-        }
-
         Ok(())
     }
 
@@ -375,6 +410,74 @@ fn stream_lines(source: impl Read, tx: &Sender<String>) {
 
 #[cfg(test)]
 mod tests {
+    fn fake_steamcmd(dir: &Path, body: &str) -> SteamCmd {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let script = dir.join("steamcmd.sh");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        SteamCmd::new(dir.to_path_buf())
+    }
+
+    #[test]
+    fn app_update_runs_again_after_a_failed_first_run() {
+        let root = temp_dir("retry");
+        let install = root.join("install");
+        let marker = root.join("attempted");
+        // Fails like a fresh SteamCMD ("Missing configuration"), then works.
+        let steamcmd = fake_steamcmd(
+            &root.join("steamcmd"),
+            &format!(
+                r#"if [ ! -e {marker} ]; then touch {marker}; echo "ERROR! Failed to install app (Missing configuration)"; exit 8; fi
+touch {install}/server"#,
+                marker = marker.display(),
+                install = install.display()
+            ),
+        );
+        let log = root.join("update.log");
+        let mut lines = Vec::new();
+
+        steamcmd
+            .update_app_expect_file("294420", &install, &log, install.join("server"), |line| {
+                lines.push(line.to_string())
+            })
+            .unwrap();
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Missing configuration"))
+        );
+        assert!(lines.iter().any(|line| line.contains("retrying")));
+        // The first failure stays in the log next to the successful run.
+        assert!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .contains("Missing configuration")
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn app_update_gives_up_after_repeated_failures() {
+        let root = temp_dir("giveup");
+        let install = root.join("install");
+        let steamcmd = fake_steamcmd(&root.join("steamcmd"), "exit 8");
+
+        let error = steamcmd
+            .update_app_expect_file(
+                "294420",
+                &install,
+                &root.join("update.log"),
+                install.join("server"),
+                |_| {},
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("exit status"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
     use super::*;
 
     fn temp_dir(label: &str) -> PathBuf {

@@ -11,10 +11,10 @@ use crate::game::GameId;
 use crate::game::rust::{self, RustLaunch};
 use crate::paths::Paths;
 
-use super::lifecycle::{self, ContainerGame, RuntimeHealth, StopReason};
+use super::lifecycle::{self, ContainerGame};
 use super::{Launch, Mount, write_runtime_spec};
 
-struct Rust;
+pub(super) struct Rust;
 
 impl ContainerGame for Rust {
     const GAME: GameId = GameId::Rust;
@@ -63,56 +63,22 @@ impl ContainerGame for Rust {
     fn running_directly(instance: &RustInstance) -> Result<bool> {
         Ok(rust::is_running_directly(instance))
     }
-}
 
-pub fn migrate(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::migrate::<Rust>(paths, db, name)
-}
-
-pub async fn runtime_health(paths: &Paths, db: &Db, name: &str) -> Result<RuntimeHealth> {
-    lifecycle::runtime_health::<Rust>(paths, db, name).await
-}
-
-pub async fn repair(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::repair::<Rust>(paths, db, name).await
-}
-
-pub async fn update(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::update::<Rust>(paths, db, name).await
-}
-
-pub fn mark_new_instance(db: &Db, instance: &RustInstance) -> Result<()> {
-    lifecycle::mark_new_instance::<Rust>(db, instance)
-}
-
-pub fn is_migrated(db: &Db, instance: &RustInstance) -> Result<bool> {
-    lifecycle::is_migrated::<Rust>(db, instance)
+    async fn stop_directly(paths: &Paths, db: &Db, instance: &RustInstance) -> Result<()> {
+        rust::stop(paths, db, instance).await
+    }
 }
 
 pub fn is_running(paths: &Paths, db: &Db, instance: &RustInstance) -> Result<bool> {
     lifecycle::is_running::<Rust>(paths, db, instance)
 }
 
-pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<RustInstance> {
-    lifecycle::start::<Rust>(paths, db, name).await
-}
-
-pub async fn stop(paths: &Paths, db: &Db, name: &str, reason: StopReason) -> Result<()> {
-    lifecycle::stop::<Rust>(paths, db, name, reason).await
-}
-
-pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<RustInstance> {
-    lifecycle::restart::<Rust>(paths, db, name).await
-}
-
-pub fn remove(paths: &Paths, db: &Db, instance: &RustInstance) -> Result<()> {
-    lifecycle::remove::<Rust>(paths, db, instance)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::container_instances;
+    use crate::podman::dispatch;
+    use crate::podman::lifecycle::StopReason;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::net::UnixListener;
 
@@ -237,7 +203,7 @@ mod tests {
         write_podman_config(&paths, &podman_socket);
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        mark_new_instance(&db, &instance).unwrap();
+        dispatch::mark_new_instance(&paths, &db, GameId::Rust, instance.name()).unwrap();
         // An operator's native document must keep its own values and keys.
         let cfg = rust::identity_dir(&paths, &instance).join("cfg/server.cfg");
         std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
@@ -249,7 +215,9 @@ mod tests {
                 .join(format!("rust-{}.control.sock", instance.name())),
         );
 
-        start(&paths, &db, "rusty").await.unwrap();
+        dispatch::start(&paths, &db, GameId::Rust, "rusty")
+            .await
+            .unwrap();
         assert!(container_instances::desired_running(&db, &instance.identity.id).unwrap());
 
         let requests = podman.join().unwrap();
@@ -338,12 +306,12 @@ mod tests {
         let paths = temp_paths("migrate");
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        assert!(!is_migrated(&db, &instance).unwrap());
+        assert!(!lifecycle::is_migrated::<Rust>(&db, &instance).unwrap());
 
-        migrate(&paths, &db, "rusty").unwrap();
-        migrate(&paths, &db, "rusty").unwrap();
+        dispatch::migrate(&paths, &db, GameId::Rust, "rusty").unwrap();
+        dispatch::migrate(&paths, &db, GameId::Rust, "rusty").unwrap();
 
-        assert!(is_migrated(&db, &instance).unwrap());
+        assert!(lifecycle::is_migrated::<Rust>(&db, &instance).unwrap());
         assert!(runtime_spec_exists(&paths, &instance));
         assert!(
             paths
@@ -372,8 +340,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(migrate(&paths, &db, "rusty").is_err());
-        assert!(!is_migrated(&db, &instance).unwrap());
+        assert!(dispatch::migrate(&paths, &db, GameId::Rust, "rusty").is_err());
+        assert!(!lifecycle::is_migrated::<Rust>(&db, &instance).unwrap());
         assert!(!runtime_spec_exists(&paths, &instance));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
@@ -412,7 +380,7 @@ mod tests {
         write_podman_config(&paths, &podman_socket);
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        mark_new_instance(&db, &instance).unwrap();
+        dispatch::mark_new_instance(&paths, &db, GameId::Rust, instance.name()).unwrap();
         let control = paths
             .container_socket_dir(&instance.identity.id)
             .join(format!("rust-{}.control.sock", instance.name()));
@@ -430,7 +398,7 @@ mod tests {
 
         container_instances::set_desired_running(&db, &instance.identity.id, true).unwrap();
 
-        stop(&paths, &db, "rusty", StopReason::Operator)
+        dispatch::stop(&paths, &db, GameId::Rust, "rusty", StopReason::Operator)
             .await
             .unwrap();
 

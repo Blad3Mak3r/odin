@@ -33,6 +33,16 @@ pub enum GameId {
 }
 
 impl GameId {
+    #[cfg(test)]
+    pub const ALL: [GameId; 6] = [
+        Self::Valheim,
+        Self::Rust,
+        Self::VRising,
+        Self::Palworld,
+        Self::RunescapeDragonwilds,
+        Self::SevenDaysToDie,
+    ];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Valheim => "valheim",

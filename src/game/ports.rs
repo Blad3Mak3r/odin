@@ -39,7 +39,7 @@ pub fn ensure_available(
         // A containerized server shares the host network, so its container
         // state is what decides whether its ports are taken. An unreachable
         // Podman must not block unrelated games from starting.
-        let running = crate::podman::valheim::is_running(paths, db, &instance).unwrap_or_else(
+        let running = crate::podman::dispatch::is_running(paths, db, GameId::Valheim, &instance.state.name).unwrap_or_else(
             |error| {
                 tracing::debug!(instance = %instance.state.name, %error, "could not tell whether Valheim is running");
                 false

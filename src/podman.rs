@@ -22,6 +22,7 @@ use crate::game::rust::RustLaunch;
 use crate::instance::state::InstanceState;
 use crate::paths::Paths;
 
+pub mod dispatch;
 pub mod lifecycle;
 pub mod runtime;
 pub mod rust;
@@ -398,7 +399,57 @@ impl Launch {
             Self::Rust(launch) => &launch.name,
         }
     }
+
+    /// Prepares whatever the game needs inside the runtime volume and builds
+    /// the command that starts its server. This is the container side's only
+    /// per-game launch hook.
+    pub fn server_command(
+        &self,
+        spec: &RuntimeSpec,
+        console_log: &Path,
+    ) -> Result<tokio::process::Command> {
+        match self {
+            Self::Valheim { instance } => crate::game::valheim::build_command_at(
+                &crate::instance::Instance {
+                    dir: spec.instance_dir.clone(),
+                    state: instance.clone(),
+                },
+                &spec.install_dir,
+                &crate::paths::instance_saves_dir(&spec.instance_dir),
+                console_log,
+            ),
+            Self::Rust(launch) => {
+                crate::game::rust::prepare_runtime(
+                    &spec.install_dir,
+                    &spec.instance_dir,
+                    &spec.steamcmd_dir,
+                    launch,
+                )?;
+                crate::game::rust::build_command_at(&spec.install_dir, console_log, launch)
+            }
+        }
+    }
+
+    /// Asks the running server to save and exit through its own console.
+    /// Returns whether the request was delivered; `false` leaves the caller
+    /// to signal the process instead.
+    pub async fn request_graceful_stop(&self) -> bool {
+        match self {
+            // SIGINT ends Rust without saving the world; its console `quit`
+            // saves first.
+            Self::Rust(launch) => tokio::time::timeout(
+                CONSOLE_STOP_TIMEOUT,
+                crate::game::rust::rcon::quit(launch.rcon_port, &launch.rcon_password),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok()),
+            // Valheim saves on SIGINT.
+            Self::Valheim { .. } => false,
+        }
+    }
 }
+
+const CONSOLE_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl RuntimeSpec {
     pub const PROTOCOL_VERSION: u16 = 1;

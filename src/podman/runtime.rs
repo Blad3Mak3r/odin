@@ -10,8 +10,8 @@ use tokio::io::BufReader;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::game::{self, rust, valheim};
-use crate::instance::{Instance, process};
+use crate::game;
+use crate::instance::process;
 use crate::paths::{self, Paths};
 use crate::steamcmd::SteamCmd;
 use crate::supervisor::protocol::{
@@ -20,8 +20,6 @@ use crate::supervisor::protocol::{
 use crate::supervisor::server::{StatsHandle, refresh_stats_periodically};
 
 use super::{Launch, RuntimeSpec};
-
-const RCON_QUIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum Action {
     Stop(u64),
@@ -264,26 +262,7 @@ async fn spawn_child(spec: &RuntimeSpec) -> Result<tokio::process::Child> {
     let logs = paths::instance_logs_dir(&spec.instance_dir);
     std::fs::create_dir_all(&logs)?;
     let console_log = logs.join("console.log");
-    let command = match &spec.launch {
-        Launch::Valheim { instance } => valheim::build_command_at(
-            &Instance {
-                dir: spec.instance_dir.clone(),
-                state: instance.clone(),
-            },
-            &spec.install_dir,
-            &paths::instance_saves_dir(&spec.instance_dir),
-            &console_log,
-        )?,
-        Launch::Rust(launch) => {
-            rust::prepare_runtime(
-                &spec.install_dir,
-                &spec.instance_dir,
-                &spec.steamcmd_dir,
-                launch,
-            )?;
-            rust::build_command_at(&spec.install_dir, &console_log, launch)?
-        }
-    };
+    let command = spec.launch.server_command(spec, &console_log)?;
     process::spawn_with_cgroup(command, None).await
 }
 
@@ -294,17 +273,7 @@ async fn stop_child(
     timeout: Duration,
     launch: &Launch,
 ) -> Result<()> {
-    // SIGINT ends Rust without saving the world; its console `quit` saves
-    // first, so SIGINT is only the fallback when the command can't be sent.
-    let quit_sent = match launch {
-        Launch::Rust(rust) => tokio::time::timeout(
-            RCON_QUIT_TIMEOUT,
-            rust::rcon::quit(rust.rcon_port, &rust.rcon_password),
-        )
-        .await
-        .is_ok_and(|result| result.is_ok()),
-        Launch::Valheim { .. } => false,
-    };
+    let quit_sent = launch.request_graceful_stop().await;
     if !quit_sent {
         let _ = process::send_signal(pid, started_at, sysinfo::Signal::Interrupt);
     }
@@ -394,6 +363,7 @@ async fn handle_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::rust;
     use crate::supervisor::server::STATS_REFRESH_INTERVAL;
 
     async fn stats_response(stats: StatsHandle, pid: u32) -> Response {

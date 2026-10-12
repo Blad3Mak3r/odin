@@ -36,6 +36,7 @@ use crate::db::game_instances;
 use crate::game::GameId;
 use crate::instance;
 use crate::paths::Paths;
+use crate::podman::dispatch;
 use crate::podman::lifecycle::StopReason;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
 use runtime::InstanceTransition;
@@ -107,20 +108,18 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
         .map(|instance| instance.state.name.clone())
         .collect::<Vec<_>>();
     let valheim_results = join_all(valheim_instances.iter().map(|instance| async {
-        if !crate::podman::valheim::is_running_async(&state.paths, &state.db, instance).await? {
+        let name = &instance.state.name;
+        if !dispatch::is_running_async(&state.paths, &state.db, GameId::Valheim, name).await? {
             return Ok(());
         }
-        if crate::podman::valheim::is_migrated(&state.db, instance)? {
-            crate::podman::valheim::stop(
-                &state.paths,
-                &state.db,
-                &instance.state.name,
-                StopReason::HostShutdown,
-            )
-            .await
-        } else {
-            instance::lifecycle::stop(&state.paths, &state.db, &instance.state.name).await
-        }
+        dispatch::stop(
+            &state.paths,
+            &state.db,
+            GameId::Valheim,
+            name,
+            StopReason::HostShutdown,
+        )
+        .await
     }))
     .await;
     let mut failures = valheim_names
@@ -305,9 +304,7 @@ async fn attempt_auto_restart(state: &AppState, name: String) {
             return;
         }
     };
-    let started = match instance::Instance::load_existing(&state.paths, &state.db, &name)
-        .and_then(|instance| crate::podman::valheim::is_migrated(&state.db, &instance))
-    {
+    let started = match dispatch::is_migrated(&state.paths, &state.db, GameId::Valheim, &name) {
         Ok(true) => crate::game::instances::start(&state.paths, &state.db, GameId::Valheim, &name)
             .await
             .map(|_| ()),

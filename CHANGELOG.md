@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-10-12
+
+### What's Changed
+- fix: wait for Podman container availability by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/126
+- fix: stop Podman instances during shutdown by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/127
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.15.3...v0.15.4
+
 ## [0.15.3] - 2026-10-12
 
 ### What's Changed

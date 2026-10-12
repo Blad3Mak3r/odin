@@ -1,6 +1,6 @@
-//! Wire protocol between `odin serve` (client, `super::client`) and `odin
-//! run` (per-instance supervisor, server side, `super::server`): newline-
-//! delimited JSON, one message per line. Deliberately no heavier framing
+//! Wire protocol between `odin serve` (client, `super::client`) and the
+//! `odin run` runtime inside each game container: newline-delimited JSON,
+//! one message per line. Deliberately no heavier framing
 //! (length-prefixing, a binary codec) — messages are small, and NDJSON is
 //! trivially debuggable with `socat`/`nc` against a running instance's
 //! socket, which matters more at this project's scale than shaving bytes.
@@ -9,8 +9,6 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt};
-
-use crate::player_events::PlayerInfo;
 
 /// Current wire-protocol version. New fields must remain decodable by older
 /// peers, and callers should use this value to decide whether an optional
@@ -45,30 +43,6 @@ pub enum Request {
     /// refresher — never computed synchronously on request, so this can't
     /// block the connection on a fresh `sysinfo` walk.
     Stats,
-    /// Currently-connected players, as tracked by the supervisor's own
-    /// `console.log` parsing (see `server`'s player tracker) — the latest
-    /// state, not a live re-scan.
-    Players,
-    /// When the world was last saved, as recognized by the supervisor's own
-    /// `console.log` parsing — `None` if it hasn't saved since this
-    /// supervisor started.
-    LastSaved,
-    /// Diagnostics for the most recent exit of this supervisor's child
-    /// (deliberate or not — including one already superseded by an
-    /// in-place automatic restart), so a crash-loop is debuggable without
-    /// digging through raw `console.log`. `None` if the current child
-    /// hasn't exited yet.
-    LastExit,
-}
-
-/// See `Request::LastExit`/`Response::LastExit`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LastExitInfo {
-    pub code: Option<i32>,
-    pub at: DateTime<Utc>,
-    /// The tail of `console.log` right before this exit — bounded by
-    /// `server::RECENT_LINES_CAPACITY`, oldest first.
-    pub recent_lines: Vec<String>,
 }
 
 /// The reply to a `Request`, over the same control-socket connection.
@@ -105,18 +79,6 @@ pub enum Response {
         cpu_percent: f32,
         memory_bytes: u64,
     },
-    /// The currently-connected player list — see `Request::Players`.
-    Players {
-        players: Vec<PlayerInfo>,
-    },
-    /// The last-save timestamp — see `Request::LastSaved`.
-    LastSaved {
-        at: Option<DateTime<Utc>>,
-    },
-    /// Diagnostics for the most recent exit — see `Request::LastExit`.
-    LastExit {
-        info: Option<LastExitInfo>,
-    },
     Error {
         #[serde(default)]
         code: ErrorCode,
@@ -131,43 +93,6 @@ pub enum ErrorCode {
     #[serde(other)]
     #[default]
     Unknown,
-}
-
-/// A message pushed unprompted over an instance's events socket. One
-/// long-lived connection per subscriber; the supervisor closes the
-/// connection right after sending `Exited`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum Event {
-    LogLine {
-        line: String,
-    },
-    /// Pushed in addition to the `LogLine` carrying the same source line,
-    /// whenever the supervisor's own parsing recognizes a join.
-    PlayerJoined {
-        name: String,
-        #[serde(default)]
-        steam_id: Option<String>,
-    },
-    /// The `PlayerJoined` counterpart, pushed on a recognized leave.
-    PlayerLeft {
-        name: String,
-    },
-    /// The supervisor respawned its child in place after an unexpected
-    /// exit (the instance has automatic restart enabled) instead of
-    /// exiting itself — no fields, since a subscriber already re-reads the
-    /// new pid from the next telemetry tick; this exists purely so
-    /// `odin serve` can record the same `InstanceAutoRestarted` activity it
-    /// used to detect on its own (much later) via polling.
-    Restarted,
-    /// Pushed in addition to the `LogLine` carrying the same source line,
-    /// whenever the supervisor's own parsing recognizes a save completing.
-    WorldSaved {
-        at: DateTime<Utc>,
-    },
-    Exited {
-        code: Option<i32>,
-    },
 }
 
 /// Reads one newline-delimited JSON message. `Ok(None)` means the peer
@@ -325,184 +250,6 @@ mod tests {
             }
             other => panic!("expected Stats, got {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    async fn players_request_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        write_frame(&mut client, &Request::Players).await.unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Request::Players)));
-    }
-
-    #[tokio::test]
-    async fn players_response_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        let response = Response::Players {
-            players: vec![PlayerInfo {
-                name: "Bjorn".to_string(),
-                steam_id: Some("76561198000000000".to_string()),
-                connected_at: Utc::now(),
-            }],
-        };
-        write_frame(&mut server, &response).await.unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut client);
-        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
-        match received {
-            Some(Response::Players { players }) => {
-                assert_eq!(players.len(), 1);
-                assert_eq!(players[0].name, "Bjorn");
-            }
-            other => panic!("expected Players, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn player_joined_event_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        write_frame(
-            &mut client,
-            &Event::PlayerJoined {
-                name: "Bjorn".to_string(),
-                steam_id: Some("76561198000000000".to_string()),
-            },
-        )
-        .await
-        .unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Event::PlayerJoined { name, .. }) if name == "Bjorn"));
-    }
-
-    #[tokio::test]
-    async fn player_left_event_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        write_frame(
-            &mut client,
-            &Event::PlayerLeft {
-                name: "Bjorn".to_string(),
-            },
-        )
-        .await
-        .unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Event::PlayerLeft { name }) if name == "Bjorn"));
-    }
-
-    #[tokio::test]
-    async fn restarted_event_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        write_frame(&mut client, &Event::Restarted).await.unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Event::Restarted)));
-    }
-
-    #[tokio::test]
-    async fn last_saved_request_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        write_frame(&mut client, &Request::LastSaved).await.unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Request::LastSaved)));
-    }
-
-    #[tokio::test]
-    async fn last_saved_response_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        let at = Utc::now();
-        write_frame(&mut server, &Response::LastSaved { at: Some(at) })
-            .await
-            .unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut client);
-        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
-        match received {
-            Some(Response::LastSaved { at: Some(got) }) => assert_eq!(got, at),
-            other => panic!("expected LastSaved, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn last_exit_request_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        write_frame(&mut client, &Request::LastExit).await.unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Request, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Request::LastExit)));
-    }
-
-    #[tokio::test]
-    async fn last_exit_response_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        let at = Utc::now();
-        let response = Response::LastExit {
-            info: Some(LastExitInfo {
-                code: Some(1),
-                at,
-                recent_lines: vec!["boom".to_string()],
-            }),
-        };
-        write_frame(&mut server, &response).await.unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut client);
-        let received = read_frame::<Response, _>(&mut reader).await.unwrap();
-        match received {
-            Some(Response::LastExit {
-                info:
-                    Some(LastExitInfo {
-                        code: Some(1),
-                        at: got_at,
-                        recent_lines,
-                    }),
-            }) => {
-                assert_eq!(got_at, at);
-                assert_eq!(recent_lines, vec!["boom".to_string()]);
-            }
-            other => panic!("expected LastExit, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn world_saved_event_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        let at = Utc::now();
-        write_frame(&mut client, &Event::WorldSaved { at })
-            .await
-            .unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
-        match received {
-            Some(Event::WorldSaved { at: got }) => assert_eq!(got, at),
-            other => panic!("expected WorldSaved, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn event_round_trips_through_a_duplex_stream() {
-        let (mut client, mut server) = tokio::io::duplex(1024);
-
-        write_frame(
-            &mut client,
-            &Event::LogLine {
-                line: "hello".to_string(),
-            },
-        )
-        .await
-        .unwrap();
-        let mut reader = tokio::io::BufReader::new(&mut server);
-        let received = read_frame::<Event, _>(&mut reader).await.unwrap();
-        assert!(matches!(received, Some(Event::LogLine { line }) if line == "hello"));
     }
 
     #[tokio::test]

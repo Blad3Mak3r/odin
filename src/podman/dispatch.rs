@@ -10,8 +10,8 @@
 //!    arms in `Launch::game`, `name`, `server_command` and
 //!    `request_graceful_stop`, all in `podman.rs`.
 //! 3. Add one arm to [`for_container_game!`] below.
-//! 4. Set `container_runtime: true` (and `stop_timeout_secs` if the game needs
-//!    longer than 30 seconds to save) in the game's driver.
+//! 4. Override `stop_timeout_secs` in the game's driver if it needs longer
+//!    than 30 seconds to save.
 //!
 //! No other host-side code enumerates container games. The full migration
 //! checklist, with the traps each earlier game hit, is
@@ -20,7 +20,6 @@
 use anyhow::Result;
 
 use crate::db::Db;
-use crate::db::container_instances;
 use crate::db::game_instances::GameInstanceIdentity;
 use crate::game::GameId;
 use crate::paths::Paths;
@@ -53,15 +52,6 @@ macro_rules! for_container_game {
     };
 }
 
-/// Whether instances of `game` are managed by the container lifecycle.
-pub fn is_container_game(game: GameId) -> bool {
-    for_container_game!(game, G => { let _ = G::GAME; true })
-}
-
-pub fn migrate(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
-    for_container_game!(game, G => lifecycle::migrate::<G>(paths, db, name))
-}
-
 pub async fn runtime_health(
     paths: &Paths,
     db: &Db,
@@ -79,23 +69,7 @@ pub async fn update(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<
     for_container_game!(game, G => lifecycle::update::<G>(paths, db, name).await)
 }
 
-/// Marks a newly created instance as containerized.
-pub fn mark_new_instance(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
-    for_container_game!(game, G => {
-        let instance = G::load(paths, db, name)?;
-        lifecycle::mark_new_instance::<G>(db, &instance)
-    })
-}
-
-pub fn is_migrated(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
-    for_container_game!(game, G => {
-        let instance = G::load(paths, db, name)?;
-        lifecycle::is_migrated::<G>(db, &instance)
-    })
-}
-
-/// Authoritative liveness: the container for a migrated instance, the host
-/// process for one that has not been migrated yet.
+/// Authoritative liveness: whether the instance's container is running.
 pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
     for_container_game!(game, G => {
         let instance = G::load(paths, db, name)?;
@@ -114,8 +88,6 @@ pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<(
     for_container_game!(game, G => lifecycle::start::<G>(paths, db, name).await.map(|_| ()))
 }
 
-/// Stops the container of a migrated instance. A server started before its
-/// migration is still a host process and is stopped as one.
 pub async fn stop(
     paths: &Paths,
     db: &Db,
@@ -123,14 +95,7 @@ pub async fn stop(
     name: &str,
     reason: StopReason,
 ) -> Result<()> {
-    for_container_game!(game, G => {
-        let instance = G::load(paths, db, name)?;
-        if lifecycle::is_migrated::<G>(db, &instance)? {
-            lifecycle::stop::<G>(paths, db, name, reason).await
-        } else {
-            G::stop_directly(paths, db, &instance).await
-        }
-    })
+    for_container_game!(game, G => lifecycle::stop::<G>(paths, db, name, reason).await)
 }
 
 pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
@@ -145,7 +110,7 @@ pub fn remove(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
     })
 }
 
-/// Rewrites the runtime spec of a migrated instance after its identity on
+/// Rewrites the runtime spec of an instance after its identity on
 /// disk changed (a rename).
 pub fn sync_spec(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
     for_container_game!(game, G => {
@@ -158,17 +123,12 @@ pub fn sync_spec(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()>
 /// when Podman is unreachable.
 #[derive(Default)]
 pub struct Execution {
-    pub migrated: bool,
-    /// Whether the container is running. Always `false` before migration and
-    /// when the container cannot be inspected.
+    /// Whether the container is running. `false` when it cannot be inspected.
     pub container_running: bool,
     pub odin_version: Option<String>,
 }
 
-pub fn execution(paths: &Paths, db: &Db, identity: &GameInstanceIdentity) -> Result<Execution> {
-    if !container_instances::is_podman(db, &identity.id)? {
-        return Ok(Execution::default());
-    }
+pub fn execution(paths: &Paths, identity: &GameInstanceIdentity) -> Execution {
     let container_running = lifecycle::container_is_running(paths, identity).unwrap_or_else(|error| {
         tracing::debug!(instance = %identity.name, %error, "failed to inspect Podman container");
         false
@@ -182,26 +142,8 @@ pub fn execution(paths: &Paths, db: &Db, identity: &GameInstanceIdentity) -> Res
         supervisor::protocol::Response::Pong { odin_version, .. } => odin_version,
         _ => None,
     });
-    Ok(Execution {
-        migrated: true,
+    Execution {
         container_running,
         odin_version,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn container_games_match_the_capability_flag() {
-        for driver in crate::game::drivers() {
-            assert_eq!(
-                is_container_game(driver.id()),
-                driver.capabilities().container_runtime,
-                "{} capability and dispatch disagree",
-                driver.id()
-            );
-        }
     }
 }

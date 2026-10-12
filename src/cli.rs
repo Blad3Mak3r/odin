@@ -119,9 +119,8 @@ pub enum Command {
         port: u16,
     },
 
-    /// Hidden: the per-instance supervisor process (odin's conmon
-    /// equivalent). Spawned internally by `odin serve`/`start`/`restart` —
-    /// not for direct/manual use.
+    /// Hidden: the runtime Odin starts inside every game container. Not for
+    /// direct/manual use.
     #[command(hide = true)]
     Run {
         #[arg(long, env = "ODIN_SUPERVISOR_INSTANCE_ID")]

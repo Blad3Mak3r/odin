@@ -7,20 +7,16 @@ use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use sysinfo::Signal;
 use tokio::process::Command;
 
 use crate::db::game_instances::{RustInstance, RustInstanceConfig};
-use crate::instance::{lifecycle::LifecycleLock, process};
+use crate::instance::lifecycle::LifecycleLock;
 use crate::paths::Paths;
 
 pub const DEDICATED_SERVER_APP_ID: &str = "258550";
-const STOP_TIMEOUT: Duration = Duration::from_secs(30);
-
 #[derive(Debug, Clone)]
 pub struct RustFileConfig {
     pub hostname: String,
@@ -128,57 +124,6 @@ pub fn is_running(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) ->
     crate::podman::rust::is_running(paths, db, instance)
 }
 
-pub fn is_running_directly(instance: &RustInstance) -> bool {
-    matches!(
-        (instance.pid, instance.pid_started_at),
-        (Some(pid), Some(started_at)) if process::is_alive(pid, started_at)
-    )
-}
-
-/// Performs the synchronous checks and setup required before the Rust
-/// supervisor launches `RustDedicated`. It is also called by `odin run`, so
-/// the hidden supervisor command remains safe when invoked independently.
-pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<RustInstance> {
-    let instance =
-        crate::db::game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
-    if is_running_directly(&instance) {
-        bail!("instance '{}' is already running", instance.name());
-    }
-    ensure_layout(paths, &instance)?;
-    crate::game::ports::ensure_available(
-        paths,
-        db,
-        crate::game::GameId::Rust,
-        instance.name(),
-        [
-            instance.config.port,
-            instance.config.query_port,
-            instance.config.rcon_port,
-        ],
-    )?;
-
-    link_steam_client(&paths.steamcmd_dir())?;
-    crate::game::config_documents::sync_rust_operational(paths, &instance)?;
-    build_command(paths, &instance)?;
-    Ok(instance)
-}
-
-/// Builds Rust Dedicated's process command using Odin's game-isolated
-/// instance layout. Spawning itself is shared with Valheim through
-/// [`process::spawn`].
-pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> {
-    let log_dir = paths
-        .game_instance_dir(crate::game::GameId::Rust, instance.name())
-        .join("logs");
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("failed to create {}", log_dir.display()))?;
-    build_command_at(
-        &paths.game_install_dir(crate::game::GameId::Rust),
-        &log_dir.join("console.log"),
-        &RustLaunch::from(instance),
-    )
-}
-
 /// The single definition of Rust Dedicated's launch contract, used both for
 /// the host's direct process and by the Podman runtime with container paths.
 pub fn build_command_at(
@@ -281,10 +226,6 @@ fn prepare_runtime_at(
     link_steam_client_at(steamcmd_dir, steam_home)
 }
 
-fn link_steam_client(steamcmd_dir: &Path) -> Result<()> {
-    link_steam_client_at(steamcmd_dir, &crate::steamcmd::steam_home_dir()?)
-}
-
 fn link_steam_client_at(steamcmd_dir: &Path, steam_home: &Path) -> Result<()> {
     crate::steamcmd::SteamCmd::new(steamcmd_dir.to_path_buf())
         .ensure_sdk64_client_at(steam_home)
@@ -301,56 +242,6 @@ fn rust_library_path(install_dir: &Path) -> Result<std::ffi::OsString> {
         paths.extend(std::env::split_paths(&inherited));
     }
     std::env::join_paths(paths).context("Rust library search paths contain an invalid ':'")
-}
-
-pub async fn stop(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
-    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
-    let instance = refresh(db, instance)?;
-    stop_unlocked(paths, db, &instance).await
-}
-
-async fn stop_unlocked(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<()> {
-    let (Some(pid), Some(started_at)) = (instance.pid, instance.pid_started_at) else {
-        bail!("instance '{}' is not running", instance.name());
-    };
-    if !process::is_alive(pid, started_at) {
-        bail!("instance '{}' is not running", instance.name());
-    }
-
-    match crate::supervisor::client::stop(
-        paths,
-        crate::game::GameId::Rust,
-        instance.name(),
-        STOP_TIMEOUT.as_secs(),
-    )
-    .await
-    {
-        Ok(()) => {
-            if !process::wait_until_gone(pid, started_at, STOP_TIMEOUT + Duration::from_secs(10))
-                .await
-            {
-                bail!("Rust instance '{}' did not stop", instance.name());
-            }
-            Ok(())
-        }
-        Err(_) => stop_via_pid_signal(db, instance.name(), pid, started_at).await,
-    }
-}
-
-async fn stop_via_pid_signal(
-    db: &crate::db::Db,
-    name: &str,
-    pid: u32,
-    started_at: i64,
-) -> Result<()> {
-    process::send_signal(pid, started_at, Signal::Interrupt)?;
-    if !process::wait_until_gone(pid, started_at, STOP_TIMEOUT).await {
-        process::send_signal(pid, started_at, Signal::Kill)?;
-        if !process::wait_until_gone(pid, started_at, Duration::from_secs(5)).await {
-            bail!("Rust instance '{name}' did not stop");
-        }
-    }
-    crate::db::game_instances::clear_rust_pid(db, name, chrono::Utc::now())
 }
 
 pub fn delete(
@@ -591,8 +482,6 @@ fn generate_rcon_password() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
     use super::*;
     use crate::db::Db;
     use crate::db::game_instances;
@@ -611,24 +500,6 @@ mod tests {
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
         (paths, db, instance)
-    }
-
-    fn install_fake_server(paths: &Paths) {
-        let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
-        std::fs::create_dir_all(&install_dir).unwrap();
-        let binary = install_dir.join("RustDedicated");
-        std::fs::write(
-            &binary,
-            "#!/bin/sh\necho fake Rust server started\nexec sleep 1000\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    fn install_fake_steam_client(paths: &Paths) {
-        let client = paths.steamcmd_dir().join("linux64/steamclient.so");
-        std::fs::create_dir_all(client.parent().unwrap()).unwrap();
-        std::fs::write(client, "fake Steam client").unwrap();
     }
 
     #[test]
@@ -692,23 +563,42 @@ mod tests {
 
     #[test]
     fn wipe_map_refuses_a_running_instance() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
         let (paths, db, instance) = temp_context("wipe-map-running");
         let source = backup_source(&paths, &instance);
         std::fs::create_dir_all(&source).unwrap();
         let save = source.join("world.sav");
         std::fs::write(&save, "world").unwrap();
-        game_instances::set_rust_pid(
-            &db,
-            instance.name(),
-            std::process::id(),
-            crate::instance::process::start_time_of(std::process::id()).unwrap(),
-            chrono::Utc::now(),
-        )
-        .unwrap();
+        let socket = paths.data_dir.join("podman.sock");
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        crate::podman::test_support::write_podman_config(&paths, &socket);
+        let podman = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut String::new())
+                .unwrap();
+            let body = r#"{"State":{"Running":true,"Status":"running"}}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        });
 
         assert!(wipe_map(&paths, &db, &instance).is_err());
         assert!(save.is_file());
 
+        podman.join().unwrap();
         std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 
@@ -772,103 +662,6 @@ mod tests {
         );
         assert!(restore_backup(&paths, &db, &instance, "../escape").is_err());
         std::fs::remove_dir_all(paths.data_dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn fake_server_start_and_stop_persist_the_process_lifecycle() {
-        let (paths, db, instance) = temp_context("lifecycle");
-        install_fake_server(&paths);
-        install_fake_steam_client(&paths);
-
-        let child = process::spawn(build_command(&paths, &instance).unwrap())
-            .await
-            .unwrap();
-        let pid = child.id().unwrap();
-        let started_at = process::start_time_of(pid).unwrap();
-        drop(child);
-        game_instances::set_rust_pid(&db, instance.name(), pid, started_at, chrono::Utc::now())
-            .unwrap();
-        let started = game_instances::load_rust(&db, instance.name())
-            .unwrap()
-            .unwrap();
-        assert!(is_running_directly(&started));
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let log = paths
-            .game_instance_dir(crate::game::GameId::Rust, started.name())
-            .join("logs/console.log");
-        assert!(
-            std::fs::read_to_string(log)
-                .unwrap()
-                .contains("fake Rust server started")
-        );
-
-        stop(&paths, &db, &started).await.unwrap();
-        let stopped = game_instances::load_rust(&db, started.name())
-            .unwrap()
-            .unwrap();
-        assert!(!is_running_directly(&stopped));
-        assert!(stopped.pid.is_none());
-
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn rust_command_prepends_its_native_library_directories() {
-        let (paths, _db, instance) = temp_context("library-path");
-        install_fake_server(&paths);
-
-        let command = build_command(&paths, &instance).unwrap();
-        let configured = command
-            .as_std()
-            .get_envs()
-            .find_map(|(name, value)| (name == "LD_LIBRARY_PATH").then_some(value.unwrap()))
-            .unwrap();
-        let configured: Vec<_> = std::env::split_paths(configured).collect();
-        let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
-        let mut expected = vec![
-            install_dir.clone(),
-            install_dir.join("RustDedicated_Data/Plugins/x86_64"),
-        ];
-        if let Some(inherited) = std::env::var_os("LD_LIBRARY_PATH") {
-            expected.extend(std::env::split_paths(&inherited));
-        }
-        assert_eq!(configured, expected);
-
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn rust_command_enables_web_rcon_with_the_instance_configuration() {
-        let (paths, _db, instance) = temp_context("rcon");
-        install_fake_server(&paths);
-
-        let command = build_command(&paths, &instance).unwrap();
-        let args: Vec<_> = command
-            .as_std()
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-
-        assert!(args.windows(2).any(
-            |args| args[0] == "+rcon.port" && args[1] == instance.config.rcon_port.to_string()
-        ));
-        assert!(
-            args.windows(2)
-                .any(|args| args[0] == "+rcon.password" && args[1] == instance.config.rcon_password)
-        );
-        assert!(args.windows(2).any(|args| args == ["+rcon.web", "1"]));
-        for file_owned in [
-            "+server.hostname",
-            "+server.level",
-            "+server.seed",
-            "+server.worldsize",
-            "+server.maxplayers",
-        ] {
-            assert!(!args.iter().any(|argument| argument == file_owned));
-        }
-
-        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]

@@ -8,8 +8,8 @@ use thiserror::Error;
 use crate::backup_storage::{self, RemoteObject, StorageProvider};
 use crate::db::Db;
 use crate::game::GameId;
-use crate::instance::{Instance, InstanceError, lifecycle};
-use crate::paths;
+use crate::instance::{Instance, InstanceError};
+use crate::paths::{self, Paths};
 
 /// Failures a caller (e.g. the web API) may want to distinguish from other,
 /// unexpected errors.
@@ -160,8 +160,8 @@ pub(crate) fn list_from_disk(instance_dir: &Path) -> Result<Vec<BackupEntry>> {
 /// one-way, unrecoverable overwrite). Refuses to run while the instance is
 /// running (checked here, not just by callers, so every entry point —
 /// CLI and web — gets the guard for free).
-pub fn restore(instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
-    if lifecycle::is_running(instance)? {
+pub fn restore(paths: &Paths, instance: &Instance, db: &Db, backup_id: &str) -> Result<()> {
+    if crate::podman::valheim::is_running(paths, db, instance)? {
         return Err(InstanceError::AlreadyRunning(instance.state.name.clone()).into());
     }
     restore_at(

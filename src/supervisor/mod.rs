@@ -1,20 +1,14 @@
-//! Odin's conmon-style game supervisor: `odin run --instance <name>` is a
-//! hidden CLI subcommand that owns one game server process for its entire
-//! life and exposes a small Unix-socket RPC surface so `odin serve` (or a
-//! one-off CLI invocation) can control it without holding a live
-//! `tokio::process::Child` or relying solely on OS-level pid fingerprinting.
+//! The RPC between `odin serve` and the `odin run` runtime that owns one game
+//! server process inside each container.
 //!
-//! `server` is the `odin run` side (the conmon role); `client` is the `odin
-//! serve` side (the podman role). `protocol` defines the newline-delimited
-//! JSON messages exchanged between them.
-//!
-//! Every supported game's lifecycle uses this supervisor. Game-specific log
-//! parsing remains optional: Rust uses the same process ownership and RPC
-//! contract without claiming Valheim-specific player or readiness events.
+//! `client` is the `odin serve` side; the runtime side lives in
+//! `podman::runtime`. `protocol` defines the newline-delimited JSON messages
+//! exchanged between them over the runtime's control socket, and `stats`
+//! samples the game process's resource usage for the runtime.
 
 pub mod client;
 pub mod protocol;
-pub mod server;
+pub mod stats;
 
 use std::path::PathBuf;
 
@@ -28,19 +22,4 @@ pub fn control_sock_path(paths: &Paths, game: GameId, instance_name: &str) -> Pa
     paths
         .runtime_dir()
         .join(format!("{game}-{instance_name}.control.sock"))
-}
-
-/// Path to an instance's events socket (push-only: `LogLine`, `Exited`).
-pub fn events_sock_path(paths: &Paths, game: GameId, instance_name: &str) -> PathBuf {
-    paths
-        .runtime_dir()
-        .join(format!("{game}-{instance_name}.events.sock"))
-}
-
-/// Path to the supervisor's own pidfile, written on startup and removed on
-/// clean exit.
-pub fn pidfile_path(paths: &Paths, game: GameId, instance_name: &str) -> PathBuf {
-    paths
-        .runtime_dir()
-        .join(format!("{game}-{instance_name}.pid"))
 }

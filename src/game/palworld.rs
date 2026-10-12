@@ -175,12 +175,6 @@ fn is_enabled(value: &str) -> bool {
     matches!(value, "True" | "true" | "1")
 }
 
-pub fn rest_enabled(paths: &Paths, instance: &GenericGameInstance) -> Result<bool> {
-    crate::game::config_documents::value(paths, instance, "RESTAPIEnabled")?
-        .map(|value| is_enabled(&value))
-        .context("Palworld configuration has not been generated yet")
-}
-
 fn request(
     paths: &Paths,
     instance: &GenericGameInstance,

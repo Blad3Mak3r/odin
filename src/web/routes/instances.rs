@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
@@ -7,10 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::activity::ActivityKind;
 use crate::db::Db;
 use crate::instance::state::{InstanceState, ValheimModifiers, ValheimPreset, ValheimSetKey};
-use crate::instance::{self, Instance, lifecycle};
+use crate::instance::{self, Instance};
 use crate::paths::Paths;
-use crate::supervisor::client;
-use crate::supervisor::protocol::Response;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::runtime::InstanceTransition;
 use crate::web::state::AppState;
@@ -23,26 +19,18 @@ pub struct InstanceView {
     pub odin_version: Option<String>,
 }
 
-fn view(paths: &Paths, instance: Instance) -> anyhow::Result<InstanceView> {
-    let running = lifecycle::is_running(&instance)?;
-    let odin_version = if running {
-        match client::ping_blocking(
-            paths,
-            crate::game::GameId::Valheim,
-            &instance.state.name,
-            Duration::from_millis(300),
-        ) {
-            Ok(Response::Pong { odin_version, .. }) => odin_version,
-            _ => None,
-        }
-    } else {
-        None
-    };
+fn view(paths: &Paths, db: &Db, instance: Instance) -> anyhow::Result<InstanceView> {
+    let identity = crate::db::game_instances::ensure_valheim_identity(
+        db,
+        &instance.state.name,
+        instance.state.created_at,
+    )?;
+    let execution = crate::podman::dispatch::execution(paths, &identity);
 
     Ok(InstanceView {
         state: instance.state,
-        running,
-        odin_version,
+        running: execution.container_running,
+        odin_version: execution.odin_version,
     })
 }
 
@@ -52,7 +40,7 @@ pub async fn list_instances(State(state): State<AppState>) -> ApiResult<Json<Vec
     let views = run_blocking(move || {
         instance::list_all(&paths, &db)?
             .into_iter()
-            .map(|instance| view(&paths, instance))
+            .map(|instance| view(&paths, &db, instance))
             .collect::<anyhow::Result<Vec<_>>>()
     })
     .await?;
@@ -83,7 +71,8 @@ pub async fn create_instance(
     })
     .await?;
     let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, created)).await?;
+    let db = state.db.clone();
+    let instance_view = run_blocking(move || view(&paths, &db, created)).await?;
     Ok(Json(instance_view))
 }
 
@@ -126,7 +115,8 @@ pub async fn clone_instance(
     })
     .await?;
     let paths = state.paths.clone();
-    let instance_view = run_blocking(move || view(&paths, cloned)).await?;
+    let db = state.db.clone();
+    let instance_view = run_blocking(move || view(&paths, &db, cloned)).await?;
     Ok(Json(instance_view))
 }
 
@@ -388,7 +378,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let target = Instance::load(&paths, &db, "target").unwrap().unwrap();
         assert_eq!(target.state.world_name, "target-world");
-        assert!(!lifecycle::is_running(&target).unwrap());
+        assert!(!crate::podman::valheim::is_running(&paths, &db, &target).unwrap());
     }
 
     #[tokio::test]

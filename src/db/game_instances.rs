@@ -222,13 +222,6 @@ pub struct GenericGameInstance {
 }
 
 impl GenericGameInstance {
-    /// Whether the host process of an instance that has not been migrated to
-    /// a container is alive. Use [`crate::game::instances::is_running`] to
-    /// ask about an instance whose game may run in a container.
-    pub fn is_running_directly(&self) -> bool {
-        matches!((self.pid, self.pid_started_at), (Some(pid), Some(started_at)) if crate::instance::process::is_alive(pid, started_at))
-    }
-
     pub fn name(&self) -> &str {
         &self.identity.name
     }
@@ -396,34 +389,6 @@ fn row_to_generic(row: &rusqlite::Row<'_>, game: GameId) -> rusqlite::Result<Gen
         last_started_at: row.get(10)?,
         last_stopped_at: row.get(11)?,
     })
-}
-
-pub fn set_generic_pid(
-    db: &crate::db::Db,
-    game: GameId,
-    name: &str,
-    pid: u32,
-    pid_started_at: i64,
-    started_at: DateTime<Utc>,
-) -> Result<()> {
-    db.conn().execute(
-        "UPDATE generic_game_instance_configs SET pid = ?3, pid_started_at = ?4, last_started_at = ?5 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
-        params![game.as_str(), name, pid, pid_started_at, started_at],
-    )?;
-    Ok(())
-}
-
-pub fn clear_generic_pid(
-    db: &crate::db::Db,
-    game: GameId,
-    name: &str,
-    stopped_at: DateTime<Utc>,
-) -> Result<()> {
-    db.conn().execute(
-        "UPDATE generic_game_instance_configs SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?3 WHERE instance_id = (SELECT id FROM game_instances WHERE game = ?1 AND name = ?2)",
-        params![game.as_str(), name, stopped_at],
-    )?;
-    Ok(())
 }
 
 pub fn delete_generic(db: &crate::db::Db, game: GameId, name: &str) -> Result<()> {
@@ -676,28 +641,6 @@ pub fn update_rust_config(
         params![name, config.auto_restart, config.port, config.query_port, config.rcon_port, config.rcon_password],
     )?;
     load_rust(db, name)?.context("Rust instance disappeared while updating configuration")
-}
-
-pub fn set_rust_pid(
-    db: &crate::db::Db,
-    name: &str,
-    pid: u32,
-    pid_started_at: i64,
-    started_at: DateTime<Utc>,
-) -> Result<RustInstance> {
-    db.conn().execute(
-        "UPDATE rust_instance_configs SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
-        params![name, pid, pid_started_at, started_at],
-    )?;
-    load_rust(db, name)?.context("Rust instance not found")
-}
-
-pub fn clear_rust_pid(db: &crate::db::Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
-    db.conn().execute(
-        "UPDATE rust_instance_configs SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'rust' AND name = ?1)",
-        params![name, stopped_at],
-    )?;
-    Ok(())
 }
 
 pub fn delete_rust(db: &crate::db::Db, name: &str) -> Result<()> {

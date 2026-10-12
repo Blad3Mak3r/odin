@@ -1,12 +1,7 @@
 //! Tracks which players are currently connected to each running instance.
 //!
-//! Two sources feed this registry: a reachable instance's supervisor
-//! (`odin run`) does its own `console.log` parsing and pushes structured
-//! join/leave events (`web::supervisor::Supervisor::try_bridge_events`,
-//! via `mark_joined`/`mark_left`/`replace_snapshot` below); an instance
-//! with no reachable supervisor falls back to `web::log_tail` parsing raw
-//! lines locally (`apply_line`, unchanged) — see `crate::player_events` for
-//! the shared parsing logic itself.
+//! `web::log_tail` feeds it by parsing each running instance's console log
+//! (`apply_line`) — see `crate::player_events` for the parsing logic itself.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -141,92 +136,6 @@ impl PlayerRegistry {
         }
     }
 
-    /// Records a join pushed by a reachable supervisor as a structured
-    /// `Event::PlayerJoined` (see `web::supervisor::Supervisor::
-    /// try_bridge_events`) — the supervisor already resolved the peer id
-    /// internally, so this is keyed by name, deduplicated the same way
-    /// `apply`'s peer-keyed path is.
-    pub fn mark_joined(
-        &self,
-        instance: &str,
-        name: String,
-        steam_id: Option<String>,
-    ) -> Option<ActivityKind> {
-        let mut instances = self
-            .instances
-            .lock()
-            .expect("players registry lock poisoned");
-        let players = instances.entry(instance.to_string()).or_default();
-        if players.iter().any(|p| {
-            steam_id
-                .as_deref()
-                .is_some_and(|id| p.peer.as_deref() == Some(id))
-                || p.info.name == name
-        }) {
-            return None;
-        }
-        let connected_at = Utc::now();
-        players.push(ConnectedPlayer {
-            peer: steam_id.clone(),
-            info: PlayerInfo {
-                name: name.clone(),
-                steam_id: steam_id.clone(),
-                connected_at,
-            },
-        });
-        self.record_join(instance, &name, steam_id.as_deref(), connected_at);
-        Some(ActivityKind::PlayerJoined { name })
-    }
-
-    /// The `Event::PlayerLeft` counterpart to `mark_joined`.
-    pub fn mark_left(&self, instance: &str, name: &str) -> Option<ActivityKind> {
-        let mut instances = self
-            .instances
-            .lock()
-            .expect("players registry lock poisoned");
-        let players = instances.entry(instance.to_string()).or_default();
-        let index = players.iter().position(|p| p.info.name == name)?;
-        let removed = players.remove(index);
-        self.record_leave(
-            instance,
-            &removed.info.name,
-            removed.info.steam_id.as_deref(),
-            Utc::now(),
-        );
-        Some(ActivityKind::PlayerLeft {
-            name: removed.info.name,
-        })
-    }
-
-    /// Seeds `instance`'s current player list from a supervisor's
-    /// authoritative `Response::Players` snapshot, replacing whatever was
-    /// tracked before — used right after a bridge connects, to pick up
-    /// anyone who joined before this subscription started (e.g. `odin
-    /// serve` restarted while the game kept running).
-    pub fn replace_snapshot(&self, instance: &str, players: Vec<PlayerInfo>) {
-        for player in &players {
-            self.record_join(
-                instance,
-                &player.name,
-                player.steam_id.as_deref(),
-                player.connected_at,
-            );
-        }
-        self.instances
-            .lock()
-            .expect("players registry lock poisoned")
-            .insert(
-                instance.to_string(),
-                players
-                    .into_iter()
-                    .map(|info| ConnectedPlayer {
-                        peer: info.steam_id.clone(),
-                        info,
-                    })
-                    .collect(),
-            );
-    }
-
     fn record_join(
         &self,
         instance: &str,
@@ -304,60 +213,5 @@ mod tests {
             },
         );
         assert!(result.is_none());
-    }
-
-    #[test]
-    fn mark_joined_then_mark_left_round_trips() {
-        let registry = PlayerRegistry::new();
-
-        let joined = registry.mark_joined(
-            "my-server",
-            "Bjorn".to_string(),
-            Some("76561198000000000".to_string()),
-        );
-        assert!(matches!(joined, Some(ActivityKind::PlayerJoined { name }) if name == "Bjorn"));
-        assert_eq!(registry.snapshot("my-server").len(), 1);
-
-        // A duplicate join for the same name is a no-op, same as apply's
-        // peer-keyed dedup.
-        assert!(
-            registry
-                .mark_joined(
-                    "my-server",
-                    "Bjorn".to_string(),
-                    Some("76561198000000000".to_string()),
-                )
-                .is_none()
-        );
-        assert_eq!(registry.snapshot("my-server").len(), 1);
-
-        let left = registry.mark_left("my-server", "Bjorn");
-        assert!(matches!(left, Some(ActivityKind::PlayerLeft { name }) if name == "Bjorn"));
-        assert_eq!(registry.snapshot("my-server").len(), 0);
-    }
-
-    #[test]
-    fn replace_snapshot_seeds_the_current_list() {
-        let registry = PlayerRegistry::new();
-        registry.apply(
-            "my-server",
-            PlayerEvent::Joined {
-                peer: "0".to_string(),
-                name: "Stale".to_string(),
-            },
-        );
-
-        registry.replace_snapshot(
-            "my-server",
-            vec![PlayerInfo {
-                name: "Bjorn".to_string(),
-                steam_id: Some("76561198000000000".to_string()),
-                connected_at: Utc::now(),
-            }],
-        );
-
-        let snapshot = registry.snapshot("my-server");
-        assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].name, "Bjorn");
     }
 }

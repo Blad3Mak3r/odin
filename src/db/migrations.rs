@@ -173,13 +173,13 @@ mod tests {
     }
 
     #[test]
-    fn v28_renames_the_podman_marker_without_losing_migrated_instances() {
+    fn v31_keeps_the_start_intent_of_podman_instances() {
         let mut conn = Connection::open_in_memory().unwrap();
         let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
         files.sort();
         for file in files {
             let version = migration_version(&file).unwrap();
-            if version >= 28 {
+            if version >= 31 {
                 continue;
             }
             let migration = Migrations::get(&file).unwrap();
@@ -188,26 +188,36 @@ mod tests {
             conn.pragma_update(None, "user_version", version).unwrap();
         }
         conn.execute_batch(
-            "INSERT INTO game_instances (id, game, name, created_at)
-                VALUES ('migrated', 'valheim', 'migrated', '2026-01-01T00:00:00Z');
-             INSERT INTO valheim_podman_instances (instance_id, migrated_at)
-                VALUES ('migrated', '2026-01-02T00:00:00Z');",
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('running', 'valheim', 'running', '2026-01-01T00:00:00Z'),
+                ('stopped', 'valheim', 'stopped', '2026-01-01T00:00:00Z');
+             INSERT INTO podman_instances (instance_id, migrated_at, desired_running) VALUES
+                ('running', '2026-01-02T00:00:00Z', 1),
+                ('stopped', '2026-01-02T00:00:00Z', 0);",
         )
         .unwrap();
 
         run(&mut conn).unwrap();
 
-        let ids: Vec<String> = conn
-            .prepare("SELECT instance_id FROM podman_instances")
+        let desired: Vec<(String, bool)> = conn
+            .prepare(
+                "SELECT instance_id, desired_running FROM instance_runtime_state ORDER BY instance_id",
+            )
             .unwrap()
-            .query_map([], |row| row.get(0))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(ids, ["migrated"]);
+        assert_eq!(
+            desired,
+            [
+                ("running".to_string(), true),
+                ("stopped".to_string(), false)
+            ]
+        );
         let old_table_exists: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'valheim_podman_instances')",
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'podman_instances')",
                 [],
                 |row| row.get(0),
             )

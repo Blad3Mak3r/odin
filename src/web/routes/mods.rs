@@ -183,7 +183,7 @@ async fn check_not_running(state: &AppState, name: &str) -> ApiResult<()> {
     let name = name.to_string();
     run_blocking(move || {
         let instance = crate::instance::Instance::load_existing(&paths, &db, &name)?;
-        if crate::instance::lifecycle::is_running(&instance)? {
+        if crate::podman::valheim::is_running(&paths, &db, &instance)? {
             return Err(crate::instance::InstanceError::ModsLocked(name).into());
         }
         Ok(())

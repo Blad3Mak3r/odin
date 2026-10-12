@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::backup;
 use crate::db::Db;
-use crate::instance::{Instance, lifecycle};
+use crate::instance::Instance;
 use crate::paths::Paths;
 
 pub fn run(paths: &Paths, db: &Db, server_name: &str, backup_id: Option<&str>) -> Result<()> {
@@ -26,11 +26,11 @@ pub fn run(paths: &Paths, db: &Db, server_name: &str, backup_id: Option<&str>) -
         return Ok(());
     };
 
-    if lifecycle::is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         bail!("'{server_name}' is running; stop it first with `odin stop {server_name}`");
     }
 
-    backup::restore(&instance, db, backup_id)?;
+    backup::restore(paths, &instance, db, backup_id)?;
     println!(
         "restored '{server_name}' from backup '{backup_id}' (previous saves were backed up first)"
     );

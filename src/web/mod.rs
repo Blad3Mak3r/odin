@@ -15,7 +15,6 @@ mod runtime;
 mod sse;
 mod state;
 mod static_files;
-pub mod supervisor;
 mod update_monitor;
 mod uptime_scheduler;
 mod webhooks;
@@ -304,15 +303,9 @@ async fn attempt_auto_restart(state: &AppState, name: String) {
             return;
         }
     };
-    let started = match dispatch::is_migrated(&state.paths, &state.db, GameId::Valheim, &name) {
-        Ok(true) => crate::game::instances::start(&state.paths, &state.db, GameId::Valheim, &name)
-            .await
-            .map(|_| ()),
-        Ok(false) => instance::lifecycle::start(&state.paths, &state.db, &name)
-            .await
-            .map(|_| ()),
-        Err(error) => Err(error),
-    };
+    let started = crate::game::instances::start(&state.paths, &state.db, GameId::Valheim, &name)
+        .await
+        .map(|_| ());
     match started {
         Ok(()) => state
             .activity
@@ -333,8 +326,7 @@ fn valheim_identity_id(state: &AppState, name: &str) -> Option<String> {
 
 /// Whether a containerized instance found stopped should be restarted: an
 /// operator never asked it to stop (`desired_running` is still set) and
-/// automatic restart is enabled. `false` for an instance that is not
-/// containerized, which never has the flag.
+/// automatic restart is enabled.
 fn container_needs_restart(
     state: &AppState,
     game: GameId,
@@ -437,43 +429,6 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 )
             {
                 crashed_with_auto_restart.push(name.clone());
-            } else if inst.state.pid.is_some() {
-                // Persisted pid but not actually alive: the process died
-                // without anyone observing it directly (crash, OOM, an
-                // external `kill -9`). Clear the stale fingerprint so the
-                // DB matches reality; `start`/`stop` already do this on
-                // their own success path, so this is purely the safety net
-                // for unwitnessed deaths.
-                let _ = crate::db::instances::clear_pid(&state.db, name, chrono::Utc::now());
-                // If a supervisor was involved, it's gone too (the ping
-                // above already failed) without cleaning up after itself —
-                // an `odin run` crash rather than a normal exit. Remove
-                // whatever it left behind so a future start doesn't trip
-                // over a stale socket/pidfile.
-                let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
-                    &state.paths,
-                    GameId::Valheim,
-                    name,
-                ));
-                let _ = std::fs::remove_file(crate::supervisor::events_sock_path(
-                    &state.paths,
-                    GameId::Valheim,
-                    name,
-                ));
-                let _ = std::fs::remove_file(crate::supervisor::pidfile_path(
-                    &state.paths,
-                    GameId::Valheim,
-                    name,
-                ));
-
-                if inst.state.auto_restart
-                    && permits_scheduled_uptime(state, GameId::Valheim, name)
-                    && state
-                        .runtime
-                        .should_attempt_auto_restart(name, AUTO_RESTART_COOLDOWN)
-                {
-                    crashed_with_auto_restart.push(name.clone());
-                }
             }
             entries.push(InstanceResourceEntry {
                 id: crate::db::game_instances::identity(&state.db, GameId::Valheim, name)
@@ -535,33 +490,6 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 )
             {
                 crashed_rust_with_auto_restart.push(name.to_string());
-            } else if !snapshot.running && rust_instance.pid.is_some() {
-                let _ = game_instances::clear_rust_pid(&state.db, name, chrono::Utc::now());
-                let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
-                    &state.paths,
-                    GameId::Rust,
-                    name,
-                ));
-                let _ = std::fs::remove_file(crate::supervisor::events_sock_path(
-                    &state.paths,
-                    GameId::Rust,
-                    name,
-                ));
-                let _ = std::fs::remove_file(crate::supervisor::pidfile_path(
-                    &state.paths,
-                    GameId::Rust,
-                    name,
-                ));
-                if rust_instance.config.auto_restart
-                    && permits_scheduled_uptime(state, GameId::Rust, name)
-                    && state.runtime.should_attempt_game_auto_restart(
-                        GameId::Rust,
-                        name,
-                        AUTO_RESTART_COOLDOWN,
-                    )
-                {
-                    crashed_rust_with_auto_restart.push(name.to_string());
-                }
             }
             entries.push(InstanceResourceEntry {
                 id: Some(rust_instance.identity.id.clone()),
@@ -624,31 +552,6 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                 )
             {
                 crashed_generic_with_auto_restart.push((game, name.to_string()));
-            } else if !snapshot.running && generic_instance.pid.is_some() {
-                let _ =
-                    game_instances::clear_generic_pid(&state.db, game, name, chrono::Utc::now());
-                let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
-                    &state.paths,
-                    game,
-                    name,
-                ));
-                let _ = std::fs::remove_file(crate::supervisor::events_sock_path(
-                    &state.paths,
-                    game,
-                    name,
-                ));
-                let _ =
-                    std::fs::remove_file(crate::supervisor::pidfile_path(&state.paths, game, name));
-                if generic_instance.config.auto_restart
-                    && permits_scheduled_uptime(state, game, name)
-                    && state.runtime.should_attempt_game_auto_restart(
-                        game,
-                        name,
-                        AUTO_RESTART_COOLDOWN,
-                    )
-                {
-                    crashed_generic_with_auto_restart.push((game, name.to_string()));
-                }
             }
             entries.push(InstanceResourceEntry {
                 id: Some(generic_instance.identity.id.clone()),
@@ -696,11 +599,7 @@ fn permits_scheduled_uptime(state: &AppState, game: GameId, name: &str) -> bool 
 
 /// Starts a live console feed (`web::log_tail`) for any newly-running
 /// instance, and aborts + clears tracked players for any that stopped
-/// running since the last tick. Prefers subscribing to the instance's
-/// supervisor for pushed events (`web::supervisor::Supervisor::
-/// try_bridge_events`); falls back to `web::log_tail`'s file-poller only
-/// for an instance with no reachable supervisor (started by a pre-upgrade
-/// binary, or whose supervisor has crashed).
+/// running since the last tick.
 async fn reconcile_log_tailers(
     state: &AppState,
     tailers: &mut HashMap<String, AbortHandle>,
@@ -725,33 +624,17 @@ async fn reconcile_log_tailers(
         if tailers.contains_key(name) {
             continue;
         }
-        let handle = match state
-            .supervisor
-            .try_bridge_events(
-                &state.paths,
-                name,
-                &state.log_tail,
-                &state.players,
-                &state.world_saves,
-                &state.activity,
-            )
-            .await
-        {
-            Some(handle) => handle,
-            None => {
-                let log_file = players::console_log_path(&state.paths.instance_dir(name));
-                let sender = state.log_tail.sender_for(name);
-                tokio::spawn(log_tail::tail_and_broadcast(
-                    name.clone(),
-                    log_file,
-                    sender,
-                    state.players.clone(),
-                    state.world_saves.clone(),
-                    state.activity.clone(),
-                ))
-                .abort_handle()
-            }
-        };
+        let log_file = players::console_log_path(&state.paths.instance_dir(name));
+        let sender = state.log_tail.sender_for(name);
+        let handle = tokio::spawn(log_tail::tail_and_broadcast(
+            name.clone(),
+            log_file,
+            sender,
+            state.players.clone(),
+            state.world_saves.clone(),
+            state.activity.clone(),
+        ))
+        .abort_handle();
         tailers.insert(name.clone(), handle);
     }
 }
@@ -835,7 +718,6 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
         crate::db::container_instances::set_desired_running(&db, &identity.id, true).unwrap();
         let state = AppState::new(paths.clone(), db.clone());
 
@@ -911,7 +793,6 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
         let desired =
             |db: &Db| crate::db::container_instances::desired_running(db, &identity.id).unwrap();
 
@@ -967,7 +848,6 @@ mod tests {
         let mut config = instance.config.clone();
         config.auto_restart = true;
         crate::db::game_instances::update_rust_config(&db, "rusty", &config).unwrap();
-        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
         crate::db::container_instances::set_desired_running(&db, &instance.identity.id, true)
             .unwrap();
 
@@ -997,7 +877,6 @@ mod tests {
             true,
         )
         .unwrap();
-        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
         crate::db::container_instances::set_desired_running(&db, &instance.identity.id, true)
             .unwrap();
 
@@ -1013,7 +892,7 @@ mod tests {
         let Some((state, db, root)) = container_state("stop-7d2d") else {
             return;
         };
-        let instance = crate::db::game_instances::create_generic(
+        crate::db::game_instances::create_generic(
             &state.paths,
             &db,
             GameId::SevenDaysToDie,
@@ -1027,7 +906,6 @@ mod tests {
             true,
         )
         .unwrap();
-        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
 
         assert!(
             run_telemetry_tick(&state)
@@ -1047,7 +925,6 @@ mod tests {
                 .unwrap();
         crate::db::game_instances::set_generic_auto_restart(&db, GameId::Palworld, "pals", true)
             .unwrap();
-        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
         crate::db::container_instances::set_desired_running(&db, &instance.identity.id, true)
             .unwrap();
 
@@ -1063,12 +940,10 @@ mod tests {
         let Some((state, db, root)) = container_state("stop-palworld") else {
             return;
         };
-        let instance =
-            crate::db::game_instances::create_generic(&state.paths, &db, GameId::Palworld, "pals")
-                .unwrap();
+        crate::db::game_instances::create_generic(&state.paths, &db, GameId::Palworld, "pals")
+            .unwrap();
         crate::db::game_instances::set_generic_auto_restart(&db, GameId::Palworld, "pals", true)
             .unwrap();
-        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
 
         assert!(
             run_telemetry_tick(&state)

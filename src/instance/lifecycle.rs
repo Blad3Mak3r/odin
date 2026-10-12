@@ -1,21 +1,14 @@
 use std::fmt::Write;
 use std::fs::{File, OpenOptions, TryLockError};
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
 use sha2::{Digest, Sha256};
-use sysinfo::Signal;
 
-use super::{Instance, InstanceError, process};
+use super::{Instance, InstanceError};
 use crate::cli::validate_instance_name;
 use crate::db::Db;
 use crate::game::GameId;
 use crate::paths::{self, Paths};
-use crate::supervisor;
-
-const STOP_TIMEOUT: Duration = Duration::from_secs(30);
-const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cross-process, per-instance exclusion for lifecycle transitions. The
 /// empty lock file is intentionally persistent; the OS releases the lock
@@ -90,148 +83,6 @@ impl LifecycleLocks {
     }
 }
 
-/// The single canonical liveness check: a live `(pid, pid_started_at)`
-/// comparison against the OS process table, never a cached/in-memory
-/// value. Correct standalone (no `odin serve` needed) and from the web
-/// layer alike.
-pub fn is_running(instance: &Instance) -> Result<bool> {
-    Ok(match (instance.state.pid, instance.state.pid_started_at) {
-        (Some(pid), Some(pid_started_at)) => process::is_alive(pid, pid_started_at),
-        _ => false,
-    })
-}
-
-/// Everything `start` needs to do before actually spawning a process:
-/// load-or-create the instance, guard against a double-start, verify the
-/// server binary is installed, and prepare the on-disk layout. Split out so
-/// `supervisor::server` (the `odin run` supervisor process itself) can call
-/// it directly — it no longer goes through `start`'s spawn step, since it
-/// *is* what does the spawning now.
-pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let instance = Instance::load_or_create(paths, db, name)?;
-
-    if is_running(&instance)? {
-        bail!(InstanceError::AlreadyRunning(name.to_string()));
-    }
-
-    let server_binary = paths.shared_install_dir().join("valheim_server.x86_64");
-    if !server_binary.is_file() {
-        bail!(
-            "Valheim dedicated server is not installed (expected {}); run `odin install` first",
-            server_binary.display()
-        );
-    }
-
-    check_port_available(paths, db, &instance)?;
-    prepare_instance_layout(paths, &instance)?;
-
-    Ok(instance)
-}
-
-/// Starts (creating first, if new) an instance's server process: spawns
-/// `odin run --instance <name>` detached (the supervisor process that
-/// actually launches and owns Valheim — see `supervisor::server`) and waits
-/// for it to become responsive. The supervisor records `(pid,
-/// pid_started_at)` in the database itself once it spawns the process, so
-/// this just reloads the instance afterwards to pick that up.
-pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
-    start_unlocked(paths, db, name).await
-}
-
-async fn start_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let instance = prepare_start(paths, db, name)?;
-    let identity =
-        crate::db::game_instances::ensure_valheim_identity(db, name, instance.state.created_at)?;
-
-    supervisor::client::spawn_detached(paths, &identity)
-        .await
-        .with_context(|| format!("failed to start instance '{name}'"))?;
-    supervisor::client::ping_with_retry(paths, GameId::Valheim, name, SUPERVISOR_START_TIMEOUT)
-        .await
-        .with_context(|| format!("failed to start instance '{name}'"))?;
-
-    Instance::load_existing(paths, db, name)
-}
-
-/// Stops a running instance. Prefers asking the live supervisor to do it
-/// (`supervisor::client::stop`) — it owns the `Child` directly, so there's
-/// no pid-fingerprint race to worry about on its side. Falls back to
-/// signalling by pid directly only when no supervisor is reachable: an
-/// instance started by a pre-upgrade binary, or one whose supervisor has
-/// already crashed. Either way, this function only returns once the
-/// process is actually gone (or `STOP_TIMEOUT` has been given a full
-/// chance, supervisor-side escalation included).
-pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
-    stop_unlocked(paths, db, name).await
-}
-
-async fn stop_unlocked(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let instance = Instance::load_existing(paths, db, name)?;
-
-    let (Some(pid), Some(pid_started_at)) = (instance.state.pid, instance.state.pid_started_at)
-    else {
-        bail!(InstanceError::NotRunning(name.to_string()));
-    };
-    if !process::is_alive(pid, pid_started_at) {
-        bail!(InstanceError::NotRunning(name.to_string()));
-    }
-
-    match supervisor::client::stop(paths, GameId::Valheim, name, STOP_TIMEOUT.as_secs()).await {
-        Ok(()) => {
-            // The supervisor owns the shutdown sequence (SIGINT, then its
-            // own SIGKILL escalation after STOP_TIMEOUT) and clears the DB
-            // pid itself once the process is gone. Give it a bit more than
-            // its own timeout budget so that escalation has time to land.
-            if !process::wait_until_gone(
-                pid,
-                pid_started_at,
-                STOP_TIMEOUT + Duration::from_secs(10),
-            )
-            .await
-            {
-                bail!(
-                    "instance '{name}' did not stop even after the supervisor's own shutdown timeout"
-                );
-            }
-            Ok(())
-        }
-        Err(_) => stop_via_pid_signal(db, name, pid, pid_started_at).await,
-    }
-}
-
-/// Direct pid-based stop: SIGINT, wait up to `STOP_TIMEOUT`, SIGKILL as a
-/// fallback. The only path taken when no supervisor is reachable for this
-/// instance — see `stop`'s doc comment.
-async fn stop_via_pid_signal(db: &Db, name: &str, pid: u32, pid_started_at: i64) -> Result<()> {
-    process::send_signal(pid, pid_started_at, Signal::Interrupt)?;
-    if !process::wait_until_gone(pid, pid_started_at, STOP_TIMEOUT).await {
-        tracing::warn!(
-            instance = name,
-            "graceful shutdown did not complete within {:?}; sending SIGKILL (possible data loss)",
-            STOP_TIMEOUT
-        );
-        process::send_signal(pid, pid_started_at, Signal::Kill)?;
-        process::wait_until_gone(pid, pid_started_at, Duration::from_secs(5)).await;
-    }
-
-    crate::db::instances::clear_pid(db, name, Utc::now())?;
-
-    Ok(())
-}
-
-/// Stops the instance if it's running, then starts it again. Requires the
-/// instance to already exist (unlike `start`, which creates it on demand).
-pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
-    let instance = Instance::load_existing(paths, db, name)?;
-    if is_running(&instance)? {
-        stop_unlocked(paths, db, name).await?;
-    }
-    start_unlocked(paths, db, name).await
-}
-
 /// Renames an instance on disk and in its state, provided it isn't running
 /// and no instance already exists under `new_name`. The world name (and thus
 /// its save files) is left untouched — only the instance's own identity moves.
@@ -250,7 +101,7 @@ pub fn rename(paths: &Paths, db: &Db, old_name: &str, new_name: &str) -> Result<
 pub fn delete(paths: &Paths, db: &Db, name: &str, keep_backups: bool) -> Result<()> {
     let _lock = LifecycleLock::acquire(paths, GameId::Valheim, name)?;
     let instance = Instance::load_existing(paths, db, name)?;
-    if is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         bail!(InstanceError::AlreadyRunning(name.to_string()));
     }
 
@@ -294,36 +145,6 @@ pub(crate) fn delete_instance_dir(
     Ok(())
 }
 
-fn check_port_available(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-    crate::game::ports::ensure_available(
-        paths,
-        db,
-        GameId::Valheim,
-        &instance.state.name,
-        crate::game::ports::block(GameId::Valheim, instance.state.port)?,
-    )
-}
-
-fn prepare_instance_layout(paths: &Paths, instance: &Instance) -> Result<()> {
-    std::fs::create_dir_all(&instance.dir)
-        .with_context(|| format!("failed to create instance dir {}", instance.dir.display()))?;
-    std::fs::create_dir_all(paths::instance_saves_dir(&instance.dir))?;
-    std::fs::create_dir_all(paths::instance_logs_dir(&instance.dir))?;
-
-    let symlink = paths::instance_server_symlink(&instance.dir);
-    if !symlink.exists() {
-        std::os::unix::fs::symlink(paths.shared_install_dir(), &symlink).with_context(|| {
-            format!(
-                "failed to symlink {} -> {}",
-                symlink.display(),
-                paths.shared_install_dir().display()
-            )
-        })?;
-    }
-
-    Ok(())
-}
-
 // The real-Valheim-binary end-to-end test that used to live here moved to
 // `supervisor::server`'s test module: `start`'s spawn step now re-execs
 // odin's own binary (`std::env::current_exe()`) as `odin run`, which only
@@ -336,6 +157,7 @@ mod tests {
     use super::*;
     use crate::instance::lists::{self, ListKind};
     use crate::instance::state::InstalledMod;
+    use chrono::Utc;
 
     fn temp_paths(label: &str) -> Paths {
         let dir = std::env::temp_dir().join(format!(

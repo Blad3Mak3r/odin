@@ -98,7 +98,7 @@ pub async fn spawn_install(state: &AppState, name: String) -> ApiResult<JobHandl
                 BadRequest(format!("BepInEx is already installed on '{check_name}'")).into(),
             );
         }
-        if crate::instance::lifecycle::is_running(&instance)? {
+        if crate::podman::valheim::is_running(&paths, &db, &instance)? {
             return Err(InstanceError::ModsLocked(check_name).into());
         }
         Ok(bepinex::latest_version(&db)?.version_number)
@@ -144,7 +144,7 @@ pub async fn spawn_update(state: &AppState, name: String) -> ApiResult<JobHandle
         if !instance.state.bepinex_installed {
             return Err(BadRequest(format!("BepInEx is not installed on '{check_name}'")).into());
         }
-        if crate::instance::lifecycle::is_running(&instance)? {
+        if crate::podman::valheim::is_running(&paths, &db, &instance)? {
             return Err(InstanceError::ModsLocked(check_name).into());
         }
         let latest = bepinex::latest_version(&db)?.version_number;

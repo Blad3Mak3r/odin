@@ -115,3 +115,50 @@ pub(crate) fn fake_runtime(socket: &std::path::Path) -> std::thread::JoinHandle<
         stream.write_all(format!("{pong}\n").as_bytes()).unwrap();
     })
 }
+
+/// Points `paths` at a Podman API that reports the containers of the given
+/// instance ids as running and every other container as missing, so a test
+/// can make an instance count as running. The server thread lives until the
+/// test process exits. Returns `false` when the sandbox forbids Unix sockets,
+/// in which case the test should skip itself.
+pub(crate) fn podman_reporting_running(paths: &Paths, running_ids: &[&str]) -> bool {
+    let socket = paths.data_dir.join("podman.sock");
+    std::fs::create_dir_all(&paths.data_dir).unwrap();
+    std::fs::create_dir_all(&paths.config_dir).unwrap();
+    let listener = match UnixListener::bind(&socket) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return false,
+        Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+    };
+    write_podman_config(paths, &socket);
+    let running_ids: Vec<String> = running_ids.iter().map(ToString::to_string).collect();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                    break;
+                }
+            }
+            let (status, body) = if running_ids.iter().any(|id| line.contains(id.as_str())) {
+                ("200 OK", r#"{"State":{"Running":true,"Status":"running"}}"#)
+            } else {
+                ("404 Not Found", r#"{"cause":"no such container"}"#)
+            };
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    true
+}

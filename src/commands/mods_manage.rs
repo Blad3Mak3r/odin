@@ -2,14 +2,14 @@ use anyhow::{Context, Result};
 use dialoguer::MultiSelect;
 
 use crate::db::Db;
+use crate::instance::Instance;
 use crate::instance::state::InstalledMod;
-use crate::instance::{Instance, lifecycle};
 use crate::mods;
 use crate::paths::Paths;
 
 pub fn run(paths: &Paths, db: &Db, server_name: &str) -> Result<()> {
     let instance = Instance::load_existing(paths, db, server_name)?;
-    if lifecycle::is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         anyhow::bail!(
             "'{server_name}' is running; stop it first with `odin stop {server_name}` before managing mods"
         );

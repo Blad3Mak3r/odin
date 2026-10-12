@@ -31,12 +31,7 @@ pub async fn set_resource_limits(
     let paths = state.paths.clone();
     let saved_id = id.clone();
     let saved = run_blocking(move || resource_limits::save(&db, &saved_id, &limits)).await?;
-    if crate::game::driver(identity.game)
-        .capabilities()
-        .container_runtime
-    {
-        crate::podman::lifecycle::update_limits(&paths, &state.db, identity.game, &id).await?;
-    }
+    crate::podman::lifecycle::update_limits(&paths, &state.db, identity.game, &id).await?;
     Ok(Json(saved))
 }
 

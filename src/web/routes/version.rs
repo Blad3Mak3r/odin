@@ -5,7 +5,7 @@ use axum::extract::State;
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::instance::{self, lifecycle};
+use crate::instance;
 use crate::odin_update;
 use crate::paths::Paths;
 use crate::supervisor::client;
@@ -43,18 +43,21 @@ pub async fn get_version(State(state): State<AppState>) -> ApiResult<Json<Versio
 fn outdated_running_instances(paths: &Paths, db: &Db) -> anyhow::Result<Vec<String>> {
     let mut outdated = Vec::new();
     for instance in instance::list_all(paths, db)? {
-        if !lifecycle::is_running(&instance)? {
+        if !crate::podman::valheim::is_running(paths, db, &instance)? {
             continue;
         }
 
+        let identity = crate::db::game_instances::ensure_valheim_identity(
+            db,
+            &instance.state.name,
+            instance.state.created_at,
+        )?;
         let Ok(Response::Pong {
             protocol_version,
             odin_version,
             ..
-        }) = client::ping_blocking(
-            paths,
-            crate::game::GameId::Valheim,
-            &instance.state.name,
+        }) = client::ping_socket_blocking(
+            &crate::podman::lifecycle::control_socket(paths, &identity),
             SUPERVISOR_PING_TIMEOUT,
         )
         else {

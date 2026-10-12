@@ -1,7 +1,6 @@
 //! Durable storage for instance state, backing `crate::instance::Instance`.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, Transaction, params};
 
 use super::Db;
@@ -238,38 +237,6 @@ pub fn set_bepinex(db: &Db, name: &str, installed: bool, version: Option<&str>) 
     Ok(())
 }
 
-/// Persists a freshly spawned process's identity fingerprint after a
-/// successful `start()`. Narrower than [`save`] so it can't clobber a
-/// concurrent edit to an unrelated column.
-pub fn set_pid(
-    db: &Db,
-    name: &str,
-    pid: u32,
-    pid_started_at: i64,
-    started_at: DateTime<Utc>,
-) -> Result<()> {
-    db.conn()
-        .execute(
-            "UPDATE valheim_instance_configs SET pid = ?2, pid_started_at = ?3, last_started_at = ?4 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
-            params![name, pid, pid_started_at, started_at],
-        )
-        .with_context(|| format!("failed to record pid for instance '{name}'"))?;
-    Ok(())
-}
-
-/// Clears a stopped instance's pid fingerprint and stamps `last_stopped_at`.
-/// Used both by an explicit `stop()` and by reconciliation when a persisted
-/// pid is found to be dead.
-pub fn clear_pid(db: &Db, name: &str, stopped_at: DateTime<Utc>) -> Result<()> {
-    db.conn()
-        .execute(
-            "UPDATE valheim_instance_configs SET pid = NULL, pid_started_at = NULL, last_stopped_at = ?2 WHERE instance_id = (SELECT id FROM game_instances WHERE game = 'valheim' AND name = ?1)",
-            params![name, stopped_at],
-        )
-        .with_context(|| format!("failed to clear pid for instance '{name}'"))?;
-    Ok(())
-}
-
 fn load_installed_mods(conn: &Connection, instance_name: &str) -> Result<Vec<InstalledMod>> {
     let mut stmt = conn.prepare(
         "SELECT m.mod_id, m.version, m.installed_at, m.enabled, m.pinned FROM installed_mods m \
@@ -379,24 +346,6 @@ mod tests {
         assert_eq!(loaded.port, original.port);
         assert_eq!(loaded.installed_mods.len(), 1);
         assert_eq!(loaded.bepinex_version.as_deref(), Some("5.4.2305"));
-    }
-
-    #[test]
-    fn set_pid_then_clear_pid_round_trips() {
-        let db = temp_db("set-clear-pid");
-        save(&db, &sample("my-server")).unwrap();
-
-        set_pid(&db, "my-server", 4242, 1_700_000_000, Utc::now()).unwrap();
-        let running = load(&db, "my-server").unwrap().unwrap();
-        assert_eq!(running.pid, Some(4242));
-        assert_eq!(running.pid_started_at, Some(1_700_000_000));
-        assert!(running.last_started_at.is_some());
-
-        clear_pid(&db, "my-server", Utc::now()).unwrap();
-        let stopped = load(&db, "my-server").unwrap().unwrap();
-        assert_eq!(stopped.pid, None);
-        assert_eq!(stopped.pid_started_at, None);
-        assert!(stopped.last_stopped_at.is_some());
     }
 
     #[test]

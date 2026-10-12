@@ -59,14 +59,6 @@ impl ContainerGame for Rust {
     fn extra_mounts(_paths: &Paths) -> Vec<Mount> {
         Vec::new()
     }
-
-    fn running_directly(instance: &RustInstance) -> Result<bool> {
-        Ok(rust::is_running_directly(instance))
-    }
-
-    async fn stop_directly(paths: &Paths, db: &Db, instance: &RustInstance) -> Result<()> {
-        rust::stop(paths, db, instance).await
-    }
 }
 
 pub fn is_running(paths: &Paths, db: &Db, instance: &RustInstance) -> Result<bool> {
@@ -95,7 +87,6 @@ mod tests {
         write_podman_config(&paths, &podman_socket);
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        dispatch::mark_new_instance(&paths, &db, GameId::Rust, instance.name()).unwrap();
         // An operator's native document must keep its own values and keys.
         let cfg = rust::identity_dir(&paths, &instance).join("cfg/server.cfg");
         std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
@@ -154,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn a_container_decides_whether_a_migrated_instance_is_running() {
+    fn a_container_decides_whether_an_instance_is_running() {
         let paths = temp_paths("rust-running");
         let podman_socket = paths.data_dir.join("podman.sock");
         let listener = match UnixListener::bind(&podman_socket) {
@@ -183,9 +174,6 @@ mod tests {
         write_podman_config(&paths, &podman_socket);
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        assert!(!is_running(&paths, &db, &instance).unwrap());
-
-        container_instances::mark_podman(&db, &instance.identity.id).unwrap();
 
         assert!(is_running(&paths, &db, &instance).unwrap());
         let line = server.join().unwrap();
@@ -194,16 +182,14 @@ mod tests {
     }
 
     #[test]
-    fn migration_prepares_the_layout_before_marking_the_instance() {
-        let paths = temp_paths("rust-migrate");
+    fn preparing_the_layout_writes_the_runtime_spec_and_keeps_existing_data() {
+        let paths = temp_paths("rust-layout");
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        assert!(!lifecycle::is_migrated::<Rust>(&db, &instance).unwrap());
 
-        dispatch::migrate(&paths, &db, GameId::Rust, "rusty").unwrap();
-        dispatch::migrate(&paths, &db, GameId::Rust, "rusty").unwrap();
+        dispatch::sync_spec(&paths, &db, GameId::Rust, "rusty").unwrap();
+        dispatch::sync_spec(&paths, &db, GameId::Rust, "rusty").unwrap();
 
-        assert!(lifecycle::is_migrated::<Rust>(&db, &instance).unwrap());
         assert!(runtime_spec_exists(&paths, &instance));
         assert!(
             paths
@@ -216,26 +202,6 @@ mod tests {
 
     fn runtime_spec_exists(paths: &Paths, instance: &RustInstance) -> bool {
         super::super::runtime_spec_path(paths, GameId::Rust, &instance.identity.id).is_file()
-    }
-
-    #[test]
-    fn migration_refuses_a_server_still_running_on_the_host() {
-        let paths = temp_paths("rust-migrate-running");
-        let db = Db::open(&paths).unwrap();
-        let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        game_instances::set_rust_pid(
-            &db,
-            "rusty",
-            std::process::id(),
-            crate::instance::process::start_time_of(std::process::id()).unwrap(),
-            chrono::Utc::now(),
-        )
-        .unwrap();
-
-        assert!(dispatch::migrate(&paths, &db, GameId::Rust, "rusty").is_err());
-        assert!(!lifecycle::is_migrated::<Rust>(&db, &instance).unwrap());
-        assert!(!runtime_spec_exists(&paths, &instance));
-        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[tokio::test]
@@ -272,7 +238,6 @@ mod tests {
         write_podman_config(&paths, &podman_socket);
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
-        dispatch::mark_new_instance(&paths, &db, GameId::Rust, instance.name()).unwrap();
         let control = paths
             .container_socket_dir(&instance.identity.id)
             .join(format!("rust-{}.control.sock", instance.name()));

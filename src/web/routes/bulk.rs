@@ -11,11 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::game_instances;
 use crate::game::GameId;
-use crate::instance::lifecycle;
 use crate::web::error::{BadRequest, run_blocking};
 use crate::web::routes::bepinex;
 use crate::web::routes::mods::{JobHandle, spawn_mod_update_job};
-use crate::web::runtime::InstanceTransition;
 use crate::web::state::AppState;
 
 /// Bounds one UUID-based bulk request and makes result allocation independent
@@ -25,79 +23,6 @@ const MAX_BULK_INSTANCE_IDS: usize = 100;
 #[derive(Deserialize)]
 pub struct BulkRequest {
     pub names: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct BulkResult {
-    pub name: String,
-    pub ok: bool,
-    pub error: Option<String>,
-}
-
-pub async fn bulk_start(
-    State(state): State<AppState>,
-    Json(req): Json<BulkRequest>,
-) -> Json<Vec<BulkResult>> {
-    let mut results = Vec::with_capacity(req.names.len());
-    for name in req.names {
-        let result = match state
-            .runtime
-            .begin_transition(&name, InstanceTransition::Starting)
-        {
-            Ok(_transition) => lifecycle::start(&state.paths, &state.db, &name).await,
-            Err(error) => Err(error.into()),
-        };
-        results.push(BulkResult {
-            ok: result.is_ok(),
-            error: result.err().map(|e| format!("{e:#}")),
-            name,
-        });
-    }
-    Json(results)
-}
-
-pub async fn bulk_stop(
-    State(state): State<AppState>,
-    Json(req): Json<BulkRequest>,
-) -> Json<Vec<BulkResult>> {
-    let mut results = Vec::with_capacity(req.names.len());
-    for name in req.names {
-        let result = match state
-            .runtime
-            .begin_transition(&name, InstanceTransition::Stopping)
-        {
-            Ok(_transition) => lifecycle::stop(&state.paths, &state.db, &name).await,
-            Err(error) => Err(error.into()),
-        };
-        results.push(BulkResult {
-            ok: result.is_ok(),
-            error: result.err().map(|e| format!("{e:#}")),
-            name,
-        });
-    }
-    Json(results)
-}
-
-pub async fn bulk_restart(
-    State(state): State<AppState>,
-    Json(req): Json<BulkRequest>,
-) -> Json<Vec<BulkResult>> {
-    let mut results = Vec::with_capacity(req.names.len());
-    for name in req.names {
-        let result = match state
-            .runtime
-            .begin_transition(&name, InstanceTransition::Restarting)
-        {
-            Ok(_transition) => lifecycle::restart(&state.paths, &state.db, &name).await,
-            Err(error) => Err(error.into()),
-        };
-        results.push(BulkResult {
-            ok: result.is_ok(),
-            error: result.err().map(|e| format!("{e:#}")),
-            name,
-        });
-    }
-    Json(results)
 }
 
 // Not `ApiResult`-wrapped for the same reason `mods::update_mods` isn't:

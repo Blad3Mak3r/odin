@@ -1,8 +1,6 @@
 //! Game-neutral Podman lifecycle. A game only describes the few facts that
 //! differ ([`ContainerGame`]); creating, starting, stopping, repairing and
-//! probing its container is the same for every game. Instances that were not
-//! explicitly migrated are kept stopped until an operator adopts them through
-//! `migrate`.
+//! probing its container is the same for every game.
 
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
@@ -46,7 +44,7 @@ pub trait ContainerGame {
     /// Every port the server binds, for the conflict check before starting.
     fn ports(instance: &Self::Instance) -> Result<Vec<u16>>;
     /// Creates the host directories and writes the runtime spec. Safe to
-    /// repeat: it runs before every start, repair and migration.
+    /// repeat: it runs before every start and repair.
     fn prepare_layout(
         paths: &Paths,
         identity: &GameInstanceIdentity,
@@ -54,11 +52,6 @@ pub trait ContainerGame {
     ) -> Result<()>;
     /// Mounts only this game needs, on top of the shared ones.
     fn extra_mounts(paths: &Paths) -> Vec<Mount>;
-    /// Whether the pre-migration host process is alive.
-    fn running_directly(instance: &Self::Instance) -> Result<bool>;
-    /// Stops a server that was started before the instance was migrated and
-    /// is therefore still a host process.
-    async fn stop_directly(paths: &Paths, db: &Db, instance: &Self::Instance) -> Result<()>;
 }
 
 /// Why a container is being stopped, which decides whether Odin remembers that
@@ -123,49 +116,7 @@ fn config(paths: &Paths, game: GameId) -> Result<PodmanConfig> {
     })
 }
 
-pub(super) fn require_migrated(db: &Db, identity: &GameInstanceIdentity) -> Result<()> {
-    if container_instances::is_podman(db, &identity.id)? {
-        Ok(())
-    } else {
-        bail!(
-            "{} instance '{}' has not been migrated to Podman; stop it and use the migration action first",
-            display(identity.game),
-            identity.name
-        )
-    }
-}
-
-/// Adopts a stopped legacy instance without reading, copying, or removing its
-/// shared host installation. The marker is inserted only after all resumable
-/// host directories and the runtime spec are prepared.
-pub fn migrate<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
-    let instance = G::load(paths, db, name)?;
-    if G::running_directly(&instance)? {
-        bail!(InstanceError::AlreadyRunning(name.to_string()));
-    }
-    let identity = G::identity(db, &instance)?;
-    if container_instances::is_podman(db, &identity.id)? {
-        return Ok(());
-    }
-    G::prepare_layout(paths, &identity, &instance)?;
-    container_instances::mark_podman(db, &identity.id)?;
-    Ok(())
-}
-
-/// Marks a newly-created instance as containerized. It does not pull an image
-/// or create a container, so creation remains offline and cheap.
-pub fn mark_new_instance<G: ContainerGame>(db: &Db, instance: &G::Instance) -> Result<()> {
-    let identity = G::identity(db, instance)?;
-    container_instances::mark_podman(db, &identity.id)
-}
-
-pub fn is_migrated<G: ContainerGame>(db: &Db, instance: &G::Instance) -> Result<bool> {
-    let identity = G::identity(db, instance)?;
-    container_instances::is_podman(db, &identity.id)
-}
-
-/// Reports every boundary needed to start a migrated runtime without mutating
+/// Reports every boundary needed to start a runtime without mutating
 /// Podman, the runtime volume, or the instance data directory.
 pub async fn runtime_health<G: ContainerGame>(
     paths: &Paths,
@@ -174,7 +125,6 @@ pub async fn runtime_health<G: ContainerGame>(
 ) -> Result<RuntimeHealth> {
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
-    require_migrated(db, &identity)?;
     let control_socket = control_socket(paths, &identity);
     let game = display(G::GAME);
 
@@ -283,7 +233,6 @@ pub async fn repair<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Res
     let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
-    require_migrated(db, &identity)?;
     let config = config(paths, G::GAME)?;
     let client = PodmanClient::from_config(&config)?;
     client.ensure_supported().await?;
@@ -311,10 +260,7 @@ pub async fn repair<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Res
 
 pub fn sync_spec<G: ContainerGame>(paths: &Paths, db: &Db, instance: &G::Instance) -> Result<()> {
     let identity = G::identity(db, instance)?;
-    if container_instances::is_podman(db, &identity.id)? {
-        G::prepare_layout(paths, &identity, instance)?;
-    }
-    Ok(())
+    G::prepare_layout(paths, &identity, instance)
 }
 
 pub fn is_running<G: ContainerGame>(
@@ -323,13 +269,10 @@ pub fn is_running<G: ContainerGame>(
     instance: &G::Instance,
 ) -> Result<bool> {
     let identity = G::identity(db, instance)?;
-    if !container_instances::is_podman(db, &identity.id)? {
-        return G::running_directly(instance);
-    }
     container_is_running(paths, &identity)
 }
 
-/// Whether the container of a migrated instance is running. Without a
+/// Whether the container of an instance is running. Without a
 /// configured Podman socket Odin cannot have created one.
 pub fn container_is_running(paths: &Paths, identity: &GameInstanceIdentity) -> Result<bool> {
     let Some(config) = GlobalConfig::load(paths)?.podman else {
@@ -347,9 +290,6 @@ pub async fn is_running_async<G: ContainerGame>(
     instance: &G::Instance,
 ) -> Result<bool> {
     let identity = G::identity(db, instance)?;
-    if !container_instances::is_podman(db, &identity.id)? {
-        return G::running_directly(instance);
-    }
     let client = PodmanClient::from_config(&config(paths, G::GAME)?)?;
     Ok(client
         .inspect(&container_name(G::GAME, &identity.id))
@@ -361,7 +301,6 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
-    require_migrated(db, &identity)?;
     crate::game::ports::ensure_available(paths, db, G::GAME, name, G::ports(&instance)?)?;
     G::prepare_layout(paths, &identity, &instance)?;
 
@@ -441,7 +380,6 @@ pub async fn stop<G: ContainerGame>(
     let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
-    require_migrated(db, &identity)?;
     // Recorded before anything is signalled so a container that is going down
     // can never be mistaken for one that crashed.
     if reason.clears_desired_running() {
@@ -514,7 +452,6 @@ pub async fn restart<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Re
 pub async fn update<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
-    require_migrated(db, &identity)?;
     if !is_running_async::<G>(paths, db, &instance).await? {
         bail!(
             "{} update requires a running instance; Odin will not start it implicitly",
@@ -525,10 +462,10 @@ pub async fn update<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Res
 }
 
 pub async fn update_limits(paths: &Paths, db: &Db, game: GameId, instance_id: &str) -> Result<()> {
-    if !container_instances::is_podman(db, instance_id)? {
+    // Without a configured socket Odin cannot have created a container.
+    let Some(config) = GlobalConfig::load(paths)?.podman else {
         return Ok(());
-    }
-    let config = config(paths, game)?;
+    };
     let client = PodmanClient::from_config(&config)?;
     let container = container_name(game, instance_id);
     if client.inspect(&container).await?.is_none() {
@@ -540,9 +477,6 @@ pub async fn update_limits(paths: &Paths, db: &Db, game: GameId, instance_id: &s
 
 pub fn remove<G: ContainerGame>(paths: &Paths, db: &Db, instance: &G::Instance) -> Result<()> {
     let identity = G::identity(db, instance)?;
-    if !container_instances::is_podman(db, &identity.id)? {
-        return Ok(());
-    }
     // Without a configured socket Odin cannot have created a container.
     if let Some(config) = GlobalConfig::load(paths)?.podman {
         PodmanClient::from_config(&config)?

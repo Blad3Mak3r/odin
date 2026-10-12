@@ -4,9 +4,9 @@ use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bepinex, bulk, changelog, config_files, diagnostics, doctor, events, games, install,
-    instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
-    rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, version, webhooks,
+    backups, bepinex, bulk, changelog, config_files, doctor, events, games, install, instances,
+    jobs, lists, mods, nexus, palworld, players, resource_limits, resources, rust_access_lists,
+    saves, settings, seven_days_to_die, uptime_schedules, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -115,10 +115,6 @@ pub fn build_router(state: AppState) -> Router {
             post(instances::clone_instance_by_id),
         )
         .route(
-            "/instances/{id}/runtime/migrate",
-            post(games::migrate_runtime_by_id),
-        )
-        .route(
             "/instances/{id}/runtime/health",
             get(games::get_runtime_health_by_id),
         )
@@ -129,10 +125,6 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{id}/runtime/update",
             post(games::update_runtime_by_id),
-        )
-        .route(
-            "/instances/{id}/valheim/last-exit",
-            get(diagnostics::get_last_exit_by_id),
         )
         .route(
             "/instances/{id}/valheim/players",
@@ -348,9 +340,6 @@ pub fn build_router(state: AppState) -> Router {
             "/instances",
             get(instances::list_instances).post(instances::create_instance),
         )
-        .route("/instances/bulk/start", post(bulk::bulk_start))
-        .route("/instances/bulk/stop", post(bulk::bulk_stop))
-        .route("/instances/bulk/restart", post(bulk::bulk_restart))
         .route("/instances/bulk/mods/update", post(bulk::bulk_update_mods))
         .route(
             "/instances/bulk/bepinex/update",
@@ -426,7 +415,6 @@ mod tests {
     use crate::instance::Instance;
     use crate::paths::Paths;
     use std::io::{Cursor, Write};
-    use std::process::Command;
     use std::sync::Arc;
 
     fn seven_days_mod_zip() -> Vec<u8> {
@@ -578,16 +566,9 @@ mod tests {
             "active-undead",
         )
         .unwrap();
-        let pid = std::process::id();
-        crate::db::game_instances::set_generic_pid(
-            &db,
-            crate::game::GameId::SevenDaysToDie,
-            "active-undead",
-            pid,
-            crate::instance::process::start_time_of(pid).unwrap(),
-            chrono::Utc::now(),
-        )
-        .unwrap();
+        if !crate::podman::test_support::podman_reporting_running(&paths, &[&active.identity.id]) {
+            return;
+        }
         let app = build_router(AppState::new(paths.clone(), db));
 
         let response = app
@@ -808,10 +789,9 @@ mod tests {
         )
         .unwrap()
         .id;
-        let mut child = Command::new("sleep").arg("60").spawn().unwrap();
-        let pid = child.id();
-        let started_at = crate::instance::process::start_time_of(pid).unwrap();
-        crate::db::instances::set_pid(&db, "meadows", pid, started_at, chrono::Utc::now()).unwrap();
+        if !crate::podman::test_support::podman_reporting_running(&paths, &[&id]) {
+            return;
+        }
 
         let app = build_router(AppState::new(paths.clone(), db));
         let request = Request::builder()
@@ -822,8 +802,6 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        child.kill().unwrap();
-        child.wait().unwrap();
         std::fs::remove_dir_all(paths.data_dir).unwrap();
     }
 
@@ -963,14 +941,9 @@ mod tests {
             assert_eq!(saved.config.rcon_port, 31000);
         }
 
-        crate::db::game_instances::set_rust_pid(
-            &db,
-            "rusty",
-            std::process::id(),
-            crate::instance::process::start_time_of(std::process::id()).unwrap(),
-            chrono::Utc::now(),
-        )
-        .unwrap();
+        if !crate::podman::test_support::podman_reporting_running(&paths, &[&rust_id]) {
+            return;
+        }
         let request = Request::builder()
             .method("PUT")
             .uri(format!("/api/instances/{rust_id}/config"))
@@ -1285,7 +1258,6 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
         let app = build_router(AppState::new(paths.clone(), db));
 
         let response = app

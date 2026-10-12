@@ -14,7 +14,7 @@ use crate::paths::Paths;
 use crate::podman::dispatch;
 use crate::podman::lifecycle::StopReason;
 
-use super::{GameId, generic, rust};
+use super::{GameId, rust};
 
 pub enum GameInstance {
     Valheim(Instance),
@@ -57,12 +57,6 @@ pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameIn
             GameInstance::Generic(instance)
         }
     };
-    // New instances of a containerized game are born containerized. Existing
-    // rows do not receive this marker and require an explicit stopped-instance
-    // migration.
-    if dispatch::is_container_game(game) {
-        dispatch::mark_new_instance(paths, db, game, name)?;
-    }
     crate::db::backup_schedules::upsert_for_game(
         db,
         game,
@@ -90,23 +84,12 @@ pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInst
 /// game. Used by background policy loops before they decide whether a
 /// lifecycle operation is needed.
 pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
-    if dispatch::is_container_game(game) {
-        return dispatch::is_running(paths, db, game, name);
-    }
-    match load(paths, db, game, name)? {
-        GameInstance::Generic(instance) => Ok(instance.is_running_directly()),
-        GameInstance::Valheim(_) | GameInstance::Rust(_) => unreachable!("container games"),
-    }
+    dispatch::is_running(paths, db, game, name)
 }
 
 pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
-    if dispatch::is_container_game(game) {
-        dispatch::start(paths, db, game, name).await?;
-        return load(paths, db, game, name);
-    }
-    generic::start(paths, db, game, name)
-        .await
-        .map(GameInstance::Generic)
+    dispatch::start(paths, db, game, name).await?;
+    load(paths, db, game, name)
 }
 
 /// Stops an instance because an operator asked for it to stay down.
@@ -114,8 +97,8 @@ pub async fn stop(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()
     stop_with(paths, db, game, name, StopReason::Operator).await
 }
 
-/// `reason` only matters to containerized games, which remember whether the
-/// instance should come back after being found stopped.
+/// `reason` decides whether Odin remembers that the instance should come back
+/// after being found stopped.
 pub async fn stop_with(
     paths: &Paths,
     db: &Db,
@@ -123,11 +106,7 @@ pub async fn stop_with(
     name: &str,
     reason: StopReason,
 ) -> Result<()> {
-    if dispatch::is_container_game(game) {
-        dispatch::stop(paths, db, game, name, reason).await?;
-    } else {
-        generic::stop(paths, db, game, name).await?;
-    }
+    dispatch::stop(paths, db, game, name, reason).await?;
     close_player_sessions(db, game, name)
 }
 
@@ -141,20 +120,11 @@ fn close_player_sessions(db: &Db, game: GameId, name: &str) -> Result<()> {
 }
 
 pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
-    if dispatch::is_container_game(game) {
-        if is_running(paths, db, game, name)? {
-            close_player_sessions(db, game, name)?;
-        }
-        dispatch::restart(paths, db, game, name).await?;
-        return load(paths, db, game, name);
-    }
     if is_running(paths, db, game, name)? {
-        generic::stop(paths, db, game, name).await?;
         close_player_sessions(db, game, name)?;
     }
-    generic::start(paths, db, game, name)
-        .await
-        .map(GameInstance::Generic)
+    dispatch::restart(paths, db, game, name).await?;
+    load(paths, db, game, name)
 }
 
 pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bool) -> Result<()> {
@@ -248,7 +218,7 @@ pub fn restore_backup(
         GameInstance::Valheim(_) => {
             let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
             let instance = Instance::load_existing(paths, db, name)?;
-            crate::backup::restore(&instance, db, backup_id)
+            crate::backup::restore(paths, &instance, db, backup_id)
         }
         GameInstance::Rust(instance) => rust::restore_backup(paths, db, &instance, backup_id),
         GameInstance::Generic(instance) => {

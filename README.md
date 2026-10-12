@@ -373,7 +373,8 @@ odin serve --bind 0.0.0.0 --port 8080  # or pick your own address/port
 
 It covers dependency status, fleet search, tags, bulk lifecycle actions,
 instance create/start/stop/restart/rename/clone/delete, game-specific
-configuration, live logs, downloadable save files, scheduled backups, and
+configuration, live logs, a save file browser (download, upload and delete while the
+server is stopped), scheduled backups, and
 live plus historical CPU/RAM usage with CSV export. Each instance also has a
 **Limits** tab for optional CPU and memory ceilings: CPU is expressed as a
 percentage of one core (so `200%` permits two full cores), and memory is

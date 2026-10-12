@@ -13,7 +13,9 @@
 //! 4. Set `container_runtime: true` (and `stop_timeout_secs` if the game needs
 //!    longer than 30 seconds to save) in the game's driver.
 //!
-//! No other host-side code enumerates container games.
+//! No other host-side code enumerates container games. The full migration
+//! checklist, with the traps each earlier game hit, is
+//! `docs/container-game-migration.md`.
 
 use anyhow::Result;
 
@@ -25,7 +27,7 @@ use crate::paths::Paths;
 use crate::supervisor;
 
 use super::lifecycle::{self, ContainerGame, RuntimeHealth, StopReason};
-use super::{rust, seven_days_to_die, valheim};
+use super::{palworld, rust, seven_days_to_die, valheim};
 
 /// Runs `$body` with `$game_type` bound to the [`ContainerGame`] of `$game`,
 /// or evaluates `$otherwise` when that game does not run in a container.
@@ -44,7 +46,11 @@ macro_rules! for_container_game {
                 type $game_type = seven_days_to_die::SevenDaysToDie;
                 $body
             }
-            GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => $otherwise,
+            GameId::Palworld => {
+                type $game_type = palworld::Palworld;
+                $body
+            }
+            GameId::VRising | GameId::RunescapeDragonwilds => $otherwise,
         }
     };
 }

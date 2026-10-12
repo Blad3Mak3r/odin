@@ -229,11 +229,15 @@ impl GameDriver for PalworldDriver {
             mods: false,
             access_lists: true,
             readiness: true,
-            container_runtime: false,
+            container_runtime: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
         GamePortRequirements { count: 1 }
+    }
+    fn stop_timeout_secs(&self) -> u64 {
+        // The REST API's `shutdown` saves the world before the server exits.
+        120
     }
 }
 

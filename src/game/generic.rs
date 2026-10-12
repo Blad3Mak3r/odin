@@ -43,15 +43,16 @@ pub fn prepare_start(
             crate::game::proton_ge::ensure(paths)?;
             crate::game::config_documents::initialize(paths, &instance)?;
         }
-        GameId::Palworld | GameId::RunescapeDragonwilds => {
+        GameId::RunescapeDragonwilds => {
             prepare_native_runtime(paths, &instance)?;
             crate::game::config_documents::initialize(paths, &instance)?;
-            if game == GameId::RunescapeDragonwilds {
-                crate::game::config_documents::validate_dragonwilds(paths, &instance)?;
-            }
+            crate::game::config_documents::validate_dragonwilds(paths, &instance)?;
         }
-        GameId::SevenDaysToDie => {
-            bail!("7 Days to Die runs in Podman; start it through its container runtime")
+        GameId::Palworld | GameId::SevenDaysToDie => {
+            bail!(
+                "{} runs in Podman; start it through its container runtime",
+                driver(game).display_name()
+            )
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
@@ -75,9 +76,12 @@ fn prepare_native_runtime(paths: &Paths, instance: &GenericGameInstance) -> Resu
     let destination = native_runtime_dir(paths, instance);
     sync_runtime_tree(&source, &destination, instance.identity.game, Path::new(""))?;
     let saved = match instance.identity.game {
-        GameId::Palworld => destination.join("Pal/Saved"),
         GameId::RunescapeDragonwilds => destination.join("RSDragonwilds/Saved"),
-        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => unreachable!(),
+        GameId::Valheim
+        | GameId::Rust
+        | GameId::VRising
+        | GameId::Palworld
+        | GameId::SevenDaysToDie => unreachable!(),
     };
     fs::create_dir_all(saved)?;
     Ok(())
@@ -119,9 +123,12 @@ fn sync_runtime_tree(
 
 fn is_instance_data_path(game: GameId, relative: &Path) -> bool {
     match game {
-        GameId::Palworld => relative.starts_with("Pal/Saved"),
         GameId::RunescapeDragonwilds => relative.starts_with("RSDragonwilds/Saved"),
-        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => false,
+        GameId::Valheim
+        | GameId::Rust
+        | GameId::VRising
+        | GameId::Palworld
+        | GameId::SevenDaysToDie => false,
     }
 }
 
@@ -150,10 +157,12 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
         .open(log_dir.join("console.log"))?;
     let stderr = stdout.try_clone()?;
     let runtime_dir = match game {
-        GameId::Palworld | GameId::RunescapeDragonwilds => native_runtime_dir(paths, instance),
-        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => {
-            install_dir.clone()
-        }
+        GameId::RunescapeDragonwilds => native_runtime_dir(paths, instance),
+        GameId::Valheim
+        | GameId::Rust
+        | GameId::VRising
+        | GameId::Palworld
+        | GameId::SevenDaysToDie => install_dir.clone(),
     };
     let binary = runtime_dir.join(driver(game).server_binary());
     let mut command = match game {
@@ -172,8 +181,8 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
                 .env("STEAM_COMPAT_DATA_PATH", instance_dir.join("proton-prefix"));
             command
         }
-        GameId::Palworld | GameId::RunescapeDragonwilds => Command::new(binary),
-        GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => {
+        GameId::RunescapeDragonwilds => Command::new(binary),
+        GameId::Valheim | GameId::Rust | GameId::Palworld | GameId::SevenDaysToDie => {
             unreachable!("generic command called for a containerized or typed driver")
         }
     };
@@ -198,15 +207,6 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
                 command.arg("-rconPort").arg(port.to_string());
             }
         }
-        GameId::Palworld => {
-            let query_port = instance
-                .config
-                .query_port
-                .context("Palworld Steam query port is required")?;
-            command
-                .arg(format!("-port={}", instance.config.port))
-                .arg(format!("-queryport={query_port}"));
-        }
         GameId::RunescapeDragonwilds => {
             command
                 .arg("-log")
@@ -215,7 +215,9 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
                 command.arg(format!("-BeaconPort={port}"));
             }
         }
-        GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => unreachable!(),
+        GameId::Valheim | GameId::Rust | GameId::Palworld | GameId::SevenDaysToDie => {
+            unreachable!()
+        }
     }
     Ok(command)
 }
@@ -337,47 +339,6 @@ mod tests {
     }
 
     #[test]
-    fn palworld_runtime_keeps_saved_data_isolated_while_refreshing_steam_files() {
-        let dir =
-            std::env::temp_dir().join(format!("odin-palworld-runtime-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir.clone(),
-        };
-        let install = paths.game_install_dir(GameId::Palworld);
-        fs::create_dir_all(install.join("Pal/Saved")).unwrap();
-        fs::write(install.join("PalServer.sh"), "server-v1").unwrap();
-        fs::write(install.join("Pal/Saved/shared.txt"), "must-not-copy").unwrap();
-        let instance = generic_instance(GameId::Palworld);
-
-        prepare_native_runtime(&paths, &instance).unwrap();
-        let runtime = native_runtime_dir(&paths, &instance);
-        assert_eq!(
-            fs::read_to_string(runtime.join("PalServer.sh")).unwrap(),
-            "server-v1"
-        );
-        assert!(!runtime.join("Pal/Saved/shared.txt").exists());
-        assert!(
-            !runtime
-                .join("Pal/Saved/Config/LinuxServer/PalWorldSettings.ini")
-                .exists()
-        );
-        fs::create_dir_all(runtime.join("Pal/Saved/SaveGames")).unwrap();
-        fs::write(runtime.join("Pal/Saved/SaveGames/world.sav"), "world").unwrap();
-        fs::write(install.join("PalServer.sh"), "server-v2").unwrap();
-        prepare_native_runtime(&paths, &instance).unwrap();
-        assert_eq!(
-            fs::read_to_string(runtime.join("PalServer.sh")).unwrap(),
-            "server-v2"
-        );
-        assert_eq!(
-            fs::read_to_string(runtime.join("Pal/Saved/SaveGames/world.sav")).unwrap(),
-            "world"
-        );
-        fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
     fn dragonwilds_command_passes_both_udp_ports() {
         let dir =
             std::env::temp_dir().join(format!("odin-dragon-command-{}", uuid::Uuid::new_v4()));
@@ -427,23 +388,6 @@ mod tests {
             args.windows(2).any(|pair| pair[0] == "-persistentDataPath"
                 && pair[1].ends_with("instances/server/data"))
         );
-        fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn palworld_command_passes_a_private_steam_query_port() {
-        let dir =
-            std::env::temp_dir().join(format!("odin-palworld-command-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir.clone(),
-        };
-        let instance = generic_instance(GameId::Palworld);
-
-        let command = build_command(&paths, &instance).unwrap();
-        let arguments = format!("{command:?}");
-        assert!(arguments.contains("-port=8211"));
-        assert!(arguments.contains("-queryport=27015"));
         fs::remove_dir_all(paths.data_dir).ok();
     }
 }

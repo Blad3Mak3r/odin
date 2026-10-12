@@ -289,6 +289,56 @@ mod tests {
     }
 
     #[test]
+    fn a_running_palworld_container_reserves_its_ports() {
+        use crate::podman::test_support::{temp_paths, write_podman_config};
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
+        let paths = temp_paths("ports-palworld");
+        let socket = paths.data_dir.join("podman.sock");
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut String::new())
+                .unwrap();
+            let body = r#"{"State":{"Running":true,"Status":"running"}}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        });
+        write_podman_config(&paths, &socket);
+        let db = crate::db::Db::open(&paths).unwrap();
+        // Born containerized, with no host pid to fingerprint.
+        let pals = crate::game::instances::create(&paths, &db, GameId::Palworld, "pals")
+            .map(|created| match created {
+                crate::game::instances::GameInstance::Generic(instance) => instance,
+                _ => unreachable!("created a generic instance"),
+            })
+            .unwrap();
+
+        let error = ensure_available(&paths, &db, GameId::Rust, "rust-server", [pals.config.port])
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("running palworld instance 'pals'")
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
     fn running_generic_servers_reserve_ports_across_games() {
         let dir =
             std::env::temp_dir().join(format!("odin-generic-port-check-{}", uuid::Uuid::new_v4()));

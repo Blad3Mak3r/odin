@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { AnsiText } from '@/components/instance/AnsiText'
 import { Button } from '@/components/ui/button'
 
 const FOLLOW_THRESHOLD_PX = 8
@@ -47,7 +48,7 @@ export function LiveLogOutput({ lines, emptyMessage }: LiveLogOutputProps) {
         className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs"
         onScroll={updateFollowing}
       >
-        {lines.join('\n') || emptyMessage}
+        {lines.length > 0 ? lines.map((line, index) => <div key={index}><AnsiText text={line} /></div>) : emptyMessage}
       </pre>
       {!following && (
         <Button className="absolute right-2 bottom-2" size="sm" onClick={resumeFollowing}>

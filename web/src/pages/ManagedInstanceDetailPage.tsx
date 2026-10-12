@@ -45,9 +45,10 @@ import {
 } from '@/lib/queries'
 import type { AdvancedConfigChange, GameId, GenericConfigUpdateRequest } from '@/lib/types'
 import { useLogSocket } from '@/hooks/useLogSocket'
+import { stripAnsi } from '@/lib/ansi'
 
 function isConsoleError(line: string) {
-  return /(?:^|\W)(?:error|exception|fatal|assertion failed|stack trace)(?:\W|$)/i.test(line)
+  return /(?:^|\W)(?:error|exception|fatal|assertion failed|stack trace)(?:\W|$)/i.test(stripAnsi(line))
 }
 
 function isGameId(value: string | undefined): value is GameId {

@@ -21,7 +21,6 @@ use crate::supervisor::server::{StatsHandle, refresh_stats_periodically};
 
 use super::{Launch, RuntimeSpec};
 
-const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const RCON_QUIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum Action {
@@ -141,11 +140,11 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
                 return Ok(());
             }
             _ = tokio::signal::ctrl_c() => {
-                stop_child(&mut child, pid, pid_started_at, STOP_TIMEOUT, &spec.launch).await?;
+                stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec.launch).await?;
                 return Ok(());
             }
             _ = sigterm.recv() => {
-                stop_child(&mut child, pid, pid_started_at, STOP_TIMEOUT, &spec.launch).await?;
+                stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec.launch).await?;
                 return Ok(());
             }
             Ok((stream, _)) = control.accept() => {
@@ -169,7 +168,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
                 }
                 Action::Update(reply) => {
                     let update = async {
-                        stop_child(&mut child, pid, pid_started_at, STOP_TIMEOUT, &spec.launch)
+                        stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec.launch)
                             .await?;
                         update_payload(&spec).await?;
                         child = spawn_child(&spec).await?;
@@ -195,6 +194,12 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
             }
         }
     }
+}
+
+/// The game's own budget for a graceful stop, used whenever the runtime is
+/// stopped by a signal or an update rather than an explicit timeout.
+fn stop_timeout(spec: &RuntimeSpec) -> Duration {
+    Duration::from_secs(game::driver(spec.launch.game()).stop_timeout_secs())
 }
 
 fn server_file(spec: &RuntimeSpec) -> PathBuf {

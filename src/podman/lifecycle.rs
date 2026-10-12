@@ -26,10 +26,11 @@ use crate::supervisor;
 use super::{ContainerSpec, ContainerState, Mount, PodmanClient, container_name};
 
 const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const STOP_TIMEOUT_SECS: u64 = 30;
 const CONTAINER_CREATE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const STOP_TIMEOUT: Duration = Duration::from_secs(STOP_TIMEOUT_SECS + 5);
+/// Slack after the runtime's own deadline, so a server that needed all of its
+/// time is not mistaken for a hung container.
+const STOP_GRACE: Duration = Duration::from_secs(5);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// What differs between games that run in a container. Everything else in
@@ -411,6 +412,7 @@ pub async fn stop<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resul
     let config = config(paths, G::GAME)?;
     let client = PodmanClient::from_config(&config)?;
     let container = container_name(G::GAME, &identity.id);
+    let timeout_secs = game::driver(G::GAME).stop_timeout_secs();
     let state = client.inspect(&container).await?;
     let Some(state) = state else {
         bail!(InstanceError::NotRunning(name.to_string()));
@@ -421,21 +423,31 @@ pub async fn stop<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resul
         }
         ContainerState::Running | ContainerState::Unknown => {
             let socket = control_socket(paths, &identity);
-            if supervisor::client::stop_socket(&socket, STOP_TIMEOUT_SECS)
+            if supervisor::client::stop_socket(&socket, timeout_secs)
                 .await
                 .is_ok()
-                && wait_for_container_stop(&client, &container).await.is_ok()
+                && wait_for_container_stop(
+                    &client,
+                    &container,
+                    Duration::from_secs(timeout_secs) + STOP_GRACE,
+                )
+                .await
+                .is_ok()
             {
                 return Ok(());
             }
-            client.stop(&container, STOP_TIMEOUT_SECS).await?;
+            client.stop(&container, timeout_secs).await?;
         }
     }
     Ok(())
 }
 
-async fn wait_for_container_stop(client: &PodmanClient, name: &str) -> Result<()> {
-    let deadline = Instant::now() + STOP_TIMEOUT;
+async fn wait_for_container_stop(
+    client: &PodmanClient,
+    name: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
     loop {
         match client.inspect(name).await? {
             None | Some(ContainerState::Created | ContainerState::Exited) => return Ok(()),
@@ -444,7 +456,7 @@ async fn wait_for_container_stop(client: &PodmanClient, name: &str) -> Result<()
         if Instant::now() >= deadline {
             bail!(
                 "Podman container {name} did not stop within {} seconds",
-                STOP_TIMEOUT.as_secs()
+                timeout.as_secs()
             );
         }
         sleep(STOP_POLL_INTERVAL).await;
@@ -756,6 +768,7 @@ mod tests {
         wait_for_container_stop(
             &PodmanClient::new(&socket).unwrap(),
             "odin-valheim-instance",
+            Duration::from_secs(35),
         )
         .await
         .unwrap();

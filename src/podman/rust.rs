@@ -376,4 +376,63 @@ mod tests {
         assert!(!runtime_spec_exists(&paths, &instance));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
+
+    #[tokio::test]
+    async fn stop_gives_rust_the_time_its_world_save_needs() {
+        let paths = temp_paths("stop");
+        let podman_socket = paths.data_dir.join("podman.sock");
+        let listener = match UnixListener::bind(&podman_socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        // The container is running when stop begins and gone once polled again.
+        let podman = std::thread::spawn(move || {
+            for body in [
+                r#"{"State":{"Running":true,"Status":"running"}}"#,
+                r#"{"State":{"Running":true,"Status":"running"}}"#,
+                r#"{"State":{"Running":false,"Status":"exited"}}"#,
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut String::new())
+                    .unwrap();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+            }
+        });
+        write_podman_config(&paths, &podman_socket);
+        let db = Db::open(&paths).unwrap();
+        let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        mark_new_instance(&db, &instance).unwrap();
+        let control = paths
+            .container_socket_dir(&instance.identity.id)
+            .join(format!("rust-{}.control.sock", instance.name()));
+        std::fs::create_dir_all(control.parent().unwrap()).unwrap();
+        let runtime_listener = UnixListener::bind(&control).unwrap();
+        let runtime = std::thread::spawn(move || {
+            let (mut stream, _) = runtime_listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            stream.write_all(b"{\"type\":\"stopped\"}\n").unwrap();
+            request
+        });
+
+        stop(&paths, &db, "rusty").await.unwrap();
+
+        let request: serde_json::Value = serde_json::from_str(&runtime.join().unwrap()).unwrap();
+        assert_eq!(request["type"], "stop");
+        assert_eq!(request["timeout_secs"], 120);
+        podman.join().unwrap();
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
 }

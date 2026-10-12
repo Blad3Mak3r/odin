@@ -95,6 +95,11 @@ pub trait GameDriver: Sync {
     fn server_binary(&self) -> &'static str;
     fn capabilities(&self) -> GameCapabilities;
     fn port_requirements(&self) -> GamePortRequirements;
+    /// How long a graceful shutdown may take before the server is killed.
+    /// It must cover the world save the game performs on exit.
+    fn stop_timeout_secs(&self) -> u64 {
+        30
+    }
 }
 
 struct ValheimDriver;
@@ -167,6 +172,12 @@ impl GameDriver for RustDriver {
 
     fn port_requirements(&self) -> GamePortRequirements {
         GamePortRequirements { count: 3 }
+    }
+
+    fn stop_timeout_secs(&self) -> u64 {
+        // A large world takes a while to write on quit. LinuxGSM waits this
+        // long for games that save on exit (its stop mode 4).
+        120
     }
 }
 
@@ -314,6 +325,12 @@ pub fn drivers() -> [&'static dyn GameDriver; 6] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rust_gets_longer_than_the_default_to_save_its_world_on_stop() {
+        assert_eq!(driver(GameId::Valheim).stop_timeout_secs(), 30);
+        assert_eq!(driver(GameId::Rust).stop_timeout_secs(), 120);
+    }
 
     #[test]
     fn rust_driver_has_the_dedicated_server_app_id() {

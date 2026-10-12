@@ -22,6 +22,7 @@ use crate::game::rust::RustLaunch;
 use crate::instance::state::InstanceState;
 use crate::paths::Paths;
 
+pub mod lifecycle;
 pub mod runtime;
 pub mod valheim;
 

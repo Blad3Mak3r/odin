@@ -10,6 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { api } from '@/lib/api-client'
+import { gameLabel } from '@/lib/games'
 import { useManagedInstanceAction, useManagedInstanceTransition } from '@/lib/queries'
 import type { InstanceResources, ManagedInstanceView } from '@/lib/types'
 import { formatBytes } from '@/lib/utils'
@@ -140,7 +141,7 @@ function ManagedInstanceRow({
         <div className="text-xs font-normal text-muted-foreground">Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}</div>
         <div className="flex flex-wrap gap-1">{instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div>
       </TableCell>
-      {withGame && <TableCell><Badge variant="secondary"><GameIcon game={instance.game} className="size-4 rounded-sm" />{instance.game}</Badge></TableCell>}
+      {withGame && <TableCell><Badge variant="secondary"><GameIcon game={instance.game} className="size-4 rounded-sm" />{gameLabel(instance.game)}</Badge></TableCell>}
       <TableCell><Badge variant={instance.running ? 'default' : 'secondary'}>{instance.running ? 'running' : 'stopped'}</Badge></TableCell>
       {withPort && <TableCell className="hidden sm:table-cell">{port}</TableCell>}
       {withButtons && <TableCell className="hidden lg:table-cell">{instance.running && resources.data ? `${resources.data.cpu_percent.toFixed(0)}% · ${formatBytes(resources.data.memory_bytes)}` : '—'}</TableCell>}

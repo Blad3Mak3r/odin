@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api-client'
 import type {
   ActivityEvent,
@@ -165,6 +165,8 @@ export function useSaveFiles(id: string, path: string) {
     queryFn: () => api.get<SaveFileEntry[]>(`${savesPath(id)}?path=${encodeURIComponent(path)}`),
     // A missing folder is a 404 the user fixes by navigating up, so don't retry it.
     retry: false,
+    // Keep the previous folder on screen while the next one loads so the page height doesn't collapse.
+    placeholderData: keepPreviousData,
   })
 }
 

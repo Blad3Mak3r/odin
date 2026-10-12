@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-12
+
+### What's Changed
+- fix: contain save files browser in a bordered, fixed-height panel by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/136
+- feat: run 7 Days to Die in a Podman container by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/137
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.17.1...v0.18.0
+
 ## [0.17.1] - 2026-10-12
 
 ### What's Changed

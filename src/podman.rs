@@ -23,12 +23,13 @@ use crate::paths::Paths;
 pub mod runtime;
 pub mod valheim;
 
-/// Podman keeps the Libpod API backwards compatible within a major release.
-/// v4.0.0 is the oldest server Odin supports, so this path works both there
-/// and on newer Podman releases without tying the client to their API level.
-const API_PREFIX: &str = "http://d/v4.0.0/libpod";
+/// Podman 5.0.0 is the oldest server Odin supports. Its Libpod API is
+/// backwards compatible within the major release, so this versioned path also
+/// works on newer Podman releases without tying the client to their API level.
+const API_PREFIX: &str = "http://d/v5.0.0/libpod";
 const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CONTAINER_ROOT: &str = "/srv/odin";
+const CPU_PERIOD: u64 = 100_000;
 
 #[derive(Clone)]
 pub struct PodmanClient {
@@ -77,7 +78,7 @@ impl PodmanClient {
             Ok(())
         } else {
             bail!(
-                "Podman {} is unsupported; Odin requires Podman 4.0.0 or newer",
+                "Podman {} is unsupported; Odin requires Podman 5.0.0 or newer",
                 version.version
             )
         }
@@ -170,7 +171,7 @@ impl PodmanClient {
     pub async fn create(&self, spec: &ContainerSpec) -> Result<()> {
         let response = self
             .client
-            .post(format!("{API_PREFIX}/containers/create?name={}", spec.name))
+            .post(format!("{API_PREFIX}/containers/create"))
             .json(&spec.request)
             .send()
             .await
@@ -190,6 +191,10 @@ impl PodmanClient {
             .send()
             .await
             .context("failed to start Podman container")?;
+        // Libpod answers 304 when the container is already running.
+        if response.status() == StatusCode::NOT_MODIFIED {
+            return Ok(());
+        }
         success(response).await?;
         Ok(())
     }
@@ -236,7 +241,7 @@ impl PodmanClient {
 
     pub async fn update_limits(&self, name: &str, limits: &ResourceLimits) -> Result<()> {
         limits.validate()?;
-        let request = PodmanResources::from(limits);
+        let request = LinuxResources::from(limits);
         let response = self
             .client
             .post(format!("{API_PREFIX}/containers/{name}/update"))
@@ -294,7 +299,7 @@ impl PodmanVersion {
             .split('.')
             .next()
             .and_then(|major| major.parse::<u64>().ok())
-            .is_some_and(|major| major >= 4)
+            .is_some_and(|major| major >= 5)
     }
 }
 
@@ -418,7 +423,6 @@ pub fn write_runtime_spec(
 
 #[derive(Debug, Clone)]
 pub struct ContainerSpec {
-    pub name: String,
     pub request: CreateContainerRequest,
 }
 
@@ -432,7 +436,7 @@ impl ContainerSpec {
     ) -> Self {
         let runtime_root = paths.valheim_runtime_dir(&identity.id);
         let socket_root = paths.valheim_socket_dir(&identity.id);
-        let mut binds = vec![
+        let mut mounts = vec![
             bind(&runtime_root, Path::new("/srv/odin/runtime")),
             bind(&instance.dir, Path::new("/srv/odin/instance")),
             bind(&socket_root, Path::new("/run/odin")),
@@ -440,7 +444,7 @@ impl ContainerSpec {
         // Existing BepInEx plugin links point at this host-absolute store.
         // Mounting it at that exact path preserves those links without
         // rewriting an operator's mod state.
-        binds.push(bind(&paths.mods_dir(), &paths.mods_dir()));
+        mounts.push(bind(&paths.mods_dir(), &paths.mods_dir()));
         let user = format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
             libc::getegid()
         });
@@ -452,9 +456,10 @@ impl ContainerSpec {
             RUNTIME_VERSION.to_string(),
         );
 
+        let name = container_name(&identity.id);
         Self {
-            name: container_name(&identity.id),
             request: CreateContainerRequest {
+                name,
                 image,
                 entrypoint: vec!["/usr/local/bin/odin".to_string()],
                 command: vec![
@@ -472,20 +477,23 @@ impl ContainerSpec {
                 ]),
                 labels,
                 user,
-                host_config: HostConfig {
-                    network_mode: "host".to_string(),
-                    binds,
-                    cpu_period: Some(100_000),
-                    cpu_quota: limits.cpu_percent.map(cpu_quota),
-                    memory: limits.memory_max_bytes.map(|value| value as i64),
+                mounts,
+                netns: Namespace {
+                    nsmode: "host".to_string(),
                 },
+                resource_limits: (!limits.is_unlimited()).then(|| LinuxResources::from(limits)),
             },
         }
     }
 }
 
-fn bind(host: &Path, container: &Path) -> String {
-    format!("{}:{}:rw", host.display(), container.display())
+fn bind(host: &Path, container: &Path) -> Mount {
+    Mount {
+        destination: container.display().to_string(),
+        kind: "bind".to_string(),
+        source: host.display().to_string(),
+        options: vec!["rw".to_string()],
+    }
 }
 
 pub fn container_name(instance_id: &str) -> String {
@@ -493,45 +501,73 @@ pub fn container_name(instance_id: &str) -> String {
 }
 
 fn cpu_quota(percent: f64) -> i64 {
-    (percent * 1000.0).round().max(1.0) as i64
+    (percent * CPU_PERIOD as f64 / 100.0).round().max(1.0) as i64
 }
 
+/// Body of `POST /libpod/containers/create` (Podman's `specgen.SpecGenerator`).
+/// Libpod ignores unknown fields, so only SpecGenerator names belong here; the
+/// Docker-compat `HostConfig` shape is silently dropped by this endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateContainerRequest {
+    pub name: String,
     pub image: String,
     pub entrypoint: Vec<String>,
     pub command: Vec<String>,
     pub env: std::collections::BTreeMap<String, String>,
     pub labels: std::collections::BTreeMap<String, String>,
     pub user: String,
-    pub host_config: HostConfig,
+    pub mounts: Vec<Mount>,
+    pub netns: Namespace,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_limits: Option<LinuxResources>,
+}
+
+/// OCI runtime-spec mount.
+#[derive(Debug, Clone, Serialize)]
+pub struct Mount {
+    pub destination: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub source: String,
+    pub options: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HostConfig {
-    pub network_mode: String,
-    pub binds: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpu_period: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpu_quota: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub memory: Option<i64>,
+pub struct Namespace {
+    pub nsmode: String,
 }
 
-#[derive(Debug, Serialize)]
-struct PodmanResources {
+/// OCI runtime-spec `LinuxResources`: the `resource_limits` value of a create
+/// request and, unwrapped, the body of `POST /libpod/containers/{name}/update`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LinuxResources {
     #[serde(skip_serializing_if = "Option::is_none")]
-    cpu: Option<i64>,
+    pub cpu: Option<LinuxCpu>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    memory: Option<i64>,
+    pub memory: Option<LinuxMemory>,
 }
 
-impl From<&ResourceLimits> for PodmanResources {
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LinuxCpu {
+    pub period: u64,
+    pub quota: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LinuxMemory {
+    pub limit: i64,
+}
+
+impl From<&ResourceLimits> for LinuxResources {
     fn from(limits: &ResourceLimits) -> Self {
         Self {
-            cpu: limits.cpu_percent.map(cpu_quota),
-            memory: limits.memory_max_bytes.map(|value| value as i64),
+            cpu: limits.cpu_percent.map(|percent| LinuxCpu {
+                period: CPU_PERIOD,
+                quota: cpu_quota(percent),
+            }),
+            memory: limits.memory_max_bytes.map(|value| LinuxMemory {
+                limit: value as i64,
+            }),
         }
     }
 }
@@ -575,29 +611,34 @@ mod tests {
                 memory_max_bytes: Some(123),
             },
         );
-        assert_eq!(spec.name, container_name(&identity.id));
+        assert_eq!(spec.request.name, container_name(&identity.id));
         assert_eq!(spec.request.entrypoint, ["/usr/local/bin/odin"]);
         assert_eq!(
             spec.request.command,
             ["run", "--instance-id", identity.id.as_str()]
         );
-        assert_eq!(spec.request.host_config.network_mode, "host");
-        assert!(
-            spec.request
-                .host_config
-                .binds
-                .iter()
-                .any(|bind| bind.ends_with(":/run/odin:rw"))
+        assert_eq!(spec.request.netns.nsmode, "host");
+        for destination in ["/run/odin", "/srv/odin/runtime", "/srv/odin/instance"] {
+            assert!(
+                spec.request
+                    .mounts
+                    .iter()
+                    .any(|mount| mount.destination == destination
+                        && mount.kind == "bind"
+                        && mount.options == ["rw"]),
+                "missing bind mount {destination}"
+            );
+        }
+        assert_eq!(
+            spec.request.resource_limits,
+            Some(LinuxResources {
+                cpu: Some(LinuxCpu {
+                    period: 100_000,
+                    quota: 125_500
+                }),
+                memory: Some(LinuxMemory { limit: 123 }),
+            })
         );
-        assert!(
-            spec.request
-                .host_config
-                .binds
-                .iter()
-                .any(|bind| bind.ends_with(":/srv/odin/runtime:rw"))
-        );
-        assert_eq!(spec.request.host_config.cpu_quota, Some(125_500));
-        assert_eq!(spec.request.host_config.memory, Some(123));
         assert_eq!(
             spec.request.env.get("ODIN_RUNTIME_SPEC"),
             Some(&"/srv/odin/runtime/runtime.json".to_string())
@@ -688,16 +729,17 @@ mod tests {
             .await
             .unwrap();
         let (line, body) = server.join().unwrap();
-        assert!(line.starts_with(&format!(
-            "POST /v4.0.0/libpod/containers/create?name={} ",
-            spec.name
-        )));
+        assert!(line.starts_with("POST /v5.0.0/libpod/containers/create "));
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(
             body["entrypoint"],
             serde_json::json!(["/usr/local/bin/odin"])
         );
-        assert_eq!(body["host_config"]["network_mode"], "host");
+        assert_eq!(body["name"], spec.request.name);
+        assert_eq!(body["netns"]["nsmode"], "host");
+        assert_eq!(body["mounts"][0]["type"], "bind");
+        assert!(body.get("host_config").is_none());
+        assert!(body.get("resource_limits").is_none());
         assert_eq!(
             body["env"]["ODIN_RUNTIME_SPEC"],
             "/srv/odin/runtime/runtime.json"
@@ -738,7 +780,7 @@ mod tests {
 
         assert!(error.to_string().contains("manifest unknown"));
         assert!(server.join().unwrap().starts_with(
-            "POST /v4.0.0/libpod/images/pull?reference=ghcr.io/example/odin-srv:missing&quiet=true "
+            "POST /v5.0.0/libpod/images/pull?reference=ghcr.io/example/odin-srv:missing&quiet=true "
         ));
         std::fs::remove_file(socket).ok();
     }
@@ -773,7 +815,7 @@ mod tests {
             server
                 .join()
                 .unwrap()
-                .starts_with("DELETE /v4.0.0/libpod/containers/odin-valheim-instance?force=false ")
+                .starts_with("DELETE /v5.0.0/libpod/containers/odin-valheim-instance?force=false ")
         );
         std::fs::remove_file(socket).ok();
     }
@@ -806,9 +848,42 @@ mod tests {
             .unwrap();
 
         assert!(server.join().unwrap().starts_with(
-            "POST /v4.0.0/libpod/containers/odin-valheim-instance/stop?timeout=30&ignore=true "
+            "POST /v5.0.0/libpod/containers/odin-valheim-instance/stop?timeout=30&ignore=true "
         ));
         std::fs::remove_file(socket).ok();
+    }
+
+    #[test]
+    fn update_body_is_a_bare_oci_linux_resources_document() {
+        let body = serde_json::to_value(LinuxResources::from(&ResourceLimits {
+            cpu_percent: Some(50.0),
+            memory_max_bytes: Some(1024),
+        }))
+        .unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "cpu": {"period": 100_000, "quota": 50_000},
+                "memory": {"limit": 1024}
+            })
+        );
+        let unlimited = LinuxResources::from(&ResourceLimits::default());
+        assert_eq!(
+            serde_json::to_value(unlimited).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn only_podman_5_or_newer_is_supported() {
+        let version = |version: &str| PodmanVersion {
+            version: version.into(),
+            api_version: "1.41".into(),
+        };
+        assert!(!version("4.9.3").is_supported());
+        assert!(version("5.0.0").is_supported());
+        assert!(version("5.6.2").is_supported());
+        assert!(version("6.0.0").is_supported());
     }
 
     #[test]

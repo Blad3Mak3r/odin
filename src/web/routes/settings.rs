@@ -80,7 +80,7 @@ async fn podman_settings(config: Option<PodmanConfig>) -> PodmanSettingsView {
                     connected: true,
                     compatible,
                     version: Some(format!("{} (API {})", version.version, version.api_version)),
-                    error: (!compatible).then(|| "Podman 4.0.0 or newer is required".to_string()),
+                    error: (!compatible).then(|| "Podman 5.0.0 or newer is required".to_string()),
                 }
             }
             Err(error) => PodmanStatusView {

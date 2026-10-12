@@ -471,7 +471,7 @@ socket = "/run/podman/podman.sock"
 ```
 
 Enable the rootful Podman socket with `sudo systemctl enable --now
-podman.socket`. The dashboard checks connectivity and requires Podman 4.0.0
+podman.socket`. The dashboard checks connectivity and requires Podman 5.0.0
 or newer before Valheim operations are available. Do not grant unrelated users
 access to this socket: it grants authority over its containers. Odin uses the
 Unix API directly; it does not require the `podman` CLI in the service path.

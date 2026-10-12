@@ -361,7 +361,68 @@ mod tests {
     }
 
     #[test]
-    fn v1_tmux_session_column_is_dropped_and_pid_columns_are_nullable() {
+    fn v32_drops_process_columns_and_keeps_instance_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 32 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at)
+                VALUES ('rusty', 'rust', 'rusty', '2026-01-01T00:00:00Z');
+             INSERT INTO rust_instance_configs
+                (instance_id, port, query_port, rcon_port, rcon_password, hostname, level, seed, world_size, max_players, auto_restart, pid, pid_started_at)
+                VALUES ('rusty', 28015, 28016, 28017, 'secret', 'h', 'Barren', 1, 3000, 50, 1, 42, 7);",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let port: u16 = conn
+            .query_row(
+                "SELECT port FROM rust_instance_configs WHERE instance_id = 'rusty'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(port, 28015);
+        for table in [
+            "instances",
+            "valheim_instance_configs",
+            "rust_instance_configs",
+            "generic_game_instance_configs",
+        ] {
+            let columns: Vec<String> = conn
+                .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            for dropped in [
+                "pid",
+                "pid_started_at",
+                "last_started_at",
+                "last_stopped_at",
+            ] {
+                assert!(
+                    !columns.iter().any(|name| name == dropped),
+                    "{table}.{dropped}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn v1_tmux_session_column_is_dropped() {
         let mut conn = Connection::open_in_memory().unwrap();
         // Apply only 0001 by hand, seed a v1-shaped row, then run the full
         // migration set and check 0002 both drops `tmux_session` and adds
@@ -389,14 +450,13 @@ mod tests {
             .unwrap();
         assert!(!has_tmux_session);
 
-        let (pid, name): (Option<i64>, String) = conn
+        let name: String = conn
             .query_row(
-                "SELECT pid, name FROM instances WHERE name = 'legacy'",
+                "SELECT name FROM instances WHERE name = 'legacy'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(pid, None);
         assert_eq!(name, "legacy");
     }
 

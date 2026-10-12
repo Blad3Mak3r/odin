@@ -26,11 +26,9 @@ pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) ->
 
     let rust_rows = {
         let mut statement = conn.prepare(
-            "SELECT g.name, m.hostname, m.level, m.seed, m.world_size, m.max_players,
-                    r.pid, r.pid_started_at \
+            "SELECT g.name, m.hostname, m.level, m.seed, m.world_size, m.max_players \
              FROM rust_file_config_migrations m
-             JOIN game_instances g ON g.id = m.instance_id
-             JOIN rust_instance_configs r ON r.instance_id = m.instance_id",
+             JOIN game_instances g ON g.id = m.instance_id",
         )?;
         statement
             .query_map([], |row| {
@@ -43,17 +41,11 @@ pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) ->
                         world_size: row.get(4)?,
                         max_players: row.get(5)?,
                     },
-                    row.get::<_, Option<u32>>(6)?,
-                    row.get::<_, Option<i64>>(7)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
-    for (name, config, pid, pid_started_at) in rust_rows {
-        anyhow::ensure!(
-            !matches!((pid, pid_started_at), (Some(pid), Some(started_at)) if crate::instance::process::is_alive(pid, started_at)),
-            "stop Rust instance '{name}' before migrating its server.cfg"
-        );
+    for (name, config) in rust_rows {
         let path = paths
             .game_instance_dir(GameId::Rust, &name)
             .join("server/cfg/server.cfg");
@@ -90,13 +82,10 @@ pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) ->
             instance_id TEXT PRIMARY KEY REFERENCES game_instances(id) ON DELETE CASCADE,
             port INTEGER NOT NULL, query_port INTEGER NOT NULL,
             rcon_port INTEGER NOT NULL, rcon_password TEXT NOT NULL,
-            auto_restart INTEGER NOT NULL DEFAULT 0,
-            pid INTEGER, pid_started_at INTEGER,
-            last_started_at TEXT, last_stopped_at TEXT
+            auto_restart INTEGER NOT NULL DEFAULT 0
          );
          INSERT INTO rust_instance_configs_next
-            SELECT instance_id, port, query_port, rcon_port, rcon_password,
-                   auto_restart, pid, pid_started_at, last_started_at, last_stopped_at
+            SELECT instance_id, port, query_port, rcon_port, rcon_password, auto_restart
             FROM rust_instance_configs;
          DROP TABLE rust_instance_configs;
          ALTER TABLE rust_instance_configs_next RENAME TO rust_instance_configs;
@@ -104,15 +93,12 @@ pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) ->
          CREATE TABLE generic_game_instance_configs_next (
             instance_id TEXT PRIMARY KEY REFERENCES game_instances(id) ON DELETE CASCADE,
             port INTEGER NOT NULL, query_port INTEGER, admin_port INTEGER,
-            auto_restart INTEGER NOT NULL DEFAULT 0,
-            pid INTEGER, pid_started_at INTEGER,
-            last_started_at TEXT, last_stopped_at TEXT
+            auto_restart INTEGER NOT NULL DEFAULT 0
          );
          INSERT INTO generic_game_instance_configs_next
             SELECT c.instance_id, c.port, c.query_port,
                    CASE WHEN g.game = 'palworld' THEN NULL ELSE c.admin_port END,
-                   c.auto_restart, c.pid, c.pid_started_at,
-                   c.last_started_at, c.last_stopped_at
+                   c.auto_restart
             FROM generic_game_instance_configs c
             JOIN game_instances g ON g.id = c.instance_id;
          DROP TABLE generic_game_instance_configs;
@@ -183,10 +169,6 @@ pub struct RustInstance {
     pub identity: GameInstanceIdentity,
     #[serde(flatten)]
     pub config: RustInstanceConfig,
-    pub pid: Option<u32>,
-    pub pid_started_at: Option<i64>,
-    pub last_started_at: Option<DateTime<Utc>>,
-    pub last_stopped_at: Option<DateTime<Utc>>,
 }
 
 impl RustInstance {
@@ -215,10 +197,6 @@ pub struct GenericGameInstance {
     pub identity: GameInstanceIdentity,
     #[serde(flatten)]
     pub config: GenericGameConfig,
-    pub pid: Option<u32>,
-    pub pid_started_at: Option<i64>,
-    pub last_started_at: Option<DateTime<Utc>>,
-    pub last_stopped_at: Option<DateTime<Utc>>,
 }
 
 impl GenericGameInstance {
@@ -263,7 +241,7 @@ pub fn list_generic(db: &crate::db::Db, game: GameId) -> Result<Vec<GenericGameI
     );
     let conn = db.conn();
     let mut statement = conn.prepare(
-        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.auto_restart \
          FROM game_instances g JOIN generic_game_instance_configs c ON c.instance_id = g.id \
          WHERE g.game = ?1 ORDER BY g.name",
     )?;
@@ -284,7 +262,7 @@ pub fn load_generic(
     );
     let conn = db.conn();
     conn.query_row(
-        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.auto_restart, c.pid, c.pid_started_at, c.last_started_at, c.last_stopped_at \
+        "SELECT g.id, g.name, g.created_at, g.tags, c.port, c.query_port, c.admin_port, c.auto_restart \
          FROM game_instances g JOIN generic_game_instance_configs c ON c.instance_id = g.id \
          WHERE g.game = ?1 AND g.name = ?2",
         params![game.as_str(), name],
@@ -384,10 +362,6 @@ fn row_to_generic(row: &rusqlite::Row<'_>, game: GameId) -> rusqlite::Result<Gen
             admin_port: row.get(6)?,
             auto_restart: row.get(7)?,
         },
-        pid: row.get(8)?,
-        pid_started_at: row.get(9)?,
-        last_started_at: row.get(10)?,
-        last_stopped_at: row.get(11)?,
     })
 }
 
@@ -546,7 +520,7 @@ pub fn ensure_valheim_identity(
 pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
     let conn = db.conn();
     let mut statement = conn.prepare(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.auto_restart, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' ORDER BY g.name",
     )?;
@@ -559,7 +533,7 @@ pub fn list_rust(db: &crate::db::Db) -> Result<Vec<RustInstance>> {
 pub fn load_rust(db: &crate::db::Db, name: &str) -> Result<Option<RustInstance>> {
     let conn = db.conn();
     conn.query_row(
-        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.auto_restart, r.pid, r.pid_started_at, r.last_started_at, r.last_stopped_at, g.tags \
+        "SELECT g.id, g.name, g.created_at, r.port, r.query_port, r.rcon_port, r.rcon_password, r.auto_restart, g.tags \
          FROM game_instances g JOIN rust_instance_configs r ON r.instance_id = g.id \
          WHERE g.game = 'rust' AND g.name = ?1",
         params![name],
@@ -599,10 +573,6 @@ pub fn create_rust(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Rust
             created_at,
         },
         config,
-        pid: None,
-        pid_started_at: None,
-        last_started_at: None,
-        last_stopped_at: None,
     };
     rust::ensure_layout(paths, &pending)?;
     crate::game::config_documents::initialize_rust(paths, &pending, &file_config)?;
@@ -697,7 +667,7 @@ fn next_rust_port(db: &crate::db::Db) -> Result<u16> {
 fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
     Ok(RustInstance {
         identity: GameInstanceIdentity {
-            tags: serde_json::from_str(&row.get::<_, String>(12)?)
+            tags: serde_json::from_str(&row.get::<_, String>(8)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
             id: row.get(0)?,
             game: GameId::Rust,
@@ -711,10 +681,6 @@ fn row_to_rust(row: &rusqlite::Row<'_>) -> rusqlite::Result<RustInstance> {
             rcon_password: row.get(6)?,
             auto_restart: row.get(7)?,
         },
-        pid: row.get(8)?,
-        pid_started_at: row.get(9)?,
-        last_started_at: row.get(10)?,
-        last_stopped_at: row.get(11)?,
     })
 }
 

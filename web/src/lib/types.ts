@@ -177,10 +177,6 @@ export interface InstanceView {
   password: string | null
   public: boolean
   created_at: string
-  last_started_at: string | null
-  last_stopped_at: string | null
-  pid: number | null
-  pid_started_at: number | null
   bepinex_installed: boolean
   installed_mods: InstalledMod[]
   running: boolean

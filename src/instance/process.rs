@@ -19,17 +19,6 @@ pub fn start_time_of(pid: u32) -> Result<i64> {
         })
 }
 
-/// The single canonical liveness check: a targeted sysinfo refresh for
-/// just this one pid, compared against the fingerprint recorded when it
-/// was spawned.
-pub fn is_alive(pid: u32, pid_started_at: i64) -> bool {
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
-    system
-        .process(Pid::from_u32(pid))
-        .is_some_and(|p| p.start_time() as i64 == pid_started_at)
-}
-
 /// Sends `signal` to `pid`, first re-validating the fingerprint so a
 /// reused pid never gets signalled by mistake. `Ok(false)` means the pid
 /// is already gone or no longer matches — the caller treats that as
@@ -86,28 +75,4 @@ pub fn descendant_pids(system: &System, roots: &[u32]) -> Vec<u32> {
         }
     }
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn is_alive_reflects_a_real_child_process_across_its_lifetime() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("2")
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        let started_at = start_time_of(pid).unwrap();
-
-        assert!(is_alive(pid, started_at));
-        assert!(!is_alive(pid, started_at + 1)); // wrong fingerprint reads as not-alive
-
-        child.kill().unwrap();
-        child.wait().unwrap();
-
-        // Reaped: pid is gone from the process table regardless of fingerprint.
-        assert!(!is_alive(pid, started_at));
-    }
 }

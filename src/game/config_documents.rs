@@ -1223,10 +1223,6 @@ mod tests {
                 admin_port: Some(26903),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         }
     }
 
@@ -1240,10 +1236,6 @@ mod tests {
                 tags: Vec::new(),
             },
             config: crate::db::game_instances::default_generic_config(game, "server"),
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         }
     }
 
@@ -1263,10 +1255,6 @@ mod tests {
                 rcon_password: "secret".into(),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         }
     }
 
@@ -1601,10 +1589,6 @@ mod tests {
                 admin_port: None,
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let path = document_path(&paths, &instance, specs(GameId::Palworld)[0]);
         let contents = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(PublicPort=8211,RESTAPIPort=8212,ServerName=Odin)\n";
@@ -1640,10 +1624,6 @@ mod tests {
                 rcon_password: "secret".into(),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let path = rust_document_path(&paths, &instance);
         let contents = "// preserve this comment\nserver.port 28015\nserver.queryport 28016\nrcon.port 28017\nrcon.password secret\nrcon.web 1\n";
@@ -1678,10 +1658,6 @@ mod tests {
                 admin_port: Some(26903),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let files = list(&paths, &instance).unwrap();
         assert!(!files[0].exists);

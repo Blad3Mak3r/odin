@@ -331,10 +331,6 @@ mod tests {
                 admin_port: None,
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let dir = std::env::temp_dir().join(format!("odin-palworld-rest-{}", uuid::Uuid::new_v4()));
         let paths = crate::paths::Paths {

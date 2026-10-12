@@ -414,7 +414,6 @@ mod tests {
             original_cfg.replace("server.hostname \"source\"", "server.hostname \"target\""),
             cloned_cfg
         );
-        assert!(cloned.pid.is_none());
         let identity = rust::backup_source(&paths, &cloned);
         assert!(identity.is_dir());
         assert!(!identity.join("saves").exists());

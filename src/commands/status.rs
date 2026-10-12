@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::Utc;
 
 use crate::db::Db;
 use crate::instance::{self};
@@ -21,41 +20,25 @@ pub fn run(paths: &Paths, db: &Db) -> Result<()> {
     let ip = public_ip();
 
     println!(
-        "{:<20} {:<10} {:<22} {:<20} {:<10} {:<6} PASSWORD",
-        "NAME", "STATUS", "ADDRESS", "WORLD", "UPTIME", "MODS"
+        "{:<20} {:<10} {:<22} {:<20} {:<6} PASSWORD",
+        "NAME", "STATUS", "ADDRESS", "WORLD", "MODS"
     );
     for inst in &instances {
         let running = valheim::is_running(paths, db, inst)?;
         let status = if running { "running" } else { "stopped" };
-        let uptime = if running {
-            inst.state
-                .last_started_at
-                .map_or_else(|| "-".to_string(), |t| format_duration(Utc::now() - t))
-        } else {
-            "-".to_string()
-        };
         let address = format!("{}:{}", ip.as_deref().unwrap_or("-"), inst.state.port);
         println!(
-            "{:<20} {:<10} {:<22} {:<20} {:<10} {:<6} {}",
+            "{:<20} {:<10} {:<22} {:<20} {:<6} {}",
             inst.state.name,
             status,
             address,
             inst.state.world_name,
-            uptime,
             inst.state.installed_mods.len(),
             inst.state.password.as_deref().unwrap_or("-")
         );
     }
 
     Ok(())
-}
-
-fn format_duration(duration: chrono::Duration) -> String {
-    let total_secs = duration.num_seconds().max(0);
-    let hours = total_secs / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let seconds = total_secs % 60;
-    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
 /// Looks up this machine's public IP via a short-timeout outbound request.

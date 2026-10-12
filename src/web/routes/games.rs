@@ -597,7 +597,9 @@ pub async fn get_rust_resources(
         game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")
     })
     .await?;
-    Ok(Json(rust_resource_snapshot(&state, &instance)))
+    // Liveness may consult Podman through a blocking client.
+    let snapshot = run_blocking(move || rust_resource_snapshot(&state, &instance)).await?;
+    Ok(Json(snapshot))
 }
 
 pub async fn get_rust_resources_by_id(
@@ -1268,22 +1270,23 @@ fn supervisor_version(paths: &Paths, game: GameId, name: &str) -> Option<String>
     }
 }
 
+/// Fails when liveness cannot be determined (an unreachable Podman), so a
+/// caller never mistakes "unknown" for "stopped".
 pub(crate) fn rust_resource_snapshot(
     state: &AppState,
     instance: &RustInstance,
-) -> InstanceSnapshot {
-    let running = rust::is_running(&state.paths, &state.db, instance).unwrap_or(false);
-    if !running {
-        return InstanceSnapshot::default();
+) -> anyhow::Result<InstanceSnapshot> {
+    if !rust::is_running(&state.paths, &state.db, instance)? {
+        return Ok(InstanceSnapshot::default());
     }
-    if crate::podman::rust::is_migrated(&state.db, instance).unwrap_or(false) {
+    if crate::podman::rust::is_migrated(&state.db, instance)? {
         // Rust has no readiness signal, in a container or out of it.
-        return InstanceSnapshot {
+        return Ok(InstanceSnapshot {
             ready: false,
             ..crate::web::routes::resources::container_snapshot(
                 &crate::podman::lifecycle::control_socket(&state.paths, &instance.identity),
             )
-        };
+        });
     }
 
     let root_pids: Vec<u32> = instance.pid.into_iter().collect();
@@ -1296,12 +1299,12 @@ pub(crate) fn rust_resource_snapshot(
             memory_bytes += process.memory();
         }
     }
-    InstanceSnapshot {
+    Ok(InstanceSnapshot {
         running: true,
         ready: false,
         cpu_percent,
         memory_bytes,
-    }
+    })
 }
 
 /// Samples a generic managed server process (V Rising, Palworld, or

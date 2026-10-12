@@ -250,6 +250,7 @@ mod tests {
         );
 
         start(&paths, &db, "rusty").await.unwrap();
+        assert!(container_instances::desired_running(&db, &instance.identity.id).unwrap());
 
         let requests = podman.join().unwrap();
         runtime.join().unwrap();

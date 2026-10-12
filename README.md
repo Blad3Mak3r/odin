@@ -461,7 +461,9 @@ owns its own persistent SteamCMD and game payload under
 `<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
 start (Rust's is several gigabytes, so that first start takes a while); Odin
 never copies or removes the old shared installation during migration, and
-deleting an instance removes its runtime volume. World data, configuration and
+deleting an instance removes its runtime volume. With **auto restart** enabled,
+Odin restarts a container that stopped without an operator asking for it, including
+after a host reboot; an operator **Stop** is respected. World data, configuration and
 backups stay in the instance directory.
 
 Odin itself starts without Podman configured. To use these games, set the

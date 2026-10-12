@@ -679,6 +679,13 @@ mod tests {
     use std::os::unix::net::UnixListener;
 
     #[test]
+    fn only_an_operator_stop_clears_the_intent_to_run() {
+        assert!(StopReason::Operator.clears_desired_running());
+        assert!(!StopReason::Restart.clears_desired_running());
+        assert!(!StopReason::HostShutdown.clears_desired_running());
+    }
+
+    #[test]
     fn clean_socket_dir_removes_only_unix_sockets() {
         let directory =
             std::env::temp_dir().join(format!("odin-runtime-health-{}", uuid::Uuid::new_v4()));

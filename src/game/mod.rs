@@ -33,16 +33,6 @@ pub enum GameId {
 }
 
 impl GameId {
-    #[cfg(test)]
-    pub const ALL: [GameId; 6] = [
-        Self::Valheim,
-        Self::Rust,
-        Self::VRising,
-        Self::Palworld,
-        Self::RunescapeDragonwilds,
-        Self::SevenDaysToDie,
-    ];
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Valheim => "valheim",
@@ -295,11 +285,15 @@ impl GameDriver for SevenDaysToDieDriver {
             mods: true,
             access_lists: false,
             readiness: true,
-            container_runtime: false,
+            container_runtime: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
         GamePortRequirements { count: 3 }
+    }
+    fn stop_timeout_secs(&self) -> u64 {
+        // The console's `shutdown` saves the world before the server exits.
+        120
     }
 }
 

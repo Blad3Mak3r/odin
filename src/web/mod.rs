@@ -153,14 +153,19 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
         GameId::SevenDaysToDie,
     ] {
         for generic_instance in game_instances::list_generic(&state.db, game)? {
-            if generic_instance.is_running()
-                && let Err(error) = crate::game::instances::stop(
-                    &state.paths,
-                    &state.db,
-                    game,
-                    generic_instance.name(),
-                )
-                .await
+            if crate::game::instances::is_running(
+                &state.paths,
+                &state.db,
+                game,
+                generic_instance.name(),
+            )? && let Err(error) = crate::game::instances::stop_with(
+                &state.paths,
+                &state.db,
+                game,
+                generic_instance.name(),
+                StopReason::HostShutdown,
+            )
+            .await
             {
                 failures.push(format!("{game}/{}: {error:#}", generic_instance.name()));
             }
@@ -588,7 +593,15 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
         };
         for generic_instance in generic_instances {
             let name = generic_instance.name();
-            let snapshot = routes::games::generic_resource_snapshot(state, &generic_instance);
+            let snapshot = match routes::games::generic_resource_snapshot(state, &generic_instance)
+            {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    // Unknown is not stopped: never act on a failed probe.
+                    tracing::debug!(instance = %name, %error, "could not sample {game} instance");
+                    continue;
+                }
+            };
             if persist_now && snapshot.running {
                 state.runtime.persist_game_instance_sample(
                     game,
@@ -611,7 +624,17 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                     .activity
                     .record_for(game, kind, Some(name.to_string()));
             }
-            if !snapshot.running && generic_instance.pid.is_some() {
+            if !snapshot.running
+                && container_needs_restart(
+                    state,
+                    game,
+                    &generic_instance.identity.id,
+                    name,
+                    generic_instance.config.auto_restart,
+                )
+            {
+                crashed_generic_with_auto_restart.push((game, name.to_string()));
+            } else if !snapshot.running && generic_instance.pid.is_some() {
                 let _ =
                     game_instances::clear_generic_pid(&state.db, game, name, chrono::Utc::now());
                 let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
@@ -747,6 +770,7 @@ async fn reconcile_log_tailers(
 mod tests {
     use super::{run_telemetry_tick, shutdown_flag_enabled, stop_running_instances};
     use crate::db::Db;
+    use crate::game::GameId;
     use crate::instance::Instance;
     use crate::paths::Paths;
     use crate::web::state::AppState;
@@ -960,6 +984,65 @@ mod tests {
         assert_eq!(
             run_telemetry_tick(&state).crashed_rust_with_auto_restart,
             ["rusty"]
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_crashed_7d2d_container_is_restarted_when_automatic_restart_is_on() {
+        let Some((state, db, root)) = container_state("crash-7d2d") else {
+            return;
+        };
+        let instance = crate::db::game_instances::create_generic(
+            &state.paths,
+            &db,
+            GameId::SevenDaysToDie,
+            "undead",
+        )
+        .unwrap();
+        crate::db::game_instances::set_generic_auto_restart(
+            &db,
+            GameId::SevenDaysToDie,
+            "undead",
+            true,
+        )
+        .unwrap();
+        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
+        crate::db::container_instances::set_desired_running(&db, &instance.identity.id, true)
+            .unwrap();
+
+        assert_eq!(
+            run_telemetry_tick(&state).crashed_generic_with_auto_restart,
+            [(GameId::SevenDaysToDie, "undead".to_string())]
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_stopped_7d2d_container_is_not_restarted_after_an_operator_stop() {
+        let Some((state, db, root)) = container_state("stop-7d2d") else {
+            return;
+        };
+        let instance = crate::db::game_instances::create_generic(
+            &state.paths,
+            &db,
+            GameId::SevenDaysToDie,
+            "undead",
+        )
+        .unwrap();
+        crate::db::game_instances::set_generic_auto_restart(
+            &db,
+            GameId::SevenDaysToDie,
+            "undead",
+            true,
+        )
+        .unwrap();
+        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
+
+        assert!(
+            run_telemetry_tick(&state)
+                .crashed_generic_with_auto_restart
+                .is_empty()
         );
         std::fs::remove_dir_all(root).ok();
     }

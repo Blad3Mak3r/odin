@@ -79,121 +79,13 @@ mod tests {
     use crate::db::container_instances;
     use crate::podman::dispatch;
     use crate::podman::lifecycle::StopReason;
-    use std::io::{BufRead, BufReader, Read, Write};
+    use crate::podman::test_support::{fake_podman, fake_runtime, temp_paths, write_podman_config};
+    use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
-
-    fn temp_paths(label: &str) -> Paths {
-        let root =
-            std::env::temp_dir().join(format!("odin-podman-rust-{label}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        Paths {
-            config_dir: root.clone(),
-            data_dir: root,
-        }
-    }
-
-    fn write_podman_config(paths: &Paths, socket: &std::path::Path) {
-        let config = crate::config::GlobalConfig {
-            data_dir: None,
-            podman: Some(crate::config::PodmanConfig {
-                socket: socket.to_path_buf(),
-                runtime_image: Some("example/odin-srv:1".into()),
-            }),
-        };
-        std::fs::write(
-            paths.config_file(),
-            toml::to_string_pretty(&config).unwrap(),
-        )
-        .unwrap();
-    }
-
-    /// Answers each Podman request on a fresh connection until the container
-    /// is started, returning `(request line, body)` for every request.
-    fn fake_podman(listener: UnixListener) -> std::thread::JoinHandle<Vec<(String, String)>> {
-        std::thread::spawn(move || {
-            let mut requests = Vec::new();
-            let mut created = false;
-            loop {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                let mut length = 0;
-                loop {
-                    let mut header = String::new();
-                    reader.read_line(&mut header).unwrap();
-                    if header == "\r\n" {
-                        break;
-                    }
-                    if let Some((name, value)) = header.split_once(':')
-                        && name.eq_ignore_ascii_case("content-length")
-                    {
-                        length = value.trim().parse().unwrap();
-                    }
-                }
-                let mut body = vec![0; length];
-                reader.read_exact(&mut body).unwrap();
-                let (status, reply) = if line.contains("/version") {
-                    ("200 OK", r#"{"Version":"5.0.0","ApiVersion":"1.41"}"#)
-                } else if line.contains("/exists") {
-                    ("204 No Content", "")
-                } else if line.contains("/containers/create") {
-                    created = true;
-                    ("201 Created", r#"{"Id":"abc"}"#)
-                } else if line.contains("/json") && created {
-                    (
-                        "200 OK",
-                        r#"{"State":{"Running":false,"Status":"created"}}"#,
-                    )
-                } else if line.contains("/json") {
-                    ("404 Not Found", r#"{"cause":"no such container"}"#)
-                } else {
-                    ("204 No Content", "")
-                };
-                let started = line.contains("/start");
-                requests.push((line.trim().to_string(), String::from_utf8(body).unwrap()));
-                stream
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{reply}",
-                            reply.len()
-                        )
-                        .as_bytes(),
-                    )
-                    .unwrap();
-                if started {
-                    return requests;
-                }
-            }
-        })
-    }
-
-    /// A runtime that answers Ping like a started `odin run`.
-    fn fake_runtime(socket: &std::path::Path) -> std::thread::JoinHandle<()> {
-        std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
-        let listener = UnixListener::bind(socket).unwrap();
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = String::new();
-            BufReader::new(stream.try_clone().unwrap())
-                .read_line(&mut request)
-                .unwrap();
-            let pong = serde_json::to_string(&crate::supervisor::protocol::Response::Pong {
-                pid: 1,
-                pid_started_at: 1,
-                started_at: chrono::Utc::now(),
-                protocol_version: crate::supervisor::protocol::PROTOCOL_VERSION,
-                odin_version: Some("test".into()),
-                ready: true,
-            })
-            .unwrap();
-            stream.write_all(format!("{pong}\n").as_bytes()).unwrap();
-        })
-    }
 
     #[tokio::test]
     async fn start_creates_the_rust_container_and_prepares_its_native_layout() {
-        let paths = temp_paths("start");
+        let paths = temp_paths("rust-start");
         let podman_socket = paths.data_dir.join("podman.sock");
         let listener = match UnixListener::bind(&podman_socket) {
             Ok(listener) => listener,
@@ -263,7 +155,7 @@ mod tests {
 
     #[test]
     fn a_container_decides_whether_a_migrated_instance_is_running() {
-        let paths = temp_paths("running");
+        let paths = temp_paths("rust-running");
         let podman_socket = paths.data_dir.join("podman.sock");
         let listener = match UnixListener::bind(&podman_socket) {
             Ok(listener) => listener,
@@ -303,7 +195,7 @@ mod tests {
 
     #[test]
     fn migration_prepares_the_layout_before_marking_the_instance() {
-        let paths = temp_paths("migrate");
+        let paths = temp_paths("rust-migrate");
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
         assert!(!lifecycle::is_migrated::<Rust>(&db, &instance).unwrap());
@@ -328,7 +220,7 @@ mod tests {
 
     #[test]
     fn migration_refuses_a_server_still_running_on_the_host() {
-        let paths = temp_paths("migrate-running");
+        let paths = temp_paths("rust-migrate-running");
         let db = Db::open(&paths).unwrap();
         let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
         game_instances::set_rust_pid(
@@ -348,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_gives_rust_the_time_its_world_save_needs() {
-        let paths = temp_paths("stop");
+        let paths = temp_paths("rust-stop");
         let podman_socket = paths.data_dir.join("podman.sock");
         let listener = match UnixListener::bind(&podman_socket) {
             Ok(listener) => listener,

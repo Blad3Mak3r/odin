@@ -77,6 +77,12 @@ pub async fn set_advanced_config_by_id(
         }
         let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
             .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
+        ensure_stopped(
+            &paths,
+            &db,
+            &identity,
+            "stop the server before changing advanced configuration",
+        )?;
         crate::game::config_documents::apply(&paths, &instance, &request.changes)
             .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
     })
@@ -99,11 +105,12 @@ pub async fn initialize_advanced_config_by_id(
         }
         let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
             .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
-        if instance.is_running() {
-            return Err(anyhow::Error::new(crate::web::error::BadRequest(
-                "stop the server before initializing its configuration".into(),
-            )));
-        }
+        ensure_stopped(
+            &paths,
+            &db,
+            &identity,
+            "stop the server before initializing its configuration",
+        )?;
         crate::game::config_documents::initialize(&paths, &instance)
             .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
     })
@@ -136,7 +143,12 @@ pub async fn apply_seven_days_template_review_by_id(
     let db = state.db.clone();
     run_blocking(move || {
         let instance = seven_days_instance(&db, &identity)?;
-        ensure_stopped(&instance)?;
+        ensure_stopped(
+            &paths,
+            &db,
+            &identity,
+            "stop the server before changing its configuration template",
+        )?;
         crate::game::config_documents::apply_seven_days_template_review(
             &paths,
             &instance,
@@ -157,7 +169,12 @@ pub async fn adopt_seven_days_template_baseline_by_id(
     let db = state.db.clone();
     run_blocking(move || {
         let instance = seven_days_instance(&db, &identity)?;
-        ensure_stopped(&instance)?;
+        ensure_stopped(
+            &paths,
+            &db,
+            &identity,
+            "stop the server before changing its configuration template",
+        )?;
         crate::game::config_documents::adopt_seven_days_template_baseline(&paths, &instance)
             .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
     })
@@ -178,10 +195,15 @@ fn seven_days_instance(
         .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))
 }
 
-fn ensure_stopped(instance: &crate::db::game_instances::GenericGameInstance) -> anyhow::Result<()> {
-    if instance.is_running() {
+fn ensure_stopped(
+    paths: &crate::paths::Paths,
+    db: &crate::db::Db,
+    identity: &crate::db::game_instances::GameInstanceIdentity,
+    message: &str,
+) -> anyhow::Result<()> {
+    if crate::game::instances::is_running(paths, db, identity.game, &identity.name)? {
         return Err(anyhow::Error::new(crate::web::error::BadRequest(
-            "stop the server before changing its configuration template".into(),
+            message.into(),
         )));
     }
     Ok(())

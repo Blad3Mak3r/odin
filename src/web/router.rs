@@ -732,7 +732,6 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         let template = "<?xml version=\"1.0\"?><ServerSettings/>";
-        write_seven_days_template(&paths, template);
         let instance = crate::db::game_instances::create_generic(
             &paths,
             &db,
@@ -740,10 +739,15 @@ mod tests {
             "undead",
         )
         .unwrap();
+        // The template comes from the instance's own copy of the game.
+        let private_template = paths
+            .container_runtime_dir(crate::game::GameId::SevenDaysToDie, &instance.identity.id)
+            .join("7d2d/serverconfig.xml");
+        std::fs::create_dir_all(private_template.parent().unwrap()).unwrap();
+        std::fs::write(&private_template, template).unwrap();
         let config = paths
             .game_instance_dir(crate::game::GameId::SevenDaysToDie, "undead")
             .join("config/serverconfig.xml");
-        std::fs::remove_file(&config).unwrap();
         let app = build_router(AppState::new(paths.clone(), db));
 
         let response = app

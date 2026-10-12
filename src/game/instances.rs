@@ -102,7 +102,7 @@ pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bo
         return dispatch::is_running(paths, db, game, name);
     }
     match load(paths, db, game, name)? {
-        GameInstance::Generic(instance) => Ok(instance.is_running()),
+        GameInstance::Generic(instance) => Ok(instance.is_running_directly()),
         GameInstance::Valheim(_) | GameInstance::Rust(_) => unreachable!("container games"),
     }
 }
@@ -194,13 +194,15 @@ pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bo
             let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
             let instance = game_instances::load_generic(db, game, name)?
                 .context("game instance does not exist")?;
-            if instance.identity.game == GameId::SevenDaysToDie && instance.is_running() {
-                anyhow::bail!("7 Days to Die backups require a stopped server");
+            if is_running(paths, db, game, name)? {
+                if game == GameId::SevenDaysToDie {
+                    anyhow::bail!("7 Days to Die backups require a stopped server");
+                }
+                anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
+                    instance.identity.name
+                ));
             }
-            anyhow::ensure!(
-                !instance.is_running(),
-                crate::instance::InstanceError::AlreadyRunning(instance.identity.name)
-            );
+            dispatch::remove(paths, db, game, name)?;
             crate::instance::lifecycle::delete_instance_dir(
                 &paths.game_instance_dir(instance.identity.game, instance.name()),
                 keep_backups,
@@ -232,7 +234,7 @@ pub fn create_backup(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
             // A filesystem copy made while Palworld is changing its world is
             // not a useful backup. Its local REST endpoint owns the save
             // operation, so ask it to flush before taking the snapshot.
-            if instance.identity.game == GameId::Palworld && instance.is_running() {
+            if instance.identity.game == GameId::Palworld && instance.is_running_directly() {
                 crate::game::palworld::save(paths, &instance)?;
             }
             crate::backup::create_at(
@@ -262,7 +264,7 @@ pub fn restore_backup(
         GameInstance::Rust(instance) => rust::restore_backup(paths, db, &instance, backup_id),
         GameInstance::Generic(instance) => {
             anyhow::ensure!(
-                !instance.is_running(),
+                !is_running(paths, db, game, name)?,
                 crate::instance::InstanceError::AlreadyRunning(instance.identity.name.clone())
             );
             crate::backup::restore_at(

@@ -21,7 +21,7 @@ pub fn prepare_start(
 ) -> Result<GenericGameInstance> {
     let instance = crate::db::game_instances::load_generic(db, game, name)?
         .context("game instance does not exist")?;
-    if instance.is_running() {
+    if instance.is_running_directly() {
         bail!("instance '{name}' is already running");
     }
     // Validate the transport contract again at the lifecycle boundary.

@@ -11,7 +11,8 @@ use anyhow::{Context, Result, bail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::game::GameId;
+use crate::db::game_instances::GameInstanceIdentity;
+use crate::game::{GameId, SEVEN_DAYS_TEMPLATE_BASELINE_FILE};
 use crate::paths::Paths;
 
 /// The launch arguments Odin passes to the server itself. Every other setting
@@ -82,6 +83,61 @@ pub fn build_command_at(
     Ok(command)
 }
 
+/// Where the installed server's `serverconfig.xml` template lives for an
+/// instance. A containerized instance owns a private copy of the game; one
+/// that has not been migrated yet still uses the shared installation.
+pub fn template_path(paths: &Paths, identity: &GameInstanceIdentity) -> PathBuf {
+    let private = paths
+        .container_runtime_dir(GameId::SevenDaysToDie, &identity.id)
+        .join(GameId::SevenDaysToDie.as_str())
+        .join(TEMPLATE_FILE);
+    if private.is_file() {
+        private
+    } else {
+        paths
+            .game_install_dir(GameId::SevenDaysToDie)
+            .join(TEMPLATE_FILE)
+    }
+}
+
+/// Creates the native document from the template the installed server ships,
+/// plus the baseline the template review compares against. An existing file
+/// is never touched.
+pub fn seed_config(template: &Path, instance_dir: &Path) -> Result<()> {
+    let destination = instance_dir.join(CONFIG_FILE);
+    if destination.exists() {
+        return Ok(());
+    }
+    if !template.is_file() {
+        bail!(
+            "7 Days to Die configuration template not found at {}",
+            template.display()
+        );
+    }
+    let parent = destination
+        .parent()
+        .context("7 Days to Die configuration path has no parent")?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    fs::copy(template, &destination).with_context(|| {
+        format!(
+            "failed to copy 7 Days to Die configuration from {}",
+            template.display()
+        )
+    })?;
+    fs::copy(template, parent.join(SEVEN_DAYS_TEMPLATE_BASELINE_FILE))
+        .context("failed to save the 7 Days to Die configuration template")?;
+    Ok(())
+}
+
+/// Container-side preparation, run before every launch: the game is installed
+/// in the private runtime volume by now, so its template can seed a missing
+/// configuration.
+pub fn prepare_runtime(install_dir: &Path, instance_dir: &Path) -> Result<()> {
+    seed_config(&install_dir.join(TEMPLATE_FILE), instance_dir)
+}
+
+const TEMPLATE_FILE: &str = "serverconfig.xml";
+
 /// Relative to the instance directory.
 pub const CONFIG_FILE: &str = "config/serverconfig.xml";
 pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
@@ -111,41 +167,68 @@ pub fn execute_console(
     instance: &crate::db::game_instances::GenericGameInstance,
     command: &str,
 ) -> Result<ConsoleResponse> {
-    let command = command.trim();
-    if command.is_empty() || command.len() > 16 * 1024 || command.contains(['\r', '\n']) {
-        bail!("console command must be one non-empty line no longer than 16 KiB");
+    let console =
+        Console::from_config(|key| crate::game::config_documents::value(paths, instance, key))?;
+    console.execute(command)
+}
+
+/// Asks a running server to save its world and exit, using the console
+/// settings in the instance's own `serverconfig.xml`.
+pub fn shutdown(instance_dir: &Path) -> Result<()> {
+    let config = instance_dir.join(CONFIG_FILE);
+    Console::from_config(|key| crate::game::config_documents::xml_value(&config, key))?
+        .execute("shutdown")
+        .map(|_| ())
+}
+
+struct Console {
+    port: u16,
+    password: String,
+}
+
+impl Console {
+    fn from_config(read: impl Fn(&str) -> Result<Option<String>>) -> Result<Self> {
+        let enabled = read("TelnetEnabled")?
+            .context("7 Days to Die configuration has not been generated yet")?;
+        if !matches!(enabled.as_str(), "true" | "True" | "1") {
+            bail!("7 Days to Die console is disabled for this instance");
+        }
+        let password = read("TelnetPassword")?
+            .filter(|value| !value.is_empty())
+            .context("7 Days to Die console requires a password")?;
+        let port = read("TelnetPort")?
+            .context("7 Days to Die console port is not configured")?
+            .parse::<u16>()
+            .context("7 Days to Die console port is invalid")?;
+        Ok(Self { port, password })
     }
-    let enabled = crate::game::config_documents::value(paths, instance, "TelnetEnabled")?
-        .context("7 Days to Die configuration has not been generated yet")?;
-    if !matches!(enabled.as_str(), "true" | "True" | "1") {
-        bail!("7 Days to Die console is disabled for this instance");
+
+    fn execute(&self, command: &str) -> Result<ConsoleResponse> {
+        let (port, password) = (self.port, self.password.as_str());
+        let command = command.trim();
+        if command.is_empty() || command.len() > 16 * 1024 || command.contains(['\r', '\n']) {
+            bail!("console command must be one non-empty line no longer than 16 KiB");
+        }
+        let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+        let mut stream = TcpStream::connect_timeout(&address.into(), CONSOLE_TIMEOUT)
+            .with_context(|| format!("failed to connect to 7 Days to Die console at {address}"))?;
+        stream.set_write_timeout(Some(CONSOLE_TIMEOUT))?;
+        // The game uses a line-oriented raw TCP service, despite its Telnet name.
+        // It prints a greeting first, then accepts the configured password.
+        let _ = read_available(&mut stream, Duration::from_secs(1))?;
+        stream.write_all(password.as_bytes())?;
+        stream.write_all(b"\n")?;
+        let authentication = read_available(&mut stream, Duration::from_secs(2))?;
+        if authentication.to_ascii_lowercase().contains("incorrect")
+            || authentication.to_ascii_lowercase().contains("failed")
+        {
+            bail!("7 Days to Die console authentication failed");
+        }
+        stream.write_all(command.as_bytes())?;
+        stream.write_all(b"\n")?;
+        let output = read_available(&mut stream, Duration::from_secs(2))?;
+        Ok(ConsoleResponse { output })
     }
-    let password = crate::game::config_documents::value(paths, instance, "TelnetPassword")?
-        .filter(|value| !value.is_empty())
-        .context("7 Days to Die console requires a password")?;
-    let port = crate::game::config_documents::value(paths, instance, "TelnetPort")?
-        .context("7 Days to Die console port is not configured")?
-        .parse::<u16>()
-        .context("7 Days to Die console port is invalid")?;
-    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    let mut stream = TcpStream::connect_timeout(&address.into(), CONSOLE_TIMEOUT)
-        .with_context(|| format!("failed to connect to 7 Days to Die console at {address}"))?;
-    stream.set_write_timeout(Some(CONSOLE_TIMEOUT))?;
-    // The game uses a line-oriented raw TCP service, despite its Telnet name.
-    // It prints a greeting first, then accepts the configured password.
-    let _ = read_available(&mut stream, Duration::from_secs(1))?;
-    stream.write_all(password.as_bytes())?;
-    stream.write_all(b"\n")?;
-    let authentication = read_available(&mut stream, Duration::from_secs(2))?;
-    if authentication.to_ascii_lowercase().contains("incorrect")
-        || authentication.to_ascii_lowercase().contains("failed")
-    {
-        bail!("7 Days to Die console authentication failed");
-    }
-    stream.write_all(command.as_bytes())?;
-    stream.write_all(b"\n")?;
-    let output = read_available(&mut stream, Duration::from_secs(2))?;
-    Ok(ConsoleResponse { output })
 }
 
 fn read_available(stream: &mut TcpStream, first_byte_timeout: Duration) -> Result<String> {
@@ -493,6 +576,59 @@ mod tests {
         );
         // The native document is never created by building the command.
         assert!(!instance.join("config/serverconfig.xml").exists());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn seeding_copies_the_template_and_a_baseline_only_when_the_config_is_missing() {
+        let root = std::env::temp_dir().join(format!("odin-7d2d-seed-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        let instance = root.join("instance");
+        fs::create_dir_all(&install).unwrap();
+        fs::write(install.join("serverconfig.xml"), "<ServerSettings/>").unwrap();
+
+        prepare_runtime(&install, &instance).unwrap();
+        assert_eq!(
+            fs::read_to_string(instance.join("config/serverconfig.xml")).unwrap(),
+            "<ServerSettings/>"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                instance
+                    .join("config")
+                    .join(SEVEN_DAYS_TEMPLATE_BASELINE_FILE)
+            )
+            .unwrap(),
+            "<ServerSettings/>"
+        );
+
+        // An operator's edits survive a later start, even after the game
+        // ships a new template.
+        fs::write(instance.join("config/serverconfig.xml"), "<edited/>").unwrap();
+        fs::write(
+            install.join("serverconfig.xml"),
+            "<ServerSettings v=\"2\"/>",
+        )
+        .unwrap();
+        prepare_runtime(&install, &instance).unwrap();
+        assert_eq!(
+            fs::read_to_string(instance.join("config/serverconfig.xml")).unwrap(),
+            "<edited/>"
+        );
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn seeding_without_a_template_fails_only_when_a_config_is_needed() {
+        let root =
+            std::env::temp_dir().join(format!("odin-7d2d-notemplate-{}", uuid::Uuid::new_v4()));
+        let instance = root.join("instance");
+        let error = prepare_runtime(&root.join("install"), &instance).unwrap_err();
+        assert!(error.to_string().contains("template not found"));
+
+        fs::create_dir_all(instance.join("config")).unwrap();
+        fs::write(instance.join("config/serverconfig.xml"), "<edited/>").unwrap();
+        prepare_runtime(&root.join("install"), &instance).unwrap();
         fs::remove_dir_all(root).ok();
     }
 

@@ -15,7 +15,7 @@ use crate::paths::Paths;
 use crate::supervisor;
 
 use super::lifecycle::{self, ContainerGame, RuntimeHealth, StopReason};
-use super::{rust, valheim};
+use super::{rust, seven_days_to_die, valheim};
 
 /// Runs `$body` with `$game_type` bound to the [`ContainerGame`] of `$game`,
 /// or evaluates `$otherwise` when that game does not run in a container.
@@ -30,10 +30,11 @@ macro_rules! for_container_game {
                 type $game_type = rust::Rust;
                 $body
             }
-            GameId::VRising
-            | GameId::Palworld
-            | GameId::RunescapeDragonwilds
-            | GameId::SevenDaysToDie => $otherwise,
+            GameId::SevenDaysToDie => {
+                type $game_type = seven_days_to_die::SevenDaysToDie;
+                $body
+            }
+            GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => $otherwise,
         }
     };
 }
@@ -190,11 +191,12 @@ mod tests {
 
     #[test]
     fn container_games_match_the_capability_flag() {
-        for game in GameId::ALL {
+        for driver in crate::game::drivers() {
             assert_eq!(
-                is_container_game(game),
-                crate::game::driver(game).capabilities().container_runtime,
-                "{game} capability and dispatch disagree"
+                is_container_game(driver.id()),
+                driver.capabilities().container_runtime,
+                "{} capability and dispatch disagree",
+                driver.id()
             );
         }
     }

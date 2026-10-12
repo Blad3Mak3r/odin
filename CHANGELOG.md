@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-12
+
+### What's Changed
+- feature: run Rust servers in Podman by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/132
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.16.1...v0.17.0
+
 ## [0.16.1] - 2026-10-12
 
 ### What's Changed

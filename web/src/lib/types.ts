@@ -13,6 +13,7 @@ export interface GameCapabilities {
   mods: boolean
   access_lists: boolean
   readiness: boolean
+  container_runtime: boolean
 }
 
 export interface GameView {
@@ -36,7 +37,7 @@ export interface ManagedInstanceView {
   migration_required: boolean
 }
 
-export interface ValheimRuntimeHealth {
+export interface RuntimeHealth {
   podman: {
     configured: boolean
     connected: boolean
@@ -295,7 +296,7 @@ export interface JobSummary {
 
 export type JobKindDescr =
   | { kind: 'steamcmd_install'; game: GameId }
-  | { kind: 'valheim_update'; instance: string }
+  | { kind: 'runtime_update'; game: GameId; instance: string }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }

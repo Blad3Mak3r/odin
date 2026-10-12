@@ -74,6 +74,8 @@ pub struct GameCapabilities {
     pub mods: bool,
     pub access_lists: bool,
     pub readiness: bool,
+    /// Whether instances run in their own Podman container.
+    pub container_runtime: bool,
 }
 
 /// Ports claimed by one default instance of a game. This belongs to the
@@ -126,6 +128,7 @@ impl GameDriver for ValheimDriver {
             mods: true,
             access_lists: true,
             readiness: true,
+            container_runtime: true,
         }
     }
 
@@ -158,6 +161,7 @@ impl GameDriver for RustDriver {
             mods: false,
             access_lists: true,
             readiness: false,
+            container_runtime: true,
         }
     }
 
@@ -186,6 +190,7 @@ impl GameDriver for VRisingDriver {
             mods: false,
             access_lists: true,
             readiness: false,
+            container_runtime: false,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -213,6 +218,7 @@ impl GameDriver for PalworldDriver {
             mods: false,
             access_lists: true,
             readiness: true,
+            container_runtime: false,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -240,6 +246,7 @@ impl GameDriver for RunescapeDragonwildsDriver {
             mods: false,
             access_lists: true,
             readiness: false,
+            container_runtime: false,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -267,6 +274,7 @@ impl GameDriver for SevenDaysToDieDriver {
             mods: true,
             access_lists: false,
             readiness: true,
+            container_runtime: false,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {

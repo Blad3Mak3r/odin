@@ -452,17 +452,20 @@ your own `systemctl --user`/init setup.
 
 ## Configuration
 
-### Podman runtime for Valheim
+### Podman runtime for Valheim and Rust
 
-Valheim instances run in an `odin-srv` Podman container. Existing instances
-must be stopped and migrated from their instance page before they can start;
-new Valheim instances are created for Podman automatically. Each instance owns
-its own persistent SteamCMD and game payload under
-`<data>/runtimes/valheim/<uuid>/`; Odin never copies or removes the old shared
-installation during migration.
+Valheim and Rust instances run in an `odin-srv` Podman container. Existing
+instances must be stopped and migrated from their instance page before they
+can start; new instances are created for Podman automatically. Each instance
+owns its own persistent SteamCMD and game payload under
+`<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
+start (Rust's is several gigabytes, so that first start takes a while); Odin
+never copies or removes the old shared installation during migration, and
+deleting an instance removes its runtime volume. World data, configuration and
+backups stay in the instance directory.
 
-Odin itself starts without Podman configured. To use Valheim, set the socket
-in **Settings** or in Odin's configuration file:
+Odin itself starts without Podman configured. To use these games, set the
+socket in **Settings** or in Odin's configuration file:
 
 ```toml
 [podman]
@@ -472,15 +475,15 @@ socket = "/run/podman/podman.sock"
 
 Enable the rootful Podman socket with `sudo systemctl enable --now
 podman.socket`. The dashboard checks connectivity and requires Podman 5.0.0
-or newer before Valheim operations are available. Do not grant unrelated users
+or newer before container operations are available. Do not grant unrelated users
 access to this socket: it grants authority over its containers. Odin uses the
 Unix API directly; it does not require the `podman` CLI in the service path.
 
-Each migrated Valheim instance shows its container and runtime-socket health on
+Each migrated instance shows its container and runtime-socket health on
 its detail page. **Repair** is available only while the instance is stopped:
 it regenerates Odin's private runtime specification, removes stale sockets,
 and deletes the stopped UUID-named container so the next **Start** recreates
-it. It never downloads Valheim, starts the instance, or changes saves,
+it. It never downloads the game, starts the instance, or changes saves,
 backups, mods, or the legacy shared installation.
 
 Odin stores everything under a single **data directory**. Which mode it
@@ -516,8 +519,9 @@ In both modes, the data dir is resolved in this order:
     console.in                    # named pipe carrying console input (`odin exec`/dashboard)
     BepInEx/plugins/<mod-id> -> ../../../../mods/<mod-id>/<version>  # exact enabled version
   games/rust/
-    install/                     # Rust Dedicated Server binaries
+    install/                     # legacy shared Rust binaries (instances not yet migrated to Podman)
     instances/<name>/            # Rust configuration, identity, logs, and backups
+  runtimes/<game>/<uuid>/        # a Podman instance's private SteamCMD and game payload
   games/7d2d/
     install/                     # shared 7 Days to Die Dedicated Server binaries
     instances/<name>/
@@ -530,11 +534,15 @@ In both modes, the data dir is resolved in this order:
 Each Valheim instance's game binaries are a symlink into one shared,
 SteamCMD-managed install — so every Valheim instance always runs the same
 game version, and updating is a single `odin install` rather than one
-download per server. Rust uses its own isolated install under `games/rust/`.
-All Rust instances run that same installation with distinct `server.identity`
-values. Odin also maintains `$HOME/.steam/sdk64/steamclient.so` as a hardlink
-to SteamCMD's 64-bit client library (or a symlink when the paths cross
-filesystems), repairing it before every Rust start so Steamworks can initialize.
+download per server. These shared installs are what instances not yet migrated
+to Podman use; a Podman instance has its own copy under `runtimes/`.
+Legacy Rust instances run one installation under `games/rust/` with distinct
+`server.identity` values. Before every Rust start, on the host and inside its
+container, Odin maintains `$HOME/.steam/sdk64/steamclient.so` as a hardlink to
+SteamCMD's 64-bit client library (or a symlink when the paths cross
+filesystems) so Steamworks can initialize. Inside a container, Odin stops Rust
+through its console `quit` command, which saves the world; a plain signal does
+not.
 Valheim mods are versioned: `odin mods add` downloads each `(mod, version)`
 once into the shared `mods/` store, and every enabled instance symlinks to
 its exact version. Updating one instance creates or reuses the newer payload

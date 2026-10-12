@@ -4,7 +4,9 @@ import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { useRepairValheimInstance, useValheimRuntimeHealth } from '@/lib/queries'
+import { useRepairRuntime, useRuntimeHealth } from '@/lib/queries'
+import { gameLabel } from '@/lib/jobs'
+import type { GameId } from '@/lib/types'
 
 function label(value: string) {
   return value.replaceAll('_', ' ')
@@ -14,9 +16,9 @@ function statusVariant(status: string) {
   return status === 'responding' || status === 'running' ? 'default' : status === 'missing' || status === 'created' || status === 'exited' || status === 'orphaned' ? 'secondary' : 'destructive'
 }
 
-export function ValheimRuntimeHealthCard({ id, running }: { id: string; running: boolean }) {
-  const health = useValheimRuntimeHealth(id)
-  const repair = useRepairValheimInstance()
+export function RuntimeHealthCard({ id, game, running }: { id: string; game: GameId; running: boolean }) {
+  const health = useRuntimeHealth(id)
+  const repair = useRepairRuntime()
   const data = health.data
   const repairable = !running && data?.podman.compatible === true && ['missing', 'created', 'exited'].includes(data.container.status)
 
@@ -24,7 +26,7 @@ export function ValheimRuntimeHealthCard({ id, running }: { id: string; running:
     <Card>
       <CardHeader>
         <CardTitle>Runtime health</CardTitle>
-        <CardDescription>Podman container and Odin runtime status for this Valheim instance.</CardDescription>
+        <CardDescription>Podman container and Odin runtime status for this instance.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {health.isError && <QueryError error={health.error} />}
@@ -66,7 +68,7 @@ export function ValheimRuntimeHealthCard({ id, running }: { id: string; running:
               size="sm"
               disabled={!repairable || repair.isPending}
               onClick={() => repair.mutate(id, {
-                onSuccess: () => toast.success('Valheim runtime repaired; the instance remains stopped'),
+                onSuccess: () => toast.success(`${gameLabel(game)} runtime repaired; the instance remains stopped`),
                 onError: (error) => toast.error(error.message),
               })}
             >

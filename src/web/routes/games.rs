@@ -158,7 +158,7 @@ pub async fn install_game(
     State(state): State<AppState>,
     Path(game): Path<GameId>,
 ) -> ApiResult<Json<JobHandle>> {
-    if matches!(game, GameId::Valheim | GameId::Rust) {
+    if game::driver(game).capabilities().container_runtime {
         // There is no shared installation once instances own their private
         // payloads. Updates are deliberately performed in a running instance
         // runtime instead.
@@ -943,7 +943,7 @@ pub async fn update_runtime_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<JobHandle>> {
     let identity = resolve_instance_id(&state, &id).await?;
-    if !matches!(identity.game, GameId::Valheim | GameId::Rust) {
+    if !game::driver(identity.game).capabilities().container_runtime {
         return Err(unsupported_runtime().into());
     }
     let paths = state.paths.clone();

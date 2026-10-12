@@ -75,6 +75,14 @@ export function useVersion() {
   })
 }
 
+export function useSystemUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>('/update'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['version'] }),
+  })
+}
+
 export function useChangelog() {
   return useQuery({
     queryKey: ['changelog'],

@@ -4,6 +4,7 @@ use sysinfo::System;
 
 use crate::activity::ActivityLog;
 use crate::db::Db;
+use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
 use crate::web::jobs::JobRegistry;
 use crate::web::log_tail::LogTailRegistry;
@@ -22,6 +23,7 @@ pub struct AppState {
     pub players: PlayerRegistry,
     pub world_saves: WorldSaveRegistry,
     pub log_tail: LogTailRegistry,
+    pub system_update: SystemUpdate,
 }
 
 impl AppState {
@@ -39,6 +41,7 @@ impl AppState {
             players: PlayerRegistry::load(db),
             world_saves: WorldSaveRegistry::new(),
             log_tail: LogTailRegistry::new(),
+            system_update: SystemUpdate::packaged(),
         }
     }
 }

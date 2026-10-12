@@ -3,16 +3,93 @@
 //! Valheim server binary itself. Backs the dashboard's "update available"
 //! banner.
 
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::db::Db;
 
 const REPO: &str = "Blad3Mak3r/odin";
 const LATEST_RELEASE_CACHE_KEY: &str = "odin_latest_release";
 const LATEST_RELEASE_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const SYSTEM_UPDATE_UNIT: &str = "odin-update.service";
+const SYSTEM_UPDATE_UNIT_PATH: &str = "/usr/lib/systemd/system/odin-update.service";
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SystemUpdateStatus {
+    pub supported: bool,
+    pub running: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum SystemUpdateError {
+    #[error("Odin dashboard updates are available only for .deb/.rpm package installs")]
+    Unsupported,
+    #[error("An Odin update is already running")]
+    AlreadyRunning,
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemUpdate {
+    unit_path: PathBuf,
+    systemctl_path: PathBuf,
+}
+
+impl SystemUpdate {
+    pub fn packaged() -> Self {
+        Self {
+            unit_path: PathBuf::from(SYSTEM_UPDATE_UNIT_PATH),
+            systemctl_path: PathBuf::from("systemctl"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(unit_path: PathBuf, systemctl_path: PathBuf) -> Self {
+        Self {
+            unit_path,
+            systemctl_path,
+        }
+    }
+
+    pub fn status(&self) -> Result<SystemUpdateStatus> {
+        if !self.unit_path.is_file() {
+            return Ok(SystemUpdateStatus {
+                supported: false,
+                running: false,
+            });
+        }
+        let output = Command::new(&self.systemctl_path)
+            .args(["is-active", "--quiet", SYSTEM_UPDATE_UNIT])
+            .output()
+            .context("failed to query Odin update service")?;
+        Ok(SystemUpdateStatus {
+            supported: true,
+            running: output.status.success(),
+        })
+    }
+
+    pub fn start(&self) -> Result<()> {
+        let status = self.status()?;
+        if !status.supported {
+            return Err(SystemUpdateError::Unsupported.into());
+        }
+        if status.running {
+            return Err(SystemUpdateError::AlreadyRunning.into());
+        }
+        let status = Command::new(&self.systemctl_path)
+            .args(["start", "--no-block", SYSTEM_UPDATE_UNIT])
+            .status()
+            .context("failed to start Odin update service")?;
+        if !status.success() {
+            bail!("Odin update service could not be started");
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateStatus {
@@ -116,6 +193,7 @@ pub(crate) fn is_newer(tag: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn is_newer_detects_a_higher_patch_version() {
@@ -138,6 +216,78 @@ mod tests {
     fn is_newer_rejects_malformed_tags() {
         assert!(!is_newer("not-a-version", "0.4.0"));
         assert!(!is_newer("v0.4", "0.4.0"));
+    }
+
+    fn fake_systemctl(label: &str, active: bool) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-system-update-test-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let unit = dir.join("odin-update.service");
+        let marker = dir.join("args");
+        let systemctl = dir.join("systemctl");
+        std::fs::write(&unit, "[Service]\n").unwrap();
+        std::fs::write(
+            &systemctl,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = is-active ]; then exit {}; fi\nprintf '%s\\n' \"$@\" > '{}'\n",
+                if active { 0 } else { 1 },
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (unit, systemctl, marker)
+    }
+
+    #[test]
+    fn packaged_updater_is_unsupported_without_its_unit() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-system-update-missing-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let updater = SystemUpdate::new(dir.join("odin-update.service"), PathBuf::from("false"));
+
+        assert!(!updater.status().unwrap().supported);
+    }
+
+    #[test]
+    fn packaged_updater_starts_the_update_unit_without_waiting() {
+        let (unit, systemctl, marker) = fake_systemctl("start", false);
+        let updater = SystemUpdate::new(unit, systemctl);
+
+        updater.start().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(marker).unwrap(),
+            "start\n--no-block\nodin-update.service\n"
+        );
+    }
+
+    #[test]
+    fn packaged_updater_rejects_a_running_update() {
+        let (unit, systemctl, _) = fake_systemctl("running", true);
+        let updater = SystemUpdate::new(unit, systemctl);
+
+        assert!(matches!(
+            updater
+                .start()
+                .unwrap_err()
+                .downcast_ref::<SystemUpdateError>(),
+            Some(SystemUpdateError::AlreadyRunning)
+        ));
+    }
+
+    #[test]
+    fn package_metadata_includes_the_updater_assets() {
+        let manifest = include_str!("../Cargo.toml");
+
+        assert_eq!(manifest.matches("packaging/odin-update.service").count(), 2);
+        assert_eq!(manifest.matches("[\"install.sh\"").count(), 1);
+        assert_eq!(manifest.matches("source = \"install.sh\"").count(), 1);
     }
 
     fn temp_db(label: &str) -> Db {

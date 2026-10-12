@@ -419,6 +419,12 @@ sudo journalctl -u odin.service -f   # follow logs
 sudo systemctl edit odin.service     # override --bind/--port via a drop-in
 ```
 
+When a newer release is available, this install can update itself from the
+dashboard's release banner. Confirming the update starts a separate system
+service, so the dashboard can restart while game instances keep running.
+Restart running instances afterward to use the new Odin supervisor. Container
+deployments still update by pulling the new image and recreating the container.
+
 A per-user install (`make install-user`, or a plain `cargo build`) has no
 system service; run `odin serve` directly, or manage it yourself under
 your own `systemctl --user`/init setup.

@@ -90,6 +90,15 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         Some(NexusError::DownloadUnavailable(_)) => return StatusCode::UNPROCESSABLE_ENTITY,
         None => {}
     }
+    match err.downcast_ref::<crate::odin_update::SystemUpdateError>() {
+        Some(crate::odin_update::SystemUpdateError::Unsupported) => {
+            return StatusCode::UNPROCESSABLE_ENTITY;
+        }
+        Some(crate::odin_update::SystemUpdateError::AlreadyRunning) => {
+            return StatusCode::CONFLICT;
+        }
+        None => {}
+    }
     match err.downcast_ref::<InstanceError>() {
         Some(InstanceError::NotFound(_)) => StatusCode::NOT_FOUND,
         Some(InstanceError::InvalidName(_) | InstanceError::InvalidWorldName) => {

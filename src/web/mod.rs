@@ -748,7 +748,7 @@ mod tests {
                 .join()
                 .unwrap()
                 .iter()
-                .any(|request| request.starts_with("POST /v4.0.0/libpod/containers/"))
+                .any(|request| request.starts_with("POST /v5.0.0/libpod/containers/"))
         );
         std::fs::remove_dir_all(root).ok();
     }

@@ -190,7 +190,7 @@ pub async fn runtime_health(paths: &Paths, db: &Db, name: &str) -> Result<Runtim
         connected: true,
         compatible,
         version: Some(format!("{} (API {})", version.version, version.api_version)),
-        error: (!compatible).then(|| "Podman 4.0.0 or newer is required".into()),
+        error: (!compatible).then(|| "Podman 5.0.0 or newer is required".into()),
     };
     if !compatible {
         return Ok(RuntimeHealth {
@@ -198,7 +198,7 @@ pub async fn runtime_health(paths: &Paths, db: &Db, name: &str) -> Result<Runtim
             container: unavailable_container(),
             socket: socket_health(&control_socket, None).await,
             guidance: vec![
-                "Upgrade Podman to version 4.0.0 or newer before starting Valheim.".into(),
+                "Upgrade Podman to version 5.0.0 or newer before starting Valheim.".into(),
             ],
         });
     }
@@ -687,7 +687,7 @@ mod tests {
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
         assert!(requests.iter().all(|request| {
-            request.starts_with("GET /v4.0.0/libpod/containers/odin-valheim-instance/json ")
+            request.starts_with("GET /v5.0.0/libpod/containers/odin-valheim-instance/json ")
         }));
         std::fs::remove_file(socket).ok();
     }
@@ -757,7 +757,7 @@ mod tests {
                     .read_line(&mut request)
                     .unwrap();
                 let (status, body) = if request.contains("/version") {
-                    ("200 OK", r#"{"Version":"4.0.0","ApiVersion":"4.0"}"#)
+                    ("200 OK", r#"{"Version":"5.0.0","ApiVersion":"1.41"}"#)
                 } else if request.contains("/json") {
                     ("200 OK", r#"{"State":{"Running":false,"Status":"exited"}}"#)
                 } else {
@@ -865,7 +865,7 @@ mod tests {
                     .read_line(&mut request)
                     .unwrap();
                 let body = if request.contains("/version") {
-                    r#"{"Version":"4.0.0","ApiVersion":"4.0"}"#
+                    r#"{"Version":"5.0.0","ApiVersion":"1.41"}"#
                 } else {
                     r#"{"State":{"Running":true,"Status":"running"}}"#
                 };

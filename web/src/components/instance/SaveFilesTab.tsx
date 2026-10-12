@@ -11,6 +11,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useDeleteSaveFile, useSaveFiles, useUploadSaveFiles } from '@/lib/queries'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 
+// Collapsed table borders don't follow sticky cells, so the header rule is drawn inside the cell.
+const stickyHead = 'sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--border)]'
+
 export function SaveFilesTab({ id, running }: { id: string; running: boolean }) {
   // The folder being browsed is local UI state: the tab's URL stays `/saves`.
   const [path, setPath] = useState<string[]>([])
@@ -106,13 +109,13 @@ export function SaveFilesTab({ id, running }: { id: string; running: boolean }) 
             </p>
           ) : null}
           {files.data && files.data.length > 0 ? (
-            <Table>
+            <Table containerClassName="h-full overflow-y-auto">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-full">Name</TableHead>
-                  <TableHead className="hidden sm:table-cell">Size</TableHead>
-                  <TableHead className="hidden md:table-cell">Modified</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className={`w-full ${stickyHead}`}>Name</TableHead>
+                  <TableHead className={`hidden sm:table-cell ${stickyHead}`}>Size</TableHead>
+                  <TableHead className={`hidden md:table-cell ${stickyHead}`}>Modified</TableHead>
+                  <TableHead className={`text-right ${stickyHead}`}>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

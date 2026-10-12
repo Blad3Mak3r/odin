@@ -339,10 +339,15 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/resources/history/export",
             get(games::export_resource_history_by_id),
         )
-        .route("/instances/{id}/saves", get(saves::list_save_files_by_id))
+        .route(
+            "/instances/{id}/saves",
+            get(saves::list_save_files_by_id)
+                .post(saves::upload_save_files_by_id)
+                .layer(DefaultBodyLimit::max(MOD_UPLOAD_BODY_LIMIT)),
+        )
         .route(
             "/instances/{id}/saves/{*path}",
-            get(saves::download_save_file_by_id),
+            get(saves::download_save_file_by_id).delete(saves::delete_save_file_by_id),
         )
         .route("/games/{game}/install", post(games::install_game))
         .route(

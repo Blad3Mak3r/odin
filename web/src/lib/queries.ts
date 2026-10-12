@@ -163,7 +163,7 @@ export function useSaveFiles(id: string, path: string) {
   return useQuery({
     queryKey: ['save-files', id, path],
     queryFn: () => api.get<SaveFileEntry[]>(`${savesPath(id)}?path=${encodeURIComponent(path)}`),
-    // A missing folder is a 404 the tab turns into a redirect, not a transient error.
+    // A missing folder is a 404 the user fixes by navigating up, so don't retry it.
     retry: false,
   })
 }

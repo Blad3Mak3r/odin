@@ -1,6 +1,5 @@
 import { ChevronRight, Download, File, Folder, Trash2, Upload } from 'lucide-react'
-import { useRef } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { QueryError } from '@/components/QueryError'
@@ -9,36 +8,18 @@ import { buttonVariants } from '@/components/ui/button-variants'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ApiError } from '@/lib/api-client'
 import { useDeleteSaveFile, useSaveFiles, useUploadSaveFiles } from '@/lib/queries'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 
-const urlFor = (basePath: string, segments: string[]) =>
-  [basePath, ...segments.map(encodeURIComponent)].join('/')
-
-export function SaveFilesTab({
-  id,
-  path,
-  running,
-  basePath,
-}: {
-  id: string
-  path: string[]
-  running: boolean
-  basePath: string
-}) {
+export function SaveFilesTab({ id, running }: { id: string; running: boolean }) {
+  // The folder being browsed is local UI state: the tab's URL stays `/saves`.
+  const [path, setPath] = useState<string[]>([])
   const folder = path.join('/')
   const files = useSaveFiles(id, folder)
   const upload = useUploadSaveFiles()
   const remove = useDeleteSaveFile()
   const fileInput = useRef<HTMLInputElement>(null)
   const { confirm, dialog } = useConfirmDialog()
-
-  // A folder that no longer exists (or a malformed URL) falls back to its parent.
-  if (path.length > 0 && files.error instanceof ApiError && [400, 404].includes(files.error.status)) {
-    return <Navigate replace to={urlFor(basePath, path.slice(0, -1))} />
-  }
-  if (files.isError) return <QueryError error={files.error} />
 
   const handleUpload = async (selected: File[]) => {
     if (selected.length === 0) return
@@ -79,18 +60,18 @@ export function SaveFilesTab({
       {dialog}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <nav aria-label="Folder" className="flex flex-wrap items-center gap-1 text-sm">
-          <Link className="font-medium hover:underline" to={urlFor(basePath, [])}>
+          <button type="button" className="font-medium hover:underline" onClick={() => setPath([])}>
             Saves
-          </Link>
+          </button>
           {path.map((segment, index) => (
             <span key={index} className="flex items-center gap-1">
               <ChevronRight className="size-3.5 text-muted-foreground" />
               {index === path.length - 1 ? (
                 <span aria-current="page" className="font-mono text-xs">{segment}</span>
               ) : (
-                <Link className="font-mono text-xs hover:underline" to={urlFor(basePath, path.slice(0, index + 1))}>
+                <button type="button" className="font-mono text-xs hover:underline" onClick={() => setPath(path.slice(0, index + 1))}>
                   {segment}
-                </Link>
+                </button>
               )}
             </span>
           ))}
@@ -115,6 +96,7 @@ export function SaveFilesTab({
         <p className="text-xs text-muted-foreground">Uploading and deleting are disabled while the server is running — stop it first.</p>
       ) : null}
 
+      {files.isError ? <QueryError error={files.error} /> : null}
       {files.isLoading ? <Skeleton className="h-28 w-full" /> : null}
       {files.data?.length === 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -138,10 +120,14 @@ export function SaveFilesTab({
                 <TableRow key={entry.path}>
                   <TableCell className="font-mono text-xs">
                     {isDir ? (
-                      <Link className="flex items-center gap-2 hover:underline" to={urlFor(basePath, entry.path.split('/'))}>
+                      <button
+                        type="button"
+                        className="flex items-center gap-2 hover:underline"
+                        onClick={() => setPath(entry.path.split('/'))}
+                      >
                         <Folder className="size-4 shrink-0 text-muted-foreground" />
                         {entry.name}
-                      </Link>
+                      </button>
                     ) : (
                       <span className="flex items-center gap-2">
                         <File className="size-4 shrink-0 text-muted-foreground" />

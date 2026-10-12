@@ -196,7 +196,8 @@ sudo env ODIN_DATA_DIR=/path/to/a/scratch/dir \
 - Dashboard tabs that select navigable content must be controlled by React
   Router, not component state. Give every tab a canonical, hierarchical URL;
   redirect an incomplete or invalid tab path to the default valid tab at the
-  closest level.
+  closest level. Exception: the Save files tab's FTP-style folder browser keeps
+  the current folder in component state, so its URL stays at `/saves`.
 - New capabilities target the web API (`src/web/routes/`) and dashboard
   (`web/src/`) only — see [Project direction](#project-direction). The CLI
   (`src/commands/`) is legacy: it doesn't need to grow alongside the web

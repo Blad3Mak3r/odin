@@ -362,13 +362,16 @@ save file sizes/dates, or verify which world a backup corresponds to
 before restoring over the live one, without downloading and unzipping it
 manually.
 
-- **Backend**: read-only routes only — `GET /instances/{name}/saves`
-  (list files with size/mtime) and a single-file download route.
-  Deliberately no upload/delete of individual save files, since that
-  bypasses the backup/restore safety net (`backup::restore` snapshots
-  before overwriting; ad hoc file edits wouldn't).
-- **Frontend**: a new tab or section, list + download button, similar in
-  shape to `ModConfigFiles.tsx`'s list/detail pattern.
+- **Backend**: `GET /instances/{id}/saves?path=` lists one folder at a
+  time (size/mtime), a single-file download route, and — added after the
+  original read-only version — multipart upload and delete routes. Writes
+  are confined to the save root, uploads are staged and renamed atomically,
+  and both are refused while the server is running (the same rule backups
+  and config editing use), so a world is never replaced under a live
+  process. Unlike `backup::restore`, they do not snapshot first; the
+  dashboard asks for confirmation instead.
+- **Frontend**: the Save files tab is an FTP-style folder browser (folder
+  in the URL, breadcrumbs, upload and delete with confirmation).
 - **Effort**: M, full-stack — backend is a small read-only fs listing.
 
 ---

@@ -11,6 +11,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useDeleteSaveFile, useSaveFiles, useUploadSaveFiles } from '@/lib/queries'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 
+// Collapsed table borders don't follow sticky cells, so the header rule is drawn inside the cell.
+const stickyHead = 'sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--border)]'
+
 export function SaveFilesTab({ id, running }: { id: string; running: boolean }) {
   // The folder being browsed is local UI state: the tab's URL stays `/saves`.
   const [path, setPath] = useState<string[]>([])
@@ -58,115 +61,123 @@ export function SaveFilesTab({ id, running }: { id: string; running: boolean }) 
   return (
     <div className="flex flex-col gap-3">
       {dialog}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <nav aria-label="Folder" className="flex flex-wrap items-center gap-1 text-sm">
-          <button type="button" className="font-medium hover:underline" onClick={() => setPath([])}>
-            Saves
-          </button>
-          {path.map((segment, index) => (
-            <span key={index} className="flex items-center gap-1">
-              <ChevronRight className="size-3.5 text-muted-foreground" />
-              {index === path.length - 1 ? (
-                <span aria-current="page" className="font-mono text-xs">{segment}</span>
-              ) : (
-                <button type="button" className="font-mono text-xs hover:underline" onClick={() => setPath(path.slice(0, index + 1))}>
-                  {segment}
-                </button>
-              )}
-            </span>
-          ))}
-        </nav>
-        <Button size="sm" variant="outline" disabled={running || upload.isPending} onClick={() => fileInput.current?.click()}>
-          {upload.isPending ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
-          Upload
-        </Button>
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          hidden
-          onChange={(event) => {
-            void handleUpload(Array.from(event.target.files ?? []))
-            event.target.value = ''
-          }}
-        />
+      <div className="flex flex-col border">
+        <div className="flex flex-col gap-2 border-b bg-muted/50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+          <nav aria-label="Folder" className="flex flex-wrap items-center gap-1 text-sm">
+            <button type="button" className="font-medium hover:underline" onClick={() => setPath([])}>
+              Saves
+            </button>
+            {path.map((segment, index) => (
+              <span key={index} className="flex items-center gap-1">
+                <ChevronRight className="size-3.5 text-muted-foreground" />
+                {index === path.length - 1 ? (
+                  <span aria-current="page" className="font-mono text-xs">{segment}</span>
+                ) : (
+                  <button type="button" className="font-mono text-xs hover:underline" onClick={() => setPath(path.slice(0, index + 1))}>
+                    {segment}
+                  </button>
+                )}
+              </span>
+            ))}
+          </nav>
+          <Button size="sm" variant="outline" disabled={running || upload.isPending} onClick={() => fileInput.current?.click()}>
+            {upload.isPending ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
+            Upload
+          </Button>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            onChange={(event) => {
+              void handleUpload(Array.from(event.target.files ?? []))
+              event.target.value = ''
+            }}
+          />
+        </div>
+
+        {/* Fixed-height body: navigating folders must not change the page height, or the page scrolls. */}
+        <div
+          className={cn('h-80 overflow-y-auto', files.isPlaceholderData && 'opacity-60')}
+          aria-busy={files.isFetching}
+        >
+          {files.isError ? <QueryError error={files.error} /> : null}
+          {files.isLoading ? <Skeleton className="h-full w-full" /> : null}
+          {files.data?.length === 0 ? (
+            <p className="p-3 text-sm text-muted-foreground">
+              {path.length === 0 ? 'No save files have been created yet.' : 'This folder is empty.'}
+            </p>
+          ) : null}
+          {files.data && files.data.length > 0 ? (
+            <Table containerClassName="h-full overflow-y-auto">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className={`w-full ${stickyHead}`}>Name</TableHead>
+                  <TableHead className={`hidden sm:table-cell ${stickyHead}`}>Size</TableHead>
+                  <TableHead className={`hidden md:table-cell ${stickyHead}`}>Modified</TableHead>
+                  <TableHead className={`text-right ${stickyHead}`}>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {files.data.map((entry) => {
+                  const isDir = entry.kind === 'dir'
+                  return (
+                    <TableRow key={entry.path}>
+                      <TableCell className="font-mono text-xs">
+                        {isDir ? (
+                          <button
+                            type="button"
+                            className="flex items-center gap-2 hover:underline"
+                            onClick={() => setPath(entry.path.split('/'))}
+                          >
+                            <Folder className="size-4 shrink-0 text-muted-foreground" />
+                            {entry.name}
+                          </button>
+                        ) : (
+                          <span className="flex items-center gap-2">
+                            <File className="size-4 shrink-0 text-muted-foreground" />
+                            {entry.name}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">
+                        {isDir ? '—' : formatBytes(entry.size_bytes)}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground md:table-cell">
+                        {entry.modified_at ? formatRelativeTime(entry.modified_at) : 'Unknown'}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-right">
+                        {isDir ? null : (
+                          <a
+                            className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
+                            href={`/api/instances/${encodeURIComponent(id)}/saves/${entry.path.split('/').map(encodeURIComponent).join('/')}`}
+                            download
+                            aria-label={`Download ${entry.name}`}
+                          >
+                            <Download className="size-4" />
+                          </a>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={running || remove.isPending}
+                          aria-label={`Delete ${entry.name}`}
+                          onClick={() => void handleDelete(entry)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          ) : null}
+        </div>
       </div>
 
       {running ? (
         <p className="text-xs text-muted-foreground">Uploading and deleting are disabled while the server is running — stop it first.</p>
-      ) : null}
-
-      {files.isError ? <QueryError error={files.error} /> : null}
-      {files.isLoading ? <Skeleton className="h-28 w-full" /> : null}
-      {files.data?.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {path.length === 0 ? 'No save files have been created yet.' : 'This folder is empty.'}
-        </p>
-      ) : null}
-      {files.data && files.data.length > 0 ? (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-full">Name</TableHead>
-              <TableHead className="hidden sm:table-cell">Size</TableHead>
-              <TableHead className="hidden md:table-cell">Modified</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {files.data.map((entry) => {
-              const isDir = entry.kind === 'dir'
-              return (
-                <TableRow key={entry.path}>
-                  <TableCell className="font-mono text-xs">
-                    {isDir ? (
-                      <button
-                        type="button"
-                        className="flex items-center gap-2 hover:underline"
-                        onClick={() => setPath(entry.path.split('/'))}
-                      >
-                        <Folder className="size-4 shrink-0 text-muted-foreground" />
-                        {entry.name}
-                      </button>
-                    ) : (
-                      <span className="flex items-center gap-2">
-                        <File className="size-4 shrink-0 text-muted-foreground" />
-                        {entry.name}
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground sm:table-cell">
-                    {isDir ? '—' : formatBytes(entry.size_bytes)}
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground md:table-cell">
-                    {entry.modified_at ? formatRelativeTime(entry.modified_at) : 'Unknown'}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-right">
-                    {isDir ? null : (
-                      <a
-                        className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-                        href={`/api/instances/${encodeURIComponent(id)}/saves/${entry.path.split('/').map(encodeURIComponent).join('/')}`}
-                        download
-                        aria-label={`Download ${entry.name}`}
-                      >
-                        <Download className="size-4" />
-                      </a>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      disabled={running || remove.isPending}
-                      aria-label={`Delete ${entry.name}`}
-                      onClick={() => void handleDelete(entry)}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
       ) : null}
     </div>
   )

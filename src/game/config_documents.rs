@@ -85,6 +85,7 @@ enum Format {
     XmlProperties,
     PalworldOptions,
     RustCfg,
+    Ini,
 }
 
 #[derive(Clone, Copy)]
@@ -93,6 +94,7 @@ struct FileSpec {
     path: &'static str,
     format: Format,
     managed: &'static [&'static str],
+    allows_new_keys: bool,
 }
 
 const SEVEN_DAYS_MANAGED: &[&str] = &["ServerPort", "UserDataFolder", "TelnetPort"];
@@ -105,6 +107,12 @@ const RUST_MANAGED: &[&str] = &[
     "rcon.web",
     "server.identity",
 ];
+const ARK_GAME_USER_SETTINGS_MANAGED: &[&str] = &[
+    "[SessionSettings].SessionName",
+    "[ServerSettings].RCONEnabled",
+    "[ServerSettings].RCONPort",
+    "[ServerSettings].ServerAdminPassword",
+];
 
 fn specs(game: GameId) -> &'static [FileSpec] {
     match game {
@@ -113,13 +121,31 @@ fn specs(game: GameId) -> &'static [FileSpec] {
             path: "config/serverconfig.xml",
             format: Format::XmlProperties,
             managed: SEVEN_DAYS_MANAGED,
+            allows_new_keys: false,
         }],
         GameId::Palworld => &[FileSpec {
             id: "server",
             path: crate::game::palworld::CONFIG_FILE,
             format: Format::PalworldOptions,
             managed: PALWORLD_MANAGED,
+            allows_new_keys: false,
         }],
+        GameId::ArkSurvivalAscended => &[
+            FileSpec {
+                id: "game-user-settings",
+                path: "Saved/Config/WindowsServer/GameUserSettings.ini",
+                format: Format::Ini,
+                managed: ARK_GAME_USER_SETTINGS_MANAGED,
+                allows_new_keys: true,
+            },
+            FileSpec {
+                id: "game",
+                path: "Saved/Config/WindowsServer/Game.ini",
+                format: Format::Ini,
+                managed: &[],
+                allows_new_keys: true,
+            },
+        ],
         GameId::Valheim | GameId::Rust => &[],
     }
 }
@@ -352,7 +378,7 @@ pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<Advance
                 path: spec.path.into(),
                 format: format_name(spec.format),
                 exists,
-                allows_new_keys: false,
+                allows_new_keys: spec.allows_new_keys,
                 sections: sections.unwrap_or_default(),
             })
         })
@@ -385,6 +411,15 @@ pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
             &crate::game::palworld::template_path(paths, &instance.identity),
             &document_path(paths, instance, specs(GameId::Palworld)[0]),
         ),
+        GameId::ArkSurvivalAscended => {
+            for spec in specs(GameId::ArkSurvivalAscended) {
+                let path = document_path(paths, instance, *spec);
+                if !path.exists() {
+                    create_atomically(&path, "")?;
+                }
+            }
+            Ok(())
+        }
         GameId::Valheim | GameId::Rust => bail!("this game has no native configuration template"),
     }
 }
@@ -585,21 +620,29 @@ pub fn apply(
             .collect();
         let mut updated = original;
         for change in changes {
-            if change.delete {
+            if change.delete && !spec.allows_new_keys {
                 bail!("deleting advanced configuration keys is not supported for this game");
             }
             if spec.managed.contains(&change.key.as_str()) {
                 bail!("{} is managed by Odin", change.key);
             }
-            if !keys.contains_key(change.key.as_str()) {
+            if !keys.contains_key(change.key.as_str()) && !spec.allows_new_keys {
                 bail!("{} does not exist in {}", change.key, spec.id);
+            }
+            if change.delete {
+                updated = remove(spec.format, &updated, &change.key)?;
+                continue;
             }
             // A blank secret from the redacted dashboard means "keep the
             // current value", matching Odin's primary configuration forms.
             if is_sensitive_key(&change.key) && change.value.is_empty() {
                 continue;
             }
-            updated = set(spec.format, &updated, &change.key, &change.value)?;
+            updated = if keys.contains_key(change.key.as_str()) {
+                set(spec.format, &updated, &change.key, &change.value)?
+            } else {
+                append(spec.format, &updated, &change.key, &change.value)?
+            };
         }
         writes.push((path, updated));
     }
@@ -684,6 +727,7 @@ fn format_name(format: Format) -> &'static str {
         Format::XmlProperties => "xml-properties",
         Format::PalworldOptions => "unreal-ini",
         Format::RustCfg => "rust-cfg",
+        Format::Ini => "ini",
     }
 }
 
@@ -762,7 +806,34 @@ fn parse(format: Format, contents: &str) -> Result<Vec<ParsedEntry>> {
         }
         Format::PalworldOptions => parse_palworld(contents),
         Format::RustCfg => Ok(parse_rust_cfg(contents)),
+        Format::Ini => Ok(parse_ini(contents)),
     }
+}
+
+fn parse_ini(contents: &str) -> Vec<ParsedEntry> {
+    let mut section = "General";
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+                return None;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                section = &line[1..line.len() - 1];
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            Some(ParsedEntry {
+                key: format!("[{section}].{key}"),
+                label: key.into(),
+                section_id: section.into(),
+                section_label: section.into(),
+                value: value.trim().into(),
+            })
+        })
+        .collect()
 }
 
 fn parse_rust_cfg(contents: &str) -> Vec<ParsedEntry> {
@@ -960,7 +1031,7 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
                 instance.config.admin_port.unwrap_or_default().to_string(),
             ),
         ],
-        GameId::Valheim | GameId::Rust => Vec::new(),
+        GameId::ArkSurvivalAscended | GameId::Valheim | GameId::Rust => Vec::new(),
     };
     let existing = parse(spec.format, &contents)?
         .into_iter()
@@ -1006,6 +1077,91 @@ fn set(format: Format, contents: &str, key: &str, value: &str) -> Result<String>
         Format::XmlProperties => set_xml(contents, key, value),
         Format::PalworldOptions => set_palworld(contents, key, value),
         Format::RustCfg => set_rust_cfg(contents, key, value),
+        Format::Ini => set_ini(contents, key, value),
+    }
+}
+
+fn ini_key(key: &str) -> Result<(&str, &str)> {
+    let (section, key) = key
+        .strip_prefix('[')
+        .and_then(|key| key.split_once("]."))
+        .context("INI keys must use [Section].Key")?;
+    anyhow::ensure!(
+        !section.is_empty() && !key.is_empty(),
+        "INI keys must use [Section].Key"
+    );
+    Ok((section, key))
+}
+
+fn set_ini(contents: &str, full_key: &str, value: &str) -> Result<String> {
+    let (target_section, target_key) = ini_key(full_key)?;
+    let mut section = "General";
+    let mut found = false;
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section = &trimmed[1..trimmed.len() - 1];
+        }
+        if section == target_section
+            && let Some((key, _)) = trimmed.split_once('=')
+            && key.trim() == target_key
+            && !found
+        {
+            lines.push(format!("{target_key}={value}"));
+            found = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    anyhow::ensure!(found, "INI key {full_key} does not exist");
+    Ok(format!("{}\n", lines.join("\n")))
+}
+
+fn append(format: Format, contents: &str, key: &str, value: &str) -> Result<String> {
+    match format {
+        Format::Ini => {
+            let (section, key) = ini_key(key)?;
+            let separator = if contents.is_empty() || contents.ends_with('\n') {
+                ""
+            } else {
+                "\n"
+            };
+            Ok(format!("{contents}{separator}[{section}]\n{key}={value}\n"))
+        }
+        _ => bail!("adding keys is not supported for this configuration format"),
+    }
+}
+
+fn remove(format: Format, contents: &str, full_key: &str) -> Result<String> {
+    match format {
+        Format::Ini => {
+            let (target_section, target_key) = ini_key(full_key)?;
+            let mut section = "General";
+            let mut found = false;
+            let lines = contents
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                        section = &trimmed[1..trimmed.len() - 1];
+                    }
+                    let remove = section == target_section
+                        && trimmed
+                            .split_once('=')
+                            .is_some_and(|(key, _)| key.trim() == target_key);
+                    found |= remove;
+                    !remove
+                })
+                .collect::<Vec<_>>();
+            anyhow::ensure!(found, "INI key {full_key} does not exist");
+            Ok(if lines.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", lines.join("\n"))
+            })
+        }
+        _ => bail!("deleting keys is not supported for this configuration format"),
     }
 }
 

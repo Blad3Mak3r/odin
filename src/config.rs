@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::game::RuntimeImage;
 use crate::paths::Paths;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -20,15 +21,39 @@ pub struct GlobalConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PodmanConfig {
     pub socket: PathBuf,
+    /// Deprecated alias for `base_image` retained for existing installations.
     #[serde(default)]
     pub runtime_image: Option<String>,
+    #[serde(default)]
+    pub base_image: Option<String>,
+    #[serde(default)]
+    pub proton_image: Option<String>,
+    #[serde(default)]
+    pub odin_binary: Option<PathBuf>,
 }
 
 impl PodmanConfig {
-    pub fn runtime_image(&self) -> String {
-        self.runtime_image
+    pub fn image(&self, runtime: RuntimeImage) -> String {
+        let base = || {
+            self.base_image
+                .as_ref()
+                .or(self.runtime_image.as_ref())
+                .cloned()
+                .unwrap_or_else(|| "ghcr.io/blad3mak3r/odin-srv:base".into())
+        };
+        match runtime {
+            RuntimeImage::Base => base(),
+            RuntimeImage::Proton => self
+                .proton_image
+                .clone()
+                .unwrap_or_else(|| "ghcr.io/blad3mak3r/odin-srv:proton".into()),
+        }
+    }
+
+    pub fn odin_binary(&self) -> PathBuf {
+        self.odin_binary
             .clone()
-            .unwrap_or_else(|| format!("ghcr.io/blad3mak3r/odin-srv:{}", env!("CARGO_PKG_VERSION")))
+            .unwrap_or_else(|| PathBuf::from("/proc/self/exe"))
     }
 }
 

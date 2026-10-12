@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::validate_instance_name;
-use crate::game::{GameId, rust};
+use crate::game::{GameId, ark_asa, rust};
 use crate::paths::Paths;
 
 pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) -> Result<()> {
@@ -199,6 +199,22 @@ pub struct GenericGameInstance {
     pub config: GenericGameConfig,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallMode {
+    Isolated,
+    Shared,
+}
+
+impl InstallMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Isolated => "isolated",
+            Self::Shared => "shared",
+        }
+    }
+}
+
 impl GenericGameInstance {
     pub fn name(&self) -> &str {
         &self.identity.name
@@ -206,11 +222,20 @@ impl GenericGameInstance {
 }
 
 pub fn is_generic_game(game: GameId) -> bool {
-    matches!(game, GameId::Palworld | GameId::SevenDaysToDie)
+    matches!(
+        game,
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie
+    )
 }
 
 pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
     match game {
+        GameId::ArkSurvivalAscended => GenericGameConfig {
+            port: 7777,
+            query_port: Some(27015),
+            admin_port: Some(27020),
+            auto_restart: false,
+        },
         GameId::Palworld => GenericGameConfig {
             port: 8211,
             // Palworld's Steam server browser listener otherwise defaults to
@@ -307,6 +332,13 @@ pub fn create_generic(
         params![id, game.as_str(), name, created_at],
     )?;
     tx.execute("INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, config.port, config.query_port, config.admin_port, config.auto_restart])?;
+    if game == GameId::ArkSurvivalAscended {
+        let options = ark_asa::ArkLaunchOptions::defaults(name);
+        tx.execute(
+            "INSERT INTO ark_launch_options (instance_id, map, session_name, mods, rcon_password) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, options.map, options.session_name, serde_json::to_string(&options.mods)?, uuid::Uuid::new_v4().to_string()],
+        )?;
+    }
     tx.commit()?;
     drop(conn);
     load_generic(db, game, name)?.context("failed to load newly-created game instance")
@@ -327,7 +359,11 @@ pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
             instance.config.rcon_port,
         ]);
     }
-    for game in [GameId::Palworld, GameId::SevenDaysToDie] {
+    for game in [
+        GameId::ArkSurvivalAscended,
+        GameId::Palworld,
+        GameId::SevenDaysToDie,
+    ] {
         for instance in list_generic(db, game)? {
             ports.extend(claimed_ports(game, &instance.config)?);
         }
@@ -436,6 +472,79 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
             "7 Days to Die console port is required".into(),
         ));
     }
+    if game == GameId::ArkSurvivalAscended
+        && (config.query_port.is_none() || config.admin_port.is_none())
+    {
+        bail!(InvalidGenericConfig(
+            "ARK query and RCON ports are required".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn install_mode(db: &crate::db::Db, instance_id: &str) -> Result<InstallMode> {
+    let mode = db
+        .conn()
+        .query_row(
+            "SELECT install_mode FROM game_instance_install WHERE instance_id = ?1",
+            params![instance_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    match mode.as_deref() {
+        None | Some("isolated") => Ok(InstallMode::Isolated),
+        Some("shared") => Ok(InstallMode::Shared),
+        Some(mode) => bail!("invalid install mode '{mode}'"),
+    }
+}
+
+pub fn set_install_mode(db: &crate::db::Db, instance_id: &str, mode: InstallMode) -> Result<()> {
+    db.conn().execute(
+        "INSERT INTO game_instance_install (instance_id, install_mode) VALUES (?1, ?2)
+         ON CONFLICT(instance_id) DO NOTHING",
+        params![instance_id, mode.as_str()],
+    )?;
+    Ok(())
+}
+
+pub fn ark_launch(
+    db: &crate::db::Db,
+    instance: &GenericGameInstance,
+) -> Result<ark_asa::ArkLaunch> {
+    anyhow::ensure!(
+        instance.identity.game == GameId::ArkSurvivalAscended,
+        "not an ARK instance"
+    );
+    db.conn().query_row(
+        "SELECT map, session_name, mods, rcon_password FROM ark_launch_options WHERE instance_id = ?1",
+        params![instance.identity.id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+    ).optional()?.map(|(map, session_name, mods, rcon_password)| -> Result<ark_asa::ArkLaunch> {
+        Ok(ark_asa::ArkLaunch {
+            name: instance.name().to_string(),
+            port: instance.config.port,
+            query_port: instance.config.query_port.context("ARK query port is required")?,
+            rcon_port: instance.config.admin_port.context("ARK RCON port is required")?,
+            rcon_password,
+            options: ark_asa::ArkLaunchOptions { map, session_name, mods: serde_json::from_str(&mods)? },
+        })
+    }).transpose()?.context("ARK instance is missing launch options")
+}
+
+pub fn update_ark_launch_options(
+    db: &crate::db::Db,
+    instance: &GenericGameInstance,
+    options: &ark_asa::ArkLaunchOptions,
+) -> Result<()> {
+    options.validate()?;
+    anyhow::ensure!(
+        instance.identity.game == GameId::ArkSurvivalAscended,
+        "not an ARK instance"
+    );
+    db.conn().execute(
+        "UPDATE ark_launch_options SET map = ?2, session_name = ?3, mods = ?4 WHERE instance_id = ?1",
+        params![instance.identity.id, options.map, options.session_name, serde_json::to_string(&options.mods)?],
+    )?;
     Ok(())
 }
 

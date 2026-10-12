@@ -195,6 +195,13 @@ fn server_file(spec: &RuntimeSpec) -> PathBuf {
 }
 
 async fn bootstrap(spec: &RuntimeSpec) -> Result<()> {
+    if spec.shared_install {
+        anyhow::ensure!(
+            server_file(spec).is_file(),
+            "Install the game files from Games › ARK: Survival Ascended before starting a shared instance"
+        );
+        return Ok(());
+    }
     if server_file(spec).is_file() {
         return Ok(());
     }
@@ -235,6 +242,10 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
 }
 
 async fn update_payload(spec: &RuntimeSpec) -> Result<()> {
+    anyhow::ensure!(
+        !spec.shared_install,
+        "shared installs are updated from Games › ARK: Survival Ascended"
+    );
     let steamcmd = spec.steamcmd_dir.clone();
     let install = spec.install_dir.clone();
     let log = spec.update_log.clone();
@@ -426,6 +437,7 @@ chmod +x "$d/valheim_server.x86_64""#,
             install_dir: root.join("runtime/valheim"),
             steamcmd_dir: root.join("runtime/steamcmd"),
             update_log: root.join("instance/logs/update.log"),
+            shared_install: false,
             launch: Launch::Valheim {
                 instance: crate::instance::state::InstanceState::new("t", 2456),
             },
@@ -482,6 +494,7 @@ chmod +x "$d/valheim_server.x86_64""#,
             install_dir: PathBuf::from("/nonexistent/install"),
             steamcmd_dir: PathBuf::from("/nonexistent/steamcmd"),
             update_log: PathBuf::from("/nonexistent/update.log"),
+            shared_install: false,
             launch,
         }
     }

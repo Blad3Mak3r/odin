@@ -18,12 +18,14 @@ use crate::config::PodmanConfig;
 use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits::ResourceLimits;
 use crate::game::GameId;
+use crate::game::ark_asa::ArkLaunch;
 use crate::game::palworld::PalworldLaunch;
 use crate::game::rust::RustLaunch;
 use crate::game::seven_days_to_die::SevenDaysLaunch;
 use crate::instance::state::InstanceState;
 use crate::paths::Paths;
 
+pub mod ark_asa;
 pub mod dispatch;
 pub mod lifecycle;
 pub mod palworld;
@@ -378,6 +380,8 @@ pub struct RuntimeSpec {
     pub install_dir: PathBuf,
     pub steamcmd_dir: PathBuf,
     pub update_log: PathBuf,
+    #[serde(default)]
+    pub shared_install: bool,
     #[serde(flatten)]
     pub launch: Launch,
 }
@@ -394,6 +398,8 @@ pub enum Launch {
     #[serde(rename = "7d2d")]
     SevenDaysToDie(SevenDaysLaunch),
     Palworld(PalworldLaunch),
+    #[serde(rename = "ark-asa")]
+    ArkSurvivalAscended(ArkLaunch),
 }
 
 impl Launch {
@@ -403,6 +409,7 @@ impl Launch {
             Self::Rust(_) => GameId::Rust,
             Self::SevenDaysToDie(_) => GameId::SevenDaysToDie,
             Self::Palworld(_) => GameId::Palworld,
+            Self::ArkSurvivalAscended(_) => GameId::ArkSurvivalAscended,
         }
     }
 
@@ -412,6 +419,7 @@ impl Launch {
             Self::Rust(launch) => &launch.name,
             Self::SevenDaysToDie(launch) => &launch.name,
             Self::Palworld(launch) => &launch.name,
+            Self::ArkSurvivalAscended(launch) => &launch.name,
         }
     }
 
@@ -458,6 +466,13 @@ impl Launch {
                 crate::game::palworld::prepare_runtime(&spec.install_dir, &spec.instance_dir)?;
                 crate::game::palworld::build_command_at(&spec.install_dir, console_log, launch)
             }
+            Self::ArkSurvivalAscended(launch) => crate::game::ark_asa::build_command_at(
+                &spec.install_dir,
+                console_log,
+                &spec.steamcmd_dir.join("proton-prefix"),
+                &spec.steamcmd_dir,
+                launch,
+            ),
         }
     }
 
@@ -500,6 +515,12 @@ impl Launch {
             }
             // Valheim saves on SIGINT.
             Self::Valheim { .. } => false,
+            Self::ArkSurvivalAscended(launch) => tokio::time::timeout(
+                CONSOLE_STOP_TIMEOUT,
+                crate::game::ark_asa::save_and_exit(launch.rcon_port, &launch.rcon_password),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok()),
         }
     }
 }
@@ -509,14 +530,17 @@ const CONSOLE_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 impl RuntimeSpec {
     pub const PROTOCOL_VERSION: u16 = 1;
 
-    fn new(instance_id: &str, launch: Launch) -> Self {
+    fn new(instance_id: &str, launch: Launch, install_dir: Option<PathBuf>) -> Self {
         Self {
             protocol_version: Self::PROTOCOL_VERSION,
             instance_id: instance_id.to_string(),
             instance_dir: PathBuf::from(format!("{CONTAINER_ROOT}/instance")),
-            install_dir: PathBuf::from(format!("{CONTAINER_ROOT}/runtime/{}", launch.game())),
+            install_dir: install_dir.unwrap_or_else(|| {
+                PathBuf::from(format!("{CONTAINER_ROOT}/runtime/{}", launch.game()))
+            }),
             steamcmd_dir: PathBuf::from(format!("{CONTAINER_ROOT}/runtime/steamcmd")),
             update_log: PathBuf::from(format!("{CONTAINER_ROOT}/instance/logs/update.log")),
+            shared_install: false,
             launch,
         }
     }
@@ -533,13 +557,24 @@ pub fn write_runtime_spec(
     identity: &GameInstanceIdentity,
     launch: Launch,
 ) -> Result<PathBuf> {
+    write_runtime_spec_with_install_dir(paths, identity, launch, None)
+}
+
+pub fn write_runtime_spec_with_install_dir(
+    paths: &Paths,
+    identity: &GameInstanceIdentity,
+    launch: Launch,
+    install_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
     let runtime_dir = paths.container_runtime_dir(identity.game, &identity.id);
     std::fs::create_dir_all(&runtime_dir)
         .with_context(|| format!("failed to create {}", runtime_dir.display()))?;
     let spec_path = runtime_spec_path(paths, identity.game, &identity.id);
     let temporary = spec_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let encoded = serde_json::to_vec_pretty(&RuntimeSpec::new(&identity.id, launch))
-        .context("failed to encode runtime specification")?;
+    let mut spec = RuntimeSpec::new(&identity.id, launch, install_dir.clone());
+    spec.shared_install = install_dir.is_some();
+    let encoded =
+        serde_json::to_vec_pretty(&spec).context("failed to encode runtime specification")?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -568,6 +603,7 @@ impl ContainerSpec {
     /// The container shape shared by every game: a private runtime volume, the
     /// instance directory and the control-socket directory, on the host
     /// network. `extra_mounts` carries anything only one game needs.
+    #[cfg(test)]
     pub fn new(
         paths: &Paths,
         identity: &GameInstanceIdentity,
@@ -576,12 +612,33 @@ impl ContainerSpec {
         image: String,
         limits: &ResourceLimits,
     ) -> Self {
+        Self::new_with_odin_binary(
+            paths,
+            identity,
+            instance_dir,
+            extra_mounts,
+            image,
+            Path::new("/proc/self/exe"),
+            limits,
+        )
+    }
+
+    pub fn new_with_odin_binary(
+        paths: &Paths,
+        identity: &GameInstanceIdentity,
+        instance_dir: &Path,
+        extra_mounts: Vec<Mount>,
+        image: String,
+        odin_binary: &Path,
+        limits: &ResourceLimits,
+    ) -> Self {
         let runtime_root = paths.container_runtime_dir(identity.game, &identity.id);
         let socket_root = paths.container_socket_dir(&identity.id);
         let mut mounts = vec![
             bind(&runtime_root, Path::new("/srv/odin/runtime")),
             bind(instance_dir, Path::new("/srv/odin/instance")),
             bind(&socket_root, Path::new("/run/odin")),
+            bind_ro(odin_binary, Path::new("/usr/local/bin/odin")),
         ];
         mounts.extend(extra_mounts);
         let user = format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
@@ -633,6 +690,16 @@ pub fn bind(host: &Path, container: &Path) -> Mount {
         kind: "bind".to_string(),
         source: host.display().to_string(),
         options: vec!["rw".to_string()],
+    }
+}
+
+/// Bind mount of `host` at `container`, read-only.
+pub fn bind_ro(host: &Path, container: &Path) -> Mount {
+    Mount {
+        destination: container.display().to_string(),
+        kind: "bind".to_string(),
+        source: host.display().to_string(),
+        options: vec!["ro".to_string()],
     }
 }
 
@@ -846,6 +913,7 @@ mod tests {
                     "/run/odin",
                     paths.container_socket_dir(&identity.id).to_str().unwrap()
                 ),
+                ("/usr/local/bin/odin", "/proc/self/exe"),
             ]
         );
         assert!(request.resource_limits.is_none());
@@ -967,7 +1035,7 @@ mod tests {
     #[test]
     fn valheim_runtime_spec_keeps_its_instance_key_for_older_runtimes() {
         let state = crate::instance::state::InstanceState::new("one", 2456);
-        let spec = RuntimeSpec::new("id", Launch::Valheim { instance: state });
+        let spec = RuntimeSpec::new("id", Launch::Valheim { instance: state }, None);
 
         let json = serde_json::to_value(&spec).unwrap();
 

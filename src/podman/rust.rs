@@ -42,6 +42,7 @@ impl ContainerGame for Rust {
 
     fn prepare_layout(
         paths: &Paths,
+        _db: &Db,
         identity: &GameInstanceIdentity,
         instance: &RustInstance,
     ) -> Result<()> {
@@ -56,8 +57,8 @@ impl ContainerGame for Rust {
         Ok(())
     }
 
-    fn extra_mounts(_paths: &Paths) -> Vec<Mount> {
-        Vec::new()
+    fn extra_mounts(_paths: &Paths, _db: &Db, _instance: &RustInstance) -> Result<Vec<Mount>> {
+        Ok(Vec::new())
     }
 }
 

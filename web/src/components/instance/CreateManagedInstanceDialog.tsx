@@ -15,9 +15,14 @@ export function CreateManagedInstanceDialog({ games, defaultGame, variant }: { g
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [game, setGame] = useState<GameId | null>(defaultGame ?? null)
+  const [installMode, setInstallMode] = useState<'isolated' | 'shared'>('isolated')
+  const [map, setMap] = useState('TheIsland_WP')
+  const [sessionName, setSessionName] = useState('')
+  const [mods, setMods] = useState('')
   const create = useCreateManagedInstance()
   const selectedGame = games.some(({ id }) => id === game) ? game : (games[0]?.id ?? null)
-  const submit = () => selectedGame && create.mutate({ game: selectedGame, name }, {
+  const isArk = selectedGame === 'ark-asa'
+  const submit = () => selectedGame && create.mutate({ game: selectedGame, name, ...(isArk ? { install_mode: installMode, ark_launch: { map, session_name: sessionName || name, mods: mods.split(',').map((id) => Number(id.trim())).filter((id) => Number.isSafeInteger(id) && id > 0) } } : {}) }, {
     onSuccess: () => {
       setOpen(false)
       setName('')
@@ -60,6 +65,7 @@ export function CreateManagedInstanceDialog({ games, defaultGame, variant }: { g
               </Select.Portal>
             </Select.Root>
           </Field>
+          {isArk && <><Field><FieldLabel htmlFor="ark-install-mode">Install mode</FieldLabel><select id="ark-install-mode" className="h-9 border bg-background px-3 text-sm" value={installMode} onChange={(event) => setInstallMode(event.target.value as 'isolated' | 'shared')}><option value="isolated">Isolated</option><option value="shared">Shared</option></select></Field><Field><FieldLabel htmlFor="ark-map">Map</FieldLabel><Input id="ark-map" value={map} onChange={(event) => setMap(event.target.value)} /></Field><Field><FieldLabel htmlFor="ark-session-name">Session name</FieldLabel><Input id="ark-session-name" placeholder={name || 'my-server'} value={sessionName} onChange={(event) => setSessionName(event.target.value)} /></Field><Field><FieldLabel htmlFor="ark-mods">Mods</FieldLabel><Input id="ark-mods" placeholder="CurseForge IDs, comma-separated" value={mods} onChange={(event) => setMods(event.target.value)} /></Field></>}
           <Field>
             <FieldLabel htmlFor="managed-instance-name">Name</FieldLabel>
             <Input id="managed-instance-name" placeholder="my-server" value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && name && selectedGame && submit()} />

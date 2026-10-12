@@ -21,6 +21,9 @@ pub(crate) fn write_podman_config(paths: &Paths, socket: &std::path::Path) {
         podman: Some(crate::config::PodmanConfig {
             socket: socket.to_path_buf(),
             runtime_image: Some("example/odin-srv:1".into()),
+            base_image: None,
+            proton_image: None,
+            odin_binary: None,
         }),
     };
     std::fs::write(

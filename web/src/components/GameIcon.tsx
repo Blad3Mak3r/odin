@@ -8,6 +8,7 @@ import type { GameId } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 const GAME_ICON_SOURCES: Record<GameId, string> = {
+  'ark-asa': '',
   valheim: valheimIcon,
   rust: rustIcon,
   palworld: palworldIcon,

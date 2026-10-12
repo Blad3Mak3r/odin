@@ -312,8 +312,8 @@ export function useManagedResourceHistory(id: string, hours?: number, enabled = 
 export function useCreateManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
-      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name }),
+    mutationFn: ({ game, name, install_mode, ark_launch }: { game: GameId; name: string; install_mode?: 'isolated' | 'shared'; ark_launch?: { map: string; session_name: string; mods: number[] } }) =>
+      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name, install_mode, ark_launch }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances'] }),
   })
 }

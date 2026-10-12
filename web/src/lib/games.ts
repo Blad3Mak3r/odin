@@ -5,6 +5,7 @@ import valheimBanner from '@/assets/game-banners/valheim.webp'
 import type { GameId } from './types'
 
 const GAME_LABELS: Record<GameId, string> = {
+  'ark-asa': 'ARK: Survival Ascended',
   valheim: 'Valheim',
   rust: 'Rust',
   palworld: 'Palworld',
@@ -12,6 +13,7 @@ const GAME_LABELS: Record<GameId, string> = {
 }
 
 export const GAME_DESCRIPTIONS: Record<GameId, string> = {
+  'ark-asa': 'Host ARK: Survival Ascended with isolated or shared game files.',
   valheim: 'Build, explore, and survive with a dedicated Valheim server.',
   rust: 'Host and manage your Rust dedicated servers.',
   palworld: 'Operate your Palworld dedicated server from one place.',
@@ -19,6 +21,7 @@ export const GAME_DESCRIPTIONS: Record<GameId, string> = {
 }
 
 export const GAME_BANNERS: Record<GameId, string> = {
+  'ark-asa': '',
   valheim: valheimBanner,
   rust: rustBanner,
   palworld: palworldBanner,

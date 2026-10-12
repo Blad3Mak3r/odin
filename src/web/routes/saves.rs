@@ -312,6 +312,9 @@ fn save_root(
     name: &str,
 ) -> anyhow::Result<PathBuf> {
     match game {
+        GameId::ArkSurvivalAscended => {
+            Ok(paths.game_instance_dir(game, name).join("Saved/SavedArks"))
+        }
         GameId::Valheim => {
             let instance = crate::instance::Instance::load_existing(paths, db, name)?;
             Ok(crate::paths::instance_saves_dir(&instance.dir))

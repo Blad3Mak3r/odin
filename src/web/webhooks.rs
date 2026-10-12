@@ -137,6 +137,7 @@ fn describe(event: &ActivityEvent) -> String {
 
 fn game_name(game: crate::game::GameId) -> &'static str {
     match game {
+        crate::game::GameId::ArkSurvivalAscended => "ARK: Survival Ascended",
         crate::game::GameId::Valheim => "Valheim",
         crate::game::GameId::Rust => "Rust",
         crate::game::GameId::Palworld => "Palworld",

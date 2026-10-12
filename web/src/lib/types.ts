@@ -5,7 +5,7 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
-export type GameId = 'valheim' | 'rust' | 'palworld' | '7d2d'
+export type GameId = 'ark-asa' | 'valheim' | 'rust' | 'palworld' | '7d2d'
 
 export interface GameCapabilities {
   backups: boolean
@@ -13,6 +13,7 @@ export interface GameCapabilities {
   mods: boolean
   access_lists: boolean
   readiness: boolean
+  shared_install: boolean
 }
 
 export interface GameView {
@@ -20,6 +21,7 @@ export interface GameView {
   name: string
   steam_app_id: string
   capabilities: GameCapabilities
+  install_mode: 'isolated' | 'shared'
 }
 
 export interface ManagedInstanceView {
@@ -68,6 +70,9 @@ export interface GenericConfigUpdateRequest {
   query_port: number | null
   admin_port: number | null
   auto_restart: boolean
+  map?: string
+  session_name?: string
+  mods?: number[]
 }
 
 export interface AdvancedConfigEntry {

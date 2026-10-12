@@ -1,0 +1,125 @@
+//! ARK: Survival Ascended's Podman lifecycle facts.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+use crate::db::Db;
+use crate::db::game_instances::{self, GameInstanceIdentity, GenericGameInstance};
+use crate::game::GameId;
+use crate::paths::Paths;
+
+use super::lifecycle::ContainerGame;
+use super::{Launch, Mount, bind, write_runtime_spec, write_runtime_spec_with_install_dir};
+
+pub(super) struct ArkSurvivalAscended;
+
+impl ContainerGame for ArkSurvivalAscended {
+    const GAME: GameId = GameId::ArkSurvivalAscended;
+    type Instance = GenericGameInstance;
+
+    fn load(_paths: &Paths, db: &Db, name: &str) -> Result<GenericGameInstance> {
+        game_instances::load_generic(db, Self::GAME, name)?
+            .context("ARK: Survival Ascended instance does not exist")
+    }
+
+    fn identity(_db: &Db, instance: &GenericGameInstance) -> Result<GameInstanceIdentity> {
+        Ok(instance.identity.clone())
+    }
+
+    fn instance_dir(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
+        paths.game_instance_dir(Self::GAME, instance.name())
+    }
+
+    fn ports(instance: &GenericGameInstance) -> Result<Vec<u16>> {
+        game_instances::claimed_ports(Self::GAME, &instance.config)
+    }
+
+    fn ensure_ready_to_start(paths: &Paths, db: &Db, instance: &GenericGameInstance) -> Result<()> {
+        if game_instances::install_mode(db, &instance.identity.id)?
+            == game_instances::InstallMode::Shared
+        {
+            let binary = paths
+                .shared_install_dir(Self::GAME)
+                .join(crate::game::driver(Self::GAME).server_binary());
+            anyhow::ensure!(
+                binary.is_file(),
+                "Install the game files from Games › ARK: Survival Ascended before starting a shared instance"
+            );
+        }
+        Ok(())
+    }
+
+    fn prepare_layout(
+        paths: &Paths,
+        db: &Db,
+        identity: &GameInstanceIdentity,
+        instance: &GenericGameInstance,
+    ) -> Result<()> {
+        let shared =
+            game_instances::install_mode(db, &identity.id)? == game_instances::InstallMode::Shared;
+        // Save data and native configuration always belong to one instance.
+        // In shared mode only the installed game files move to the common root.
+        let root = Self::instance_dir(paths, instance);
+        for directory in ["Saved", "Mods", "logs"] {
+            std::fs::create_dir_all(root.join(directory))?;
+        }
+        for file in [
+            "Saved/Config/WindowsServer/GameUserSettings.ini",
+            "Saved/Config/WindowsServer/Game.ini",
+        ] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().context("ARK config path has no parent")?)?;
+            if !path.exists() {
+                std::fs::File::create(path)?;
+            }
+        }
+        std::fs::create_dir_all(paths.container_runtime_dir(Self::GAME, &identity.id))?;
+        std::fs::create_dir_all(paths.container_socket_dir(&identity.id))?;
+        let launch = Launch::ArkSurvivalAscended(game_instances::ark_launch(db, instance)?);
+        if shared {
+            write_runtime_spec_with_install_dir(
+                paths,
+                identity,
+                launch,
+                Some(PathBuf::from("/srv/odin/shared")),
+            )?;
+        } else {
+            write_runtime_spec(paths, identity, launch)?;
+        }
+        Ok(())
+    }
+
+    fn extra_mounts(paths: &Paths, db: &Db, instance: &GenericGameInstance) -> Result<Vec<Mount>> {
+        let root = Self::instance_dir(paths, instance);
+        let shared = game_instances::install_mode(db, &instance.identity.id)?
+            == game_instances::InstallMode::Shared;
+        let install = if shared {
+            "/srv/odin/shared"
+        } else {
+            "/srv/odin/runtime/ark-asa"
+        };
+        // Parent mounts must precede submounts so the per-instance state is
+        // visible when the install tree itself is shared.
+        let mut mounts = Vec::new();
+        if shared {
+            mounts.push(bind(
+                &paths.shared_install_dir(Self::GAME),
+                Path::new("/srv/odin/shared"),
+            ));
+        }
+        mounts.extend([
+            bind(
+                &root.join("Saved"),
+                &PathBuf::from(format!("{install}/ShooterGame/Saved")),
+            ),
+            bind(
+                &root.join("Mods"),
+                &PathBuf::from(format!(
+                    "{install}/ShooterGame/Binaries/Win64/ShooterGame/Mods"
+                )),
+            ),
+        ]);
+        Ok(mounts)
+    }
+}

@@ -39,6 +39,7 @@ impl ContainerGame for Palworld {
 
     fn prepare_layout(
         paths: &Paths,
+        _db: &Db,
         identity: &GameInstanceIdentity,
         instance: &GenericGameInstance,
     ) -> Result<()> {
@@ -56,8 +57,12 @@ impl ContainerGame for Palworld {
         Ok(())
     }
 
-    fn extra_mounts(_paths: &Paths) -> Vec<Mount> {
-        Vec::new()
+    fn extra_mounts(
+        _paths: &Paths,
+        _db: &Db,
+        _instance: &GenericGameInstance,
+    ) -> Result<Vec<Mount>> {
+        Ok(Vec::new())
     }
 }
 

@@ -453,14 +453,14 @@ your own `systemctl --user`/init setup.
 
 ## Configuration
 
-### Podman runtime for Valheim, Rust and 7 Days to Die
+### Podman runtime for Valheim, Rust, 7 Days to Die and Palworld
 
-Valheim, Rust and 7 Days to Die instances run in an `odin-srv` Podman container. Existing
+Valheim, Rust, 7 Days to Die and Palworld instances run in an `odin-srv` Podman container. Existing
 instances must be stopped and migrated from their instance page before they
 can start; new instances are created for Podman automatically. Each instance
 owns its own persistent SteamCMD and game payload under
 `<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
-start (Rust's and 7 Days to Die's are several gigabytes, so that first start
+start (Rust's, 7 Days to Die's and Palworld's are several gigabytes, so that first start
 takes a while); Odin
 never copies or removes the old shared installation during migration, and
 deleting an instance removes its runtime volume. With **auto restart** enabled,
@@ -468,9 +468,17 @@ Odin restarts a container that stopped without an operator asking for it, includ
 after a host reboot; an operator **Stop** is respected. World data, configuration and
 backups stay in the instance directory.
 
-Rust is stopped through its RCON `quit` and 7 Days to Die through its console's
-`shutdown`, so both save the world before exiting; if the console is disabled or
-unreachable Odin signals the server instead.
+Rust is stopped through its RCON `quit`, 7 Days to Die through its console's
+`shutdown` and Palworld through its REST API's `shutdown`, so all of them save
+the world before exiting; if that interface is disabled or unreachable Odin
+signals the server instead.
+
+Palworld keeps its saves and `PalWorldSettings.ini` in the instance directory
+under `runtime/Pal/Saved/`; inside the container the game's own `Pal/Saved`
+is a link to it. Odin creates `PalWorldSettings.ini` from the server's shipped
+`DefaultPalWorldSettings.ini` on the first start and never replaces an existing
+file. The files that the old host launch left in `runtime/` besides `Pal/Saved/`
+are unused after migration and can be deleted.
 
 Odin itself starts without Podman configured. To use these games, set the
 socket in **Settings** or in Odin's configuration file:
@@ -530,6 +538,10 @@ In both modes, the data dir is resolved in this order:
     install/                     # legacy shared Rust binaries (instances not yet migrated to Podman)
     instances/<name>/            # Rust configuration, identity, logs, and backups
   runtimes/<game>/<uuid>/        # a Podman instance's private SteamCMD and game payload
+  games/palworld/
+    install/                     # legacy shared binaries (instances not yet migrated to Podman)
+    instances/<name>/
+      runtime/Pal/Saved/         # saves and Config/LinuxServer/PalWorldSettings.ini
   games/7d2d/
     install/                     # legacy shared binaries (instances not yet migrated to Podman)
     instances/<name>/

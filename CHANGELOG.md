@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-12
+
+### What's Changed
+- fix: install libpulse-mainloop-glib0 in runtime images by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/130
+- fix: answer control pings while the Valheim runtime bootstraps by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/131
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.16.0...v0.16.1
+
 ## [0.16.0] - 2026-10-12
 
 ### What's Changed

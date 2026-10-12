@@ -108,6 +108,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
         .route(
+            "/instances/{id}/logs/update/sse",
+            get(sse::update_logs_sse_by_id),
+        )
+        .route(
             "/instances/{id}/valheim/clone",
             post(instances::clone_instance_by_id),
         )

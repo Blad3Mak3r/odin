@@ -588,6 +588,35 @@ chmod +x "$d/valheim_server.x86_64""#,
     }
 
     #[tokio::test]
+    async fn ping_during_bootstrap_reports_not_ready() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let (actions, _rx) = mpsc::channel(1);
+        let handler = tokio::spawn(handle_control(
+            server,
+            7,
+            11,
+            Utc::now(),
+            false,
+            actions,
+            Arc::new(Mutex::new(None)),
+        ));
+
+        write_frame(&mut client, &Request::Ping).await.unwrap();
+        let mut reader = BufReader::new(&mut client);
+        let response = read_frame::<Response, _>(&mut reader).await.unwrap();
+        handler.await.unwrap();
+
+        assert!(matches!(
+            response,
+            Some(Response::Pong {
+                pid: 7,
+                ready: false,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
     async fn stats_are_not_ready_before_the_first_sample() {
         let response = stats_response(Arc::new(Mutex::new(None)), 1).await;
         assert!(matches!(

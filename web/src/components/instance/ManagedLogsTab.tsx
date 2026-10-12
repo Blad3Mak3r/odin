@@ -4,23 +4,25 @@ import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useLogSocket } from '@/hooks/useLogSocket'
+import { useLogSocket, type LogSource } from '@/hooks/useLogSocket'
 import { useManagedInstanceLogs } from '@/lib/queries'
 
 const LINE_OPTIONS = [100, 200, 500, 1000]
 const LIVE_TAIL_LINES = 200
 
-export function ManagedLogsTab({ id }: { id: string }) {
+export function ManagedLogsTab({ id, hasInstallLog = false }: { id: string; hasInstallLog?: boolean }) {
   const [lineCount, setLineCount] = useState(200)
   const [filter, setFilter] = useState('')
+  const [source, setSource] = useState<LogSource>('console')
+  const installLog = hasInstallLog && source === 'update'
   const logs = useManagedInstanceLogs(id, lineCount)
-  const socket = useLogSocket(id)
+  const socket = useLogSocket(id, installLog ? 'update' : 'console')
   const scrollRef = useRef<HTMLDivElement>(null)
-  const showExpandedHistory = lineCount > LIVE_TAIL_LINES
-  const live = !showExpandedHistory && (socket.connected || socket.lines.length > 0)
+  const showExpandedHistory = !installLog && lineCount > LIVE_TAIL_LINES
+  const live = (installLog || !showExpandedHistory) && (socket.connected || socket.lines.length > 0)
   const allLines = useMemo(
-    () => (live ? socket.lines : (logs.data?.lines ?? [])),
-    [live, socket.lines, logs.data?.lines],
+    () => (live || installLog ? socket.lines : (logs.data?.lines ?? [])),
+    [live, installLog, socket.lines, logs.data?.lines],
   )
   const lines = useMemo(() => {
     const needle = filter.trim().toLowerCase()
@@ -43,24 +45,30 @@ export function ManagedLogsTab({ id }: { id: string }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          {live ? 'Live console log.' : `Last ${lineCount} lines (not live).`}
+          {installLog ? 'Live SteamCMD install log.' : live ? 'Live console log.' : `Last ${lineCount} lines (not live).`}
         </p>
         <div className="flex items-center gap-2">
+          {hasInstallLog && (
+            <div className="flex gap-1">
+              <Button size="sm" variant={installLog ? 'outline' : 'default'} onClick={() => setSource('console')}>Console</Button>
+              <Button size="sm" variant={installLog ? 'default' : 'outline'} onClick={() => setSource('update')}>SteamCMD</Button>
+            </div>
+          )}
           {live && <Badge variant={socket.connected ? 'default' : 'secondary'}>{socket.connected ? 'connected' : 'disconnected'}</Badge>}
-          <div className="flex gap-1">
+          {!installLog && <div className="flex gap-1">
             {LINE_OPTIONS.map((count) => (
               <Button key={count} size="sm" variant={lineCount === count ? 'default' : 'outline'} onClick={() => setLineCount(count)}>
                 {count}
               </Button>
             ))}
-          </div>
+          </div>}
         </div>
       </div>
       <Input placeholder="Filter lines…" value={filter} onChange={(event) => setFilter(event.target.value)} />
       <div ref={scrollRef} className="h-96 overflow-y-auto rounded-xl border bg-muted/30 p-3 font-mono text-xs">
-        {logs.isLoading && !live && <p className="text-muted-foreground">Loading…</p>}
-        {logs.isError && !live && <QueryError error={logs.error} />}
-        {lines.length === 0 && <p className="text-muted-foreground">{filter ? 'No lines match the filter.' : 'No logs yet — start the instance first.'}</p>}
+        {!installLog && logs.isLoading && !live && <p className="text-muted-foreground">Loading…</p>}
+        {!installLog && logs.isError && !live && <QueryError error={logs.error} />}
+        {lines.length === 0 && <p className="text-muted-foreground">{filter ? 'No lines match the filter.' : installLog ? 'No install output yet — it appears here while the server downloads on first start.' : 'No logs yet — start the instance first.'}</p>}
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {virtualizer.getVirtualItems().map((item) => (
             <div

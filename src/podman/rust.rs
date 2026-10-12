@@ -427,7 +427,13 @@ mod tests {
             request
         });
 
-        stop(&paths, &db, "rusty").await.unwrap();
+        container_instances::set_desired_running(&db, &instance.identity.id, true).unwrap();
+
+        stop(&paths, &db, "rusty", StopReason::Operator)
+            .await
+            .unwrap();
+
+        assert!(!container_instances::desired_running(&db, &instance.identity.id).unwrap());
 
         let request: serde_json::Value = serde_json::from_str(&runtime.join().unwrap()).unwrap();
         assert_eq!(request["type"], "stop");

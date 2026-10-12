@@ -79,7 +79,9 @@ fn bind_socket(path: &Path) -> Result<UnixListener> {
 }
 
 async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener) -> Result<()> {
-    bootstrap(&spec).await?;
+    if !bootstrap_while_serving(&spec, &control, &events).await? {
+        return Ok(());
+    }
     let mut child = spawn_child(&spec).await?;
     let mut pid = child.id().context("Valheim child has no PID")?;
     let mut started_at = Utc::now();
@@ -106,7 +108,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
                 return Ok(());
             }
             Ok((stream, _)) = control.accept() => {
-                tokio::spawn(handle_control(stream, pid, pid_started_at, started_at, actions_tx.clone()));
+                tokio::spawn(handle_control(stream, pid, pid_started_at, started_at, true, actions_tx.clone()));
             }
             Ok((stream, _)) = events.accept() => {
                 // A connection is valid but this lightweight container runtime
@@ -136,6 +138,46 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
                         // runtime looking healthy to the host.
                         bail!("Valheim update failed; runtime is stopping");
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Runs `bootstrap` (a first-start SteamCMD download that can take minutes)
+/// while still answering the host's control requests, so a `Ping` gets a
+/// `ready: false` `Pong` instead of queueing unanswered until the 2s client
+/// timeout. Returns `false` when a stop was requested before the server was
+/// installed, in which case there is nothing to run.
+async fn bootstrap_while_serving(
+    spec: &RuntimeSpec,
+    control: &UnixListener,
+    events: &UnixListener,
+) -> Result<bool> {
+    let pid = std::process::id();
+    let pid_started_at = process::start_time_of(pid)?;
+    let started_at = Utc::now();
+    let (actions_tx, mut actions_rx) = mpsc::channel(4);
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .context("failed to register SIGTERM handler")?;
+    let bootstrap = bootstrap(spec);
+    tokio::pin!(bootstrap);
+
+    loop {
+        tokio::select! {
+            result = &mut bootstrap => return result.map(|()| true),
+            _ = tokio::signal::ctrl_c() => return Ok(false),
+            _ = sigterm.recv() => return Ok(false),
+            Ok((stream, _)) = control.accept() => {
+                tokio::spawn(handle_control(stream, pid, pid_started_at, started_at, false, actions_tx.clone()));
+            }
+            Ok((stream, _)) = events.accept() => drop(stream),
+            Some(action) = actions_rx.recv() => match action {
+                Action::Stop(_) => return Ok(false),
+                Action::Update(reply) => {
+                    let _ = reply.send(Err(anyhow::anyhow!(
+                        "the Valheim server is still being installed"
+                    )));
                 }
             }
         }
@@ -242,6 +284,7 @@ async fn handle_control(
     pid: u32,
     pid_started_at: i64,
     started_at: chrono::DateTime<Utc>,
+    ready: bool,
     actions: mpsc::Sender<Action>,
 ) {
     let (read, mut write) = stream.into_split();
@@ -253,7 +296,7 @@ async fn handle_control(
             started_at,
             protocol_version: PROTOCOL_VERSION,
             odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            ready: true,
+            ready,
         },
         Ok(Some(Request::Stop { timeout_secs })) => {
             let _ = actions.send(Action::Stop(timeout_secs)).await;
@@ -307,4 +350,30 @@ async fn handle_control(
         },
     };
     let _ = write_frame(&mut write, &response).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ping_during_bootstrap_reports_not_ready() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let (actions, _rx) = mpsc::channel(1);
+        let handler = tokio::spawn(handle_control(server, 7, 11, Utc::now(), false, actions));
+
+        write_frame(&mut client, &Request::Ping).await.unwrap();
+        let mut reader = BufReader::new(&mut client);
+        let response = read_frame::<Response, _>(&mut reader).await.unwrap();
+        handler.await.unwrap();
+
+        assert!(matches!(
+            response,
+            Some(Response::Pong {
+                pid: 7,
+                ready: false,
+                ..
+            })
+        ));
+    }
 }

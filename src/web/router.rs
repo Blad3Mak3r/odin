@@ -1286,7 +1286,7 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
         let app = build_router(AppState::new(paths.clone(), db));
 
         let response = app

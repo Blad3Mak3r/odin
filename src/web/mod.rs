@@ -738,7 +738,7 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
         let state = AppState::new(paths.clone(), db);
 
         stop_running_instances(&state).await.unwrap();

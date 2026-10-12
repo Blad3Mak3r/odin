@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::PodmanConfig;
 use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits::ResourceLimits;
+use crate::game::GameId;
 use crate::instance::Instance;
 use crate::paths::Paths;
 
@@ -387,7 +388,9 @@ impl RuntimeSpec {
 }
 
 pub fn runtime_spec_path(paths: &Paths, instance_id: &str) -> PathBuf {
-    paths.valheim_runtime_dir(instance_id).join("runtime.json")
+    paths
+        .container_runtime_dir(GameId::Valheim, instance_id)
+        .join("runtime.json")
 }
 
 pub fn write_runtime_spec(
@@ -395,7 +398,7 @@ pub fn write_runtime_spec(
     identity: &GameInstanceIdentity,
     instance: &Instance,
 ) -> Result<PathBuf> {
-    let runtime_dir = paths.valheim_runtime_dir(&identity.id);
+    let runtime_dir = paths.container_runtime_dir(GameId::Valheim, &identity.id);
     std::fs::create_dir_all(&runtime_dir)
         .with_context(|| format!("failed to create {}", runtime_dir.display()))?;
     let spec_path = runtime_spec_path(paths, &identity.id);
@@ -434,8 +437,8 @@ impl ContainerSpec {
         image: String,
         limits: &ResourceLimits,
     ) -> Self {
-        let runtime_root = paths.valheim_runtime_dir(&identity.id);
-        let socket_root = paths.valheim_socket_dir(&identity.id);
+        let runtime_root = paths.container_runtime_dir(GameId::Valheim, &identity.id);
+        let socket_root = paths.container_socket_dir(&identity.id);
         let mut mounts = vec![
             bind(&runtime_root, Path::new("/srv/odin/runtime")),
             bind(&instance.dir, Path::new("/srv/odin/instance")),
@@ -456,7 +459,7 @@ impl ContainerSpec {
             RUNTIME_VERSION.to_string(),
         );
 
-        let name = container_name(&identity.id);
+        let name = container_name(GameId::Valheim, &identity.id);
         Self {
             request: CreateContainerRequest {
                 name,
@@ -496,8 +499,8 @@ fn bind(host: &Path, container: &Path) -> Mount {
     }
 }
 
-pub fn container_name(instance_id: &str) -> String {
-    format!("odin-valheim-{instance_id}")
+pub fn container_name(game: GameId, instance_id: &str) -> String {
+    format!("odin-{game}-{instance_id}")
 }
 
 fn cpu_quota(percent: f64) -> i64 {
@@ -611,7 +614,10 @@ mod tests {
                 memory_max_bytes: Some(123),
             },
         );
-        assert_eq!(spec.request.name, container_name(&identity.id));
+        assert_eq!(
+            spec.request.name,
+            container_name(GameId::Valheim, &identity.id)
+        );
         assert_eq!(spec.request.entrypoint, ["/usr/local/bin/odin"]);
         assert_eq!(
             spec.request.command,
@@ -642,6 +648,18 @@ mod tests {
         assert_eq!(
             spec.request.env.get("ODIN_RUNTIME_SPEC"),
             Some(&"/srv/odin/runtime/runtime.json".to_string())
+        );
+    }
+
+    #[test]
+    fn container_names_are_namespaced_by_game() {
+        assert_eq!(
+            container_name(GameId::Valheim, "3c1b20a3"),
+            "odin-valheim-3c1b20a3"
+        );
+        assert_eq!(
+            container_name(GameId::Rust, "3c1b20a3"),
+            "odin-rust-3c1b20a3"
         );
     }
 

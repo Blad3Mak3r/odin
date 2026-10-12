@@ -1140,7 +1140,7 @@ fn valheim_view(
     let odin_version = if migrated {
         crate::supervisor::client::ping_socket_blocking(
             &paths
-                .valheim_socket_dir(&identity.id)
+                .container_socket_dir(&identity.id)
                 .join(format!("valheim-{}.control.sock", identity.name)),
             Duration::from_millis(300),
         )
@@ -1365,7 +1365,7 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
 
         let view = valheim_view(&paths, &db, instance).unwrap();
 

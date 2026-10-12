@@ -185,10 +185,10 @@ pub(crate) fn compute_instance_snapshot(
         &instance.state.name,
         instance.state.created_at,
     )?;
-    if crate::db::container_instances::is_valheim_podman(&state.db, &identity.id)? {
+    if crate::db::container_instances::is_podman(&state.db, &identity.id)? {
         let socket = state
             .paths
-            .valheim_socket_dir(&identity.id)
+            .container_socket_dir(&identity.id)
             .join(format!("valheim-{}.control.sock", identity.name));
         let running = crate::podman::valheim::is_running(&state.paths, &state.db, instance)?;
         if !running {

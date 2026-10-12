@@ -69,7 +69,7 @@ fn identity(db: &Db, instance: &Instance) -> Result<GameInstanceIdentity> {
 }
 
 fn require_migrated(db: &Db, identity: &GameInstanceIdentity) -> Result<()> {
-    if container_instances::is_valheim_podman(db, &identity.id)? {
+    if container_instances::is_podman(db, &identity.id)? {
         Ok(())
     } else {
         bail!(
@@ -86,8 +86,8 @@ fn prepare_layout(
 ) -> Result<()> {
     std::fs::create_dir_all(paths::instance_saves_dir(&instance.dir))?;
     std::fs::create_dir_all(paths::instance_logs_dir(&instance.dir))?;
-    std::fs::create_dir_all(paths.valheim_runtime_dir(&identity.id))?;
-    std::fs::create_dir_all(paths.valheim_socket_dir(&identity.id))?;
+    std::fs::create_dir_all(paths.container_runtime_dir(GameId::Valheim, &identity.id))?;
+    std::fs::create_dir_all(paths.container_socket_dir(&identity.id))?;
     std::fs::create_dir_all(paths.mods_dir())?;
     write_runtime_spec(paths, identity, instance)?;
     Ok(())
@@ -103,11 +103,11 @@ pub fn migrate(paths: &Paths, db: &Db, name: &str) -> Result<()> {
         bail!(InstanceError::AlreadyRunning(name.to_string()));
     }
     let identity = identity(db, &instance)?;
-    if container_instances::is_valheim_podman(db, &identity.id)? {
+    if container_instances::is_podman(db, &identity.id)? {
         return Ok(());
     }
     prepare_layout(paths, &identity, &instance)?;
-    container_instances::mark_valheim_podman(db, &identity.id)?;
+    container_instances::mark_podman(db, &identity.id)?;
     Ok(())
 }
 
@@ -115,12 +115,12 @@ pub fn migrate(paths: &Paths, db: &Db, name: &str) -> Result<()> {
 /// an image or create a container, so creation remains offline and cheap.
 pub fn mark_new_instance(db: &Db, instance: &Instance) -> Result<()> {
     let identity = identity(db, instance)?;
-    container_instances::mark_valheim_podman(db, &identity.id)
+    container_instances::mark_podman(db, &identity.id)
 }
 
 pub fn is_migrated(db: &Db, instance: &Instance) -> Result<bool> {
     let identity = identity(db, instance)?;
-    container_instances::is_valheim_podman(db, &identity.id)
+    container_instances::is_podman(db, &identity.id)
 }
 
 /// Reports every boundary needed to start a migrated Valheim runtime without
@@ -202,7 +202,10 @@ pub async fn runtime_health(paths: &Paths, db: &Db, name: &str) -> Result<Runtim
             ],
         });
     }
-    let state = match client.inspect(&container_name(&identity.id)).await {
+    let state = match client
+        .inspect(&container_name(GameId::Valheim, &identity.id))
+        .await
+    {
         Ok(state) => state,
         Err(error) => {
             return Ok(RuntimeHealth {
@@ -241,7 +244,7 @@ pub async fn repair(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     let config = config(paths)?;
     let client = PodmanClient::from_config(&config)?;
     client.ensure_supported().await?;
-    let container = container_name(&identity.id);
+    let container = container_name(GameId::Valheim, &identity.id);
     match client.inspect(&container).await? {
         Some(ContainerState::Running) => bail!(InstanceError::AlreadyRunning(name.to_string())),
         Some(ContainerState::Unknown) => {
@@ -251,12 +254,12 @@ pub async fn repair(paths: &Paths, db: &Db, name: &str) -> Result<()> {
         }
         Some(ContainerState::Created | ContainerState::Exited) => {
             prepare_layout(paths, &identity, &instance)?;
-            clean_socket_dir(&paths.valheim_socket_dir(&identity.id))?;
+            clean_socket_dir(&paths.container_socket_dir(&identity.id))?;
             client.remove(&container, false).await?;
         }
         None => {
             prepare_layout(paths, &identity, &instance)?;
-            clean_socket_dir(&paths.valheim_socket_dir(&identity.id))?;
+            clean_socket_dir(&paths.container_socket_dir(&identity.id))?;
         }
     }
     Ok(())
@@ -264,7 +267,7 @@ pub async fn repair(paths: &Paths, db: &Db, name: &str) -> Result<()> {
 
 pub fn sync_spec(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
     let identity = identity(db, instance)?;
-    if container_instances::is_valheim_podman(db, &identity.id)? {
+    if container_instances::is_podman(db, &identity.id)? {
         prepare_layout(paths, &identity, instance)?;
     }
     Ok(())
@@ -272,7 +275,7 @@ pub fn sync_spec(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
 
 pub fn is_running(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
     let identity = identity(db, instance)?;
-    if !container_instances::is_valheim_podman(db, &identity.id)? {
+    if !container_instances::is_podman(db, &identity.id)? {
         return lifecycle::is_running(instance);
     }
     let Some(config) = GlobalConfig::load(paths)?.podman else {
@@ -280,18 +283,18 @@ pub fn is_running(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
     };
     let client = PodmanClient::from_config(&config)?;
     Ok(client
-        .inspect_blocking(&container_name(&identity.id))?
+        .inspect_blocking(&container_name(GameId::Valheim, &identity.id))?
         .is_some_and(ContainerState::is_running))
 }
 
 pub async fn is_running_async(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
     let identity = identity(db, instance)?;
-    if !container_instances::is_valheim_podman(db, &identity.id)? {
+    if !container_instances::is_podman(db, &identity.id)? {
         return lifecycle::is_running(instance);
     }
     let client = PodmanClient::from_config(&config(paths)?)?;
     Ok(client
-        .inspect(&container_name(&identity.id))
+        .inspect(&container_name(GameId::Valheim, &identity.id))
         .await?
         .is_some_and(ContainerState::is_running))
 }
@@ -313,7 +316,7 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     let client = PodmanClient::from_config(&config)?;
     client.ensure_supported().await?;
     let limits = resource_limits::load(db, &identity.id)?;
-    let container = container_name(&identity.id);
+    let container = container_name(GameId::Valheim, &identity.id);
     let image = config.runtime_image();
     let spec = ContainerSpec::valheim(paths, &identity, &instance, image.clone(), &limits);
     match client.inspect(&container).await? {
@@ -375,7 +378,7 @@ pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     require_migrated(db, &identity)?;
     let config = config(paths)?;
     let client = PodmanClient::from_config(&config)?;
-    let container = container_name(&identity.id);
+    let container = container_name(GameId::Valheim, &identity.id);
     let state = client.inspect(&container).await?;
     let Some(state) = state else {
         bail!(InstanceError::NotRunning(name.to_string()));
@@ -437,13 +440,13 @@ pub async fn update(paths: &Paths, db: &Db, name: &str) -> Result<()> {
 }
 
 pub async fn update_limits(paths: &Paths, db: &Db, instance_id: &str) -> Result<()> {
-    if !container_instances::is_valheim_podman(db, instance_id)? {
+    if !container_instances::is_podman(db, instance_id)? {
         return Ok(());
     }
     let config = config(paths)?;
     let client = PodmanClient::from_config(&config)?;
     if client
-        .inspect(&container_name(instance_id))
+        .inspect(&container_name(GameId::Valheim, instance_id))
         .await?
         .is_none()
     {
@@ -451,17 +454,18 @@ pub async fn update_limits(paths: &Paths, db: &Db, instance_id: &str) -> Result<
     }
     let limits = resource_limits::load(db, instance_id)?;
     client
-        .update_limits(&container_name(instance_id), &limits)
+        .update_limits(&container_name(GameId::Valheim, instance_id), &limits)
         .await
 }
 
 pub fn remove(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
     let identity = identity(db, instance)?;
-    if !container_instances::is_valheim_podman(db, &identity.id)? {
+    if !container_instances::is_podman(db, &identity.id)? {
         return Ok(());
     }
     let config = config(paths)?;
-    PodmanClient::from_config(&config)?.remove_blocking(&container_name(&identity.id), true)
+    PodmanClient::from_config(&config)?
+        .remove_blocking(&container_name(GameId::Valheim, &identity.id), true)
 }
 
 fn unavailable_container() -> RuntimeContainerHealth {
@@ -574,7 +578,7 @@ fn clean_socket_dir(socket_dir: &std::path::Path) -> Result<()> {
 }
 
 fn control_socket(paths: &Paths, identity: &GameInstanceIdentity) -> std::path::PathBuf {
-    paths.valheim_socket_dir(&identity.id).join(format!(
+    paths.container_socket_dir(&identity.id).join(format!(
         "{}-{}.control.sock",
         GameId::Valheim,
         identity.name
@@ -777,7 +781,7 @@ mod tests {
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
         let identity = identity(&db, &instance).unwrap();
-        container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        container_instances::mark_podman(&db, &identity.id).unwrap();
         let saves = paths::instance_saves_dir(&instance.dir);
         std::fs::create_dir_all(&saves).unwrap();
         let save = saves.join("world.db");
@@ -790,7 +794,7 @@ mod tests {
         std::fs::create_dir_all(&mods).unwrap();
         let mod_file = mods.join("example-mod");
         std::fs::write(&mod_file, "mod data").unwrap();
-        let socket_dir = paths.valheim_socket_dir(&identity.id);
+        let socket_dir = paths.container_socket_dir(&identity.id);
         std::fs::create_dir_all(&socket_dir).unwrap();
         let stale_socket = socket_dir.join("stale.sock");
         let stale_listener = UnixListener::bind(&stale_socket).unwrap();
@@ -882,7 +886,7 @@ mod tests {
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
         let identity = identity(&db, &instance).unwrap();
-        container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        container_instances::mark_podman(&db, &identity.id).unwrap();
 
         let error = repair(&paths, &db, "valheim").await.unwrap_err();
 

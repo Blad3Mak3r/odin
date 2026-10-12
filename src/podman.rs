@@ -24,6 +24,7 @@ use crate::paths::Paths;
 
 pub mod lifecycle;
 pub mod runtime;
+pub mod rust;
 pub mod valheim;
 
 /// Podman 5.0.0 is the oldest server Odin supports. Its Libpod API is

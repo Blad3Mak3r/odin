@@ -11,6 +11,7 @@ use crate::db::Db;
 use crate::db::game_instances::{self, GenericGameInstance, RustInstance};
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
+use crate::podman::rust as podman_rust;
 use crate::podman::valheim as podman_valheim;
 
 use super::{GameId, generic, rust};
@@ -57,7 +58,11 @@ pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameIn
         GameInstance::Rust(instance) => {
             let mut config = instance.config.clone();
             config.auto_restart = defaults.auto_restart;
-            GameInstance::Rust(game_instances::update_rust_config(db, name, &config)?)
+            let instance = game_instances::update_rust_config(db, name, &config)?;
+            // New Rust instances are born containerized, like Valheim ones.
+            // Existing rows keep running directly until explicitly migrated.
+            podman_rust::mark_new_instance(db, &instance)?;
+            GameInstance::Rust(instance)
         }
         GameInstance::Generic(mut instance) => {
             instance.config.auto_restart = defaults.auto_restart;
@@ -97,7 +102,7 @@ pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInst
 pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
     match load(paths, db, game, name)? {
         GameInstance::Valheim(instance) => podman_valheim::is_running(paths, db, &instance),
-        GameInstance::Rust(instance) => Ok(instance.is_running()),
+        GameInstance::Rust(instance) => rust::is_running(paths, db, &instance),
         GameInstance::Generic(instance) => Ok(instance.is_running()),
     }
 }
@@ -107,15 +112,9 @@ pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<G
         GameId::Valheim => podman_valheim::start(paths, db, name)
             .await
             .map(GameInstance::Valheim),
-        GameId::Rust => {
-            let instance = load(paths, db, game, name)?;
-            let GameInstance::Rust(instance) = instance else {
-                unreachable!("Rust game must load a Rust instance")
-            };
-            rust::start(paths, db, &instance)
-                .await
-                .map(GameInstance::Rust)
-        }
+        GameId::Rust => podman_rust::start(paths, db, name)
+            .await
+            .map(GameInstance::Rust),
         GameId::VRising
         | GameId::Palworld
         | GameId::RunescapeDragonwilds
@@ -129,11 +128,14 @@ pub async fn stop(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()
     match game {
         GameId::Valheim => podman_valheim::stop(paths, db, name).await,
         GameId::Rust => {
-            let instance = load(paths, db, game, name)?;
-            let GameInstance::Rust(instance) = instance else {
-                unreachable!("Rust game must load a Rust instance")
-            };
-            rust::stop(paths, db, &instance).await
+            let instance =
+                game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
+            if podman_rust::is_migrated(db, &instance)? {
+                podman_rust::stop(paths, db, name).await
+            } else {
+                // A server started before migration is still a host process.
+                rust::stop(paths, db, &instance).await
+            }
         }
         GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
             generic::stop(paths, db, game, name).await
@@ -155,15 +157,9 @@ pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
         GameId::Valheim => podman_valheim::restart(paths, db, name)
             .await
             .map(GameInstance::Valheim),
-        GameId::Rust => {
-            let instance = load(paths, db, game, name)?;
-            let GameInstance::Rust(instance) = instance else {
-                unreachable!("Rust game must load a Rust instance")
-            };
-            rust::restart(paths, db, &instance)
-                .await
-                .map(GameInstance::Rust)
-        }
+        GameId::Rust => podman_rust::restart(paths, db, name)
+            .await
+            .map(GameInstance::Rust),
         GameId::VRising
         | GameId::Palworld
         | GameId::RunescapeDragonwilds
@@ -201,6 +197,12 @@ pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bo
         GameId::Rust => {
             let instance =
                 game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
+            if rust::is_running(paths, db, &instance)? {
+                anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
+                    name.to_string()
+                ));
+            }
+            podman_rust::remove(paths, db, &instance)?;
             rust::delete(paths, db, &instance, keep_backups)
         }
         GameId::VRising
@@ -310,7 +312,7 @@ pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Res
     let instance = load(paths, db, game, old)?;
     let running = match &instance {
         GameInstance::Valheim(i) => podman_valheim::is_running(paths, db, i)?,
-        GameInstance::Rust(i) => i.is_running(),
+        GameInstance::Rust(i) => rust::is_running(paths, db, i)?,
         GameInstance::Generic(i) => i.is_running(),
     };
     anyhow::ensure!(

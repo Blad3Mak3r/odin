@@ -13,7 +13,6 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::db::game_instances::RustInstance;
-use crate::instance::InstanceError;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -28,11 +27,9 @@ struct RconResponse {
 }
 
 /// Runs one console command through the instance's loopback-only WebRCON
-/// connection and returns the matching server response.
+/// connection and returns the matching server response. The caller has
+/// already established that the server is running.
 pub async fn execute(instance: &RustInstance, command: &str) -> Result<String> {
-    if !instance.is_running() {
-        bail!(InstanceError::NotRunning(instance.name().to_owned()));
-    }
     execute_at(
         instance.config.rcon_port,
         &instance.config.rcon_password,

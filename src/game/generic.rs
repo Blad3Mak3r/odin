@@ -27,7 +27,7 @@ pub fn prepare_start(
     // Validate the transport contract again at the lifecycle boundary.
     crate::db::game_instances::validate_generic_config(game, &instance.config)?;
     let requested = crate::db::game_instances::claimed_ports(game, &instance.config)?;
-    crate::game::ports::ensure_available(db, game, name, requested)?;
+    crate::game::ports::ensure_available(paths, db, game, name, requested)?;
     let binary = paths
         .game_install_dir(game)
         .join(driver(game).server_binary());

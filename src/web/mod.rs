@@ -127,9 +127,14 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
         .collect::<Vec<_>>();
 
     for rust_instance in game_instances::list_rust(&state.db)? {
-        if rust_instance.is_running()
-            && let Err(error) =
-                crate::game::rust::stop(&state.paths, &state.db, &rust_instance).await
+        if crate::game::rust::is_running(&state.paths, &state.db, &rust_instance)?
+            && let Err(error) = crate::game::instances::stop(
+                &state.paths,
+                &state.db,
+                GameId::Rust,
+                rust_instance.name(),
+            )
+            .await
         {
             failures.push(format!("rust/{}: {error:#}", rust_instance.name()));
         }
@@ -239,7 +244,9 @@ async fn attempt_rust_auto_restart(state: &AppState, name: String) {
             return;
         }
     };
-    match crate::game::rust::start(&state.paths, &state.db, &instance).await {
+    match crate::game::instances::start(&state.paths, &state.db, GameId::Rust, instance.name())
+        .await
+    {
         Ok(_) => state.activity.record_for(
             GameId::Rust,
             ActivityKind::InstanceAutoRestarted,

@@ -122,7 +122,7 @@ pub fn prepare_start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
         );
     }
 
-    check_port_available(db, &instance)?;
+    check_port_available(paths, db, &instance)?;
     prepare_instance_layout(paths, &instance)?;
 
     Ok(instance)
@@ -294,8 +294,9 @@ pub(crate) fn delete_instance_dir(
     Ok(())
 }
 
-fn check_port_available(db: &Db, instance: &Instance) -> Result<()> {
+fn check_port_available(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
     crate::game::ports::ensure_available(
+        paths,
         db,
         GameId::Valheim,
         &instance.state.name,

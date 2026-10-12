@@ -31,8 +31,11 @@ pub async fn set_resource_limits(
     let paths = state.paths.clone();
     let saved_id = id.clone();
     let saved = run_blocking(move || resource_limits::save(&db, &saved_id, &limits)).await?;
-    if identity.game == crate::game::GameId::Valheim {
-        crate::podman::valheim::update_limits(&paths, &state.db, &id).await?;
+    if matches!(
+        identity.game,
+        crate::game::GameId::Valheim | crate::game::GameId::Rust
+    ) {
+        crate::podman::lifecycle::update_limits(&paths, &state.db, identity.game, &id).await?;
     }
     Ok(Json(saved))
 }

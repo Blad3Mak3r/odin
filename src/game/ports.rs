@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 
 use super::{GameId, driver};
+use crate::paths::Paths;
 
 /// Returns every consecutive port claimed by an instance starting at
 /// `base_port`. Drivers whose ports cease to be consecutive can reserve their
@@ -24,31 +25,37 @@ pub fn block(game: GameId, base_port: u16) -> Result<Vec<u16>> {
 /// by another live Odin-managed game server. This complements allocation:
 /// saved configuration can be edited independently after an instance exists.
 pub fn ensure_available(
+    paths: &Paths,
     db: &crate::db::Db,
     game: GameId,
     name: &str,
     requested_ports: impl IntoIterator<Item = u16>,
 ) -> Result<()> {
     let requested_ports: HashSet<_> = requested_ports.into_iter().collect();
-    for instance in crate::db::instances::list_all(db)? {
-        if game == GameId::Valheim && instance.name == name {
+    for instance in crate::instance::list_all(paths, db)? {
+        if game == GameId::Valheim && instance.state.name == name {
             continue;
         }
-        let running = matches!(
-            (instance.pid, instance.pid_started_at),
-            (Some(pid), Some(started_at)) if crate::instance::process::is_alive(pid, started_at)
+        // A containerized server shares the host network, so its container
+        // state is what decides whether its ports are taken. An unreachable
+        // Podman must not block unrelated games from starting.
+        let running = crate::podman::valheim::is_running(paths, db, &instance).unwrap_or_else(
+            |error| {
+                tracing::debug!(instance = %instance.state.name, %error, "could not tell whether Valheim is running");
+                false
+            },
         );
         if !running {
             continue;
         }
-        let occupied = block(GameId::Valheim, instance.port)?;
+        let occupied = block(GameId::Valheim, instance.state.port)?;
         if let Some(port) = occupied
             .into_iter()
             .find(|port| requested_ports.contains(port))
         {
             anyhow::bail!(
                 "port {port} is already in use by running Valheim instance '{}'",
-                instance.name
+                instance.state.name
             );
         }
     }
@@ -57,7 +64,11 @@ pub fn ensure_available(
         if game == GameId::Rust && instance.name() == name {
             continue;
         }
-        if !instance.is_running() {
+        let running = crate::game::rust::is_running(paths, db, &instance).unwrap_or_else(|error| {
+            tracing::debug!(instance = %instance.name(), %error, "could not tell whether Rust is running");
+            false
+        });
+        if !running {
             continue;
         }
         for port in [
@@ -102,7 +113,6 @@ pub fn ensure_available(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths::Paths;
 
     #[test]
     fn drivers_declare_their_required_port_blocks() {
@@ -137,6 +147,7 @@ mod tests {
         valheim.save(&db).unwrap();
 
         let error = ensure_available(
+            &paths,
             &db,
             GameId::Rust,
             "rust-server",
@@ -146,6 +157,78 @@ mod tests {
 
         assert!(error.to_string().contains("28015"));
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn a_running_valheim_container_reserves_its_ports() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
+        let dir =
+            std::env::temp_dir().join(format!("odin-container-ports-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let socket = dir.join("podman.sock");
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut String::new())
+                .unwrap();
+            let body = r#"{"State":{"Running":true,"Status":"running"}}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        });
+        let config = crate::config::GlobalConfig {
+            data_dir: None,
+            podman: Some(crate::config::PodmanConfig {
+                socket,
+                runtime_image: None,
+            }),
+        };
+        std::fs::write(
+            paths.config_file(),
+            toml::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+        let db = crate::db::Db::open(&paths).unwrap();
+        // Born containerized, with no host pid to fingerprint.
+        let valheim = crate::game::instances::create(&paths, &db, GameId::Valheim, "contained")
+            .map(|created| match created {
+                crate::game::instances::GameInstance::Valheim(instance) => instance,
+                _ => unreachable!("created a Valheim instance"),
+            })
+            .unwrap();
+
+        let error = ensure_available(
+            &paths,
+            &db,
+            GameId::Rust,
+            "rust-server",
+            block(GameId::Valheim, valheim.state.port).unwrap(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("running Valheim instance 'contained'")
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -186,7 +269,8 @@ mod tests {
         )
         .unwrap();
 
-        let error = ensure_available(&db, GameId::Rust, "rust-server", [28015]).unwrap_err();
+        let error =
+            ensure_available(&paths, &db, GameId::Rust, "rust-server", [28015]).unwrap_err();
         assert!(error.to_string().contains("palworld"));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

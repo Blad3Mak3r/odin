@@ -122,37 +122,17 @@ pub fn ensure_layout(paths: &Paths, instance: &RustInstance) -> Result<()> {
     Ok(())
 }
 
-pub fn is_running(instance: &RustInstance) -> bool {
+/// Whether the server is alive: its container for a Podman-managed
+/// instance, its host process otherwise.
+pub fn is_running(paths: &Paths, db: &crate::db::Db, instance: &RustInstance) -> Result<bool> {
+    crate::podman::rust::is_running(paths, db, instance)
+}
+
+pub fn is_running_directly(instance: &RustInstance) -> bool {
     matches!(
         (instance.pid, instance.pid_started_at),
         (Some(pid), Some(started_at)) if process::is_alive(pid, started_at)
     )
-}
-
-pub async fn start(
-    paths: &Paths,
-    db: &crate::db::Db,
-    instance: &RustInstance,
-) -> Result<RustInstance> {
-    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
-    let instance = refresh(db, instance)?;
-    start_unlocked(paths, db, instance.name()).await
-}
-
-async fn start_unlocked(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<RustInstance> {
-    let instance = prepare_start(paths, db, name)?;
-    crate::supervisor::client::spawn_detached(paths, &instance.identity)
-        .await
-        .with_context(|| format!("failed to start Rust instance '{name}'"))?;
-    crate::supervisor::client::ping_with_retry(
-        paths,
-        crate::game::GameId::Rust,
-        name,
-        Duration::from_secs(10),
-    )
-    .await
-    .with_context(|| format!("failed to start Rust instance '{name}'"))?;
-    crate::db::game_instances::load_rust(db, name)?.context("Rust instance disappeared after start")
 }
 
 /// Performs the synchronous checks and setup required before the Rust
@@ -161,11 +141,12 @@ async fn start_unlocked(paths: &Paths, db: &crate::db::Db, name: &str) -> Result
 pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<RustInstance> {
     let instance =
         crate::db::game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
-    if is_running(&instance) {
+    if is_running_directly(&instance) {
         bail!("instance '{}' is already running", instance.name());
     }
     ensure_layout(paths, &instance)?;
     crate::game::ports::ensure_available(
+        paths,
         db,
         crate::game::GameId::Rust,
         instance.name(),
@@ -356,20 +337,6 @@ async fn stop_unlocked(paths: &Paths, db: &crate::db::Db, instance: &RustInstanc
     }
 }
 
-pub async fn restart(
-    paths: &Paths,
-    db: &crate::db::Db,
-    instance: &RustInstance,
-) -> Result<RustInstance> {
-    let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
-    let instance = refresh(db, instance)?;
-    if is_running(&instance) {
-        stop_unlocked(paths, db, &instance).await?;
-    }
-    ensure_layout(paths, &instance)?;
-    start_unlocked(paths, db, instance.name()).await
-}
-
 async fn stop_via_pid_signal(
     db: &crate::db::Db,
     name: &str,
@@ -394,7 +361,7 @@ pub fn delete(
 ) -> Result<()> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
-    if is_running(&instance) {
+    if is_running(paths, db, &instance)? {
         anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
             instance.name().to_string()
         ));
@@ -431,7 +398,7 @@ fn wipe(
 ) -> Result<usize> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
-    if is_running(&instance) {
+    if is_running(paths, db, &instance)? {
         anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
             instance.name().to_string()
         ));
@@ -506,7 +473,7 @@ pub fn create_backup(
 ) -> Result<crate::backup::BackupEntry> {
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
-    if is_running(&instance) {
+    if is_running(paths, db, &instance)? {
         bail!(
             "stop Rust instance '{}' before creating a backup",
             instance.name()
@@ -521,7 +488,7 @@ fn create_backup_unlocked(
     db: &crate::db::Db,
     instance: &RustInstance,
 ) -> Result<crate::backup::BackupEntry> {
-    if is_running(instance) {
+    if is_running(paths, db, instance)? {
         bail!(
             "stop Rust instance '{}' before creating a backup",
             instance.name()
@@ -573,7 +540,7 @@ pub fn restore_backup(
     let _lock = LifecycleLock::acquire(paths, crate::game::GameId::Rust, instance.name())?;
     let instance = refresh(db, instance)?;
     crate::backup::validate_backup_id(backup_id)?;
-    if is_running(&instance) {
+    if is_running(paths, db, &instance)? {
         bail!(
             "stop Rust instance '{}' before restoring a backup",
             instance.name()
@@ -824,7 +791,7 @@ mod tests {
         let started = game_instances::load_rust(&db, instance.name())
             .unwrap()
             .unwrap();
-        assert!(is_running(&started));
+        assert!(is_running_directly(&started));
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         let log = paths
@@ -840,7 +807,7 @@ mod tests {
         let stopped = game_instances::load_rust(&db, started.name())
             .unwrap()
             .unwrap();
-        assert!(!is_running(&stopped));
+        assert!(!is_running_directly(&stopped));
         assert!(stopped.pid.is_none());
 
         std::fs::remove_dir_all(paths.data_dir).ok();

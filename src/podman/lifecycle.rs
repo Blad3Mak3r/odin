@@ -334,7 +334,7 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
     require_migrated(db, &identity)?;
-    crate::game::ports::ensure_available(db, G::GAME, name, G::ports(&instance)?)?;
+    crate::game::ports::ensure_available(paths, db, G::GAME, name, G::ports(&instance)?)?;
     G::prepare_layout(paths, &identity, &instance)?;
 
     let config = config(paths, G::GAME)?;
@@ -493,9 +493,27 @@ pub fn remove<G: ContainerGame>(paths: &Paths, db: &Db, instance: &G::Instance) 
     if !container_instances::is_podman(db, &identity.id)? {
         return Ok(());
     }
-    let config = config(paths, G::GAME)?;
-    PodmanClient::from_config(&config)?
-        .remove_blocking(&container_name(G::GAME, &identity.id), true)
+    // Without a configured socket Odin cannot have created a container.
+    if let Some(config) = GlobalConfig::load(paths)?.podman {
+        PodmanClient::from_config(&config)?
+            .remove_blocking(&container_name(G::GAME, &identity.id), true)?;
+    }
+    // The private runtime volume (SteamCMD and the game payload) belongs to
+    // this instance alone and would otherwise outlive it.
+    for directory in [
+        paths.container_runtime_dir(G::GAME, &identity.id),
+        paths.container_socket_dir(&identity.id),
+    ] {
+        match std::fs::remove_dir_all(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to remove {}", directory.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn unavailable_container() -> RuntimeContainerHealth {
@@ -607,7 +625,7 @@ fn clean_socket_dir(socket_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn control_socket(paths: &Paths, identity: &GameInstanceIdentity) -> PathBuf {
+pub fn control_socket(paths: &Paths, identity: &GameInstanceIdentity) -> PathBuf {
     paths
         .container_socket_dir(&identity.id)
         .join(format!("{}-{}.control.sock", identity.game, identity.name))

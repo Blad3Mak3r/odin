@@ -43,10 +43,6 @@ impl SteamCmd {
     /// SteamCMD can replace its copy during an update, so this is deliberately
     /// safe to call before every server start rather than being a one-time
     /// installation step.
-    pub fn ensure_sdk64_client(&self) -> Result<PathBuf> {
-        self.ensure_sdk64_client_at(&steam_home_dir()?)
-    }
-
     pub(crate) fn ensure_sdk64_client_at(&self, home_dir: &Path) -> Result<PathBuf> {
         self.ensure_sdk64_client_at_with(home_dir, |source, destination| {
             std::fs::hard_link(source, destination)

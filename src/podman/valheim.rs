@@ -118,10 +118,6 @@ pub async fn update(paths: &Paths, db: &Db, name: &str) -> Result<()> {
     lifecycle::update::<Valheim>(paths, db, name).await
 }
 
-pub async fn update_limits(paths: &Paths, db: &Db, instance_id: &str) -> Result<()> {
-    lifecycle::update_limits(paths, db, GameId::Valheim, instance_id).await
-}
-
 pub fn remove(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
     lifecycle::remove::<Valheim>(paths, db, instance)
 }
@@ -229,6 +225,55 @@ mod tests {
                 .any(|request| request.starts_with("DELETE "))
         );
         drop(stale_listener);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn remove_deletes_the_container_and_the_private_runtime_volume() {
+        let root =
+            std::env::temp_dir().join(format!("odin-runtime-remove-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = Paths {
+            config_dir: root.clone(),
+            data_dir: root.clone(),
+        };
+        let podman_socket = root.join("podman.sock");
+        let listener = match UnixListener::bind(&podman_socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                std::fs::remove_dir_all(root).ok();
+                return;
+            }
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            request
+        });
+        write_podman_config(&paths, podman_socket);
+        let db = crate::db::Db::open(&paths).unwrap();
+        let instance = Instance::create(&paths, &db, "valheim").unwrap();
+        let identity = Valheim::identity(&db, &instance).unwrap();
+        container_instances::mark_podman(&db, &identity.id).unwrap();
+        let runtime = paths.container_runtime_dir(GameId::Valheim, &identity.id);
+        std::fs::create_dir_all(runtime.join("valheim")).unwrap();
+        std::fs::write(runtime.join("valheim/payload"), "game").unwrap();
+        let saves = paths::instance_saves_dir(&instance.dir);
+        std::fs::create_dir_all(&saves).unwrap();
+        std::fs::write(saves.join("world.db"), "save").unwrap();
+
+        remove(&paths, &db, &instance).unwrap();
+
+        assert!(server.join().unwrap().starts_with("DELETE "));
+        assert!(!runtime.exists());
+        assert!(saves.join("world.db").is_file());
         std::fs::remove_dir_all(root).ok();
     }
 

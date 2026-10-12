@@ -158,13 +158,14 @@ pub async fn install_game(
     State(state): State<AppState>,
     Path(game): Path<GameId>,
 ) -> ApiResult<Json<JobHandle>> {
-    if game == GameId::Valheim {
-        // There is no shared Valheim installation once instances own their
-        // private payloads. Updates are deliberately performed in a running
-        // instance runtime instead.
-        return Err(BadRequest(
-            "Valheim is updated per running instance; use that instance's Update action".into(),
-        )
+    if matches!(game, GameId::Valheim | GameId::Rust) {
+        // There is no shared installation once instances own their private
+        // payloads. Updates are deliberately performed in a running instance
+        // runtime instead.
+        return Err(BadRequest(format!(
+            "{} is updated per running instance; use that instance's Update action",
+            game::driver(game).display_name()
+        ))
         .into());
     }
     let paths = state.paths.clone();
@@ -174,29 +175,11 @@ pub async fn install_game(
         .jobs
         .spawn(JobKindDescr::SteamcmdInstall { game }, move |logger| {
             match game {
-                GameId::Valheim => {
-                    let running = instance::running_instance_names(&paths, &db)?;
-                    if !running.is_empty() {
-                        anyhow::bail!(
-                            "refusing to update Valheim while instance(s) are running: {}",
-                            running.join(", ")
-                        );
-                    }
-                }
-                GameId::Rust => {
-                    let running = game_instances::list_rust(&db)?
-                        .into_iter()
-                        .filter(|instance| instance.is_running())
-                        .map(|instance| instance.identity.name)
-                        .collect::<Vec<_>>();
-                    if !running.is_empty() {
-                        anyhow::bail!(
-                            "refusing to update Rust while instance(s) are running: {}",
-                            running.join(", ")
-                        );
-                    }
-                }
-                GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {}
+                GameId::Valheim
+                | GameId::Rust
+                | GameId::VRising
+                | GameId::Palworld
+                | GameId::RunescapeDragonwilds => {}
                 GameId::SevenDaysToDie => {
                     let running = game_instances::list_generic(&db, game)?
                         .into_iter()
@@ -222,10 +205,6 @@ pub async fn install_game(
                 install_dir.join(driver.server_binary()),
                 |line| logger.line(line),
             )?;
-            if game == GameId::Rust {
-                logger.line("preparing Steamworks runtime");
-                steamcmd.ensure_sdk64_client()?;
-            }
             activity.record_for(game, crate::activity::ActivityKind::ServerInstalled, None);
             logger.line("done");
             Ok(())
@@ -353,6 +332,9 @@ async fn update_rust_config_for(
         let _lock = lifecycle::LifecycleLock::acquire(&paths, GameId::Rust, &name)?;
         let instance =
             game_instances::load_rust(&db, &name)?.context("Rust instance does not exist")?;
+        if rust::is_running(&paths, &db, &instance)? {
+            anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(name.clone()));
+        }
         let mut config = instance.config;
         if let Some(port) = request.port {
             config.port = port;
@@ -370,7 +352,7 @@ async fn update_rust_config_for(
             config.auto_restart = auto_restart;
         }
         game_instances::update_rust_config(&db, &name, &config)
-            .map(|instance| rust_view(&paths, instance))
+            .map(|instance| rust_view(&paths, &db, instance))
     })
     .await?;
     Ok(Json(view))
@@ -901,68 +883,93 @@ pub async fn restart_instance_by_id(
     restart_instance_for(state, identity.game, identity.name).await
 }
 
-pub async fn migrate_valheim_instance_by_id(
+fn unsupported_runtime() -> BadRequest {
+    BadRequest("this API is only available for games that run in Podman".into())
+}
+
+pub async fn migrate_runtime_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     let identity = resolve_instance_id(&state, &id).await?;
-    if identity.game != GameId::Valheim {
-        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
-    }
     let paths = state.paths.clone();
     let db = state.db.clone();
     let name = identity.name;
-    run_blocking(move || crate::podman::valheim::migrate(&paths, &db, &name)).await?;
+    run_blocking(move || match identity.game {
+        GameId::Valheim => crate::podman::valheim::migrate(&paths, &db, &name),
+        GameId::Rust => crate::podman::rust::migrate(&paths, &db, &name),
+        _ => Err(unsupported_runtime().into()),
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn get_valheim_runtime_health_by_id(
+pub async fn get_runtime_health_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<crate::podman::valheim::RuntimeHealth>> {
+) -> ApiResult<Json<crate::podman::lifecycle::RuntimeHealth>> {
     let identity = resolve_instance_id(&state, &id).await?;
-    if identity.game != GameId::Valheim {
-        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    let health = match identity.game {
+        GameId::Valheim => {
+            crate::podman::valheim::runtime_health(&state.paths, &state.db, &identity.name).await
+        }
+        GameId::Rust => {
+            crate::podman::rust::runtime_health(&state.paths, &state.db, &identity.name).await
+        }
+        _ => return Err(unsupported_runtime().into()),
     }
-    let health = crate::podman::valheim::runtime_health(&state.paths, &state.db, &identity.name)
-        .await
-        .map_err(|error| BadRequest(error.to_string()))?;
+    .map_err(|error| BadRequest(error.to_string()))?;
     Ok(Json(health))
 }
 
-pub async fn repair_valheim_instance_by_id(
+pub async fn repair_runtime_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     let identity = resolve_instance_id(&state, &id).await?;
-    if identity.game != GameId::Valheim {
-        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    match identity.game {
+        GameId::Valheim => {
+            crate::podman::valheim::repair(&state.paths, &state.db, &identity.name).await
+        }
+        GameId::Rust => crate::podman::rust::repair(&state.paths, &state.db, &identity.name).await,
+        _ => return Err(unsupported_runtime().into()),
     }
-    crate::podman::valheim::repair(&state.paths, &state.db, &identity.name)
-        .await
-        .map_err(|error| BadRequest(error.to_string()))?;
+    .map_err(|error| BadRequest(error.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn update_valheim_instance_by_id(
+pub async fn update_runtime_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<JobHandle>> {
     let identity = resolve_instance_id(&state, &id).await?;
-    if identity.game != GameId::Valheim {
-        return Err(BadRequest("this API is only available for Valheim instances".into()).into());
+    if !matches!(identity.game, GameId::Valheim | GameId::Rust) {
+        return Err(unsupported_runtime().into());
     }
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let name = identity.name.clone();
+    let game = identity.game;
+    let display = game::driver(game).display_name();
     let job = state.jobs.spawn(
-        JobKindDescr::ValheimUpdate { instance: name },
+        JobKindDescr::RuntimeUpdate {
+            game,
+            instance: identity.name.clone(),
+        },
         move |logger| {
-            logger.line("requesting in-place Valheim update from the container runtime");
-            tokio::runtime::Builder::new_current_thread()
+            logger.line(format!(
+                "requesting in-place {display} update from the container runtime"
+            ));
+            let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
-                .build()?
-                .block_on(crate::podman::valheim::update(&paths, &db, &identity.name))?;
+                .build()?;
+            match game {
+                GameId::Rust => {
+                    runtime.block_on(crate::podman::rust::update(&paths, &db, &identity.name))?
+                }
+                _ => {
+                    runtime.block_on(crate::podman::valheim::update(&paths, &db, &identity.name))?
+                }
+            }
             logger.line("update completed");
             Ok(())
         },
@@ -1114,7 +1121,7 @@ fn game_instance_view(
 ) -> anyhow::Result<ManagedInstanceView> {
     match instance {
         game_instances_ops::GameInstance::Valheim(instance) => valheim_view(paths, db, instance),
-        game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(paths, instance)),
+        game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(paths, db, instance)),
         game_instances_ops::GameInstance::Generic(instance) => Ok(generic_view(paths, instance)),
     }
 }
@@ -1139,9 +1146,7 @@ fn valheim_view(
     let migrated = crate::podman::valheim::is_migrated(db, &instance)?;
     let odin_version = if migrated {
         crate::supervisor::client::ping_socket_blocking(
-            &paths
-                .container_socket_dir(&identity.id)
-                .join(format!("valheim-{}.control.sock", identity.name)),
+            &crate::podman::lifecycle::control_socket(paths, &identity),
             Duration::from_millis(300),
         )
         .ok()
@@ -1185,13 +1190,29 @@ fn valheim_view(
 fn rust_views(paths: &Paths, db: &crate::db::Db) -> anyhow::Result<Vec<ManagedInstanceView>> {
     Ok(game_instances::list_rust(db)?
         .into_iter()
-        .map(|instance| rust_view(paths, instance))
+        .map(|instance| rust_view(paths, db, instance))
         .collect())
 }
 
-fn rust_view(paths: &Paths, instance: RustInstance) -> ManagedInstanceView {
-    let running = instance.is_running();
-    let odin_version = supervisor_version(paths, GameId::Rust, instance.name());
+fn rust_view(paths: &Paths, db: &crate::db::Db, instance: RustInstance) -> ManagedInstanceView {
+    let migrated = crate::podman::rust::is_migrated(db, &instance).unwrap_or(false);
+    let running = rust::is_running(paths, db, &instance).unwrap_or_else(|error| {
+        tracing::debug!(instance = %instance.name(), %error, "failed to determine whether Rust is running");
+        false
+    });
+    let odin_version = if migrated {
+        crate::supervisor::client::ping_socket_blocking(
+            &crate::podman::lifecycle::control_socket(paths, &instance.identity),
+            Duration::from_millis(300),
+        )
+        .ok()
+        .and_then(|response| match response {
+            crate::supervisor::protocol::Response::Pong { odin_version, .. } => odin_version,
+            _ => None,
+        })
+    } else {
+        supervisor_version(paths, GameId::Rust, instance.name())
+    };
     ManagedInstanceView {
         identity: instance.identity,
         running,
@@ -1204,8 +1225,8 @@ fn rust_view(paths: &Paths, instance: RustInstance) -> ManagedInstanceView {
             "rcon_password": instance.config.rcon_password,
             "auto_restart": instance.config.auto_restart,
         }),
-        execution: "direct",
-        migration_required: false,
+        execution: if migrated { "podman" } else { "direct" },
+        migration_required: !migrated,
     }
 }
 
@@ -1251,8 +1272,18 @@ pub(crate) fn rust_resource_snapshot(
     state: &AppState,
     instance: &RustInstance,
 ) -> InstanceSnapshot {
-    if !instance.is_running() {
+    let running = rust::is_running(&state.paths, &state.db, instance).unwrap_or(false);
+    if !running {
         return InstanceSnapshot::default();
+    }
+    if crate::podman::rust::is_migrated(&state.db, instance).unwrap_or(false) {
+        // Rust has no readiness signal, in a container or out of it.
+        return InstanceSnapshot {
+            ready: false,
+            ..crate::web::routes::resources::container_snapshot(
+                &crate::podman::lifecycle::control_socket(&state.paths, &instance.identity),
+            )
+        };
     }
 
     let root_pids: Vec<u32> = instance.pid.into_iter().collect();
@@ -1433,7 +1464,7 @@ async fn clone_rust_instance_for(
             crate::activity::ActivityKind::InstanceCloned { source: name },
             Some(req.name),
         );
-        Ok(rust_view(&paths, instance))
+        Ok(rust_view(&paths, &db, instance))
     })
     .await?;
     Ok(Json(view))

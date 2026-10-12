@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, ensure};
 use thiserror::Error;
 
+use crate::db::Db;
 use crate::db::game_instances::RustInstance;
 use crate::game::GameId;
 use crate::instance::lifecycle::LifecycleLock;
@@ -102,22 +103,24 @@ pub fn read(
 /// commands of the other kind in the same `users.cfg` file.
 pub fn write(
     paths: &Paths,
+    db: &Db,
     instance: &RustInstance,
     kind: RustAccessListKind,
     ids: &[String],
 ) -> Result<()> {
     let _lock = LifecycleLock::acquire(paths, GameId::Rust, instance.name())?;
-    write_unlocked(paths, instance, kind, ids)
+    write_unlocked(paths, db, instance, kind, ids)
 }
 
 fn write_unlocked(
     paths: &Paths,
+    db: &Db,
     instance: &RustInstance,
     kind: RustAccessListKind,
     ids: &[String],
 ) -> Result<()> {
     ensure!(
-        !instance.is_running(),
+        !crate::game::rust::is_running(paths, db, instance)?,
         crate::instance::InstanceError::AlreadyRunning(instance.name().to_string())
     );
     for id in ids {
@@ -164,6 +167,7 @@ fn write_unlocked(
 
 pub fn add_id(
     paths: &Paths,
+    db: &Db,
     instance: &RustInstance,
     kind: RustAccessListKind,
     id: &str,
@@ -175,12 +179,13 @@ pub fn add_id(
         return Ok(false);
     }
     ids.push(id.to_string());
-    write_unlocked(paths, instance, kind, &ids)?;
+    write_unlocked(paths, db, instance, kind, &ids)?;
     Ok(true)
 }
 
 pub fn remove_id(
     paths: &Paths,
+    db: &Db,
     instance: &RustInstance,
     kind: RustAccessListKind,
     id: &str,
@@ -192,7 +197,7 @@ pub fn remove_id(
     if ids.len() == original_len {
         return Ok(false);
     }
-    write_unlocked(paths, instance, kind, &ids)?;
+    write_unlocked(paths, db, instance, kind, &ids)?;
     Ok(true)
 }
 
@@ -243,9 +248,10 @@ mod tests {
     #[test]
     fn writes_owners_and_preserves_moderators_in_users_cfg() {
         let paths = temp_paths("users");
-        let (_db, instance) = instance(&paths);
+        let (db, instance) = instance(&paths);
         write(
             &paths,
+            &db,
             &instance,
             RustAccessListKind::Owner,
             &[ID_A.to_string()],
@@ -253,6 +259,7 @@ mod tests {
         .unwrap();
         write(
             &paths,
+            &db,
             &instance,
             RustAccessListKind::Moderator,
             &[ID_B.to_string()],
@@ -277,10 +284,10 @@ mod tests {
     #[test]
     fn adds_and_removes_bans() {
         let paths = temp_paths("bans");
-        let (_db, instance) = instance(&paths);
-        assert!(add_id(&paths, &instance, RustAccessListKind::Banned, ID_A).unwrap());
-        assert!(!add_id(&paths, &instance, RustAccessListKind::Banned, ID_A).unwrap());
-        assert!(remove_id(&paths, &instance, RustAccessListKind::Banned, ID_A).unwrap());
+        let (db, instance) = instance(&paths);
+        assert!(add_id(&paths, &db, &instance, RustAccessListKind::Banned, ID_A).unwrap());
+        assert!(!add_id(&paths, &db, &instance, RustAccessListKind::Banned, ID_A).unwrap());
+        assert!(remove_id(&paths, &db, &instance, RustAccessListKind::Banned, ID_A).unwrap());
         assert!(
             read(&paths, &instance, RustAccessListKind::Banned)
                 .unwrap()
@@ -292,9 +299,10 @@ mod tests {
     #[test]
     fn rejects_invalid_ids_before_touching_the_file() {
         let paths = temp_paths("invalid");
-        let (_db, instance) = instance(&paths);
+        let (db, instance) = instance(&paths);
         let error = write(
             &paths,
+            &db,
             &instance,
             RustAccessListKind::Owner,
             &["not-a-steamid".to_string()],

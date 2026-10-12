@@ -453,19 +453,24 @@ your own `systemctl --user`/init setup.
 
 ## Configuration
 
-### Podman runtime for Valheim and Rust
+### Podman runtime for Valheim, Rust and 7 Days to Die
 
-Valheim and Rust instances run in an `odin-srv` Podman container. Existing
+Valheim, Rust and 7 Days to Die instances run in an `odin-srv` Podman container. Existing
 instances must be stopped and migrated from their instance page before they
 can start; new instances are created for Podman automatically. Each instance
 owns its own persistent SteamCMD and game payload under
 `<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
-start (Rust's is several gigabytes, so that first start takes a while); Odin
+start (Rust's and 7 Days to Die's are several gigabytes, so that first start
+takes a while); Odin
 never copies or removes the old shared installation during migration, and
 deleting an instance removes its runtime volume. With **auto restart** enabled,
 Odin restarts a container that stopped without an operator asking for it, including
 after a host reboot; an operator **Stop** is respected. World data, configuration and
 backups stay in the instance directory.
+
+Rust is stopped through its RCON `quit` and 7 Days to Die through its console's
+`shutdown`, so both save the world before exiting; if the console is disabled or
+unreachable Odin signals the server instead.
 
 Odin itself starts without Podman configured. To use these games, set the
 socket in **Settings** or in Odin's configuration file:
@@ -526,7 +531,7 @@ In both modes, the data dir is resolved in this order:
     instances/<name>/            # Rust configuration, identity, logs, and backups
   runtimes/<game>/<uuid>/        # a Podman instance's private SteamCMD and game payload
   games/7d2d/
-    install/                     # shared 7 Days to Die Dedicated Server binaries
+    install/                     # legacy shared binaries (instances not yet migrated to Podman)
     instances/<name>/
       config/serverconfig.xml    # instance-local server configuration
       Mods/<mod-name>/ModInfo.xml # instance-local uploaded 7D2D mods
@@ -558,8 +563,10 @@ UDP ports `26900–26902` by default and load user-uploaded ZIP mods from each
 instance's own `Mods/` directory. Odin requires a stopped 7D2D server before
 creating a backup or changing mods.
 
-Each 7D2D instance starts from the installed `serverconfig.xml` template. When
-an installed game update changes that template, the dashboard offers a review
+Each 7D2D instance starts from the `serverconfig.xml` template shipped with its
+own copy of the game: the container copies it into the instance's `config/`
+directory on the first start and never replaces an existing file. When that
+template changes after a game update, the dashboard offers a review
 of added, removed, and changed defaults. Applying a review is explicit: Odin
 never overwrites an instance value that differs from its original template.
 Existing instances can adopt their current configuration as the baseline for
@@ -578,8 +585,9 @@ networks because the game does not provide Odin with a console bind-address
 setting. Once enabled, the dashboard Console and Players tabs can run server
 commands, show version/build and memory information, list connected players,
 record recent sessions, and manage bans, administrators, and the whitelist.
-The dashboard also reports a 7D2D instance as *ready* only after a game-start log
-line, rather than merely when the process exists.
+An instance that still runs as a host process is reported as *ready* only after
+a game-start log line; a containerized one is reported as ready once its game
+process has started.
 
 On the first start after upgrading, Odin automatically moves the legacy
 single-version mod store into this layout and repoints every existing instance;

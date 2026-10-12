@@ -2,8 +2,18 @@
 //!
 //! [`ContainerGame`] is generic over the game, so callers that only hold a
 //! [`GameId`] go through the functions here instead of matching on the game
-//! themselves. Adding a game to the container runtime means adding one line to
-//! [`for_container_game!`]; nothing else on the host side enumerates games.
+//! themselves.
+//!
+//! To run another game in a container:
+//! 1. Implement [`ContainerGame`] in `podman/<game>.rs`.
+//! 2. Add a `Launch` variant (tagged with the game's `GameId::as_str`) and its
+//!    arms in `Launch::game`, `name`, `server_command` and
+//!    `request_graceful_stop`, all in `podman.rs`.
+//! 3. Add one arm to [`for_container_game!`] below.
+//! 4. Set `container_runtime: true` (and `stop_timeout_secs` if the game needs
+//!    longer than 30 seconds to save) in the game's driver.
+//!
+//! No other host-side code enumerates container games.
 
 use anyhow::Result;
 

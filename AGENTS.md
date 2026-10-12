@@ -67,6 +67,17 @@ must not replace an official source for the normal contract.
   initialization behavior, and migration precedence. Cite the official
   sources used to establish the contract in the pull request description.
 
+## Migrating a game to the Podman runtime
+
+Valheim, Rust, 7 Days to Die and Palworld run in an `odin-srv` Podman
+container. Before moving another game, or changing the container lifecycle,
+read [docs/container-game-migration.md](docs/container-game-migration.md): it
+covers the container model, the per-file checklist, the recurring design
+problems (data relative to the install tree, native-document seeding, graceful
+stop, migration of existing instances), the traps earlier migrations hit, and
+the tests a migration must add. It complements the policy above and
+`src/podman/dispatch.rs`; it does not replace them.
+
 ## Agent workflow and engineering principles
 
 - Prefer the smallest clear change that solves the stated problem. Do not
@@ -102,6 +113,8 @@ must not replace an official source for the normal contract.
   - `mods/` — BepInEx bootstrap and Thunderstore integration.
   - `web/` — the axum HTTP/WebSocket API backing `odin serve`, under
     `web/routes/`.
+  - `podman/` — container lifecycle for games that run in Podman
+    (see the migration guide above).
 - `web/` — a separate npm package (`odin-dashboard`): Vite + React +
   TypeScript + Tailwind + shadcn/ui. Builds to `web/dist/`, which
   `rust-embed` embeds into the compiled binary. Not a Cargo workspace

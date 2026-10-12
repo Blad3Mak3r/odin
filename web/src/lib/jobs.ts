@@ -4,6 +4,8 @@ export function describeJobKind(kind: JobKindDescr): string {
   switch (kind.kind) {
     case 'steamcmd_install':
       return `Install/update ${gameLabel(kind.game)} server files`
+    case 'runtime_update':
+      return `Update ${gameLabel(kind.game)} / ${kind.instance} in its container`
     case 'mod_add':
       return `Install mod ${kind.mod_id} on ${kind.instance}`
     case 'mod_update':
@@ -27,7 +29,7 @@ export function describeJobKind(kind: JobKindDescr): string {
   }
 }
 
-function gameLabel(game: GameId) {
+export function gameLabel(game: GameId) {
   return { valheim: 'Valheim', rust: 'Rust', vrising: 'V Rising', palworld: 'Palworld', 'runescape-dragonwilds': 'RuneScape: Dragonwilds', '7d2d': '7 Days to Die' }[game]
 }
 

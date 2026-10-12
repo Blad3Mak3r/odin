@@ -116,19 +116,19 @@ impl Paths {
         self.data_dir.join("mods")
     }
 
-    /// Persistent runtime payload for a containerized Valheim instance.
+    /// Persistent runtime payload for a containerized game instance.
     /// Unlike `runtime_dir`, this is intentionally under the data root: it
     /// contains the private SteamCMD and game installation and survives a
     /// container recreation.
-    pub fn valheim_runtime_dir(&self, instance_id: &str) -> PathBuf {
+    pub fn container_runtime_dir(&self, game: GameId, instance_id: &str) -> PathBuf {
         self.data_dir
             .join("runtimes")
-            .join("valheim")
+            .join(game.as_str())
             .join(instance_id)
     }
 
     /// Host-side directory bind-mounted as `/run/odin` in one container.
-    pub fn valheim_socket_dir(&self, instance_id: &str) -> PathBuf {
+    pub fn container_socket_dir(&self, instance_id: &str) -> PathBuf {
         self.runtime_dir().join("containers").join(instance_id)
     }
 

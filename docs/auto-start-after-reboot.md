@@ -1,5 +1,16 @@
 # Auto-starting instances after a host reboot
 
+## Status
+
+Implemented for Podman-managed instances (Valheim and Rust), where there is no
+host pid at all. `podman_instances.desired_running` is set after a successful
+start and cleared before an operator stop; restarts and host shutdowns keep it
+(`StopReason`). The telemetry loop restarts an instance found stopped while
+`auto_restart && desired_running`, which also recovers instances after a host
+reboot, one at a time and subject to the existing cooldown. Instances that were
+already running when the column was added are tracked from their next start.
+The direct (pid-based) path described below is unchanged.
+
 ## Problem
 
 `auto_restart` currently covers an unexpected Valheim or supervisor exit. The

@@ -116,20 +116,20 @@ pub fn build_router(state: AppState) -> Router {
             post(instances::clone_instance_by_id),
         )
         .route(
-            "/instances/{id}/valheim/migrate",
-            post(games::migrate_valheim_instance_by_id),
+            "/instances/{id}/runtime/migrate",
+            post(games::migrate_runtime_by_id),
         )
         .route(
-            "/instances/{id}/valheim/runtime-health",
-            get(games::get_valheim_runtime_health_by_id),
+            "/instances/{id}/runtime/health",
+            get(games::get_runtime_health_by_id),
         )
         .route(
-            "/instances/{id}/valheim/repair",
-            post(games::repair_valheim_instance_by_id),
+            "/instances/{id}/runtime/repair",
+            post(games::repair_runtime_by_id),
         )
         .route(
-            "/instances/{id}/valheim/update",
-            post(games::update_valheim_instance_by_id),
+            "/instances/{id}/runtime/update",
+            post(games::update_runtime_by_id),
         )
         .route(
             "/instances/{id}/valheim/last-exit",
@@ -1290,16 +1290,13 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
         let app = build_router(AppState::new(paths.clone(), db));
 
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!(
-                        "/api/instances/{}/valheim/runtime-health",
-                        identity.id
-                    ))
+                    .uri(format!("/api/instances/{}/runtime/health", identity.id))
                     .body(Body::empty())
                     .unwrap(),
             )

@@ -173,6 +173,32 @@ fn disk_usage_for(path: &std::path::Path) -> (u64, u64) {
         .unwrap_or((0, 0))
 }
 
+/// Snapshot of a running containerized game, read from its runtime's control
+/// socket. A runtime that cannot answer yields zeros rather than an error so
+/// one unresponsive container never blanks the whole telemetry tick.
+pub(crate) fn container_snapshot(control_socket: &std::path::Path) -> InstanceSnapshot {
+    let ready = matches!(
+        crate::supervisor::client::ping_socket_blocking(control_socket, SUPERVISOR_PING_TIMEOUT),
+        Ok(crate::supervisor::protocol::Response::Pong { ready: true, .. })
+    );
+    let (cpu_percent, memory_bytes) = match crate::supervisor::client::stats_socket_blocking(
+        control_socket,
+        SUPERVISOR_PING_TIMEOUT,
+    ) {
+        Ok(crate::supervisor::protocol::Response::Stats {
+            cpu_percent,
+            memory_bytes,
+        }) => (cpu_percent, memory_bytes),
+        _ => (0.0, 0),
+    };
+    InstanceSnapshot {
+        running: true,
+        ready,
+        cpu_percent,
+        memory_bytes,
+    }
+}
+
 /// Computed by `spawn_telemetry` for each currently-running instance on its
 /// background tick. Blocking (`sysinfo` process walk) — call from a
 /// blocking context.
@@ -185,37 +211,13 @@ pub(crate) fn compute_instance_snapshot(
         &instance.state.name,
         instance.state.created_at,
     )?;
-    if crate::db::container_instances::is_valheim_podman(&state.db, &identity.id)? {
-        let socket = state
-            .paths
-            .valheim_socket_dir(&identity.id)
-            .join(format!("valheim-{}.control.sock", identity.name));
-        let running = crate::podman::valheim::is_running(&state.paths, &state.db, instance)?;
-        if !running {
+    if crate::db::container_instances::is_podman(&state.db, &identity.id)? {
+        if !crate::podman::valheim::is_running(&state.paths, &state.db, instance)? {
             return Ok(InstanceSnapshot::default());
         }
-        let ping =
-            crate::supervisor::client::ping_socket_blocking(&socket, SUPERVISOR_PING_TIMEOUT);
-        let ready = matches!(
-            ping,
-            Ok(crate::supervisor::protocol::Response::Pong { ready: true, .. })
-        );
-        let (cpu_percent, memory_bytes) = match crate::supervisor::client::stats_socket_blocking(
-            &socket,
-            SUPERVISOR_PING_TIMEOUT,
-        ) {
-            Ok(crate::supervisor::protocol::Response::Stats {
-                cpu_percent,
-                memory_bytes,
-            }) => (cpu_percent, memory_bytes),
-            _ => (0.0, 0),
-        };
-        return Ok(InstanceSnapshot {
-            running,
-            ready,
-            cpu_percent,
-            memory_bytes,
-        });
+        return Ok(container_snapshot(
+            &crate::podman::lifecycle::control_socket(&state.paths, &identity),
+        ));
     }
     // Ping the live supervisor first — it's a more direct signal than the
     // sysinfo/pid-fingerprint check (no reliance on a periodic full-process

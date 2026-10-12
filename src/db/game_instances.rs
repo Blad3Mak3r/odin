@@ -190,10 +190,6 @@ pub struct RustInstance {
 }
 
 impl RustInstance {
-    pub fn is_running(&self) -> bool {
-        rust::is_running(self)
-    }
-
     pub fn name(&self) -> &str {
         &self.identity.name
     }
@@ -742,10 +738,7 @@ pub fn update_rust_config(
     name: &str,
     config: &RustInstanceConfig,
 ) -> Result<RustInstance> {
-    let instance = load_rust(db, name)?.context("Rust instance not found")?;
-    if instance.is_running() {
-        bail!(crate::instance::InstanceError::AlreadyRunning(name.into()));
-    }
+    load_rust(db, name)?.context("Rust instance not found")?;
     if config.port == 0
         || config.query_port == 0
         || config.rcon_port == 0

@@ -83,8 +83,8 @@ function InstallStatusCard({ game }: { game: GameView }) {
   )
 }
 
-function ValheimRuntimeCard() {
-  return <Card><CardHeader><CardTitle>Per-instance runtime</CardTitle><CardDescription>Valheim is installed and updated inside each running Podman runtime. Create an instance, migrate any stopped legacy instance, then use its Update action.</CardDescription></CardHeader></Card>
+function RuntimeCard({ game }: { game: GameView }) {
+  return <Card><CardHeader><CardTitle>Per-instance runtime</CardTitle><CardDescription>{game.name} is installed and updated inside each running Podman runtime. Create an instance, migrate any stopped legacy instance, then use its Update action.</CardDescription></CardHeader></Card>
 }
 
 function GameInstances({ game }: { game: GameView }) {
@@ -167,7 +167,7 @@ export function GameDetailPage() {
     <div className="flex flex-col gap-6">
       <GameHeader game={game} />
       <GameTabs game={game} />
-      {activeTab === 'overview' && (game.id === 'valheim' ? <ValheimRuntimeCard /> : <InstallStatusCard game={game} />)}
+      {activeTab === 'overview' && (game.capabilities.container_runtime ? <RuntimeCard game={game} /> : <InstallStatusCard game={game} />)}
       {activeTab === 'instances' && <GameInstances game={game} />}
       {activeTab === 'mods' && game.id === 'valheim' && <ValheimModsTab path={nestedPath} />}
     </div>

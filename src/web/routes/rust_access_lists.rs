@@ -63,7 +63,7 @@ pub async fn set_list(
     run_blocking(move || {
         let instance = game_instances::load_rust(&db, &name)?
             .ok_or_else(|| crate::instance::InstanceError::NotFound(name.clone()))?;
-        access_lists::write(&paths, &instance, kind, &req.ids)
+        access_lists::write(&paths, &db, &instance, kind, &req.ids)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -89,7 +89,7 @@ pub async fn add_list_entry(
     run_blocking(move || {
         let instance = game_instances::load_rust(&db, &name)?
             .ok_or_else(|| crate::instance::InstanceError::NotFound(name.clone()))?;
-        access_lists::add_id(&paths, &instance, kind, &req.id)
+        access_lists::add_id(&paths, &db, &instance, kind, &req.id)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -114,7 +114,7 @@ pub async fn remove_list_entry(
     run_blocking(move || {
         let instance = game_instances::load_rust(&db, &name)?
             .ok_or_else(|| crate::instance::InstanceError::NotFound(name.clone()))?;
-        access_lists::remove_id(&paths, &instance, kind, &id)
+        access_lists::remove_id(&paths, &db, &instance, kind, &id)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)

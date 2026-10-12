@@ -39,7 +39,7 @@ const LOG_POLL_INTERVAL: Duration = Duration::from_millis(500);
 // Matches `web::TELEMETRY_INTERVAL` in value only — independently owned,
 // since this tick loop belongs to a different process (`odin run`, not
 // `odin serve`) and can evolve on its own.
-const STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+pub(crate) const STATS_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 // Matches `web::AUTO_RESTART_COOLDOWN` in value only — independently owned
 // (see that constant's doc comment for the rationale: without a cooldown,
 // an instance that crashes immediately on every start would get a fresh
@@ -56,7 +56,7 @@ pub(crate) const RECENT_LINES_CAPACITY: usize = 20;
 /// Shared with `handle_control_connection`: `None` until the first
 /// background refresh completes, then the latest `(cpu_percent,
 /// memory_bytes)` snapshot.
-type StatsHandle = Arc<Mutex<Option<(f32, u64)>>>;
+pub(crate) type StatsHandle = Arc<Mutex<Option<(f32, u64)>>>;
 
 /// Shared with `handle_control_connection`: the currently-connected player
 /// list, as recognized by `poll_console_log`'s own parsing. Peer ids are
@@ -597,7 +597,7 @@ async fn handle_control_connection(
 /// table — done here instead, scoped to just this one instance's process
 /// tree, since `odin run` already knows its exact child pid. Runs forever;
 /// aborted by `run_instance` alongside `log_poller` once the child exits.
-async fn refresh_stats_periodically(pid: u32, stats: StatsHandle) {
+pub(crate) async fn refresh_stats_periodically(pid: u32, stats: StatsHandle) {
     let mut system = System::new_all();
     loop {
         system = tokio::task::spawn_blocking(move || {

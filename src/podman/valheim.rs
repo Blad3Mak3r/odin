@@ -1,589 +1,132 @@
-//! Podman lifecycle for Valheim. Existing non-migrated instances are kept
-//! stopped until an operator explicitly adopts them through `migrate`.
+//! Valheim's side of the Podman lifecycle: the few facts that differ from
+//! other games. The lifecycle itself lives in [`super::lifecycle`].
 
-use std::os::unix::fs::FileTypeExt;
-use std::time::Duration;
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
-use serde::Serialize;
-use tokio::time::{Instant, sleep};
+use anyhow::Result;
 
-use crate::config::{GlobalConfig, PodmanConfig};
 use crate::db::Db;
-use crate::db::container_instances;
 use crate::db::game_instances::{self, GameInstanceIdentity};
-use crate::db::resource_limits;
 use crate::game::GameId;
-use crate::instance::{Instance, InstanceError, lifecycle};
+use crate::instance::{Instance, lifecycle as direct};
 use crate::paths::{self, Paths};
-use crate::supervisor;
 
-use super::{ContainerSpec, ContainerState, PodmanClient, container_name, write_runtime_spec};
+use super::lifecycle::{self, ContainerGame, StopReason};
+use super::{Launch, Mount, bind, write_runtime_spec};
 
-const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const STOP_TIMEOUT_SECS: u64 = 30;
-const CONTAINER_CREATE_TIMEOUT: Duration = Duration::from_secs(5);
-const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const STOP_TIMEOUT: Duration = Duration::from_secs(STOP_TIMEOUT_SECS + 5);
-const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub use super::lifecycle::RuntimeHealth;
 
-#[derive(Serialize)]
-pub struct RuntimeHealth {
-    pub podman: RuntimePodmanHealth,
-    pub container: RuntimeContainerHealth,
-    pub socket: RuntimeSocketHealth,
-    pub guidance: Vec<String>,
-}
+struct Valheim;
 
-#[derive(Serialize)]
-pub struct RuntimePodmanHealth {
-    pub configured: bool,
-    pub connected: bool,
-    pub compatible: bool,
-    pub version: Option<String>,
-    pub error: Option<String>,
-}
+impl ContainerGame for Valheim {
+    const GAME: GameId = GameId::Valheim;
+    type Instance = Instance;
 
-#[derive(Serialize)]
-pub struct RuntimeContainerHealth {
-    pub status: &'static str,
-    pub error: Option<String>,
-}
+    fn load(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
+        Instance::load_existing(paths, db, name)
+    }
 
-#[derive(Serialize)]
-pub struct RuntimeSocketHealth {
-    pub status: &'static str,
-    pub protocol_version: Option<u16>,
-    pub odin_version: Option<String>,
-    pub error: Option<String>,
-}
+    fn identity(db: &Db, instance: &Instance) -> Result<GameInstanceIdentity> {
+        game_instances::ensure_valheim_identity(db, &instance.state.name, instance.state.created_at)
+    }
 
-fn config(paths: &Paths) -> Result<PodmanConfig> {
-    GlobalConfig::load(paths)?
-        .podman
-        .context("Valheim requires [podman].socket; configure access to Podman's Unix socket")
-}
+    fn instance_dir(_paths: &Paths, instance: &Instance) -> PathBuf {
+        instance.dir.clone()
+    }
 
-fn identity(db: &Db, instance: &Instance) -> Result<GameInstanceIdentity> {
-    game_instances::ensure_valheim_identity(db, &instance.state.name, instance.state.created_at)
-}
+    fn ports(instance: &Instance) -> Result<Vec<u16>> {
+        crate::game::ports::block(GameId::Valheim, instance.state.port)
+    }
 
-fn require_migrated(db: &Db, identity: &GameInstanceIdentity) -> Result<()> {
-    if container_instances::is_valheim_podman(db, &identity.id)? {
+    fn prepare_layout(
+        paths: &Paths,
+        identity: &GameInstanceIdentity,
+        instance: &Instance,
+    ) -> Result<()> {
+        std::fs::create_dir_all(paths::instance_saves_dir(&instance.dir))?;
+        std::fs::create_dir_all(paths::instance_logs_dir(&instance.dir))?;
+        std::fs::create_dir_all(paths.container_runtime_dir(GameId::Valheim, &identity.id))?;
+        std::fs::create_dir_all(paths.container_socket_dir(&identity.id))?;
+        std::fs::create_dir_all(paths.mods_dir())?;
+        write_runtime_spec(
+            paths,
+            identity,
+            Launch::Valheim {
+                instance: instance.state.clone(),
+            },
+        )?;
         Ok(())
-    } else {
-        bail!(
-            "Valheim instance '{}' has not been migrated to Podman; stop it and use the migration action first",
-            identity.name
-        )
+    }
+
+    fn extra_mounts(paths: &Paths) -> Vec<Mount> {
+        // Existing BepInEx plugin links point at this host-absolute store.
+        // Mounting it at that exact path preserves those links without
+        // rewriting an operator's mod state.
+        vec![bind(&paths.mods_dir(), &paths.mods_dir())]
+    }
+
+    fn running_directly(instance: &Instance) -> Result<bool> {
+        direct::is_running(instance)
     }
 }
 
-fn prepare_layout(
-    paths: &Paths,
-    identity: &GameInstanceIdentity,
-    instance: &Instance,
-) -> Result<()> {
-    std::fs::create_dir_all(paths::instance_saves_dir(&instance.dir))?;
-    std::fs::create_dir_all(paths::instance_logs_dir(&instance.dir))?;
-    std::fs::create_dir_all(paths.valheim_runtime_dir(&identity.id))?;
-    std::fs::create_dir_all(paths.valheim_socket_dir(&identity.id))?;
-    std::fs::create_dir_all(paths.mods_dir())?;
-    write_runtime_spec(paths, identity, instance)?;
-    Ok(())
-}
-
-/// Adopts a stopped legacy Valheim instance without reading, copying, or
-/// removing its shared host installation. The marker is inserted only after
-/// all resumable host directories and the runtime spec are prepared.
 pub fn migrate(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let _lock = lifecycle::LifecycleLock::acquire(paths, GameId::Valheim, name)?;
-    let instance = Instance::load_existing(paths, db, name)?;
-    if lifecycle::is_running(&instance)? {
-        bail!(InstanceError::AlreadyRunning(name.to_string()));
-    }
-    let identity = identity(db, &instance)?;
-    if container_instances::is_valheim_podman(db, &identity.id)? {
-        return Ok(());
-    }
-    prepare_layout(paths, &identity, &instance)?;
-    container_instances::mark_valheim_podman(db, &identity.id)?;
-    Ok(())
+    lifecycle::migrate::<Valheim>(paths, db, name)
 }
 
-/// Marks a newly-created Valheim instance as containerized. It does not pull
-/// an image or create a container, so creation remains offline and cheap.
 pub fn mark_new_instance(db: &Db, instance: &Instance) -> Result<()> {
-    let identity = identity(db, instance)?;
-    container_instances::mark_valheim_podman(db, &identity.id)
+    lifecycle::mark_new_instance::<Valheim>(db, instance)
 }
 
 pub fn is_migrated(db: &Db, instance: &Instance) -> Result<bool> {
-    let identity = identity(db, instance)?;
-    container_instances::is_valheim_podman(db, &identity.id)
+    lifecycle::is_migrated::<Valheim>(db, instance)
 }
 
-/// Reports every boundary needed to start a migrated Valheim runtime without
-/// mutating Podman, the runtime volume, or the instance data directory.
 pub async fn runtime_health(paths: &Paths, db: &Db, name: &str) -> Result<RuntimeHealth> {
-    let instance = Instance::load_existing(paths, db, name)?;
-    let identity = identity(db, &instance)?;
-    require_migrated(db, &identity)?;
-    let control_socket = control_socket(paths, &identity);
-
-    let config = GlobalConfig::load(paths)?.podman;
-    let Some(config) = config else {
-        return Ok(RuntimeHealth {
-            podman: RuntimePodmanHealth {
-                configured: false,
-                connected: false,
-                compatible: false,
-                version: None,
-                error: None,
-            },
-            container: unavailable_container(),
-            socket: socket_health(&control_socket, None).await,
-            guidance: vec![
-                "Configure Podman's Unix socket in Settings before starting Valheim.".into(),
-            ],
-        });
-    };
-    let client = match PodmanClient::from_config(&config) {
-        Ok(client) => client,
-        Err(error) => {
-            return Ok(RuntimeHealth {
-                podman: RuntimePodmanHealth {
-                    configured: true,
-                    connected: false,
-                    compatible: false,
-                    version: None,
-                    error: Some(error.to_string()),
-                },
-                container: unavailable_container(),
-                socket: socket_health(&control_socket, None).await,
-                guidance: vec!["Fix the configured Podman socket before starting Valheim.".into()],
-            });
-        }
-    };
-    let version = match client.version().await {
-        Ok(version) => version,
-        Err(error) => {
-            return Ok(RuntimeHealth {
-                podman: RuntimePodmanHealth {
-                    configured: true,
-                    connected: false,
-                    compatible: false,
-                    version: None,
-                    error: Some(error.to_string()),
-                },
-                container: unavailable_container(),
-                socket: socket_health(&control_socket, None).await,
-                guidance: vec![
-                    "Restore access to Podman's Unix socket before starting Valheim.".into(),
-                ],
-            });
-        }
-    };
-    let compatible = version.is_supported();
-    let podman = RuntimePodmanHealth {
-        configured: true,
-        connected: true,
-        compatible,
-        version: Some(format!("{} (API {})", version.version, version.api_version)),
-        error: (!compatible).then(|| "Podman 5.0.0 or newer is required".into()),
-    };
-    if !compatible {
-        return Ok(RuntimeHealth {
-            podman,
-            container: unavailable_container(),
-            socket: socket_health(&control_socket, None).await,
-            guidance: vec![
-                "Upgrade Podman to version 5.0.0 or newer before starting Valheim.".into(),
-            ],
-        });
-    }
-    let state = match client.inspect(&container_name(&identity.id)).await {
-        Ok(state) => state,
-        Err(error) => {
-            return Ok(RuntimeHealth {
-                podman,
-                container: RuntimeContainerHealth {
-                    status: "unavailable",
-                    error: Some(error.to_string()),
-                },
-                socket: socket_health(&control_socket, None).await,
-                guidance: vec!["Check the Podman service and try the diagnostic again.".into()],
-            });
-        }
-    };
-    let container = RuntimeContainerHealth {
-        status: state.map_or("missing", ContainerState::as_str),
-        error: None,
-    };
-    let socket = socket_health(&control_socket, state).await;
-    let guidance = runtime_guidance(container.status, socket.status);
-    Ok(RuntimeHealth {
-        podman,
-        container,
-        socket,
-        guidance,
-    })
+    lifecycle::runtime_health::<Valheim>(paths, db, name).await
 }
 
 pub async fn repair(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let _lock = lifecycle::LifecycleLock::acquire(paths, GameId::Valheim, name)?;
-    let instance = Instance::load_existing(paths, db, name)?;
-    let identity = identity(db, &instance)?;
-    require_migrated(db, &identity)?;
-    if lifecycle::is_running(&instance)? {
-        bail!(InstanceError::AlreadyRunning(name.to_string()));
-    }
-    let config = config(paths)?;
-    let client = PodmanClient::from_config(&config)?;
-    client.ensure_supported().await?;
-    let container = container_name(&identity.id);
-    match client.inspect(&container).await? {
-        Some(ContainerState::Running) => bail!(InstanceError::AlreadyRunning(name.to_string())),
-        Some(ContainerState::Unknown) => {
-            bail!(
-                "refusing to repair Valheim instance '{name}': Podman returned an unknown container state"
-            )
-        }
-        Some(ContainerState::Created | ContainerState::Exited) => {
-            prepare_layout(paths, &identity, &instance)?;
-            clean_socket_dir(&paths.valheim_socket_dir(&identity.id))?;
-            client.remove(&container, false).await?;
-        }
-        None => {
-            prepare_layout(paths, &identity, &instance)?;
-            clean_socket_dir(&paths.valheim_socket_dir(&identity.id))?;
-        }
-    }
-    Ok(())
+    lifecycle::repair::<Valheim>(paths, db, name).await
 }
 
 pub fn sync_spec(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-    let identity = identity(db, instance)?;
-    if container_instances::is_valheim_podman(db, &identity.id)? {
-        prepare_layout(paths, &identity, instance)?;
-    }
-    Ok(())
+    lifecycle::sync_spec::<Valheim>(paths, db, instance)
 }
 
 pub fn is_running(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
-    let identity = identity(db, instance)?;
-    if !container_instances::is_valheim_podman(db, &identity.id)? {
-        return lifecycle::is_running(instance);
-    }
-    let Some(config) = GlobalConfig::load(paths)?.podman else {
-        return Ok(false);
-    };
-    let client = PodmanClient::from_config(&config)?;
-    Ok(client
-        .inspect_blocking(&container_name(&identity.id))?
-        .is_some_and(ContainerState::is_running))
+    lifecycle::is_running::<Valheim>(paths, db, instance)
 }
 
 pub async fn is_running_async(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
-    let identity = identity(db, instance)?;
-    if !container_instances::is_valheim_podman(db, &identity.id)? {
-        return lifecycle::is_running(instance);
-    }
-    let client = PodmanClient::from_config(&config(paths)?)?;
-    Ok(client
-        .inspect(&container_name(&identity.id))
-        .await?
-        .is_some_and(ContainerState::is_running))
+    lifecycle::is_running_async::<Valheim>(paths, db, instance).await
 }
 
 pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let _lock = lifecycle::LifecycleLock::acquire(paths, GameId::Valheim, name)?;
-    let instance = Instance::load_existing(paths, db, name)?;
-    let identity = identity(db, &instance)?;
-    require_migrated(db, &identity)?;
-    crate::game::ports::ensure_available(
-        db,
-        GameId::Valheim,
-        name,
-        crate::game::ports::block(GameId::Valheim, instance.state.port)?,
-    )?;
-    prepare_layout(paths, &identity, &instance)?;
-
-    let config = config(paths)?;
-    let client = PodmanClient::from_config(&config)?;
-    client.ensure_supported().await?;
-    let limits = resource_limits::load(db, &identity.id)?;
-    let container = container_name(&identity.id);
-    let image = config.runtime_image();
-    let spec = ContainerSpec::valheim(paths, &identity, &instance, image.clone(), &limits);
-    match client.inspect(&container).await? {
-        Some(state) if state.is_running() => bail!(InstanceError::AlreadyRunning(name.to_string())),
-        Some(_) => {
-            client.update_limits(&container, &limits).await?;
-            client.start(&container).await?;
-        }
-        None => {
-            client.ensure_image(&image).await?;
-            client.create(&spec).await?;
-            wait_for_container(&client, &container).await?;
-            client.start(&container).await?;
-        }
-    }
-    let response = supervisor::client::ping_socket_with_retry(
-        &control_socket(paths, &identity),
-        START_TIMEOUT,
-    )
-    .await
-    .with_context(|| {
-        format!("container {container} started but its Odin runtime did not respond")
-    })?;
-    match response {
-        crate::supervisor::protocol::Response::Pong {
-            protocol_version, ..
-        } if protocol_version >= crate::supervisor::protocol::PROTOCOL_VERSION => {}
-        crate::supervisor::protocol::Response::Pong {
-            protocol_version, ..
-        } => bail!(
-            "runtime image protocol {protocol_version} is incompatible; require protocol {} or newer",
-            crate::supervisor::protocol::PROTOCOL_VERSION
-        ),
-        other => bail!("runtime image returned an unexpected startup response: {other:?}"),
-    }
-    Ok(instance)
+    lifecycle::start::<Valheim>(paths, db, name).await
 }
 
-async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {
-    let deadline = Instant::now() + CONTAINER_CREATE_TIMEOUT;
-    loop {
-        if client.inspect(name).await?.is_some() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "Podman created container {name} but it did not become available within {} seconds",
-                CONTAINER_CREATE_TIMEOUT.as_secs()
-            );
-        }
-        sleep(CONTAINER_CREATE_POLL_INTERVAL).await;
-    }
-}
-
-pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let _lock = lifecycle::LifecycleLock::acquire(paths, GameId::Valheim, name)?;
-    let instance = Instance::load_existing(paths, db, name)?;
-    let identity = identity(db, &instance)?;
-    require_migrated(db, &identity)?;
-    let config = config(paths)?;
-    let client = PodmanClient::from_config(&config)?;
-    let container = container_name(&identity.id);
-    let state = client.inspect(&container).await?;
-    let Some(state) = state else {
-        bail!(InstanceError::NotRunning(name.to_string()));
-    };
-    match state {
-        ContainerState::Created | ContainerState::Exited => {
-            bail!(InstanceError::NotRunning(name.to_string()));
-        }
-        ContainerState::Running | ContainerState::Unknown => {
-            let socket = control_socket(paths, &identity);
-            if supervisor::client::stop_socket(&socket, STOP_TIMEOUT_SECS)
-                .await
-                .is_ok()
-                && wait_for_container_stop(&client, &container).await.is_ok()
-            {
-                return Ok(());
-            }
-            client.stop(&container, STOP_TIMEOUT_SECS).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn wait_for_container_stop(client: &PodmanClient, name: &str) -> Result<()> {
-    let deadline = Instant::now() + STOP_TIMEOUT;
-    loop {
-        match client.inspect(name).await? {
-            None | Some(ContainerState::Created | ContainerState::Exited) => return Ok(()),
-            Some(ContainerState::Running | ContainerState::Unknown) => {}
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "Podman container {name} did not stop within {} seconds",
-                STOP_TIMEOUT.as_secs()
-            );
-        }
-        sleep(STOP_POLL_INTERVAL).await;
-    }
+pub async fn stop(paths: &Paths, db: &Db, name: &str, reason: StopReason) -> Result<()> {
+    lifecycle::stop::<Valheim>(paths, db, name, reason).await
 }
 
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
-    let instance = Instance::load_existing(paths, db, name)?;
-    if is_running_async(paths, db, &instance).await? {
-        stop(paths, db, name).await?;
-    }
-    start(paths, db, name).await
+    lifecycle::restart::<Valheim>(paths, db, name).await
 }
 
-/// Updates the game payload inside an already-running runtime. The container
-/// remains alive; the runtime stops and restarts only its Valheim child.
 pub async fn update(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    let instance = Instance::load_existing(paths, db, name)?;
-    let identity = identity(db, &instance)?;
-    require_migrated(db, &identity)?;
-    if !is_running_async(paths, db, &instance).await? {
-        bail!("Valheim update requires a running instance; Odin will not start it implicitly");
-    }
-    supervisor::client::update_socket(&control_socket(paths, &identity)).await
-}
-
-pub async fn update_limits(paths: &Paths, db: &Db, instance_id: &str) -> Result<()> {
-    if !container_instances::is_valheim_podman(db, instance_id)? {
-        return Ok(());
-    }
-    let config = config(paths)?;
-    let client = PodmanClient::from_config(&config)?;
-    if client
-        .inspect(&container_name(instance_id))
-        .await?
-        .is_none()
-    {
-        return Ok(());
-    }
-    let limits = resource_limits::load(db, instance_id)?;
-    client
-        .update_limits(&container_name(instance_id), &limits)
-        .await
+    lifecycle::update::<Valheim>(paths, db, name).await
 }
 
 pub fn remove(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-    let identity = identity(db, instance)?;
-    if !container_instances::is_valheim_podman(db, &identity.id)? {
-        return Ok(());
-    }
-    let config = config(paths)?;
-    PodmanClient::from_config(&config)?.remove_blocking(&container_name(&identity.id), true)
-}
-
-fn unavailable_container() -> RuntimeContainerHealth {
-    RuntimeContainerHealth {
-        status: "unavailable",
-        error: None,
-    }
-}
-
-async fn socket_health(
-    control_socket: &std::path::Path,
-    container: Option<ContainerState>,
-) -> RuntimeSocketHealth {
-    let is_socket = std::fs::symlink_metadata(control_socket)
-        .map(|metadata| metadata.file_type().is_socket())
-        .unwrap_or(false);
-    if !is_socket {
-        let has_stale_socket = control_socket.parent().is_some_and(socket_dir_has_socket);
-        return RuntimeSocketHealth {
-            status: if !container.is_some_and(ContainerState::is_running) && has_stale_socket {
-                "orphaned"
-            } else {
-                "missing"
-            },
-            protocol_version: None,
-            odin_version: None,
-            error: None,
-        };
-    }
-    if !container.is_some_and(ContainerState::is_running) {
-        return RuntimeSocketHealth {
-            status: "orphaned",
-            protocol_version: None,
-            odin_version: None,
-            error: None,
-        };
-    }
-    match supervisor::client::ping_socket(control_socket).await {
-        Ok(crate::supervisor::protocol::Response::Pong {
-            protocol_version,
-            odin_version,
-            ..
-        }) => RuntimeSocketHealth {
-            status: "responding",
-            protocol_version: Some(protocol_version),
-            odin_version,
-            error: None,
-        },
-        Ok(response) => RuntimeSocketHealth {
-            status: "unreachable",
-            protocol_version: None,
-            odin_version: None,
-            error: Some(format!("unexpected runtime response: {response:?}")),
-        },
-        Err(error) => RuntimeSocketHealth {
-            status: "unreachable",
-            protocol_version: None,
-            odin_version: None,
-            error: Some(error.to_string()),
-        },
-    }
-}
-
-fn runtime_guidance(container: &str, socket: &str) -> Vec<String> {
-    match (container, socket) {
-        (_, "orphaned") => {
-            vec!["Use Repair to remove the stale runtime socket before the next start.".into()]
-        }
-        ("missing", _) => vec!["Start the instance to create its Podman container.".into()],
-        ("running", "responding") => vec!["The Podman runtime is healthy.".into()],
-        ("running", _) => vec![
-            "The container is running but its runtime socket is unavailable; restart the instance."
-                .into(),
-        ],
-        ("created" | "exited", _) => vec![
-            "The stopped container can be removed safely with Repair before the next start.".into(),
-        ],
-        ("unknown", _) => {
-            vec!["Inspect the container in Podman before attempting a repair.".into()]
-        }
-        _ => vec!["Re-run the diagnostic after configuring Podman.".into()],
-    }
-}
-
-fn socket_dir_has_socket(socket_dir: &std::path::Path) -> bool {
-    std::fs::read_dir(socket_dir).ok().is_some_and(|entries| {
-        entries.flatten().any(|entry| {
-            entry
-                .file_type()
-                .map(|file_type| file_type.is_socket())
-                .unwrap_or(false)
-        })
-    })
-}
-
-fn clean_socket_dir(socket_dir: &std::path::Path) -> Result<()> {
-    if !socket_dir.exists() {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(socket_dir)
-        .with_context(|| format!("failed to read {}", socket_dir.display()))?
-    {
-        let entry = entry?;
-        if entry.file_type()?.is_socket() {
-            std::fs::remove_file(entry.path())
-                .with_context(|| format!("failed to remove {}", entry.path().display()))?;
-        }
-    }
-    Ok(())
-}
-
-fn control_socket(paths: &Paths, identity: &GameInstanceIdentity) -> std::path::PathBuf {
-    paths.valheim_socket_dir(&identity.id).join(format!(
-        "{}-{}.control.sock",
-        GameId::Valheim,
-        identity.name
-    ))
+    lifecycle::remove::<Valheim>(paths, db, instance)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::container_instances;
+    use crate::podman::lifecycle::require_migrated;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 
@@ -601,133 +144,6 @@ mod tests {
             toml::to_string_pretty(&config).unwrap(),
         )
         .unwrap();
-    }
-
-    #[test]
-    fn clean_socket_dir_removes_only_unix_sockets() {
-        let directory =
-            std::env::temp_dir().join(format!("odin-runtime-health-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let socket = directory.join("stale.sock");
-        let listener = match UnixListener::bind(&socket) {
-            Ok(listener) => listener,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
-            Err(error) => panic!("failed to bind fake runtime socket: {error}"),
-        };
-        let keep = directory.join("keep.txt");
-        std::fs::write(&keep, "keep").unwrap();
-
-        clean_socket_dir(&directory).unwrap();
-
-        assert!(!socket.exists());
-        assert_eq!(std::fs::read_to_string(&keep).unwrap(), "keep");
-        drop(listener);
-        std::fs::remove_dir_all(directory).ok();
-    }
-
-    #[tokio::test]
-    async fn stopped_container_socket_is_reported_as_orphaned() {
-        let directory =
-            std::env::temp_dir().join(format!("odin-runtime-health-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let socket = directory.join("stale.sock");
-        let listener = match UnixListener::bind(&socket) {
-            Ok(listener) => listener,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
-            Err(error) => panic!("failed to bind fake runtime socket: {error}"),
-        };
-
-        let health = socket_health(&socket, Some(ContainerState::Exited)).await;
-
-        assert_eq!(health.status, "orphaned");
-        drop(listener);
-        std::fs::remove_dir_all(directory).ok();
-    }
-
-    #[tokio::test]
-    async fn wait_for_container_retries_until_podman_exposes_it() {
-        let socket =
-            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
-        let listener = match UnixListener::bind(&socket) {
-            Ok(listener) => listener,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
-            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
-        };
-        let server = std::thread::spawn(move || {
-            let mut requests = Vec::new();
-            for (status, body) in [
-                ("404 Not Found", r#"{"cause":"no such container"}"#),
-                (
-                    "200 OK",
-                    r#"{"State":{"Running":false,"Status":"created"}}"#,
-                ),
-            ] {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = String::new();
-                BufReader::new(stream.try_clone().unwrap())
-                    .read_line(&mut request)
-                    .unwrap();
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
-                    body.len()
-                );
-                stream.write_all(response.as_bytes()).unwrap();
-                requests.push(request);
-            }
-            requests
-        });
-
-        wait_for_container(
-            &PodmanClient::new(&socket).unwrap(),
-            "odin-valheim-instance",
-        )
-        .await
-        .unwrap();
-
-        let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 2);
-        assert!(requests.iter().all(|request| {
-            request.starts_with("GET /v5.0.0/libpod/containers/odin-valheim-instance/json ")
-        }));
-        std::fs::remove_file(socket).ok();
-    }
-
-    #[tokio::test]
-    async fn wait_for_container_stop_waits_for_the_runtime_to_exit() {
-        let socket =
-            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
-        let listener = match UnixListener::bind(&socket) {
-            Ok(listener) => listener,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
-            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
-        };
-        let server = std::thread::spawn(move || {
-            for body in [
-                r#"{"State":{"Running":true,"Status":"running"}}"#,
-                r#"{"State":{"Running":false,"Status":"exited"}}"#,
-            ] {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = String::new();
-                BufReader::new(stream.try_clone().unwrap())
-                    .read_line(&mut request)
-                    .unwrap();
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
-                    body.len()
-                );
-                stream.write_all(response.as_bytes()).unwrap();
-            }
-        });
-
-        wait_for_container_stop(
-            &PodmanClient::new(&socket).unwrap(),
-            "odin-valheim-instance",
-        )
-        .await
-        .unwrap();
-
-        server.join().unwrap();
-        std::fs::remove_file(socket).ok();
     }
 
     #[tokio::test]
@@ -776,8 +192,8 @@ mod tests {
 
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
-        let identity = identity(&db, &instance).unwrap();
-        container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        let identity = Valheim::identity(&db, &instance).unwrap();
+        container_instances::mark_podman(&db, &identity.id).unwrap();
         let saves = paths::instance_saves_dir(&instance.dir);
         std::fs::create_dir_all(&saves).unwrap();
         let save = saves.join("world.db");
@@ -790,7 +206,7 @@ mod tests {
         std::fs::create_dir_all(&mods).unwrap();
         let mod_file = mods.join("example-mod");
         std::fs::write(&mod_file, "mod data").unwrap();
-        let socket_dir = paths.valheim_socket_dir(&identity.id);
+        let socket_dir = paths.container_socket_dir(&identity.id);
         std::fs::create_dir_all(&socket_dir).unwrap();
         let stale_socket = socket_dir.join("stale.sock");
         let stale_listener = UnixListener::bind(&stale_socket).unwrap();
@@ -800,7 +216,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(save).unwrap(), "save data");
         assert_eq!(std::fs::read_to_string(backup).unwrap(), "backup data");
         assert_eq!(std::fs::read_to_string(mod_file).unwrap(), "mod data");
-        assert!(crate::podman::runtime_spec_path(&paths, &identity.id).is_file());
+        assert!(crate::podman::runtime_spec_path(&paths, GameId::Valheim, &identity.id).is_file());
         assert!(!stale_socket.exists());
         let requests = server.join().unwrap();
         assert!(
@@ -809,6 +225,55 @@ mod tests {
                 .any(|request| request.starts_with("DELETE "))
         );
         drop(stale_listener);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn remove_deletes_the_container_and_the_private_runtime_volume() {
+        let root =
+            std::env::temp_dir().join(format!("odin-runtime-remove-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = Paths {
+            config_dir: root.clone(),
+            data_dir: root.clone(),
+        };
+        let podman_socket = root.join("podman.sock");
+        let listener = match UnixListener::bind(&podman_socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                std::fs::remove_dir_all(root).ok();
+                return;
+            }
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            request
+        });
+        write_podman_config(&paths, podman_socket);
+        let db = crate::db::Db::open(&paths).unwrap();
+        let instance = Instance::create(&paths, &db, "valheim").unwrap();
+        let identity = Valheim::identity(&db, &instance).unwrap();
+        container_instances::mark_podman(&db, &identity.id).unwrap();
+        let runtime = paths.container_runtime_dir(GameId::Valheim, &identity.id);
+        std::fs::create_dir_all(runtime.join("valheim")).unwrap();
+        std::fs::write(runtime.join("valheim/payload"), "game").unwrap();
+        let saves = paths::instance_saves_dir(&instance.dir);
+        std::fs::create_dir_all(&saves).unwrap();
+        std::fs::write(saves.join("world.db"), "save").unwrap();
+
+        remove(&paths, &db, &instance).unwrap();
+
+        assert!(server.join().unwrap().starts_with("DELETE "));
+        assert!(!runtime.exists());
+        assert!(saves.join("world.db").is_file());
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -825,7 +290,7 @@ mod tests {
         };
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
-        let identity = identity(&db, &instance).unwrap();
+        let identity = Valheim::identity(&db, &instance).unwrap();
 
         let error = require_migrated(&db, &identity).unwrap_err();
 
@@ -881,8 +346,8 @@ mod tests {
         write_podman_config(&paths, podman_socket);
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
-        let identity = identity(&db, &instance).unwrap();
-        container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
+        let identity = Valheim::identity(&db, &instance).unwrap();
+        container_instances::mark_podman(&db, &identity.id).unwrap();
 
         let error = repair(&paths, &db, "valheim").await.unwrap_err();
 

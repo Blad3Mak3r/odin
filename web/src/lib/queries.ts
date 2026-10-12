@@ -48,7 +48,7 @@ import type {
   SaveFileEntry,
   SevenDaysPlayer,
   SettingsView,
-  ValheimRuntimeHealth,
+  RuntimeHealth,
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
@@ -323,10 +323,10 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   })
 }
 
-export function useMigrateValheimInstance() {
+export function useMigrateRuntime() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post<void>(`/instances/${id}/valheim/migrate`),
+    mutationFn: (id: string) => api.post<void>(`/instances/${id}/runtime/migrate`),
     onSuccess: (_result, id) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
@@ -334,10 +334,10 @@ export function useMigrateValheimInstance() {
   })
 }
 
-export function useUpdateValheimInstance() {
+export function useUpdateRuntime() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post<JobHandle>(`/instances/${id}/valheim/update`),
+    mutationFn: (id: string) => api.post<JobHandle>(`/instances/${id}/runtime/update`),
     onSuccess: (_job, id) => {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
@@ -345,22 +345,22 @@ export function useUpdateValheimInstance() {
   })
 }
 
-export function useValheimRuntimeHealth(id: string, enabled = true) {
+export function useRuntimeHealth(id: string, enabled = true) {
   return useQuery({
-    queryKey: ['managed-instances', id, 'valheim-runtime-health'],
-    queryFn: () => api.get<ValheimRuntimeHealth>(`/instances/${id}/valheim/runtime-health`),
+    queryKey: ['managed-instances', id, 'runtime-health'],
+    queryFn: () => api.get<RuntimeHealth>(`/instances/${id}/runtime/health`),
     enabled: enabled && Boolean(id),
   })
 }
 
-export function useRepairValheimInstance() {
+export function useRepairRuntime() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.post<void>(`/instances/${id}/valheim/repair`),
+    mutationFn: (id: string) => api.post<void>(`/instances/${id}/runtime/repair`),
     onSuccess: (_result, id) => {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'valheim-runtime-health'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'runtime-health'] })
     },
   })
 }

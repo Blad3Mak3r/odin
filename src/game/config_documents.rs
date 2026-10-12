@@ -245,10 +245,11 @@ pub fn list_rust(paths: &Paths, instance: &RustInstance) -> Result<Vec<AdvancedC
 
 pub fn apply_rust(
     paths: &Paths,
+    db: &crate::db::Db,
     instance: &RustInstance,
     changes: &[AdvancedConfigChange],
 ) -> Result<()> {
-    if instance.is_running() {
+    if crate::game::rust::is_running(paths, db, instance)? {
         bail!("stop the server before changing advanced configuration");
     }
     let path = rust_document_path(paths, instance);
@@ -1895,10 +1896,12 @@ mod tests {
         let path = rust_document_path(&paths, &instance);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "// keep this\nserver.hostname \"Odin\"\n").unwrap();
+        let db = crate::db::Db::open(&paths).unwrap();
 
         assert!(list_rust(&paths, &instance).unwrap()[0].allows_new_keys);
         apply_rust(
             &paths,
+            &db,
             &instance,
             &[AdvancedConfigChange {
                 file: "server".into(),
@@ -1915,6 +1918,7 @@ mod tests {
         );
         apply_rust(
             &paths,
+            &db,
             &instance,
             &[AdvancedConfigChange {
                 file: "server".into(),
@@ -1931,6 +1935,7 @@ mod tests {
         assert!(
             apply_rust(
                 &paths,
+                &db,
                 &instance,
                 &[AdvancedConfigChange {
                     file: "server".into(),
@@ -1944,6 +1949,7 @@ mod tests {
         assert!(
             apply_rust(
                 &paths,
+                &db,
                 &instance,
                 &[AdvancedConfigChange {
                     file: "server".into(),

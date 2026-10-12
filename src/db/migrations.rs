@@ -173,6 +173,49 @@ mod tests {
     }
 
     #[test]
+    fn v28_renames_the_podman_marker_without_losing_migrated_instances() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 28 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at)
+                VALUES ('migrated', 'valheim', 'migrated', '2026-01-01T00:00:00Z');
+             INSERT INTO valheim_podman_instances (instance_id, migrated_at)
+                VALUES ('migrated', '2026-01-02T00:00:00Z');",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let ids: Vec<String> = conn
+            .prepare("SELECT instance_id FROM podman_instances")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(ids, ["migrated"]);
+        let old_table_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'valheim_podman_instances')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!old_table_exists);
+    }
+
+    #[test]
     fn v21_expands_the_game_catalog_without_losing_existing_instances() {
         let mut conn = Connection::open_in_memory().unwrap();
         let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();

@@ -36,6 +36,7 @@ use crate::db::game_instances;
 use crate::game::GameId;
 use crate::instance;
 use crate::paths::Paths;
+use crate::podman::lifecycle::StopReason;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
 use runtime::InstanceTransition;
 use runtime::{InstanceResourceEntry, ResourcesTick};
@@ -110,7 +111,13 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
             return Ok(());
         }
         if crate::podman::valheim::is_migrated(&state.db, instance)? {
-            crate::podman::valheim::stop(&state.paths, &state.db, &instance.state.name).await
+            crate::podman::valheim::stop(
+                &state.paths,
+                &state.db,
+                &instance.state.name,
+                StopReason::HostShutdown,
+            )
+            .await
         } else {
             instance::lifecycle::stop(&state.paths, &state.db, &instance.state.name).await
         }
@@ -127,9 +134,15 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
         .collect::<Vec<_>>();
 
     for rust_instance in game_instances::list_rust(&state.db)? {
-        if rust_instance.is_running()
-            && let Err(error) =
-                crate::game::rust::stop(&state.paths, &state.db, &rust_instance).await
+        if crate::game::rust::is_running(&state.paths, &state.db, &rust_instance)?
+            && let Err(error) = crate::game::instances::stop_with(
+                &state.paths,
+                &state.db,
+                GameId::Rust,
+                rust_instance.name(),
+                StopReason::HostShutdown,
+            )
+            .await
         {
             failures.push(format!("rust/{}: {error:#}", rust_instance.name()));
         }
@@ -239,7 +252,9 @@ async fn attempt_rust_auto_restart(state: &AppState, name: String) {
             return;
         }
     };
-    match crate::game::rust::start(&state.paths, &state.db, &instance).await {
+    match crate::game::instances::start(&state.paths, &state.db, GameId::Rust, instance.name())
+        .await
+    {
         Ok(_) => state.activity.record_for(
             GameId::Rust,
             ActivityKind::InstanceAutoRestarted,
@@ -290,14 +305,58 @@ async fn attempt_auto_restart(state: &AppState, name: String) {
             return;
         }
     };
-    match instance::lifecycle::start(&state.paths, &state.db, &name).await {
-        Ok(_) => state
+    let started = match instance::Instance::load_existing(&state.paths, &state.db, &name)
+        .and_then(|instance| crate::podman::valheim::is_migrated(&state.db, &instance))
+    {
+        Ok(true) => crate::game::instances::start(&state.paths, &state.db, GameId::Valheim, &name)
+            .await
+            .map(|_| ()),
+        Ok(false) => instance::lifecycle::start(&state.paths, &state.db, &name)
+            .await
+            .map(|_| ()),
+        Err(error) => Err(error),
+    };
+    match started {
+        Ok(()) => state
             .activity
             .record(ActivityKind::InstanceAutoRestarted, Some(name)),
         Err(e) => {
             tracing::warn!(instance = %name, error = %e, "automatic restart failed");
         }
     }
+}
+
+/// Id of the Valheim instance `name`, when it has one.
+fn valheim_identity_id(state: &AppState, name: &str) -> Option<String> {
+    crate::db::game_instances::identity(&state.db, GameId::Valheim, name)
+        .ok()
+        .flatten()
+        .map(|identity| identity.id)
+}
+
+/// Whether a containerized instance found stopped should be restarted: an
+/// operator never asked it to stop (`desired_running` is still set) and
+/// automatic restart is enabled. `false` for an instance that is not
+/// containerized, which never has the flag.
+fn container_needs_restart(
+    state: &AppState,
+    game: GameId,
+    instance_id: &str,
+    name: &str,
+    auto_restart: bool,
+) -> bool {
+    if !crate::db::container_instances::desired_running(&state.db, instance_id).unwrap_or(false) {
+        return false;
+    }
+    if !auto_restart {
+        // Nobody will bring it back, so stop claiming it should be running.
+        let _ = crate::db::container_instances::set_desired_running(&state.db, instance_id, false);
+        return false;
+    }
+    permits_scheduled_uptime(state, game, name)
+        && state
+            .runtime
+            .should_attempt_game_auto_restart(game, name, AUTO_RESTART_COOLDOWN)
 }
 
 #[derive(Default)]
@@ -371,6 +430,16 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
             }
             if snapshot.running {
                 running_names.push(name.clone());
+            } else if let Some(id) = valheim_identity_id(state, name)
+                && container_needs_restart(
+                    state,
+                    GameId::Valheim,
+                    &id,
+                    name,
+                    inst.state.auto_restart,
+                )
+            {
+                crashed_with_auto_restart.push(name.clone());
             } else if inst.state.pid.is_some() {
                 // Persisted pid but not actually alive: the process died
                 // without anyone observing it directly (crash, OOM, an
@@ -429,7 +498,14 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
     if let Ok(rust_instances) = game_instances::list_rust(&state.db) {
         for rust_instance in rust_instances {
             let name = rust_instance.name();
-            let snapshot = routes::games::rust_resource_snapshot(state, &rust_instance);
+            let snapshot = match routes::games::rust_resource_snapshot(state, &rust_instance) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    // Unknown is not stopped: never act on a failed probe.
+                    tracing::debug!(instance = %name, %error, "could not sample Rust instance");
+                    continue;
+                }
+            };
             if persist_now && snapshot.running {
                 state.runtime.persist_game_instance_sample(
                     GameId::Rust,
@@ -452,7 +528,17 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
                     .activity
                     .record_for(GameId::Rust, kind, Some(name.to_string()));
             }
-            if !snapshot.running && rust_instance.pid.is_some() {
+            if !snapshot.running
+                && container_needs_restart(
+                    state,
+                    GameId::Rust,
+                    &rust_instance.identity.id,
+                    name,
+                    rust_instance.config.auto_restart,
+                )
+            {
+                crashed_rust_with_auto_restart.push(name.to_string());
+            } else if !snapshot.running && rust_instance.pid.is_some() {
                 let _ = game_instances::clear_rust_pid(&state.db, name, chrono::Utc::now());
                 let _ = std::fs::remove_file(crate::supervisor::control_sock_path(
                     &state.paths,
@@ -662,7 +748,7 @@ async fn reconcile_log_tailers(
 
 #[cfg(test)]
 mod tests {
-    use super::{shutdown_flag_enabled, stop_running_instances};
+    use super::{run_telemetry_tick, shutdown_flag_enabled, stop_running_instances};
     use crate::db::Db;
     use crate::instance::Instance;
     use crate::paths::Paths;
@@ -738,10 +824,14 @@ mod tests {
             instance.state.created_at,
         )
         .unwrap();
-        crate::db::container_instances::mark_valheim_podman(&db, &identity.id).unwrap();
-        let state = AppState::new(paths.clone(), db);
+        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
+        crate::db::container_instances::set_desired_running(&db, &identity.id, true).unwrap();
+        let state = AppState::new(paths.clone(), db.clone());
 
         stop_running_instances(&state).await.unwrap();
+
+        // A shutdown is not an operator stop: the instance should come back.
+        assert!(crate::db::container_instances::desired_running(&db, &identity.id).unwrap());
 
         assert!(
             server
@@ -749,6 +839,130 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|request| request.starts_with("POST /v5.0.0/libpod/containers/"))
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// A Podman whose every container is stopped, serving until the test ends.
+    fn exited_podman(root: &std::path::Path) -> Option<()> {
+        let socket = root.join("podman.sock");
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return None,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut String::new())
+                    .unwrap();
+                let body = r#"{"State":{"Running":false,"Status":"exited"}}"#;
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        std::fs::write(
+            root.join("config.toml"),
+            format!("[podman]\nsocket = \"{}\"\n", socket.display()),
+        )
+        .unwrap();
+        Some(())
+    }
+
+    fn container_state(label: &str) -> Option<(AppState, Arc<Db>, std::path::PathBuf)> {
+        let root = std::env::temp_dir().join(format!("odin-web-{label}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        exited_podman(&root)?;
+        let paths = Paths {
+            config_dir: root.clone(),
+            data_dir: root.clone(),
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        Some((AppState::new(paths, db.clone()), db, root))
+    }
+
+    #[test]
+    fn a_crashed_valheim_container_is_restarted_but_an_operator_stop_is_not() {
+        let Some((state, db, root)) = container_state("crash-valheim") else {
+            return;
+        };
+        let mut instance = Instance::create(&state.paths, &db, "valheim").unwrap();
+        instance.state.auto_restart = true;
+        instance.save(&db).unwrap();
+        let identity = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "valheim",
+            instance.state.created_at,
+        )
+        .unwrap();
+        crate::db::container_instances::mark_podman(&db, &identity.id).unwrap();
+        let desired =
+            |db: &Db| crate::db::container_instances::desired_running(db, &identity.id).unwrap();
+
+        // Never started by an operator: nothing to recover.
+        assert!(
+            run_telemetry_tick(&state)
+                .crashed_with_auto_restart
+                .is_empty()
+        );
+
+        crate::db::container_instances::set_desired_running(&db, &identity.id, true).unwrap();
+        assert_eq!(
+            run_telemetry_tick(&state).crashed_with_auto_restart,
+            ["valheim"]
+        );
+        // The cooldown spaces retries, and the intent survives for the next one.
+        assert!(
+            run_telemetry_tick(&state)
+                .crashed_with_auto_restart
+                .is_empty()
+        );
+        assert!(desired(&db));
+
+        // An operator stop clears the intent, so a fresh cooldown still does nothing.
+        crate::db::container_instances::set_desired_running(&db, &identity.id, false).unwrap();
+        let fresh = AppState::new((*state.paths).clone(), db.clone());
+        assert!(
+            run_telemetry_tick(&fresh)
+                .crashed_with_auto_restart
+                .is_empty()
+        );
+
+        // With automatic restart off a dead instance is left alone and forgotten.
+        instance.state.auto_restart = false;
+        instance.save(&db).unwrap();
+        crate::db::container_instances::set_desired_running(&db, &identity.id, true).unwrap();
+        let fresh = AppState::new((*state.paths).clone(), db.clone());
+        assert!(
+            run_telemetry_tick(&fresh)
+                .crashed_with_auto_restart
+                .is_empty()
+        );
+        assert!(!desired(&db));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_crashed_rust_container_is_restarted_when_automatic_restart_is_on() {
+        let Some((state, db, root)) = container_state("crash-rust") else {
+            return;
+        };
+        let instance = crate::db::game_instances::create_rust(&state.paths, &db, "rusty").unwrap();
+        let mut config = instance.config.clone();
+        config.auto_restart = true;
+        crate::db::game_instances::update_rust_config(&db, "rusty", &config).unwrap();
+        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
+        crate::db::container_instances::set_desired_running(&db, &instance.identity.id, true)
+            .unwrap();
+
+        assert_eq!(
+            run_telemetry_tick(&state).crashed_rust_with_auto_restart,
+            ["rusty"]
         );
         std::fs::remove_dir_all(root).ok();
     }

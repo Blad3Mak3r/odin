@@ -31,10 +31,6 @@ const MAX_LOADED_JOBS: usize = 200;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobKindDescr {
-    SteamcmdInstall {
-        #[serde(default = "valheim_game")]
-        game: GameId,
-    },
     #[serde(alias = "valheim_update")]
     RuntimeUpdate {
         #[serde(default = "valheim_game")]
@@ -404,8 +400,9 @@ mod tests {
     async fn successful_job_ends_succeeded() {
         let registry = temp_registry("success");
         let id = registry.spawn(
-            JobKindDescr::SteamcmdInstall {
+            JobKindDescr::RuntimeUpdate {
                 game: GameId::Valheim,
+                instance: "test".into(),
             },
             |logger| {
                 logger.line("working");
@@ -429,8 +426,9 @@ mod tests {
     async fn failed_job_carries_message() {
         let registry = temp_registry("failure");
         let id = registry.spawn(
-            JobKindDescr::SteamcmdInstall {
+            JobKindDescr::RuntimeUpdate {
                 game: GameId::Valheim,
+                instance: "test".into(),
             },
             |_logger| anyhow::bail!("boom"),
         );
@@ -455,8 +453,9 @@ mod tests {
     async fn late_subscriber_gets_buffered_log() {
         let registry = temp_registry("late-subscriber");
         let id = registry.spawn(
-            JobKindDescr::SteamcmdInstall {
+            JobKindDescr::RuntimeUpdate {
                 game: GameId::Valheim,
+                instance: "test".into(),
             },
             |logger| {
                 logger.line("first");
@@ -496,8 +495,9 @@ mod tests {
         let id = {
             let registry = JobRegistry::load(db.clone());
             let id = registry.spawn(
-                JobKindDescr::SteamcmdInstall {
+                JobKindDescr::RuntimeUpdate {
                     game: GameId::Valheim,
+                    instance: "test".into(),
                 },
                 |logger| {
                     logger.line("done");
@@ -534,8 +534,9 @@ mod tests {
             })
             .unwrap(),
         );
-        let (kind_tag, kind_payload) = encode_kind(&JobKindDescr::SteamcmdInstall {
+        let (kind_tag, kind_payload) = encode_kind(&JobKindDescr::RuntimeUpdate {
             game: GameId::Valheim,
+            instance: "test".into(),
         })
         .unwrap();
         let (status_tag, status_payload) = encode_status(&JobStatus::Running).unwrap();
@@ -565,8 +566,8 @@ mod tests {
         db_jobs::insert(
             &db,
             "old-succeeded",
-            "steamcmd_install",
-            r#"{"kind":"steamcmd_install"}"#,
+            "runtime_update",
+            r#"{"kind":"runtime_update","game":"valheim","instance":"test"}"#,
             "succeeded",
             r#"{"status":"succeeded"}"#,
             cutoff - chrono::Duration::seconds(1),
@@ -582,8 +583,9 @@ mod tests {
             jobs.insert(
                 id.to_string(),
                 JobRecord {
-                    kind: JobKindDescr::SteamcmdInstall {
+                    kind: JobKindDescr::RuntimeUpdate {
                         game: GameId::Valheim,
+                        instance: "test".into(),
                     },
                     status,
                     started_at: cutoff - chrono::Duration::seconds(1),
@@ -599,16 +601,5 @@ mod tests {
         assert!(registry.get("old-queued").is_some());
         assert!(registry.get("old-running").is_some());
         assert!(db_jobs::recent(&db, 10).unwrap().is_empty());
-    }
-
-    #[test]
-    fn legacy_steamcmd_jobs_default_to_valheim() {
-        let kind = decode_kind(r#"{"kind":"steamcmd_install"}"#).unwrap();
-        assert!(matches!(
-            kind,
-            JobKindDescr::SteamcmdInstall {
-                game: GameId::Valheim
-            }
-        ));
     }
 }

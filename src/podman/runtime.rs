@@ -17,7 +17,7 @@ use crate::steamcmd::SteamCmd;
 use crate::supervisor::protocol::{
     ErrorCode, PROTOCOL_VERSION, Request, Response, read_frame, write_frame,
 };
-use crate::supervisor::server::{StatsHandle, refresh_stats_periodically};
+use crate::supervisor::stats::{StatsHandle, refresh_stats_periodically};
 
 use super::RuntimeSpec;
 
@@ -48,14 +48,10 @@ pub async fn run(spec_path: &Path, expected_instance_id: &str) -> Result<()> {
     };
     let control_path =
         crate::supervisor::control_sock_path(&paths, spec.launch.game(), spec.launch.name());
-    let events_path =
-        crate::supervisor::events_sock_path(&paths, spec.launch.game(), spec.launch.name());
     let control = bind_socket(&control_path)?;
-    let events = bind_socket(&events_path)?;
 
-    let result = run_loop(spec, control, events).await;
+    let result = run_loop(spec, control).await;
     let _ = std::fs::remove_file(control_path);
-    let _ = std::fs::remove_file(events_path);
     result
 }
 
@@ -77,7 +73,7 @@ fn label(spec: &RuntimeSpec) -> &'static str {
     game::driver(spec.launch.game()).display_name()
 }
 
-async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener) -> Result<()> {
+async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("failed to register SIGTERM handler")?;
     let (actions_tx, mut actions_rx) = mpsc::channel(4);
@@ -108,7 +104,6 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
                         actions_tx.clone(), stats.clone(),
                     ));
                 }
-                Ok((stream, _)) = events.accept() => drop(stream),
                 Some(action) = actions_rx.recv() => match action {
                     Action::Stop(_) => return Ok(()),
                     Action::Update(reply) => {
@@ -150,12 +145,6 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
                     stream, pid, pid_started_at, started_at, true,
                     actions_tx.clone(), stats.clone(),
                 ));
-            }
-            Ok((stream, _)) = events.accept() => {
-                // A connection is valid but this lightweight container runtime
-                // has no separate event producer; close it immediately so the
-                // host falls back to its existing log tail reader.
-                drop(stream);
             }
             Some(action) = actions_rx.recv() => match action {
                 Action::Stop(timeout) => {
@@ -262,8 +251,10 @@ async fn spawn_child(spec: &RuntimeSpec) -> Result<tokio::process::Child> {
     let logs = paths::instance_logs_dir(&spec.instance_dir);
     std::fs::create_dir_all(&logs)?;
     let console_log = logs.join("console.log");
-    let command = spec.launch.server_command(spec, &console_log)?;
-    process::spawn_with_cgroup(command, None).await
+    let mut command = spec.launch.server_command(spec, &console_log)?;
+    command
+        .spawn()
+        .context("failed to spawn game server process")
 }
 
 async fn stop_child(
@@ -347,10 +338,6 @@ async fn handle_control(
                 message: "stats not yet available".into(),
             },
         },
-        Ok(Some(_)) => Response::Error {
-            code: ErrorCode::Unknown,
-            message: "request is not supported by the container runtime".into(),
-        },
         Ok(None) => return,
         Err(error) => Response::Error {
             code: ErrorCode::Unknown,
@@ -365,7 +352,7 @@ mod tests {
     use super::*;
     use crate::game::rust;
     use crate::podman::Launch;
-    use crate::supervisor::server::STATS_REFRESH_INTERVAL;
+    use crate::supervisor::stats::STATS_REFRESH_INTERVAL;
 
     async fn stats_response(stats: StatsHandle, pid: u32) -> Response {
         let (client, server) = UnixStream::pair().unwrap();
@@ -445,8 +432,7 @@ chmod +x "$d/valheim_server.x86_64""#,
         };
         let control_path = root.join("c.sock");
         let control = bind_socket(&control_path).unwrap();
-        let events = bind_socket(&root.join("e.sock")).unwrap();
-        let runtime = tokio::spawn(run_loop(spec, control, events));
+        let runtime = tokio::spawn(run_loop(spec, control));
 
         let installing = crate::supervisor::client::ping_socket_with_retry(
             &control_path,

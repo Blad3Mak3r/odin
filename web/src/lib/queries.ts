@@ -10,7 +10,6 @@ import type {
   BackupStorageView,
   BepInExStatus,
   BulkBepInExResult,
-  BulkResult,
   ChangelogRelease,
   CheckResult,
   ConfigFileEntry,
@@ -23,7 +22,6 @@ import type {
   GameView,
   GenericConfigUpdateRequest,
   HostResources,
-  InstallStatusView,
   InstanceResources,
   InstanceDefaults,
   InstanceTransition,
@@ -32,7 +30,6 @@ import type {
   ManagedInstanceView,
   JobHandle,
   JobSummary,
-  LastExitInfo,
   ListKind,
   ListView,
   LogsView,
@@ -52,7 +49,6 @@ import type {
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
-  VRisingAccessListKind,
   WebhookView,
 } from './types'
 
@@ -226,24 +222,7 @@ export function useGames() {
   })
 }
 
-export function useGameInstallStatus(game: GameId) {
-  return useQuery({
-    queryKey: ['game-install-status', game],
-    queryFn: () => api.get<InstallStatusView>(`/games/${game}/install/status`),
-    refetchInterval: LIVE_FALLBACK_INTERVAL,
-  })
-}
 
-export function useInstallGame() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (game: GameId) => api.post<JobHandle>(`/games/${game}/install`),
-    onSuccess: (_job, game) => {
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
-      queryClient.invalidateQueries({ queryKey: ['game-install-status', game] })
-    },
-  })
-}
 
 export function useManagedInstances() {
   return useQuery({
@@ -351,16 +330,6 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
   })
 }
 
-export function useMigrateRuntime() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) => api.post<void>(`/instances/${id}/runtime/migrate`),
-    onSuccess: (_result, id) => {
-      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
-      queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
-    },
-  })
-}
 
 export function useUpdateRuntime() {
   const queryClient = useQueryClient()
@@ -538,13 +507,6 @@ export function useExecuteRustRcon() {
   })
 }
 
-export function useExecuteVRisingRcon() {
-  return useMutation({
-    mutationFn: ({ id, command }: { id: string; command: string }) =>
-      api.post<RconCommandResponse>(`/instances/${id}/vrising/rcon`, { command }),
-  })
-}
-
 export function useWipeRustMap() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -618,38 +580,6 @@ export function useCloneInstance(sourceName: string) {
     },
   })
 }
-
-function useInstanceAction(action: 'start' | 'stop' | 'restart') {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (name: string) => api.post<void>(valheimInstancePath(name, `/${action}`)),
-    onSuccess: (_data, name) => {
-      queryClient.invalidateQueries({ queryKey: ['instances'] })
-      queryClient.invalidateQueries({ queryKey: ['instances', name] })
-      queryClient.invalidateQueries({ queryKey: ['version'] })
-    },
-  })
-}
-
-export const useStartInstance = () => useInstanceAction('start')
-export const useStopInstance = () => useInstanceAction('stop')
-export const useRestartInstance = () => useInstanceAction('restart')
-
-function useBulkInstanceAction(action: 'start' | 'stop' | 'restart') {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (names: string[]) =>
-      api.post<BulkResult[]>(`/instances/bulk/${action}`, { names }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instances'] })
-      queryClient.invalidateQueries({ queryKey: ['version'] })
-    },
-  })
-}
-
-export const useBulkStartInstances = () => useBulkInstanceAction('start')
-export const useBulkStopInstances = () => useBulkInstanceAction('stop')
-export const useBulkRestartInstances = () => useBulkInstanceAction('restart')
 
 export function useBulkUpdateMods() {
   const queryClient = useQueryClient()
@@ -748,12 +678,6 @@ export function useLogs(name: string, lines = 200) {
 
 // Diagnostics for the most recent exit — not part of the live tick (there's
 // nothing to push it live for), so this is a plain on-demand fetch.
-export function useLastExit(name: string) {
-  return useQuery({
-    queryKey: ['instances', name, 'last-exit'],
-    queryFn: () => api.get<LastExitInfo | null>(valheimInstancePath(name, '/last-exit')),
-  })
-}
 
 export function useMods(name: string) {
   return useQuery({
@@ -1134,29 +1058,6 @@ export function useRemoveRustAccessListEntry(id: string, kind: RustAccessListKin
   })
 }
 
-export function useVRisingAccessList(id: string, kind: VRisingAccessListKind) {
-  return useQuery({
-    queryKey: ['managed-instances', id, 'lists', kind],
-    queryFn: () => api.get<ListView>(`/instances/${id}/vrising/lists/${kind}`),
-  })
-}
-
-export function useAddVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (entryId: string) => api.post<void>(`/instances/${id}/vrising/lists/${kind}`, { id: entryId }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
-  })
-}
-
-export function useRemoveVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (entryId: string) => api.delete<void>(`/instances/${id}/vrising/lists/${kind}/${encodeURIComponent(entryId)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
-  })
-}
-
 export function useConfigFiles(name: string) {
   return useQuery({
     queryKey: ['instances', name, 'bepinex-config'],
@@ -1185,24 +1086,7 @@ export function useSetConfigFileContent(name: string) {
   })
 }
 
-export function useInstallServer() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => api.post<JobHandle>('/install'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['jobs'] })
-      queryClient.invalidateQueries({ queryKey: ['install-status'] })
-    },
-  })
-}
 
-export function useInstallStatus() {
-  return useQuery({
-    queryKey: ['install-status'],
-    queryFn: () => api.get<InstallStatusView>('/install/status'),
-    refetchInterval: LIVE_FALLBACK_INTERVAL,
-  })
-}
 
 export function useJobs() {
   return useQuery({

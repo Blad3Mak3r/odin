@@ -1,7 +1,6 @@
 mod activity;
 mod backup;
 mod backup_storage;
-mod cgroup;
 mod cli;
 mod commands;
 mod config;
@@ -16,7 +15,6 @@ mod odin_update;
 mod paths;
 mod player_events;
 mod podman;
-mod readiness_events;
 mod save_events;
 mod steamcmd;
 mod supervisor;
@@ -24,7 +22,7 @@ mod web;
 
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 
 use cli::{Cli, Command, ModsCommand};
@@ -50,9 +48,9 @@ fn run() -> Result<()> {
 
     // Container runtime mode deliberately does not open the host database:
     // the bind-mounted runtime spec is its complete typed launch contract.
-    if let Command::Run { instance_id } = &cli.command
-        && let Some(spec_path) = std::env::var_os("ODIN_RUNTIME_SPEC")
-    {
+    if let Command::Run { instance_id } = &cli.command {
+        let spec_path = std::env::var_os("ODIN_RUNTIME_SPEC")
+            .context("`odin run` is the container runtime and requires ODIN_RUNTIME_SPEC")?;
         return commands::run::run_container(
             &std::path::PathBuf::from(spec_path),
             instance_id.clone(),
@@ -74,7 +72,6 @@ fn run() -> Result<()> {
     let db = db::Db::open(&paths)?;
 
     match cli.command {
-        Command::Install => commands::install::run(&paths, &db),
         Command::Create { server_name } => commands::create::run(&paths, &db, &server_name),
         Command::Start { server_name } => commands::start::run(&paths, &db, &server_name),
         Command::Stop { server_name } => commands::stop::run(&paths, &db, &server_name),
@@ -140,6 +137,6 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::Serve { bind, port } => commands::serve::run(&paths, &bind, port),
-        Command::Run { instance_id } => commands::run::run(&paths, instance_id),
+        Command::Run { .. } => unreachable!("handled before the host database is opened"),
     }
 }

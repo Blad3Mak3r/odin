@@ -1,6 +1,4 @@
 import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
-import { VRisingAccessListsTab } from '@/components/instance/VRisingAccessListsTab'
-import { VRisingRconTab } from '@/components/instance/VRisingRconTab'
 import { PalworldAdminTab } from '@/components/instance/PalworldAdminTab'
 import { RustRconTab } from '@/components/instance/RustRconTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
@@ -54,7 +52,7 @@ function isConsoleError(line: string) {
 }
 
 function isGameId(value: string | undefined): value is GameId {
-  return value === 'valheim' || value === 'rust' || value === 'vrising' || value === 'palworld' || value === 'runescape-dragonwilds' || value === '7d2d'
+  return value === 'valheim' || value === 'rust' || value === 'palworld' || value === '7d2d'
 }
 
 type RustConfig = {
@@ -209,7 +207,7 @@ function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId
   if (config.isError) return <QueryError error={config.error} />
   const files = config.data?.files ?? []
   const missingFiles = files.filter((file) => !file.exists)
-  const canInitialize = game === '7d2d' || game === 'vrising' || game === 'palworld' || game === 'runescape-dragonwilds'
+  const canInitialize = game === '7d2d' || game === 'palworld'
   const normalizedSearch = search.trim().toLocaleLowerCase()
   const generatedFiles = files.filter((file) => file.exists)
   const visibleFiles = generatedFiles.map((file) => ({
@@ -250,14 +248,14 @@ function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId
   return <div className="flex flex-col gap-4"><div><p className="text-sm text-muted-foreground">Settings come directly from native server files. Stop the server before saving.</p>{missingFiles.length > 0 && canInitialize ? <div className="mt-2 flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">Initialize missing files from the installed server template.</p><Button type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Configuration files initialized'), onError: (error) => toast.error(error.message) })}>Initialize config files</Button></div> : missingFiles.length > 0 && <p className="mt-2 text-sm text-muted-foreground">Missing: {missingFiles.map((file) => file.path).join(', ')}.</p>}</div>{generatedFiles.length > 0 && <Input aria-label="Search configuration keys" placeholder="Search configuration keys…" value={search} onChange={(event) => setSearch(event.target.value)} />}{visibleFiles.map((file) => <div key={file.id} className="rounded-xl border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="divide-y">{file.sections.map((section) => <details key={section.id} open={normalizedSearch.length > 0} className="group"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">{section.label}</summary><div className="grid gap-3 border-t px-4 py-4 sm:grid-cols-2">{section.entries.map((entry) => { const entryId = `${file.id}:${entry.key}`; const deleted = deletedEntries.has(entryId); return <div key={entry.key} className="flex flex-col gap-1"><Label className={deleted ? 'text-muted-foreground line-through' : undefined} htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.label}</Label><Input id={`advanced-${file.id}-${entry.key}`} type={entry.sensitive ? 'password' : 'text'} placeholder={entry.sensitive && entry.configured ? '••••••••' : entry.managed ? 'Managed by Odin' : undefined} value={values[entryId] ?? entry.value} disabled={running || entry.managed || deleted} onChange={(event) => setValues((current) => ({ ...current, [entryId]: event.target.value }))} />{file.allows_new_keys && !entry.managed && <Button className="w-fit" type="button" variant="outline" size="sm" disabled={running} onClick={() => toggleDeleted(entryId)}>{deleted ? 'Restore' : 'Delete'}</Button>}</div> })}</div></details>)}</div>{file.allows_new_keys && <div className="flex flex-col gap-3 border-t px-4 py-4"><div><p className="text-sm font-medium">Add configuration key</p><p className="text-xs text-muted-foreground">Use the Rust convar name and its value exactly as the server expects.</p></div>{newEntries.filter((entry) => entry.file === file.id).map((entry) => <div key={entry.id} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"><Input aria-label="New configuration key" placeholder="server.example" value={entry.key} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'key', event.target.value)} /><Input aria-label="New configuration value" placeholder="Value" value={entry.value} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'value', event.target.value)} /><Button type="button" variant="outline" disabled={running} onClick={() => setNewEntries((current) => current.filter((currentEntry) => currentEntry.id !== entry.id))}>Remove</Button></div>)}<Button className="w-fit" type="button" variant="outline" disabled={running} onClick={() => addEntry(file.id)}>Add key</Button></div>}</div>)}{generatedFiles.length > 0 && visibleFiles.length === 0 && <p className="text-sm text-muted-foreground">No configuration keys match “{search}”.</p>}{generatedFiles.length > 0 && <Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save configuration</Button>}</div>
 }
 
-function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'>; config: GenericConfig; running: boolean }) {
+function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'palworld' | '7d2d'>; config: GenericConfig; running: boolean }) {
   const update = useUpdateGenericConfig()
   const [port, setPort] = useState(String(config.port))
   const [queryPort, setQueryPort] = useState(config.query_port === null ? '' : String(config.query_port))
   const [adminPort, setAdminPort] = useState(config.admin_port === null ? '' : String(config.admin_port))
   const [autoRestart, setAutoRestart] = useState(config.auto_restart)
   const save = () => update.mutate({ id, request: { port: Number(port), query_port: queryPort ? Number(queryPort) : null, admin_port: adminPort ? Number(adminPort) : null, auto_restart: autoRestart } }, { onSuccess: () => toast.success('Odin runtime settings saved'), onError: (error) => toast.error(error.message) })
-  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : game === 'runescape-dragonwilds' ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === '7d2d' ? 'Local console port' : 'RCON port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form><AdvancedConfigSection id={id} game={game} running={running} />{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
+  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : 'Local console port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form><AdvancedConfigSection id={id} game={game} running={running} />{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
 }
 
 function TabPanel({ active, className, children }: { active: boolean; className?: string; children: ReactNode }) {
@@ -288,17 +286,16 @@ export function ManagedInstanceDetailPage() {
     return <Navigate replace to={`/instance/${detail.id}${tabPath ? `/${tabPath}` : ''}`} />
   }
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
-  const genericConfig = detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds' || detail.game === '7d2d' ? asGenericConfig(detail.config) : null
+  const genericConfig = detail.game === 'palworld' || detail.game === '7d2d' ? asGenericConfig(detail.config) : null
   const tabs = [
     { id: 'logs', label: 'Logs' },
     ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
-    ...(detail.game === 'vrising' ? [{ id: 'rcon', label: 'RCON' }] : []),
     ...(detail.game === '7d2d' ? [{ id: 'console', label: 'Console' }, { id: 'players', label: 'Players' }] : []),
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
     ...((detail.game === 'valheim' || detail.game === '7d2d') && detail.capabilities.mods ? [{ id: 'mods', label: 'Mods' }] : []),
     ...(detail.game === 'palworld' ? [{ id: 'admin', label: 'Admin' }] : []),
-    ...((detail.game === 'valheim' || detail.game === 'rust' || detail.game === 'vrising') && detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
+    ...((detail.game === 'valheim' || detail.game === 'rust') && detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
     { id: 'saves', label: 'Save files' },
     { id: 'resources', label: 'Resources' },
@@ -307,7 +304,7 @@ export function ManagedInstanceDetailPage() {
   ]
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
   const listsBasePath = `/instance/${id}/lists`
-  const defaultListTab = detail.game === 'vrising' || detail.game === 'valheim' ? 'admin' : 'owner'
+  const defaultListTab = detail.game === 'valheim' ? 'admin' : 'owner'
   if (!tab || (tab !== 'lists' && tab !== 'mods' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
     return <Navigate replace to={`/instance/${id}/logs`} />
   }
@@ -318,12 +315,11 @@ export function ManagedInstanceDetailPage() {
     <div className="relative isolate flex flex-col gap-6">
       <GameBackdrop game={detail.game} />
       <ManagedInstanceHeader instance={detail} />
-      {detail.execution === 'podman' && <RuntimeHealthCard id={detail.id} game={detail.game} running={detail.running} />}
+      <RuntimeHealthCard id={detail.id} game={detail.game} running={detail.running} />
       <RouteTabs label="Instance sections" tabs={tabs.map((item) => ({ label: item.label, to: `/instance/${id}/${item.id}` }))} />
       <div className="flex flex-col gap-2">
-        <TabPanel active={tab === 'logs'}><ManagedLogsTab id={detail.id} hasInstallLog={detail.execution === 'podman'} /></TabPanel>
+        <TabPanel active={tab === 'logs'}><ManagedLogsTab id={detail.id} /></TabPanel>
         {detail.game === 'rust' && <TabPanel active={tab === 'rcon'}><RustRconTab id={detail.id} running={detail.running} /></TabPanel>}
-        {detail.game === 'vrising' && <TabPanel active={tab === 'rcon'}><VRisingRconTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.game === '7d2d' && <TabPanel active={tab === 'console'}><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.game === '7d2d' && <TabPanel active={tab === 'players'}><SevenDaysPlayersTab id={detail.id} running={detail.running} /></TabPanel>}
         <TabPanel active={tab === 'errors'}>
@@ -344,7 +340,7 @@ export function ManagedInstanceDetailPage() {
             ? <ConfigTab id={detail.id} />
             : rustConfig
             ? <div className="flex flex-col gap-6"><RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={rustConfig} running={detail.running} /><AdvancedConfigSection id={detail.id} game={detail.game} running={detail.running} /></div>
-            : genericConfig && (detail.game === 'vrising' || detail.game === 'palworld' || detail.game === 'runescape-dragonwilds' || detail.game === '7d2d')
+            : genericConfig && (detail.game === 'palworld' || detail.game === '7d2d')
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
           <UptimeScheduleCard id={detail.id} />
@@ -356,9 +352,6 @@ export function ManagedInstanceDetailPage() {
         )}
         {detail.game === 'rust' && tab === 'lists' && (
           <TabPanel active={tab === 'lists'}><RustAccessListsTab id={detail.id} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabPanel>
-        )}
-        {detail.game === 'vrising' && tab === 'lists' && (
-          <TabPanel active={tab === 'lists'}><VRisingAccessListsTab id={detail.id} path={nestedPath} basePath={listsBasePath} /></TabPanel>
         )}
         {detail.game === 'valheim' && tab === 'lists' && (
           <TabPanel active={tab === 'lists'}><AccessListsTab id={detail.id} path={nestedPath} /></TabPanel>

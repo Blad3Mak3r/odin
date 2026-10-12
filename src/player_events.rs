@@ -2,11 +2,7 @@
 //! the dedicated server has no RCON or other admin protocol, so this is the
 //! only signal available for who's currently connected.
 //!
-//! Shared by `supervisor::server` (which parses lines as it tails them, for
-//! `odin run`'s own player self-monitoring) and `web::players`/
-//! `web::log_tail` (`odin serve`'s fallback for an instance with no
-//! reachable supervisor) — neither owns the other, so this pure logic lives
-//! at the crate root, the same way `log_poll` does for raw line-reading.
+//! Used by `web::players`/`web::log_tail` as they tail an instance's console.
 //!
 //! Current Valheim logs report the SteamID and character name on separate
 //! lines. `PlayerEventParser` correlates those lines so the later

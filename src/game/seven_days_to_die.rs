@@ -84,8 +84,8 @@ pub fn build_command_at(
 }
 
 /// Where the installed server's `serverconfig.xml` template lives for an
-/// instance. A containerized instance owns a private copy of the game; one
-/// that has not been migrated yet still uses the shared installation.
+/// instance: its private copy of the game once installed, otherwise a
+/// template placed in the host install directory.
 pub fn template_path(paths: &Paths, identity: &GameInstanceIdentity) -> PathBuf {
     let private = paths
         .container_runtime_dir(GameId::SevenDaysToDie, &identity.id)

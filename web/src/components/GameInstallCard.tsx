@@ -1,17 +1,8 @@
 import { Link } from 'react-router-dom'
 import { GameIcon } from '@/components/GameIcon'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { GAME_BANNERS } from '@/lib/games'
-import { useGameInstallStatus } from '@/lib/queries'
 import type { GameView } from '@/lib/types'
-
-function InstallBadge({ game }: { game: GameView }) {
-  const status = useGameInstallStatus(game.id)
-  if (!status.data) return null
-  if (!status.data.installed) return <Badge variant="outline">Not installed</Badge>
-  return <Badge variant={status.data.update_available ? 'secondary' : 'outline'}>{status.data.update_available ? 'Update available' : 'Up to date'}</Badge>
-}
 
 export function GameCard({ game, instances, running }: { game: GameView; instances: number; running: number }) {
   return (
@@ -28,7 +19,6 @@ export function GameCard({ game, instances, running }: { game: GameView; instanc
         <span className="tabular-nums text-muted-foreground">
           {instances} {instances === 1 ? 'instance' : 'instances'} · {running} running
         </span>
-        {!game.capabilities.container_runtime && <InstallBadge game={game} />}
       </CardContent>
     </Card>
   )

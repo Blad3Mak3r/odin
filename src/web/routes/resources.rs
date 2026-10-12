@@ -6,10 +6,10 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::Deserialize;
-use sysinfo::{Disks, Pid};
+use sysinfo::Disks;
 
 use crate::db::resource_samples::{self, ResourceSampleRow};
-use crate::instance::{Instance, lifecycle};
+use crate::instance::Instance;
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::runtime::{HostSnapshot, InstanceSnapshot, ResourceSample};
 use crate::web::state::AppState;
@@ -211,93 +211,15 @@ pub(crate) fn compute_instance_snapshot(
         &instance.state.name,
         instance.state.created_at,
     )?;
-    if crate::db::container_instances::is_podman(&state.db, &identity.id)? {
-        if !crate::podman::dispatch::is_running(
-            &state.paths,
-            &state.db,
-            crate::game::GameId::Valheim,
-            &instance.state.name,
-        )? {
-            return Ok(InstanceSnapshot::default());
-        }
-        return Ok(container_snapshot(
-            &crate::podman::lifecycle::control_socket(&state.paths, &identity),
-        ));
-    }
-    // Ping the live supervisor first — it's a more direct signal than the
-    // sysinfo/pid-fingerprint check (no reliance on a periodic full-process
-    // refresh), and correctly reports "running" even in the moment right
-    // after a start/restart before this tick's own sysinfo refresh has
-    // necessarily seen the new pid. Fall back to the pid check for an
-    // instance with no reachable supervisor (started by a pre-upgrade
-    // binary, or whose supervisor has crashed but Valheim itself survived).
-    let supervisor_ping = crate::supervisor::client::ping_blocking(
+    if !crate::podman::dispatch::is_running(
         &state.paths,
+        &state.db,
         crate::game::GameId::Valheim,
         &instance.state.name,
-        SUPERVISOR_PING_TIMEOUT,
-    );
-    let running = match &supervisor_ping {
-        Ok(_) => true,
-        Err(_) => lifecycle::is_running(instance)?,
-    };
-    if !running {
+    )? {
         return Ok(InstanceSnapshot::default());
     }
-
-    // Whether Valheim itself is done loading, not just "the process/socket
-    // exists" — only a reachable supervisor can tell us this (it's the one
-    // parsing `console.log` for the readiness marker). No host-side
-    // fallback exists for it, unlike CPU/memory, so an unreachable
-    // supervisor just falls back to treating "running" as "ready" — the
-    // same experience the dashboard already had before this distinction
-    // existed.
-    let ready = match &supervisor_ping {
-        Ok(crate::supervisor::protocol::Response::Pong { ready, .. }) => *ready,
-        _ => running,
-    };
-
-    // A reachable supervisor already tracks its own child's resource usage
-    // (a background refresh loop scoped to just that one process tree, no
-    // need to guess from odin serve's own host-wide process table) — prefer
-    // its answer. `Response::Error` here means either an old supervisor that
-    // doesn't understand `Stats`, or a fresh one that hasn't completed its
-    // first refresh yet; either way, fall through to the host-side walk.
-    if supervisor_ping.is_ok()
-        && let Ok(crate::supervisor::protocol::Response::Stats {
-            cpu_percent,
-            memory_bytes,
-        }) = crate::supervisor::client::stats_blocking(
-            &state.paths,
-            crate::game::GameId::Valheim,
-            &instance.state.name,
-            SUPERVISOR_PING_TIMEOUT,
-        )
-    {
-        return Ok(InstanceSnapshot {
-            running: true,
-            ready,
-            cpu_percent,
-            memory_bytes,
-        });
-    }
-
-    let root_pids: Vec<u32> = instance.state.pid.into_iter().collect();
-
-    let system = state.resources.lock().expect("resources lock poisoned");
-    let mut cpu_percent = 0.0;
-    let mut memory_bytes = 0;
-    for pid in crate::instance::process::descendant_pids(&system, &root_pids) {
-        if let Some(process) = system.process(Pid::from_u32(pid)) {
-            cpu_percent += process.cpu_usage();
-            memory_bytes += process.memory();
-        }
-    }
-
-    Ok(InstanceSnapshot {
-        running: true,
-        ready,
-        cpu_percent,
-        memory_bytes,
-    })
+    Ok(container_snapshot(
+        &crate::podman::lifecycle::control_socket(&state.paths, &identity),
+    ))
 }

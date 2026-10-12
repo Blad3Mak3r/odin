@@ -8,7 +8,7 @@ use anyhow::Result;
 use crate::db::Db;
 use crate::db::game_instances::{self, GameInstanceIdentity};
 use crate::game::GameId;
-use crate::instance::{Instance, lifecycle as direct};
+use crate::instance::Instance;
 use crate::paths::{self, Paths};
 
 use super::lifecycle::{self, ContainerGame, StopReason};
@@ -62,18 +62,6 @@ impl ContainerGame for Valheim {
         // rewriting an operator's mod state.
         vec![bind(&paths.mods_dir(), &paths.mods_dir())]
     }
-
-    fn running_directly(instance: &Instance) -> Result<bool> {
-        direct::is_running(instance)
-    }
-
-    async fn stop_directly(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-        direct::stop(paths, db, &instance.state.name).await
-    }
-}
-
-pub fn mark_new_instance(db: &Db, instance: &Instance) -> Result<()> {
-    lifecycle::mark_new_instance::<Valheim>(db, instance)
 }
 
 pub fn is_running(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
@@ -95,9 +83,7 @@ pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::container_instances;
     use crate::podman::dispatch;
-    use crate::podman::lifecycle::require_migrated;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 
@@ -164,7 +150,6 @@ mod tests {
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
         let identity = Valheim::identity(&db, &instance).unwrap();
-        container_instances::mark_podman(&db, &identity.id).unwrap();
         let saves = paths::instance_saves_dir(&instance.dir);
         std::fs::create_dir_all(&saves).unwrap();
         let save = saves.join("world.db");
@@ -234,7 +219,6 @@ mod tests {
         let db = crate::db::Db::open(&paths).unwrap();
         let instance = Instance::create(&paths, &db, "valheim").unwrap();
         let identity = Valheim::identity(&db, &instance).unwrap();
-        container_instances::mark_podman(&db, &identity.id).unwrap();
         let runtime = paths.container_runtime_dir(GameId::Valheim, &identity.id);
         std::fs::create_dir_all(runtime.join("valheim")).unwrap();
         std::fs::write(runtime.join("valheim/payload"), "game").unwrap();
@@ -247,30 +231,6 @@ mod tests {
         assert!(server.join().unwrap().starts_with("DELETE "));
         assert!(!runtime.exists());
         assert!(saves.join("world.db").is_file());
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn migration_gate_rejects_an_unmigrated_instance() {
-        let root = std::env::temp_dir().join(format!(
-            "odin-runtime-repair-unmigrated-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let paths = Paths {
-            config_dir: root.clone(),
-            data_dir: root.clone(),
-        };
-        let db = crate::db::Db::open(&paths).unwrap();
-        let instance = Instance::create(&paths, &db, "valheim").unwrap();
-        let identity = Valheim::identity(&db, &instance).unwrap();
-
-        let error = require_migrated(&db, &identity).unwrap_err();
-
-        assert!(
-            error.to_string().contains("has not been migrated"),
-            "unexpected migration error: {error:#}"
-        );
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -318,9 +278,7 @@ mod tests {
         });
         write_podman_config(&paths, podman_socket);
         let db = crate::db::Db::open(&paths).unwrap();
-        let instance = Instance::create(&paths, &db, "valheim").unwrap();
-        let identity = Valheim::identity(&db, &instance).unwrap();
-        container_instances::mark_podman(&db, &identity.id).unwrap();
+        Instance::create(&paths, &db, "valheim").unwrap();
 
         let error = dispatch::repair(&paths, &db, GameId::Valheim, "valheim")
             .await

@@ -126,8 +126,8 @@ mod tests {
         insert(
             &db,
             "job-1",
-            "steamcmd_install",
-            r#"{"kind":"steamcmd_install"}"#,
+            "runtime_update",
+            r#"{"kind":"runtime_update"}"#,
             "queued",
             r#"{"status":"queued"}"#,
             Utc::now(),
@@ -147,8 +147,8 @@ mod tests {
         insert(
             &db,
             "job-1",
-            "steamcmd_install",
-            r#"{"kind":"steamcmd_install"}"#,
+            "runtime_update",
+            r#"{"kind":"runtime_update"}"#,
             "queued",
             r#"{"status":"queued"}"#,
             Utc::now(),
@@ -178,8 +178,8 @@ mod tests {
             insert(
                 &db,
                 &format!("job-{i}"),
-                "steamcmd_install",
-                r#"{"kind":"steamcmd_install"}"#,
+                "runtime_update",
+                r#"{"kind":"runtime_update"}"#,
                 "queued",
                 r#"{"status":"queued"}"#,
                 Utc::now() + chrono::Duration::seconds(i),
@@ -234,8 +234,8 @@ mod tests {
             insert(
                 &db,
                 id,
-                "steamcmd_install",
-                r#"{"kind":"steamcmd_install"}"#,
+                "runtime_update",
+                r#"{"kind":"runtime_update"}"#,
                 status,
                 payload,
                 started_at,

@@ -19,12 +19,12 @@ processes.
 
 Odin is a self-hosted Linux service and embedded web dashboard for managing
 the lifecycle of dedicated game servers from one Rust binary. It installs and
-updates supported servers through SteamCMD, runs isolated named instances,
-supervises their processes, exposes each game's configuration, and provides
+updates supported servers through SteamCMD, runs each isolated named instance
+in its own Podman container, exposes each game's configuration, and provides
 backups plus the game-specific capabilities Odin supports.
 
-The currently compiled game drivers are Valheim, Rust, V Rising, Palworld,
-RuneScape: Dragonwilds, and 7 Days to Die. Odin is not a general-purpose
+The currently compiled game drivers are Valheim, Rust, Palworld, and
+7 Days to Die. Odin is not a general-purpose
 plugin host: supported games ship as compiled drivers with explicit launch,
 storage, and configuration contracts.
 
@@ -51,11 +51,11 @@ capabilities are built in the web API and dashboard.
 - Servers are managed as independent instances, scoped by both game and
   name. Instances can share a display name across different games, but never
   share save data, logs, runtime paths, identity, or reserved ports.
-- Odin shares immutable install files per game where the game's runtime
-  allows it, while deriving instance-owned data, logs, runtime directories,
-  and process identity. Each instance is directly supervised by Odin.
-- Running state is derived from the operating system process and its start
-  time, not from a stored boolean. The dashboard also provides live logs and
+- Each instance runs in its own Podman container with a private copy of the
+  game, while Odin derives instance-owned data, logs, runtime directories, and
+  process identity.
+- Running state is derived from the instance's container, not from a stored
+  boolean. The dashboard also provides live logs and
   host/per-instance resource information.
 - Odin stores its metadata, lifecycle records, schedules, and process
   arguments in SQLite. Game-owned settings remain in each game's documented
@@ -74,10 +74,8 @@ capabilities are built in the web API and dashboard.
     readiness.
   - Rust supports access lists and RCON-backed administration, but not Odin
     mod management, player views, or readiness detection.
-  - V Rising supports access lists and RCON-backed administration.
   - Palworld supports player and access-list operations through its local,
     authenticated REST API, plus readiness detection.
-  - RuneScape: Dragonwilds supports access-list operations.
   - 7 Days to Die supports player views, mod management, and readiness
     detection.
 - Game configuration follows the native contract for each server. Odin keeps
@@ -91,8 +89,7 @@ capabilities are built in the web API and dashboard.
 - Valheim's shared BepInEx and Thunderstore store is deduplicated globally.
   This mod model is specific to Valheim; mod support is not presumed for the
   other games.
-- Linux only; there is no Windows or macOS host support. V Rising runs its
-  Windows dedicated server through an Odin-managed Proton-GE runtime.
+- Linux only; there is no Windows or macOS host support.
 - Odin's dashboard assets are embedded in the binary. Node.js is needed to
   build those assets, not to run the resulting service.
 

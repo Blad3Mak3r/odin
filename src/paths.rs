@@ -66,35 +66,21 @@ impl Paths {
         self.data_dir.join("steamcmd")
     }
 
-    pub fn shared_install_dir(&self) -> PathBuf {
-        self.data_dir.join("install").join("valheim")
-    }
-
-    /// New games use a namespaced layout. Valheim deliberately keeps its
-    /// legacy locations so upgrades never move player data.
+    /// Host-side location of a game's installation files. Servers install
+    /// into their container's private runtime volume, so this only holds what
+    /// Odin itself places there (for example a template provided before the
+    /// first start).
     pub fn game_install_dir(&self, game: GameId) -> PathBuf {
-        match game {
-            GameId::Valheim => self.shared_install_dir(),
-            GameId::Rust
-            | GameId::VRising
-            | GameId::Palworld
-            | GameId::RunescapeDragonwilds
-            | GameId::SevenDaysToDie => self
-                .data_dir
-                .join("games")
-                .join(game.as_str())
-                .join("install"),
-        }
+        self.data_dir
+            .join("games")
+            .join(game.as_str())
+            .join("install")
     }
 
     pub fn game_instance_dir(&self, game: GameId, name: &str) -> PathBuf {
         match game {
             GameId::Valheim => self.instance_dir(name),
-            GameId::Rust
-            | GameId::VRising
-            | GameId::Palworld
-            | GameId::RunescapeDragonwilds
-            | GameId::SevenDaysToDie => self
+            GameId::Rust | GameId::Palworld | GameId::SevenDaysToDie => self
                 .data_dir
                 .join("games")
                 .join(game.as_str())
@@ -196,8 +182,4 @@ pub fn instance_bepinex_dir(instance_dir: &std::path::Path) -> PathBuf {
 
 pub fn instance_bepinex_config_dir(instance_dir: &std::path::Path) -> PathBuf {
     instance_bepinex_dir(instance_dir).join("config")
-}
-
-pub fn instance_server_symlink(instance_dir: &std::path::Path) -> PathBuf {
-    instance_dir.join("server")
 }

@@ -63,14 +63,6 @@ impl ContainerGame for SevenDaysToDie {
     fn extra_mounts(_paths: &Paths) -> Vec<Mount> {
         Vec::new()
     }
-
-    fn running_directly(instance: &GenericGameInstance) -> Result<bool> {
-        Ok(instance.is_running_directly())
-    }
-
-    async fn stop_directly(paths: &Paths, db: &Db, instance: &GenericGameInstance) -> Result<()> {
-        crate::game::generic::stop(paths, db, GameId::SevenDaysToDie, instance.name()).await
-    }
 }
 
 #[cfg(test)]
@@ -78,7 +70,7 @@ mod tests {
     use super::*;
     use crate::db::container_instances;
     use crate::podman::dispatch;
-    use crate::podman::lifecycle::{self, StopReason};
+    use crate::podman::lifecycle::StopReason;
     use crate::podman::test_support::{fake_podman, fake_runtime, temp_paths, write_podman_config};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
@@ -110,7 +102,6 @@ mod tests {
         let db = Db::open(&paths).unwrap();
         let instance =
             game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
-        dispatch::mark_new_instance(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
         // An operator's native document keeps its own values and keys.
         let config = paths
             .game_instance_dir(GameId::SevenDaysToDie, "undead")
@@ -177,22 +168,20 @@ mod tests {
     }
 
     #[test]
-    fn migration_prepares_the_layout_before_marking_the_instance() {
-        let paths = temp_paths("7d2d-migrate");
+    fn preparing_the_layout_writes_the_runtime_spec_and_keeps_existing_data() {
+        let paths = temp_paths("7d2d-layout");
         let db = Db::open(&paths).unwrap();
         let instance =
             game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
-        assert!(!lifecycle::is_migrated::<SevenDaysToDie>(&db, &instance).unwrap());
 
-        dispatch::migrate(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
-        dispatch::migrate(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+        dispatch::sync_spec(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+        dispatch::sync_spec(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
 
-        assert!(lifecycle::is_migrated::<SevenDaysToDie>(&db, &instance).unwrap());
         assert!(
             super::super::runtime_spec_path(&paths, GameId::SevenDaysToDie, &instance.identity.id)
                 .is_file()
         );
-        // Migration never creates the game's own document; the container
+        // Preparing the layout never creates the game's own document; the container
         // seeds it from its private install on first start.
         assert!(
             !paths
@@ -200,27 +189,6 @@ mod tests {
                 .join("config/serverconfig.xml")
                 .exists()
         );
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn migration_refuses_a_server_still_running_on_the_host() {
-        let paths = temp_paths("7d2d-migrate-running");
-        let db = Db::open(&paths).unwrap();
-        let instance =
-            game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
-        game_instances::set_generic_pid(
-            &db,
-            GameId::SevenDaysToDie,
-            "undead",
-            std::process::id(),
-            crate::instance::process::start_time_of(std::process::id()).unwrap(),
-            chrono::Utc::now(),
-        )
-        .unwrap();
-
-        assert!(dispatch::migrate(&paths, &db, GameId::SevenDaysToDie, "undead").is_err());
-        assert!(!lifecycle::is_migrated::<SevenDaysToDie>(&db, &instance).unwrap());
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
@@ -259,7 +227,6 @@ mod tests {
         let db = Db::open(&paths).unwrap();
         let instance =
             game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
-        dispatch::mark_new_instance(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
         let control = control_socket(&paths, &instance);
         std::fs::create_dir_all(control.parent().unwrap()).unwrap();
         let runtime_listener = UnixListener::bind(&control).unwrap();

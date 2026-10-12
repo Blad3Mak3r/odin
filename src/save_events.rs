@@ -1,8 +1,5 @@
-//! Recognizes Valheim's own "world saved" `console.log` line — shared by
-//! `supervisor::server` (parses lines as it tails them, for `odin run`'s
-//! own self-monitoring) and `web::log_tail` (`odin serve`'s fallback for an
-//! instance with no reachable supervisor), same reasoning as
-//! `crate::player_events`.
+//! Recognizes Valheim's own "world saved" `console.log` line, used by
+//! `web::log_tail` as it tails an instance's console.
 
 /// Best-effort, like `player_events::PlayerEventParser` — not verified against a
 /// real `console.log`. If it doesn't match a real server's output, this is

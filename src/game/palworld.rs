@@ -84,8 +84,8 @@ pub fn build_command_at(
 }
 
 /// Where the installed server's `DefaultPalWorldSettings.ini` template lives
-/// for an instance. A containerized instance owns a private copy of the game;
-/// one that has not been migrated yet still uses the shared installation.
+/// for an instance: its private copy of the game once installed, otherwise a
+/// template placed in the host install directory.
 pub fn template_path(paths: &Paths, identity: &GameInstanceIdentity) -> PathBuf {
     let private = paths
         .container_runtime_dir(GameId::Palworld, &identity.id)
@@ -173,12 +173,6 @@ impl RestApi {
 
 fn is_enabled(value: &str) -> bool {
     matches!(value, "True" | "true" | "1")
-}
-
-pub fn rest_enabled(paths: &Paths, instance: &GenericGameInstance) -> Result<bool> {
-    crate::game::config_documents::value(paths, instance, "RESTAPIEnabled")?
-        .map(|value| is_enabled(&value))
-        .context("Palworld configuration has not been generated yet")
 }
 
 fn request(
@@ -337,10 +331,6 @@ mod tests {
                 admin_port: None,
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let dir = std::env::temp_dir().join(format!("odin-palworld-rest-{}", uuid::Uuid::new_v4()));
         let paths = crate::paths::Paths {

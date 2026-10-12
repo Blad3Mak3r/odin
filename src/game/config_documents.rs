@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::db::game_instances::{GenericGameInstance, RustInstance};
 use crate::game::{GameId, SEVEN_DAYS_TEMPLATE_BASELINE_FILE};
@@ -84,8 +83,6 @@ pub enum SevenDaysTemplateChangeKind {
 #[derive(Clone, Copy)]
 enum Format {
     XmlProperties,
-    Json,
-    Ini,
     PalworldOptions,
     RustCfg,
 }
@@ -99,9 +96,7 @@ struct FileSpec {
 }
 
 const SEVEN_DAYS_MANAGED: &[&str] = &["ServerPort", "UserDataFolder", "TelnetPort"];
-const VRISING_MANAGED: &[&str] = &["Port", "QueryPort", "Rcon.Port"];
 const PALWORLD_MANAGED: &[&str] = &[];
-const DRAGONWILDS_MANAGED: &[&str] = &[];
 const RUST_MANAGED: &[&str] = &[
     "server.port",
     "server.queryport",
@@ -119,31 +114,11 @@ fn specs(game: GameId) -> &'static [FileSpec] {
             format: Format::XmlProperties,
             managed: SEVEN_DAYS_MANAGED,
         }],
-        GameId::VRising => &[
-            FileSpec {
-                id: "server-host",
-                path: "data/Settings/ServerHostSettings.json",
-                format: Format::Json,
-                managed: VRISING_MANAGED,
-            },
-            FileSpec {
-                id: "server-game",
-                path: "data/Settings/ServerGameSettings.json",
-                format: Format::Json,
-                managed: &[],
-            },
-        ],
         GameId::Palworld => &[FileSpec {
             id: "server",
             path: crate::game::palworld::CONFIG_FILE,
             format: Format::PalworldOptions,
             managed: PALWORLD_MANAGED,
-        }],
-        GameId::RunescapeDragonwilds => &[FileSpec {
-            id: "server",
-            path: "runtime/RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini",
-            format: Format::Ini,
-            managed: DRAGONWILDS_MANAGED,
         }],
         GameId::Valheim | GameId::Rust => &[],
     }
@@ -398,19 +373,6 @@ fn seven_days_config_path(paths: &Paths, instance: &GenericGameInstance) -> Path
     document_path(paths, instance, specs(GameId::SevenDaysToDie)[0])
 }
 
-const DRAGONWILDS_TEMPLATE: &str = r#"[SectionsToSave]
-bCanSaveAllSections=true
-
-[/Script/Dominion.DedicatedServerSettings]
-AdminPassword=
-WorldPassword=
-ServerGuid=
-ServerName=
-DefaultWorldName=
-AdministratorList=()
-OwnerId=
-"#;
-
 /// Creates only missing native configuration documents. Existing operator
 /// files are never replaced.
 pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
@@ -419,32 +381,10 @@ pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
             &seven_days_template_path(paths, instance),
             &instance_root(paths, instance),
         ),
-        GameId::VRising => {
-            for spec in specs(GameId::VRising) {
-                let source = paths
-                    .game_install_dir(GameId::VRising)
-                    .join("VRisingServer_Data/StreamingAssets/Settings")
-                    .join(
-                        Path::new(spec.path)
-                            .file_name()
-                            .context("V Rising template has no filename")?,
-                    );
-                copy_template_if_missing(&source, &document_path(paths, instance, *spec))?;
-            }
-            Ok(())
-        }
         GameId::Palworld => copy_template_if_missing(
             &crate::game::palworld::template_path(paths, &instance.identity),
             &document_path(paths, instance, specs(GameId::Palworld)[0]),
         ),
-        GameId::RunescapeDragonwilds => {
-            migrate_dragonwilds_legacy(paths, instance)?;
-            let target = document_path(paths, instance, specs(GameId::RunescapeDragonwilds)[0]);
-            if !target.exists() {
-                create_atomically(&target, DRAGONWILDS_TEMPLATE)?;
-            }
-            Ok(())
-        }
         GameId::Valheim | GameId::Rust => bail!("this game has no native configuration template"),
     }
 }
@@ -461,50 +401,6 @@ pub(crate) fn copy_template_if_missing(source: &Path, target: &Path) -> Result<(
     let contents = fs::read_to_string(source)
         .with_context(|| format!("failed to read {}", source.display()))?;
     create_atomically(target, &contents)
-}
-
-pub fn migrate_dragonwilds_legacy(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    if instance.identity.game != GameId::RunescapeDragonwilds {
-        return Ok(());
-    }
-    let active = document_path(paths, instance, specs(GameId::RunescapeDragonwilds)[0]);
-    let legacy = instance_root(paths, instance)
-        .join("runtime/RSDragonwilds/Saved/Config/Linux/DedicatedServer.ini");
-    if active.exists() || !legacy.exists() {
-        return Ok(());
-    }
-    fs::create_dir_all(
-        active
-            .parent()
-            .context("Dragonwilds config has no parent")?,
-    )?;
-    fs::rename(&legacy, &active).with_context(|| {
-        format!(
-            "failed to migrate {} to {}",
-            legacy.display(),
-            active.display()
-        )
-    })
-}
-
-pub fn validate_dragonwilds(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    let spec = specs(GameId::RunescapeDragonwilds)[0];
-    let path = document_path(paths, instance, spec);
-    let contents = fs::read_to_string(&path)
-        .with_context(|| format!("Dragonwilds configuration is missing at {}", path.display()))?;
-    let entries: HashMap<_, _> = parse(spec.format, &contents)?
-        .into_iter()
-        .map(|entry| (entry.label, entry.value))
-        .collect();
-    for key in ["OwnerId", "ServerName", "DefaultWorldName", "AdminPassword"] {
-        anyhow::ensure!(
-            entries
-                .get(key)
-                .is_some_and(|value| !value.trim().is_empty()),
-            "Dragonwilds {key} must be configured before starting"
-        );
-    }
-    Ok(())
 }
 
 /// Compares the installed 7D2D template to the immutable template captured
@@ -786,8 +682,6 @@ fn replace_or_create_atomically(path: &Path, contents: &str) -> Result<()> {
 fn format_name(format: Format) -> &'static str {
     match format {
         Format::XmlProperties => "xml-properties",
-        Format::Json => "json",
-        Format::Ini => "ini",
         Format::PalworldOptions => "unreal-ini",
         Format::RustCfg => "rust-cfg",
     }
@@ -866,14 +760,6 @@ fn parse(format: Format, contents: &str) -> Result<Vec<ParsedEntry>> {
                 })
                 .collect())
         }
-        Format::Json => {
-            let value: Value =
-                serde_json::from_str(contents).context("invalid JSON configuration")?;
-            let mut entries = Vec::new();
-            flatten_json("", &value, &mut entries);
-            Ok(entries)
-        }
-        Format::Ini => Ok(parse_ini(contents)),
         Format::PalworldOptions => parse_palworld(contents),
         Format::RustCfg => Ok(parse_rust_cfg(contents)),
     }
@@ -897,74 +783,6 @@ fn parse_rust_cfg(contents: &str) -> Vec<ParsedEntry> {
             })
         })
         .collect()
-}
-
-fn flatten_json(prefix: &str, value: &Value, entries: &mut Vec<ParsedEntry>) {
-    match value {
-        Value::Object(values) => {
-            for (key, value) in values {
-                let path = if prefix.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{prefix}.{key}")
-                };
-                flatten_json(&path, value, entries);
-            }
-        }
-        Value::Array(_) => push_json_entry(entries, prefix, value.to_string()),
-        Value::String(value) => push_json_entry(entries, prefix, value.clone()),
-        _ => push_json_entry(entries, prefix, value.to_string()),
-    }
-}
-
-fn push_json_entry(entries: &mut Vec<ParsedEntry>, key: &str, value: String) {
-    let (section_id, label) = key.rsplit_once('.').unwrap_or(("root", key));
-    entries.push(ParsedEntry {
-        key: key.into(),
-        label: label.into(),
-        section_id: section_id.into(),
-        section_label: if section_id == "root" {
-            "General".into()
-        } else {
-            section_id.into()
-        },
-        value,
-    });
-}
-
-fn parse_ini(contents: &str) -> Vec<ParsedEntry> {
-    let mut section = String::new();
-    let mut entries = Vec::new();
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with('[') && line.ends_with(']') {
-            section = line.into();
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            let label = key.trim();
-            entries.push(ParsedEntry {
-                key: if section.is_empty() {
-                    label.into()
-                } else {
-                    format!("{section}.{label}")
-                },
-                label: label.into(),
-                section_id: if section.is_empty() {
-                    "root".into()
-                } else {
-                    section.clone()
-                },
-                section_label: if section.is_empty() {
-                    "General".into()
-                } else {
-                    section.clone()
-                },
-                value: value.trim().into(),
-            });
-        }
-    }
-    entries
 }
 
 fn parse_palworld(contents: &str) -> Result<Vec<ParsedEntry>> {
@@ -1134,17 +952,6 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
         return Ok(());
     };
     let values: Vec<(&str, String)> = match instance.identity.game {
-        GameId::VRising => vec![
-            ("Port", instance.config.port.to_string()),
-            (
-                "QueryPort",
-                instance.config.query_port.unwrap_or_default().to_string(),
-            ),
-            (
-                "Rcon.Port",
-                instance.config.admin_port.unwrap_or_default().to_string(),
-            ),
-        ],
         GameId::Palworld => Vec::new(),
         GameId::SevenDaysToDie => vec![
             ("ServerPort", instance.config.port.to_string()),
@@ -1153,7 +960,7 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
                 instance.config.admin_port.unwrap_or_default().to_string(),
             ),
         ],
-        GameId::RunescapeDragonwilds | GameId::Valheim | GameId::Rust => Vec::new(),
+        GameId::Valheim | GameId::Rust => Vec::new(),
     };
     let existing = parse(spec.format, &contents)?
         .into_iter()
@@ -1197,8 +1004,6 @@ pub fn remove_legacy_control_panel(paths: &Paths, instance: &GenericGameInstance
 fn set(format: Format, contents: &str, key: &str, value: &str) -> Result<String> {
     match format {
         Format::XmlProperties => set_xml(contents, key, value),
-        Format::Json => set_json(contents, key, value),
-        Format::Ini => set_ini(contents, key, value),
         Format::PalworldOptions => set_palworld(contents, key, value),
         Format::RustCfg => set_rust_cfg(contents, key, value),
     }
@@ -1352,75 +1157,6 @@ fn xml_attribute(tag: &str, name: &str) -> Option<String> {
         .map(|value| value.as_str().into())
 }
 
-fn set_json(contents: &str, key: &str, value: &str) -> Result<String> {
-    let mut document: Value = serde_json::from_str(contents)?;
-    let mut target = &mut document;
-    let mut parts = key.split('.').peekable();
-    while let Some(part) = parts.next() {
-        if parts.peek().is_none() {
-            let object = target
-                .as_object_mut()
-                .context("JSON key is not an object property")?;
-            let old = object.get(part).context("JSON key does not exist")?;
-            object.insert(part.into(), parse_scalar(value, old));
-        } else {
-            target = target.get_mut(part).context("JSON key does not exist")?;
-        }
-    }
-    Ok(format!("{}\n", serde_json::to_string_pretty(&document)?))
-}
-
-fn parse_scalar(value: &str, old: &Value) -> Value {
-    match old {
-        Value::Bool(_) => Value::Bool(matches!(value, "true" | "True" | "1")),
-        Value::Number(number) if number.is_i64() => value
-            .parse::<i64>()
-            .map(Into::into)
-            .unwrap_or_else(|_| Value::String(value.into())),
-        Value::Number(_) => value
-            .parse::<f64>()
-            .ok()
-            .and_then(serde_json::Number::from_f64)
-            .map(Value::Number)
-            .unwrap_or_else(|| Value::String(value.into())),
-        Value::Null => serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into())),
-        _ => Value::String(value.into()),
-    }
-}
-
-fn set_ini(contents: &str, key: &str, value: &str) -> Result<String> {
-    let (wanted_section, bare) = key.rsplit_once('.').unwrap_or(("", key));
-    let mut section = "";
-    let mut found = false;
-    let mut output = String::with_capacity(contents.len());
-    for raw_line in contents.split_inclusive('\n') {
-        let line = raw_line.trim_end_matches(['\r', '\n']);
-        let ending = &raw_line[line.len()..];
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            section = trimmed;
-            output.push_str(raw_line);
-            continue;
-        }
-        if section == wanted_section
-            && let Some((existing, _)) = line.split_once('=')
-            && existing.trim() == bare
-        {
-            let prefix = &line[..line.find('=').expect("split_once found equals") + 1];
-            output.push_str(prefix);
-            output.push_str(value);
-            output.push_str(ending);
-            found = true;
-            continue;
-        }
-        output.push_str(raw_line);
-    }
-    if !found {
-        bail!("INI key {key} does not exist");
-    }
-    Ok(output)
-}
-
 fn set_palworld(contents: &str, key: &str, value: &str) -> Result<String> {
     let Some((_, settings)) = palworld_option_settings(contents)? else {
         bail!("Palworld configuration has no OptionSettings tuple");
@@ -1487,10 +1223,6 @@ mod tests {
                 admin_port: Some(26903),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         }
     }
 
@@ -1504,10 +1236,6 @@ mod tests {
                 tags: Vec::new(),
             },
             config: crate::db::game_instances::default_generic_config(game, "server"),
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         }
     }
 
@@ -1527,10 +1255,6 @@ mod tests {
                 rcon_password: "secret".into(),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         }
     }
 
@@ -1633,22 +1357,6 @@ mod tests {
         );
     }
     #[test]
-    fn json_round_trip_preserves_unknown_properties() {
-        let output = set_json(r#"{"a": {"b": 1}, "other": true}"#, "a.b", "2").unwrap();
-        let parsed: Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed["a"]["b"], 2);
-        assert_eq!(parsed["other"], true);
-    }
-
-    #[test]
-    fn ini_round_trip_preserves_other_sections() {
-        let input = "[Server]\nKnown=old\n[Other]\nKnown=other\n";
-        let output = set_ini(input, "[Server].Known", "new").unwrap();
-        assert!(output.contains("Known=new"));
-        assert!(output.contains("[Other]\nKnown=other"));
-    }
-
-    #[test]
     fn palworld_parser_keeps_commas_inside_quoted_values() {
         let entries =
             parse_palworld("OptionSettings=(Known=1,Message=\"one, two\",Other=True)").unwrap();
@@ -1694,43 +1402,6 @@ mod tests {
 
     #[test]
     fn native_document_structure_becomes_dashboard_sections() {
-        let ini = sections(Format::Ini, "[Server]\nName=Odin\n[Rules]\nPvP=true\n", &[]).unwrap();
-        assert_eq!(ini.len(), 2);
-        assert_eq!(ini[0].label, "[Server]");
-        assert_eq!(ini[0].entries[0].label, "Name");
-        assert_eq!(ini[1].entries[0].key, "[Rules].PvP");
-
-        let json = sections(
-            Format::Json,
-            r#"{"Rcon":{"Enabled":true,"Port":25575}}"#,
-            &[],
-        )
-        .unwrap();
-        assert_eq!(json[0].label, "Rcon");
-        assert_eq!(json[0].entries[0].key, "Rcon.Enabled");
-        let vrising = sections(
-            Format::Json,
-            r#"{"Rcon":{"BindAddress":"127.0.0.1","Port":25575}}"#,
-            VRISING_MANAGED,
-        )
-        .unwrap();
-        assert!(
-            !vrising[0]
-                .entries
-                .iter()
-                .find(|entry| entry.key == "Rcon.BindAddress")
-                .unwrap()
-                .managed
-        );
-        assert!(
-            vrising[0]
-                .entries
-                .iter()
-                .find(|entry| entry.key == "Rcon.Port")
-                .unwrap()
-                .managed
-        );
-
         let xml = sections(
             Format::XmlProperties,
             "<ServerSettings><property name=\"ServerName\" value=\"Odin\"/></ServerSettings>",
@@ -1739,90 +1410,6 @@ mod tests {
         .unwrap();
         assert_eq!(xml[0].label, "ServerSettings");
         assert_eq!(xml[0].entries[0].label, "ServerName");
-    }
-
-    #[test]
-    fn vrising_initialization_copies_both_native_templates_without_overwriting() {
-        let directory =
-            std::env::temp_dir().join(format!("odin-vrising-config-init-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: directory.clone(),
-            config_dir: directory,
-        };
-        let templates = paths
-            .game_install_dir(GameId::VRising)
-            .join("VRisingServer_Data/StreamingAssets/Settings");
-        fs::create_dir_all(&templates).unwrap();
-        fs::write(
-            templates.join("ServerHostSettings.json"),
-            "{\"Name\":\"host\"}",
-        )
-        .unwrap();
-        fs::write(
-            templates.join("ServerGameSettings.json"),
-            "{\"Mode\":\"game\"}",
-        )
-        .unwrap();
-        let instance = generic_instance(GameId::VRising);
-
-        initialize(&paths, &instance).unwrap();
-        let files = list(&paths, &instance).unwrap();
-        assert_eq!(files.len(), 2);
-        assert!(files.iter().all(|file| file.exists));
-        let host = document_path(&paths, &instance, specs(GameId::VRising)[0]);
-        fs::write(&host, "{\"Name\":\"operator\"}").unwrap();
-        initialize(&paths, &instance).unwrap();
-        assert_eq!(fs::read_to_string(host).unwrap(), "{\"Name\":\"operator\"}");
-        fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn dragonwilds_moves_only_the_legacy_linux_configuration() {
-        let directory =
-            std::env::temp_dir().join(format!("odin-dragon-config-move-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: directory.clone(),
-            config_dir: directory,
-        };
-        let instance = generic_instance(GameId::RunescapeDragonwilds);
-        let legacy = instance_root(&paths, &instance)
-            .join("runtime/RSDragonwilds/Saved/Config/Linux/DedicatedServer.ini");
-        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        fs::write(&legacy, "legacy").unwrap();
-
-        initialize(&paths, &instance).unwrap();
-        let active = document_path(&paths, &instance, specs(GameId::RunescapeDragonwilds)[0]);
-        assert_eq!(fs::read_to_string(&active).unwrap(), "legacy");
-        assert!(!legacy.exists());
-        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        fs::write(&legacy, "later legacy").unwrap();
-        initialize(&paths, &instance).unwrap();
-        assert_eq!(fs::read_to_string(&active).unwrap(), "legacy");
-        assert_eq!(fs::read_to_string(&legacy).unwrap(), "later legacy");
-        fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn dragonwilds_requires_identity_and_administration_settings() {
-        let directory = std::env::temp_dir().join(format!(
-            "odin-dragon-config-validation-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let paths = Paths {
-            data_dir: directory.clone(),
-            config_dir: directory,
-        };
-        let instance = generic_instance(GameId::RunescapeDragonwilds);
-        initialize(&paths, &instance).unwrap();
-        assert!(validate_dragonwilds(&paths, &instance).is_err());
-        let active = document_path(&paths, &instance, specs(GameId::RunescapeDragonwilds)[0]);
-        fs::write(
-            &active,
-            "[SectionsToSave]\nbCanSaveAllSections=true\n[/Script/Dominion.DedicatedServerSettings]\nOwnerId=1\nServerName=Odin\nDefaultWorldName=world\nAdminPassword=secret\n",
-        )
-        .unwrap();
-        validate_dragonwilds(&paths, &instance).unwrap();
-        fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]
@@ -2002,10 +1589,6 @@ mod tests {
                 admin_port: None,
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let path = document_path(&paths, &instance, specs(GameId::Palworld)[0]);
         let contents = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(PublicPort=8211,RESTAPIPort=8212,ServerName=Odin)\n";
@@ -2041,10 +1624,6 @@ mod tests {
                 rcon_password: "secret".into(),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let path = rust_document_path(&paths, &instance);
         let contents = "// preserve this comment\nserver.port 28015\nserver.queryport 28016\nrcon.port 28017\nrcon.password secret\nrcon.web 1\n";
@@ -2079,10 +1658,6 @@ mod tests {
                 admin_port: Some(26903),
                 auto_restart: false,
             },
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
         };
         let files = list(&paths, &instance).unwrap();
         assert!(!files[0].exists);

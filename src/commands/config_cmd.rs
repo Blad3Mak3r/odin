@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::cli::ConfigAction;
 use crate::db::Db;
-use crate::instance::{Instance, lifecycle};
+use crate::instance::Instance;
 use crate::paths::Paths;
 
 pub fn run(paths: &Paths, db: &Db, server_name: &str, action: ConfigAction) -> Result<()> {
@@ -48,7 +48,7 @@ pub fn run(paths: &Paths, db: &Db, server_name: &str, action: ConfigAction) -> R
             }
             instance.save(db)?;
 
-            if lifecycle::is_running(&instance)? {
+            if crate::podman::valheim::is_running(paths, db, &instance)? {
                 tracing::warn!(
                     instance = server_name,
                     "instance is currently running; changes take effect on next `odin restart {server_name}`"

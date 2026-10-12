@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use tokio::process::Command;
 
 use crate::instance::Instance;
-use crate::paths::{self, Paths};
+use crate::paths::{self};
 
 /// Prepends `prefix` to whatever `var` Odin inherited, matching the historic
 /// server launcher without discarding operator-provided values.
@@ -16,17 +16,6 @@ fn colon_prepend(var: &str, prefix: &str) -> String {
         Ok(existing) if !existing.is_empty() => format!("{prefix}:{existing}"),
         _ => prefix.to_string(),
     }
-}
-
-/// Builds Valheim Dedicated Server's command without spawning it. Process
-/// ownership, PID tracking, and signals are game-neutral in `instance::process`.
-pub fn build_command(instance: &Instance, paths: &Paths) -> Result<Command> {
-    build_command_at(
-        instance,
-        &paths.shared_install_dir(),
-        &paths::instance_saves_dir(&instance.dir),
-        &paths::instance_logs_dir(&instance.dir).join("console.log"),
-    )
 }
 
 /// Same official launch contract as [`build_command`], with paths supplied
@@ -161,6 +150,17 @@ mod tests {
         ValheimPortalModifier, ValheimPreset, ValheimRaidModifier, ValheimResourceModifier,
         ValheimSetKey,
     };
+    use crate::paths::Paths;
+
+    fn build_command_for_test(instance: &Instance, paths: &Paths) -> Command {
+        build_command_at(
+            instance,
+            &paths.data_dir.join("runtime/valheim"),
+            &paths::instance_saves_dir(&instance.dir),
+            &paths::instance_logs_dir(&instance.dir).join("console.log"),
+        )
+        .unwrap()
+    }
 
     #[test]
     fn build_command_preserves_the_valheim_launch_contract() {
@@ -180,7 +180,7 @@ mod tests {
         };
         std::fs::create_dir_all(paths::instance_logs_dir(&instance.dir)).unwrap();
 
-        let command = build_command(&instance, &paths).unwrap();
+        let command = build_command_for_test(&instance, &paths);
         let args: Vec<_> = command
             .as_std()
             .get_args()
@@ -241,8 +241,7 @@ mod tests {
         };
         std::fs::create_dir_all(paths::instance_logs_dir(&instance.dir)).unwrap();
 
-        let args: Vec<_> = build_command(&instance, &paths)
-            .unwrap()
+        let args: Vec<_> = build_command_for_test(&instance, &paths)
             .as_std()
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())

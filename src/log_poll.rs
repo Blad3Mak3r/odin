@@ -1,6 +1,4 @@
-//! Shared byte-offset file-tailing helper. Used by both `web::log_tail`'s
-//! per-boot poller (the legacy fallback for instances with no reachable
-//! supervisor) and `supervisor::server`'s in-process poller.
+//! Shared byte-offset file-tailing helper, used by `web::log_tail`.
 
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::Path;

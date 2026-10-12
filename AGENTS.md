@@ -7,13 +7,13 @@ it.
 
 ## What this project is
 
-Odin is a single Rust binary that manages the full lifecycle of Valheim
-dedicated game servers on Linux: installing/updating the server via
-SteamCMD, running multiple independent named "instances" as directly
-supervised background processes (see `src/instance/process.rs`), managing
-per-instance config and access lists, taking backups, and
-installing/toggling BepInEx mods from Thunderstore through a shared,
-deduplicated global mod store. It also ships an optional embedded web
+Odin is a single Rust binary that manages the full lifecycle of dedicated
+game servers on Linux (Valheim, Rust, Palworld, 7 Days to Die): running
+multiple independent named "instances", each in its own Podman container
+(see `src/podman/`), with the game installed and updated by SteamCMD inside
+that container, managing per-instance config and access lists, taking
+backups, and installing/toggling BepInEx mods from Thunderstore through a
+shared, deduplicated global mod store. It also ships an optional embedded web
 dashboard (`odin serve`) built as a separate frontend package and compiled
 into the binary at build time.
 
@@ -67,16 +67,16 @@ must not replace an official source for the normal contract.
   initialization behavior, and migration precedence. Cite the official
   sources used to establish the contract in the pull request description.
 
-## Migrating a game to the Podman runtime
+## Adding a game to the Podman runtime
 
-Valheim, Rust, 7 Days to Die and Palworld run in an `odin-srv` Podman
-container. Before moving another game, or changing the container lifecycle,
-read [docs/container-game-migration.md](docs/container-game-migration.md): it
+Every game runs in an `odin-srv` Podman container; there is no host-process
+mode. Before adding another game, or changing the container lifecycle, read
+[docs/container-game-migration.md](docs/container-game-migration.md): it
 covers the container model, the per-file checklist, the recurring design
 problems (data relative to the install tree, native-document seeding, graceful
-stop, migration of existing instances), the traps earlier migrations hit, and
-the tests a migration must add. It complements the policy above and
-`src/podman/dispatch.rs`; it does not replace them.
+stop), the traps earlier games hit, and the tests a new game must add. It
+complements the policy above and `src/podman/dispatch.rs`; it does not replace
+them.
 
 ## Agent workflow and engineering principles
 
@@ -113,8 +113,8 @@ the tests a migration must add. It complements the policy above and
   - `mods/` — BepInEx bootstrap and Thunderstore integration.
   - `web/` — the axum HTTP/WebSocket API backing `odin serve`, under
     `web/routes/`.
-  - `podman/` — container lifecycle for games that run in Podman
-    (see the migration guide above).
+  - `podman/` — container lifecycle for every game
+    (see the guide above).
 - `web/` — a separate npm package (`odin-dashboard`): Vite + React +
   TypeScript + Tailwind + shadcn/ui. Builds to `web/dist/`, which
   `rust-embed` embeds into the compiled binary. Not a Cargo workspace

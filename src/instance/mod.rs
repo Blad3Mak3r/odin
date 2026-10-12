@@ -65,15 +65,6 @@ impl Instance {
         Self::load(paths, db, name)?.ok_or_else(|| InstanceError::NotFound(name.to_string()).into())
     }
 
-    /// Loads an existing instance, or creates a new one with an auto-assigned
-    /// port that doesn't collide with any other known instance's recorded port.
-    pub fn load_or_create(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
-        if let Some(instance) = Self::load(paths, db, name)? {
-            return Ok(instance);
-        }
-        Self::create_new(paths, db, name)
-    }
-
     /// Creates a new instance, failing if one with this name already exists.
     /// Unlike `load_or_create`, this never returns an already-existing instance.
     pub fn create(paths: &Paths, db: &Db, name: &str) -> Result<Self> {
@@ -125,7 +116,7 @@ pub fn clone_configuration(
     )?;
 
     let source = Instance::load_existing(paths, db, source_name)?;
-    if lifecycle::is_running(&source)? {
+    if crate::podman::valheim::is_running(paths, db, &source)? {
         return Err(InstanceError::AlreadyRunning(source_name.to_string()).into());
     }
     if Instance::load(paths, db, target_name)?.is_some() {
@@ -188,7 +179,6 @@ pub fn clone_configuration(
         let _ = std::fs::remove_dir_all(&target_dir);
         return Err(error);
     }
-    crate::podman::valheim::mark_new_instance(db, &target)?;
 
     Ok(target)
 }
@@ -303,17 +293,6 @@ pub fn list_all(paths: &Paths, db: &Db) -> Result<Vec<Instance>> {
             state,
         })
         .collect())
-}
-
-/// Names (only, not full state) of every instance currently running.
-pub fn running_instance_names(paths: &Paths, db: &Db) -> Result<Vec<String>> {
-    let mut running = Vec::new();
-    for instance in list_all(paths, db)? {
-        if lifecycle::is_running(&instance)? {
-            running.push(instance.state.name);
-        }
-    }
-    Ok(running)
 }
 
 #[cfg(test)]
@@ -528,11 +507,17 @@ mod tests {
     #[test]
     fn clone_rejects_a_running_source() {
         let (paths, db) = temp_context("running-source");
-        let mut source = Instance::create(&paths, &db, "source").unwrap();
-        source.state.pid = Some(std::process::id());
-        source.state.pid_started_at =
-            Some(crate::instance::process::start_time_of(std::process::id()).unwrap());
-        source.save(&db).unwrap();
+        let source = Instance::create(&paths, &db, "source").unwrap();
+        let source_id = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            "source",
+            source.state.created_at,
+        )
+        .unwrap()
+        .id;
+        if !crate::podman::test_support::podman_reporting_running(&paths, &[&source_id]) {
+            return;
+        }
 
         let error = match clone_configuration(&paths, &db, "source", "target", "target-world") {
             Ok(_) => panic!("clone should fail while its source is running"),

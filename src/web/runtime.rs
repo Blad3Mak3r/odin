@@ -341,15 +341,6 @@ impl RuntimeRegistry {
             .remove(&GameInstanceKey::new(game, name));
     }
 
-    /// Gates automatic crash-restart attempts: returns `true` (and records
-    /// this as the latest attempt) only if the instance hasn't had one
-    /// within `cooldown`. Without this, an instance that crashes
-    /// immediately on every start (a broken mod, say) would get a fresh
-    /// restart attempt on every ~3s telemetry tick forever.
-    pub fn should_attempt_auto_restart(&self, name: &str, cooldown: chrono::Duration) -> bool {
-        self.should_attempt_game_auto_restart(GameId::Valheim, name, cooldown)
-    }
-
     pub fn should_attempt_game_auto_restart(
         &self,
         game: GameId,
@@ -520,13 +511,13 @@ mod tests {
         let registry = temp_registry("cooldown");
         let cooldown = chrono::Duration::hours(1);
 
-        assert!(registry.should_attempt_auto_restart("my-server", cooldown));
+        assert!(registry.should_attempt_game_auto_restart(GameId::Valheim, "my-server", cooldown));
         assert!(
-            !registry.should_attempt_auto_restart("my-server", cooldown),
+            !registry.should_attempt_game_auto_restart(GameId::Valheim, "my-server", cooldown),
             "a second attempt within the cooldown should be refused"
         );
         assert!(
-            registry.should_attempt_auto_restart("other-server", cooldown),
+            registry.should_attempt_game_auto_restart(GameId::Valheim, "other-server", cooldown),
             "cooldown is tracked per instance, not globally"
         );
     }
@@ -534,9 +525,17 @@ mod tests {
     #[test]
     fn auto_restart_is_allowed_again_once_the_cooldown_elapses() {
         let registry = temp_registry("elapsed");
-        assert!(registry.should_attempt_auto_restart("my-server", chrono::Duration::zero()));
+        assert!(registry.should_attempt_game_auto_restart(
+            GameId::Valheim,
+            "my-server",
+            chrono::Duration::zero()
+        ));
         assert!(
-            registry.should_attempt_auto_restart("my-server", chrono::Duration::zero()),
+            registry.should_attempt_game_auto_restart(
+                GameId::Valheim,
+                "my-server",
+                chrono::Duration::zero()
+            ),
             "a zero-length cooldown should never block a retry"
         );
     }

@@ -21,7 +21,7 @@ use serde::Serialize;
 
 use crate::db::Db;
 use crate::instance::state::InstalledMod;
-use crate::instance::{Instance, InstanceError, lifecycle};
+use crate::instance::{Instance, InstanceError};
 use crate::paths::{self, Paths};
 use source::ModSource;
 use thunderstore::ModRef;
@@ -151,7 +151,7 @@ fn validate_mod_id(mod_id: &str) -> Result<()> {
 
 pub fn add(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
-    if lifecycle::is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         return Err(InstanceError::ModsLocked(server_name.to_string()).into());
     }
     ensure_bepinex(db, &mut instance)?;
@@ -210,7 +210,7 @@ pub fn add_local(
     let _cleanup = CleanupFile(zip_path);
 
     let mut instance = Instance::load_existing(paths, db, server_name)?;
-    if lifecycle::is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         return Err(InstanceError::ModsLocked(server_name.to_string()).into());
     }
     ensure_bepinex(db, &mut instance)?;
@@ -249,7 +249,7 @@ fn ensure_bepinex(db: &Db, instance: &mut Instance) -> Result<()> {
 /// by the dashboard's game-level mod administration page.
 pub fn install_bepinex(paths: &Paths, db: &Db, server_name: &str) -> Result<String> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
-    if lifecycle::is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         return Err(InstanceError::ModsLocked(server_name.to_string()).into());
     }
     if instance.state.bepinex_installed {
@@ -410,7 +410,7 @@ pub fn update(paths: &Paths, db: &Db, server_name: &str) -> Result<Vec<ModUpdate
         println!("all mods for '{server_name}' are already up to date");
     }
 
-    if crate::instance::lifecycle::is_running(&instance)? && any_updated {
+    if crate::podman::valheim::is_running(paths, db, &instance)? && any_updated {
         tracing::warn!(
             instance = server_name,
             "instance is currently running; updated mods won't take effect until it's restarted"
@@ -525,7 +525,7 @@ fn add_dir_to_modpack_zip(
 
 pub fn remove(paths: &Paths, db: &Db, server_name: &str, mod_id: &str) -> Result<()> {
     let mut instance = Instance::load_existing(paths, db, server_name)?;
-    if lifecycle::is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         return Err(InstanceError::ModsLocked(server_name.to_string()).into());
     }
 
@@ -572,7 +572,7 @@ pub fn set_enabled(
         return Ok(false);
     }
 
-    if lifecycle::is_running(&instance)? {
+    if crate::podman::valheim::is_running(paths, db, &instance)? {
         return Err(InstanceError::ModsLocked(server_name.to_string()).into());
     }
 
@@ -630,7 +630,7 @@ pub fn select_version(
     if installed.version == version && installed.pinned {
         return Ok(false);
     }
-    if lifecycle::is_running(&instance)? && installed.version != version {
+    if crate::podman::valheim::is_running(paths, db, &instance)? && installed.version != version {
         return Err(InstanceError::ModsLocked(server_name.to_string()).into());
     }
     if !crate::db::global_mods::contains(db, mod_id, version)? {
@@ -748,7 +748,7 @@ pub fn list_global(paths: &Paths, db: &Db) -> Result<Vec<GlobalMod>> {
     }
 
     for instance in crate::instance::list_all(paths, db)? {
-        let running = crate::instance::lifecycle::is_running(&instance)?;
+        let running = crate::podman::valheim::is_running(paths, db, &instance)?;
         for installed in &instance.state.installed_mods {
             mods.entry(installed.mod_id.clone())
                 .or_insert_with(|| GlobalMod {
@@ -1475,21 +1475,17 @@ mod tests {
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 
-    /// Marks `instance` as running by recording a real child process's
-    /// `(pid, pid_started_at)` — `lifecycle::is_running` always does a live
-    /// syscall, so faking "running" needs an actual process, same as
-    /// `process.rs`'s own liveness test.
-    fn mark_running(instance: &mut crate::instance::Instance, db: &Db) -> std::process::Child {
-        let child = std::process::Command::new("sleep")
-            .arg("5")
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        let started_at = crate::instance::process::start_time_of(pid).unwrap();
-        instance.state.pid = Some(pid);
-        instance.state.pid_started_at = Some(started_at);
-        instance.save(db).unwrap();
-        child
+    /// Makes the instance's container count as running. Returns `false` when
+    /// the sandbox forbids the Unix socket the fake Podman needs.
+    fn mark_running(paths: &Paths, instance: &crate::instance::Instance, db: &Db) -> bool {
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            db,
+            &instance.state.name,
+            instance.state.created_at,
+        )
+        .unwrap()
+        .id;
+        crate::podman::test_support::podman_reporting_running(paths, &[&id])
     }
 
     #[test]
@@ -1504,7 +1500,9 @@ mod tests {
             pinned: false,
         });
         instance.save(&db).unwrap();
-        let mut child = mark_running(&mut instance, &db);
+        if !mark_running(&paths, &instance, &db) {
+            return;
+        }
 
         // No-op (already enabled) must still succeed while running.
         assert!(!set_enabled(&paths, &db, "my-server", "author-SomeMod", true).unwrap());
@@ -1516,8 +1514,6 @@ mod tests {
             Some(InstanceError::ModsLocked(_))
         ));
 
-        child.kill().unwrap();
-        child.wait().unwrap();
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 
@@ -1533,7 +1529,9 @@ mod tests {
             pinned: false,
         });
         instance.save(&db).unwrap();
-        let mut child = mark_running(&mut instance, &db);
+        if !mark_running(&paths, &instance, &db) {
+            return;
+        }
 
         let err = remove(&paths, &db, "my-server", "author-SomeMod").unwrap_err();
         assert!(matches!(
@@ -1541,8 +1539,6 @@ mod tests {
             Some(InstanceError::ModsLocked(_))
         ));
 
-        child.kill().unwrap();
-        child.wait().unwrap();
         std::fs::remove_dir_all(&paths.data_dir).ok();
     }
 }

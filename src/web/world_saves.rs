@@ -1,5 +1,5 @@
 //! Tracks each running instance's most recent "world saved" timestamp, fed
-//! by a reachable supervisor's own `console.log` parsing — mirrors
+//! by `web::log_tail`'s `console.log` parsing — mirrors
 //! `web::players::PlayerRegistry`'s role, just for a single value per
 //! instance instead of a list.
 

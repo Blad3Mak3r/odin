@@ -5,7 +5,7 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
-export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'
+export type GameId = 'valheim' | 'rust' | 'palworld' | '7d2d'
 
 export interface GameCapabilities {
   backups: boolean
@@ -13,7 +13,6 @@ export interface GameCapabilities {
   mods: boolean
   access_lists: boolean
   readiness: boolean
-  container_runtime: boolean
 }
 
 export interface GameView {
@@ -33,8 +32,6 @@ export interface ManagedInstanceView {
   odin_version: string | null
   capabilities: GameCapabilities
   config: Record<string, unknown>
-  execution: 'direct' | 'podman'
-  migration_required: boolean
 }
 
 export interface RuntimeHealth {
@@ -138,8 +135,6 @@ export interface SevenDaysPlayer {
   platform_id: string | null
 }
 
-export type VRisingAccessListKind = 'admin' | 'banned'
-
 export interface ChangelogSection {
   title: string
   changes: string[]
@@ -156,13 +151,6 @@ export interface CheckResult {
   ok: boolean
   critical: boolean
   detail: string | null
-}
-
-export interface InstallStatusView {
-  installed: boolean
-  installed_build_id: number | null
-  latest_build_id: number | null
-  update_available: boolean
 }
 
 export interface BepInExStatus {
@@ -189,10 +177,6 @@ export interface InstanceView {
   password: string | null
   public: boolean
   created_at: string
-  last_started_at: string | null
-  last_stopped_at: string | null
-  pid: number | null
-  pid_started_at: number | null
   bepinex_installed: boolean
   installed_mods: InstalledMod[]
   running: boolean
@@ -253,12 +237,6 @@ export interface LogsView {
   lines: string[]
 }
 
-export interface LastExitInfo {
-  code: number | null
-  at: string
-  recent_lines: string[]
-}
-
 export interface ModSearchResult {
   mod_id: string
   name: string
@@ -295,7 +273,6 @@ export interface JobSummary {
 }
 
 export type JobKindDescr =
-  | { kind: 'steamcmd_install'; game: GameId }
   | { kind: 'runtime_update'; game: GameId; instance: string }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }

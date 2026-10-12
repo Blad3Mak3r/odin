@@ -173,13 +173,13 @@ mod tests {
     }
 
     #[test]
-    fn v28_renames_the_podman_marker_without_losing_migrated_instances() {
+    fn v31_keeps_the_start_intent_of_podman_instances() {
         let mut conn = Connection::open_in_memory().unwrap();
         let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
         files.sort();
         for file in files {
             let version = migration_version(&file).unwrap();
-            if version >= 28 {
+            if version >= 31 {
                 continue;
             }
             let migration = Migrations::get(&file).unwrap();
@@ -188,26 +188,36 @@ mod tests {
             conn.pragma_update(None, "user_version", version).unwrap();
         }
         conn.execute_batch(
-            "INSERT INTO game_instances (id, game, name, created_at)
-                VALUES ('migrated', 'valheim', 'migrated', '2026-01-01T00:00:00Z');
-             INSERT INTO valheim_podman_instances (instance_id, migrated_at)
-                VALUES ('migrated', '2026-01-02T00:00:00Z');",
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('running', 'valheim', 'running', '2026-01-01T00:00:00Z'),
+                ('stopped', 'valheim', 'stopped', '2026-01-01T00:00:00Z');
+             INSERT INTO podman_instances (instance_id, migrated_at, desired_running) VALUES
+                ('running', '2026-01-02T00:00:00Z', 1),
+                ('stopped', '2026-01-02T00:00:00Z', 0);",
         )
         .unwrap();
 
         run(&mut conn).unwrap();
 
-        let ids: Vec<String> = conn
-            .prepare("SELECT instance_id FROM podman_instances")
+        let desired: Vec<(String, bool)> = conn
+            .prepare(
+                "SELECT instance_id, desired_running FROM instance_runtime_state ORDER BY instance_id",
+            )
             .unwrap()
-            .query_map([], |row| row.get(0))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(ids, ["migrated"]);
+        assert_eq!(
+            desired,
+            [
+                ("running".to_string(), true),
+                ("stopped".to_string(), false)
+            ]
+        );
         let old_table_exists: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'valheim_podman_instances')",
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'podman_instances')",
                 [],
                 |row| row.get(0),
             )
@@ -303,7 +313,116 @@ mod tests {
     }
 
     #[test]
-    fn v1_tmux_session_column_is_dropped_and_pid_columns_are_nullable() {
+    fn v30_removes_unsupported_games_and_their_dependent_records() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 30 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('pal', 'palworld', 'pal', '2026-01-01T00:00:00Z'),
+                ('vr', 'vrising', 'vr', '2026-01-01T00:00:00Z'),
+                ('dw', 'runescape-dragonwilds', 'dw', '2026-01-01T00:00:00Z');
+             INSERT INTO generic_game_instance_configs (instance_id, port, config_json) VALUES
+                ('pal', 8211, '{}'),
+                ('vr', 27015, '{}'),
+                ('dw', 7777, '{}');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        run(&mut conn).unwrap();
+
+        let games: Vec<String> = conn
+            .prepare("SELECT game FROM game_instances")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(games, vec!["palworld"]);
+        let configs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM generic_game_instance_configs",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(configs, 1);
+    }
+
+    #[test]
+    fn v32_drops_process_columns_and_keeps_instance_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 32 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at)
+                VALUES ('rusty', 'rust', 'rusty', '2026-01-01T00:00:00Z');
+             INSERT INTO rust_instance_configs
+                (instance_id, port, query_port, rcon_port, rcon_password, hostname, level, seed, world_size, max_players, auto_restart, pid, pid_started_at)
+                VALUES ('rusty', 28015, 28016, 28017, 'secret', 'h', 'Barren', 1, 3000, 50, 1, 42, 7);",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let port: u16 = conn
+            .query_row(
+                "SELECT port FROM rust_instance_configs WHERE instance_id = 'rusty'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(port, 28015);
+        for table in [
+            "instances",
+            "valheim_instance_configs",
+            "rust_instance_configs",
+            "generic_game_instance_configs",
+        ] {
+            let columns: Vec<String> = conn
+                .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            for dropped in [
+                "pid",
+                "pid_started_at",
+                "last_started_at",
+                "last_stopped_at",
+            ] {
+                assert!(
+                    !columns.iter().any(|name| name == dropped),
+                    "{table}.{dropped}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn v1_tmux_session_column_is_dropped() {
         let mut conn = Connection::open_in_memory().unwrap();
         // Apply only 0001 by hand, seed a v1-shaped row, then run the full
         // migration set and check 0002 both drops `tmux_session` and adds
@@ -331,14 +450,13 @@ mod tests {
             .unwrap();
         assert!(!has_tmux_session);
 
-        let (pid, name): (Option<i64>, String) = conn
+        let name: String = conn
             .query_row(
-                "SELECT pid, name FROM instances WHERE name = 'legacy'",
+                "SELECT name FROM instances WHERE name = 'legacy'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(pid, None);
         assert_eq!(name, "legacy");
     }
 

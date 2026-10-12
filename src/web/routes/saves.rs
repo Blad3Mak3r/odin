@@ -321,13 +321,9 @@ fn save_root(
                 .ok_or_else(|| InstanceError::NotFound(name.to_string()))?;
             Ok(crate::game::rust::backup_source(paths, &instance))
         }
-        GameId::VRising => Ok(paths.game_instance_dir(game, name).join("data/Saves")),
         GameId::Palworld => Ok(paths
             .game_instance_dir(game, name)
             .join("runtime/Pal/Saved/SaveGames")),
-        GameId::RunescapeDragonwilds => Ok(paths
-            .game_instance_dir(game, name)
-            .join("runtime/RSDragonwilds/Saved/Savegames")),
         GameId::SevenDaysToDie => Ok(paths.game_instance_dir(game, name).join("Saves")),
     }
 }
@@ -617,26 +613,17 @@ mod tests {
     async fn writes_are_refused_while_the_server_is_running() {
         let fixture = fixture();
         std::fs::write(fixture.root.join("w.db"), "keep").unwrap();
-        let pid = std::process::id();
-        let started_at = crate::instance::process::start_time_of(pid).unwrap();
-        crate::db::game_instances::set_generic_pid(
-            &fixture.db,
-            GameId::Palworld,
-            "saves-test",
-            pid,
-            started_at,
-            Utc::now(),
-        )
+        if !crate::podman::test_support::podman_reporting_running(&fixture.paths, &[&fixture.id]) {
+            return;
+        }
+        let (paths, db) = (fixture.paths.clone(), fixture.db.clone());
+        let running = tokio::task::spawn_blocking(move || {
+            crate::game::instances::is_running(&paths, &db, GameId::Palworld, "saves-test")
+        })
+        .await
+        .unwrap()
         .unwrap();
-        assert!(
-            crate::game::instances::is_running(
-                &fixture.paths,
-                &fixture.db,
-                GameId::Palworld,
-                "saves-test"
-            )
-            .unwrap()
-        );
+        assert!(running);
 
         let (status, body) = send(&fixture, upload(&fixture, "", "w.db", "new")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);

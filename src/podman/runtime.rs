@@ -250,13 +250,9 @@ async fn update_payload(spec: &RuntimeSpec) -> Result<()> {
     let install = spec.install_dir.clone();
     let log = spec.update_log.clone();
     let expected = server_file(spec);
-    let driver = game::driver(spec.launch.game());
-    let app_id = driver.steam_app_id();
-    let platform = driver.steam_platform();
+    let app_id = game::driver(spec.launch.game()).steam_app_id();
     tokio::task::spawn_blocking(move || {
-        SteamCmd::new(steamcmd)
-            .with_platform(platform)
-            .update_app_expect_file(app_id, &install, &log, expected, |_| {})
+        SteamCmd::new(steamcmd).update_app_expect_file(app_id, &install, &log, expected, |_| {})
     })
     .await
     .context("runtime update task failed")?

@@ -22,36 +22,11 @@ pub enum SteamCmdError {
 
 pub struct SteamCmd {
     steamcmd_dir: PathBuf,
-    platform: Option<&'static str>,
 }
 
 impl SteamCmd {
     pub fn new(steamcmd_dir: PathBuf) -> Self {
-        Self {
-            steamcmd_dir,
-            platform: None,
-        }
-    }
-
-    /// Makes SteamCMD fetch the depots of this platform. Some apps report
-    /// "Missing configuration" unless it is forced.
-    pub fn with_platform(mut self, platform: Option<&'static str>) -> Self {
-        self.platform = platform;
-        self
-    }
-
-    /// The arguments of one anonymous `app_update`. The install directory
-    /// must be set before logging in.
-    fn app_update_args(&self, app_id: &str, install_dir: &Path) -> Vec<String> {
-        let mut arguments = Vec::new();
-        if let Some(platform) = self.platform {
-            arguments.push(format!("+@sSteamCmdForcePlatformType {platform}"));
-        }
-        arguments.push(format!("+force_install_dir {}", install_dir.display()));
-        arguments.push("+login anonymous".into());
-        arguments.push(format!("+app_update {app_id} validate"));
-        arguments.push("+quit".into());
-        arguments
+        Self { steamcmd_dir }
     }
 
     fn script_path(&self) -> PathBuf {
@@ -236,10 +211,14 @@ impl SteamCmd {
                 .with_context(|| format!("failed to create log dir {}", parent.display()))?;
         }
 
-        tracing::info!(app_id, install_dir = %install_dir.display(), "running steamcmd app_update");
+        let install_dir_str = install_dir.to_string_lossy();
+        tracing::info!(app_id, install_dir = %install_dir_str, "running steamcmd app_update");
 
         let mut child = Command::new(self.script_path())
-            .args(self.app_update_args(app_id, install_dir))
+            .arg(format!("+force_install_dir {install_dir_str}"))
+            .arg("+login anonymous")
+            .arg(format!("+app_update {app_id} validate"))
+            .arg("+quit")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -396,27 +375,6 @@ fn stream_lines(source: impl Read, tx: &Sender<String>) {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn app_update_forces_the_platform_before_anything_else() {
-        let install = Path::new("/srv/odin/runtime/7d2d");
-        let forced = SteamCmd::new(PathBuf::from("/steamcmd")).with_platform(Some("linux"));
-        assert_eq!(
-            forced.app_update_args("294420", install),
-            [
-                "+@sSteamCmdForcePlatformType linux",
-                "+force_install_dir /srv/odin/runtime/7d2d",
-                "+login anonymous",
-                "+app_update 294420 validate",
-                "+quit",
-            ]
-        );
-        let default = SteamCmd::new(PathBuf::from("/steamcmd"));
-        assert_eq!(
-            default.app_update_args("896660", install)[0],
-            "+force_install_dir /srv/odin/runtime/7d2d"
-        );
-    }
-
     use super::*;
 
     fn temp_dir(label: &str) -> PathBuf {

@@ -4,8 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: "0 6 * * 1"
 
 concurrency:
   group: codeql-${{ github.event.pull_request.number || github.ref }}
@@ -27,7 +25,7 @@ jobs:
           fetch-depth: 0
 
       # Pull requests only analyze the languages whose files changed; pushes
-      # to main and the weekly schedule always analyze everything.
+      # to main always analyze everything.
       - name: Select languages
         id: filter
         env:

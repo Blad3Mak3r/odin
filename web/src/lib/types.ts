@@ -437,7 +437,9 @@ export interface PlayerSession {
 }
 
 export interface SaveFileEntry {
+  name: string
   path: string
+  kind: 'file' | 'dir'
   size_bytes: number
   modified_at: string | null
 }

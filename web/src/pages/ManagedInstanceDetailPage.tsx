@@ -302,7 +302,7 @@ export function ManagedInstanceDetailPage() {
   const [tab, ...nestedPath] = tabPath?.split('/').filter(Boolean) ?? []
   const listsBasePath = `/instance/${id}/lists`
   const defaultListTab = detail.game === 'vrising' || detail.game === 'valheim' ? 'admin' : 'owner'
-  if (!tab || (tab !== 'lists' && tab !== 'mods' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
+  if (!tab || (tab !== 'lists' && tab !== 'mods' && tab !== 'saves' && nestedPath.length > 0) || !tabs.some((candidate) => candidate.id === tab)) {
     return <Navigate replace to={`/instance/${id}/logs`} />
   }
 
@@ -362,7 +362,7 @@ export function ManagedInstanceDetailPage() {
           <TabsContent value="mods"><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabsContent>
         )}
         {detail.game === '7d2d' && tab === 'mods' && <TabsContent value="mods"><SevenDaysModsTab id={detail.id} running={detail.running} /></TabsContent>}
-        <TabsContent value="saves"><SaveFilesTab id={detail.id} /></TabsContent>
+        <TabsContent value="saves"><SaveFilesTab id={detail.id} path={nestedPath} running={detail.running} basePath={`/instance/${id}/saves`} /></TabsContent>
         <TabsContent value="resources"><ManagedResourcesTab id={detail.id} running={detail.running} /></TabsContent>
         <TabsContent value="limits"><ResourceLimitsTab id={detail.id} /></TabsContent>
         {detail.game === 'valheim' && <TabsContent value="players"><PlayersTab id={detail.id} running={detail.running} /></TabsContent>}

@@ -155,10 +155,36 @@ export function usePlayerHistory(id: string) {
   })
 }
 
-export function useSaveFiles(id: string) {
+const savesPath = (id: string, path = '') =>
+  `/instances/${id}/saves${path ? `/${path.split('/').map(encodeURIComponent).join('/')}` : ''}`
+
+/** Lists one folder of the instance's saves; `path` is empty for the root. */
+export function useSaveFiles(id: string, path: string) {
   return useQuery({
-    queryKey: ['save-files', id],
-    queryFn: () => api.get<SaveFileEntry[]>(`/instances/${id}/saves`),
+    queryKey: ['save-files', id, path],
+    queryFn: () => api.get<SaveFileEntry[]>(`${savesPath(id)}?path=${encodeURIComponent(path)}`),
+    // A missing folder is a 404 the tab turns into a redirect, not a transient error.
+    retry: false,
+  })
+}
+
+export function useUploadSaveFiles() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, path, files }: { id: string; path: string; files: File[] }) => {
+      const formData = new FormData()
+      for (const file of files) formData.append('file', file)
+      return api.upload<void>(`${savesPath(id)}?path=${encodeURIComponent(path)}`, formData)
+    },
+    onSuccess: (_data, { id }) => queryClient.invalidateQueries({ queryKey: ['save-files', id] }),
+  })
+}
+
+export function useDeleteSaveFile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, path }: { id: string; path: string }) => api.delete<void>(savesPath(id, path)),
+    onSuccess: (_data, { id }) => queryClient.invalidateQueries({ queryKey: ['save-files', id] }),
   })
 }
 

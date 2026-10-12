@@ -175,7 +175,11 @@ impl PodmanClient {
             .send()
             .await
             .context("failed to create Podman container")?;
-        success(response).await?;
+        success(response)
+            .await?
+            .bytes()
+            .await
+            .context("failed to read Podman container create response")?;
         Ok(())
     }
 

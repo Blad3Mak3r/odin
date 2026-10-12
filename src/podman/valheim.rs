@@ -11,7 +11,7 @@ use crate::game::GameId;
 use crate::instance::{Instance, lifecycle as direct};
 use crate::paths::{self, Paths};
 
-use super::lifecycle::{self, ContainerGame};
+use super::lifecycle::{self, ContainerGame, StopReason};
 use super::{Launch, Mount, bind, write_runtime_spec};
 
 pub use super::lifecycle::RuntimeHealth;
@@ -106,8 +106,8 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     lifecycle::start::<Valheim>(paths, db, name).await
 }
 
-pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::stop::<Valheim>(paths, db, name).await
+pub async fn stop(paths: &Paths, db: &Db, name: &str, reason: StopReason) -> Result<()> {
+    lifecycle::stop::<Valheim>(paths, db, name, reason).await
 }
 
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {

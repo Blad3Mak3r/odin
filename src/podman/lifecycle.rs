@@ -58,6 +58,24 @@ pub trait ContainerGame {
     fn running_directly(instance: &Self::Instance) -> Result<bool>;
 }
 
+/// Why a container is being stopped, which decides whether Odin remembers that
+/// the instance should still be running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// An operator asked for it to stay down.
+    Operator,
+    /// The stop is one step of a restart.
+    Restart,
+    /// Odin or the host is shutting down; the instance should come back.
+    HostShutdown,
+}
+
+impl StopReason {
+    fn clears_desired_running(self) -> bool {
+        self == Self::Operator
+    }
+}
+
 #[derive(Serialize)]
 pub struct RuntimeHealth {
     pub podman: RuntimePodmanHealth,
@@ -385,6 +403,7 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
         ),
         other => bail!("runtime image returned an unexpected startup response: {other:?}"),
     }
+    container_instances::set_desired_running(db, &identity.id, true)?;
     Ok(instance)
 }
 
@@ -404,11 +423,21 @@ async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {
     }
 }
 
-pub async fn stop<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Result<()> {
+pub async fn stop<G: ContainerGame>(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+    reason: StopReason,
+) -> Result<()> {
     let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
     require_migrated(db, &identity)?;
+    // Recorded before anything is signalled so a container that is going down
+    // can never be mistaken for one that crashed.
+    if reason.clears_desired_running() {
+        container_instances::set_desired_running(db, &identity.id, false)?;
+    }
     let config = config(paths, G::GAME)?;
     let client = PodmanClient::from_config(&config)?;
     let container = container_name(G::GAME, &identity.id);
@@ -466,7 +495,7 @@ async fn wait_for_container_stop(
 pub async fn restart<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Result<G::Instance> {
     let instance = G::load(paths, db, name)?;
     if is_running_async::<G>(paths, db, &instance).await? {
-        stop::<G>(paths, db, name).await?;
+        stop::<G>(paths, db, name, StopReason::Restart).await?;
     }
     start::<G>(paths, db, name).await
 }

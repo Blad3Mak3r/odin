@@ -36,6 +36,7 @@ use crate::db::game_instances;
 use crate::game::GameId;
 use crate::instance;
 use crate::paths::Paths;
+use crate::podman::lifecycle::StopReason;
 use routes::resources::{compute_host_snapshot, compute_instance_snapshot};
 use runtime::InstanceTransition;
 use runtime::{InstanceResourceEntry, ResourcesTick};
@@ -110,7 +111,13 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
             return Ok(());
         }
         if crate::podman::valheim::is_migrated(&state.db, instance)? {
-            crate::podman::valheim::stop(&state.paths, &state.db, &instance.state.name).await
+            crate::podman::valheim::stop(
+                &state.paths,
+                &state.db,
+                &instance.state.name,
+                StopReason::HostShutdown,
+            )
+            .await
         } else {
             instance::lifecycle::stop(&state.paths, &state.db, &instance.state.name).await
         }
@@ -128,11 +135,12 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
 
     for rust_instance in game_instances::list_rust(&state.db)? {
         if crate::game::rust::is_running(&state.paths, &state.db, &rust_instance)?
-            && let Err(error) = crate::game::instances::stop(
+            && let Err(error) = crate::game::instances::stop_with(
                 &state.paths,
                 &state.db,
                 GameId::Rust,
                 rust_instance.name(),
+                StopReason::HostShutdown,
             )
             .await
         {

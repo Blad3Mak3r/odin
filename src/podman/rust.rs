@@ -11,7 +11,7 @@ use crate::game::GameId;
 use crate::game::rust::{self, RustLaunch};
 use crate::paths::Paths;
 
-use super::lifecycle::{self, ContainerGame, RuntimeHealth};
+use super::lifecycle::{self, ContainerGame, RuntimeHealth, StopReason};
 use super::{Launch, Mount, write_runtime_spec};
 
 struct Rust;
@@ -97,8 +97,8 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<RustInstance> {
     lifecycle::start::<Rust>(paths, db, name).await
 }
 
-pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::stop::<Rust>(paths, db, name).await
+pub async fn stop(paths: &Paths, db: &Db, name: &str, reason: StopReason) -> Result<()> {
+    lifecycle::stop::<Rust>(paths, db, name, reason).await
 }
 
 pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<RustInstance> {

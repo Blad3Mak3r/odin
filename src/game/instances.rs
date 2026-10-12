@@ -11,6 +11,7 @@ use crate::db::Db;
 use crate::db::game_instances::{self, GenericGameInstance, RustInstance};
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
+use crate::podman::lifecycle::StopReason;
 use crate::podman::rust as podman_rust;
 use crate::podman::valheim as podman_valheim;
 
@@ -124,14 +125,27 @@ pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<G
     }
 }
 
+/// Stops an instance because an operator asked for it to stay down.
 pub async fn stop(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
+    stop_with(paths, db, game, name, StopReason::Operator).await
+}
+
+/// `reason` only matters to containerized games, which remember whether the
+/// instance should come back after being found stopped.
+pub async fn stop_with(
+    paths: &Paths,
+    db: &Db,
+    game: GameId,
+    name: &str,
+    reason: StopReason,
+) -> Result<()> {
     match game {
-        GameId::Valheim => podman_valheim::stop(paths, db, name).await,
+        GameId::Valheim => podman_valheim::stop(paths, db, name, reason).await,
         GameId::Rust => {
             let instance =
                 game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
             if podman_rust::is_migrated(db, &instance)? {
-                podman_rust::stop(paths, db, name).await
+                podman_rust::stop(paths, db, name, reason).await
             } else {
                 // A server started before migration is still a host process.
                 rust::stop(paths, db, &instance).await

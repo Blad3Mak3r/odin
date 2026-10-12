@@ -384,10 +384,8 @@ pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<Advance
         .collect()
 }
 
-fn seven_days_template_path(paths: &Paths) -> PathBuf {
-    paths
-        .game_install_dir(GameId::SevenDaysToDie)
-        .join("serverconfig.xml")
+fn seven_days_template_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
+    crate::game::seven_days_to_die::template_path(paths, &instance.identity)
 }
 
 fn seven_days_baseline_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
@@ -416,14 +414,11 @@ OwnerId=
 /// Creates only missing native configuration documents. Existing operator
 /// files are never replaced.
 pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
-    anyhow::ensure!(
-        !instance.is_running(),
-        "stop the server before initializing its configuration"
-    );
     match instance.identity.game {
-        GameId::SevenDaysToDie => {
-            crate::db::game_instances::copy_seven_days_to_die_config(paths, instance.name())
-        }
+        GameId::SevenDaysToDie => crate::game::seven_days_to_die::seed_config(
+            &seven_days_template_path(paths, instance),
+            &instance_root(paths, instance),
+        ),
         GameId::VRising => {
             for spec in specs(GameId::VRising) {
                 let source = paths
@@ -530,7 +525,7 @@ pub fn review_seven_days_template(
         "template review is only available for 7 Days to Die"
     );
     let config = seven_days_config_path(paths, instance);
-    let template = seven_days_template_path(paths);
+    let template = seven_days_template_path(paths, instance);
     let baseline = seven_days_baseline_path(paths, instance);
     if !config.is_file() || !template.is_file() || !baseline.is_file() {
         return Ok(SevenDaysTemplateReview {
@@ -571,7 +566,7 @@ pub fn apply_seven_days_template_review(
     );
 
     let config = seven_days_config_path(paths, instance);
-    let template = seven_days_template_path(paths);
+    let template = seven_days_template_path(paths, instance);
     let selected: BTreeSet<_> = keys.iter().map(String::as_str).collect();
     let changes: BTreeMap<_, _> = review
         .changes
@@ -676,9 +671,6 @@ pub fn apply(
     instance: &GenericGameInstance,
     changes: &[AdvancedConfigChange],
 ) -> Result<()> {
-    if instance.is_running() {
-        bail!("stop the server before changing advanced configuration");
-    }
     let mut per_file: HashMap<&str, Vec<&AdvancedConfigChange>> = HashMap::new();
     for change in changes {
         per_file
@@ -1091,6 +1083,20 @@ fn matching_parenthesis(contents: &str, opening: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// Reads one property from a 7 Days to Die `serverconfig.xml` at `path`, for
+/// callers that only have the instance directory (the container runtime).
+pub fn xml_value(path: &Path, key: &str) -> Result<Option<String>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(parse(Format::XmlProperties, &contents)?
+        .into_iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.value))
 }
 
 /// Reads a game-generated configuration value without exposing it through the
@@ -1561,7 +1567,7 @@ mod tests {
         };
         let instance = seven_days_instance();
         let config = seven_days_config_path(&paths, &instance);
-        let template = seven_days_template_path(&paths);
+        let template = seven_days_template_path(&paths, &instance);
         let baseline = seven_days_baseline_path(&paths, &instance);
         fs::create_dir_all(config.parent().unwrap()).unwrap();
         fs::create_dir_all(template.parent().unwrap()).unwrap();

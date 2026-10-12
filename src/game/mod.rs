@@ -285,11 +285,15 @@ impl GameDriver for SevenDaysToDieDriver {
             mods: true,
             access_lists: false,
             readiness: true,
-            container_runtime: false,
+            container_runtime: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
         GamePortRequirements { count: 3 }
+    }
+    fn stop_timeout_secs(&self) -> u64 {
+        // The console's `shutdown` saves the world before the server exits.
+        120
     }
 }
 

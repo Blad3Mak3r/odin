@@ -19,12 +19,17 @@ use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits::ResourceLimits;
 use crate::game::GameId;
 use crate::game::rust::RustLaunch;
+use crate::game::seven_days_to_die::SevenDaysLaunch;
 use crate::instance::state::InstanceState;
 use crate::paths::Paths;
 
+pub mod dispatch;
 pub mod lifecycle;
 pub mod runtime;
 pub mod rust;
+pub mod seven_days_to_die;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod valheim;
 
 /// Podman 5.0.0 is the oldest server Odin supports. Its Libpod API is
@@ -380,8 +385,12 @@ pub struct RuntimeSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "game", rename_all = "snake_case")]
 pub enum Launch {
-    Valheim { instance: InstanceState },
+    Valheim {
+        instance: InstanceState,
+    },
     Rust(RustLaunch),
+    #[serde(rename = "7d2d")]
+    SevenDaysToDie(SevenDaysLaunch),
 }
 
 impl Launch {
@@ -389,6 +398,7 @@ impl Launch {
         match self {
             Self::Valheim { .. } => GameId::Valheim,
             Self::Rust(_) => GameId::Rust,
+            Self::SevenDaysToDie(_) => GameId::SevenDaysToDie,
         }
     }
 
@@ -396,9 +406,84 @@ impl Launch {
         match self {
             Self::Valheim { instance } => &instance.name,
             Self::Rust(launch) => &launch.name,
+            Self::SevenDaysToDie(launch) => &launch.name,
+        }
+    }
+
+    /// Prepares whatever the game needs inside the runtime volume and builds
+    /// the command that starts its server. This is the container side's only
+    /// per-game launch hook.
+    pub fn server_command(
+        &self,
+        spec: &RuntimeSpec,
+        console_log: &Path,
+    ) -> Result<tokio::process::Command> {
+        match self {
+            Self::Valheim { instance } => crate::game::valheim::build_command_at(
+                &crate::instance::Instance {
+                    dir: spec.instance_dir.clone(),
+                    state: instance.clone(),
+                },
+                &spec.install_dir,
+                &crate::paths::instance_saves_dir(&spec.instance_dir),
+                console_log,
+            ),
+            Self::Rust(launch) => {
+                crate::game::rust::prepare_runtime(
+                    &spec.install_dir,
+                    &spec.instance_dir,
+                    &spec.steamcmd_dir,
+                    launch,
+                )?;
+                crate::game::rust::build_command_at(&spec.install_dir, console_log, launch)
+            }
+            Self::SevenDaysToDie(launch) => {
+                crate::game::seven_days_to_die::prepare_runtime(
+                    &spec.install_dir,
+                    &spec.instance_dir,
+                )?;
+                crate::game::seven_days_to_die::build_command_at(
+                    &spec.install_dir,
+                    &spec.instance_dir,
+                    console_log,
+                    launch,
+                )
+            }
+        }
+    }
+
+    /// Asks the running server to save and exit through its own console.
+    /// Returns whether the request was delivered; `false` leaves the caller
+    /// to signal the process instead.
+    pub async fn request_graceful_stop(&self, instance_dir: &Path) -> bool {
+        match self {
+            // SIGINT ends Rust without saving the world; its console `quit`
+            // saves first.
+            Self::Rust(launch) => tokio::time::timeout(
+                CONSOLE_STOP_TIMEOUT,
+                crate::game::rust::rcon::quit(launch.rcon_port, &launch.rcon_password),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok()),
+            // The console's `shutdown` saves the world before the server exits.
+            Self::SevenDaysToDie(_) => {
+                let instance_dir = instance_dir.to_path_buf();
+                tokio::time::timeout(
+                    CONSOLE_STOP_TIMEOUT,
+                    tokio::task::spawn_blocking(move || {
+                        crate::game::seven_days_to_die::shutdown(&instance_dir)
+                    }),
+                )
+                .await
+                .is_ok_and(|joined| joined.is_ok_and(|result| result.is_ok()))
+            }
+            // Valheim saves on SIGINT.
+            Self::Valheim { .. } => false,
         }
     }
 }
+
+const CONSOLE_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl RuntimeSpec {
     pub const PROTOCOL_VERSION: u16 = 1;
@@ -779,6 +864,43 @@ mod tests {
         assert!(matches!(
             spec.launch,
             Launch::Rust(launch) if launch.rcon_port == 28017 && launch.rcon_password == "secret"
+        ));
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn runtime_spec_round_trips_the_7d2d_launch_under_its_game_id() {
+        let paths = paths();
+        let identity = GameInstanceIdentity {
+            game: GameId::SevenDaysToDie,
+            name: "undead".into(),
+            ..rust_identity()
+        };
+        let launch = SevenDaysLaunch {
+            name: "undead".into(),
+            port: 26900,
+            telnet_port: Some(26903),
+        };
+
+        let path = write_runtime_spec(&paths, &identity, Launch::SevenDaysToDie(launch)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let spec: RuntimeSpec = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(
+            path,
+            paths
+                .container_runtime_dir(GameId::SevenDaysToDie, &identity.id)
+                .join("runtime.json")
+        );
+        // The tag must be the GameId's own spelling so the runtime directory,
+        // the container label and the spec agree.
+        assert_eq!(json["game"], "7d2d");
+        assert_eq!(spec.install_dir, PathBuf::from("/srv/odin/runtime/7d2d"));
+        assert_eq!(spec.launch.game(), GameId::SevenDaysToDie);
+        assert!(matches!(
+            spec.launch,
+            Launch::SevenDaysToDie(launch) if launch.port == 26900 && launch.telnet_port == Some(26903)
         ));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

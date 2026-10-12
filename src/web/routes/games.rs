@@ -14,6 +14,7 @@ use crate::db::game_instances::{self, GameInstanceIdentity, GenericGameInstance,
 use crate::game::{self, GameId, instances as game_instances_ops, rust};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
+use crate::podman::dispatch;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
@@ -105,30 +106,45 @@ pub struct SevenDaysWorldsView {
     pub worlds: Vec<String>,
 }
 
-pub async fn list_seven_days_worlds(State(state): State<AppState>) -> Json<SevenDaysWorldsView> {
-    let directory = state
-        .paths
-        .game_install_dir(GameId::SevenDaysToDie)
-        .join("Data/Worlds");
-    let mut worlds = std::fs::read_dir(directory)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            entry
-                .file_type()
-                .ok()?
-                .is_dir()
-                .then(|| entry.file_name().to_string_lossy().to_string())
-        })
-        .collect::<Vec<_>>();
-    if !worlds.iter().any(|world| world == "Navezgane") {
-        worlds.push("Navezgane".into());
-    }
-    worlds.sort();
-    worlds.dedup();
-    Json(SevenDaysWorldsView { worlds })
+/// Worlds the game ships with. Each container instance holds its own copy of
+/// the game, so the union over all of them is offered, plus the legacy shared
+/// installation of instances that have not been migrated yet.
+pub async fn list_seven_days_worlds(
+    State(state): State<AppState>,
+) -> ApiResult<Json<SevenDaysWorldsView>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let worlds = run_blocking(move || {
+        let mut directories = vec![paths.game_install_dir(GameId::SevenDaysToDie)];
+        for instance in game_instances::list_generic(&db, GameId::SevenDaysToDie)? {
+            directories.push(
+                paths
+                    .container_runtime_dir(GameId::SevenDaysToDie, &instance.identity.id)
+                    .join(GameId::SevenDaysToDie.as_str()),
+            );
+        }
+        let mut worlds = directories
+            .into_iter()
+            .filter_map(|install| std::fs::read_dir(install.join("Data/Worlds")).ok())
+            .flatten()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                entry
+                    .file_type()
+                    .ok()?
+                    .is_dir()
+                    .then(|| entry.file_name().to_string_lossy().to_string())
+            })
+            .collect::<Vec<_>>();
+        if !worlds.iter().any(|world| world == "Navezgane") {
+            worlds.push("Navezgane".into());
+        }
+        worlds.sort();
+        worlds.dedup();
+        Ok(worlds)
+    })
+    .await?;
+    Ok(Json(SevenDaysWorldsView { worlds }))
 }
 
 #[derive(Serialize)]
@@ -169,7 +185,6 @@ pub async fn install_game(
         .into());
     }
     let paths = state.paths.clone();
-    let db = state.db.clone();
     let activity = state.activity.clone();
     let id = state
         .jobs
@@ -179,17 +194,8 @@ pub async fn install_game(
                 | GameId::Rust
                 | GameId::VRising
                 | GameId::Palworld
-                | GameId::RunescapeDragonwilds => {}
-                GameId::SevenDaysToDie => {
-                    let running = game_instances::list_generic(&db, game)?
-                        .into_iter()
-                        .any(|instance| instance.is_running());
-                    if running {
-                        anyhow::bail!(
-                            "refusing to update 7 Days to Die while an instance is running"
-                        );
-                    }
-                }
+                | GameId::RunescapeDragonwilds
+                | GameId::SevenDaysToDie => {}
             }
             let driver = game::driver(game);
             let install_dir = paths.game_install_dir(game);
@@ -376,9 +382,12 @@ async fn update_generic_config_for(
             admin_port: request.admin_port,
             auto_restart: request.auto_restart,
         };
+        if game_instances_ops::is_running(&paths, &db, game, &name)? {
+            return Err(crate::instance::InstanceError::AlreadyRunning(name).into());
+        }
         let instance = game_instances::update_generic_config(&db, game, &name, &config)?;
         crate::game::config_documents::sync_operational(&paths, &instance)?;
-        Ok(generic_view(&paths, instance))
+        Ok(generic_view(&paths, &db, instance))
     })
     .await?;
     Ok(Json(view))
@@ -897,12 +906,11 @@ pub async fn migrate_runtime_by_id(
     let paths = state.paths.clone();
     let db = state.db.clone();
     let name = identity.name;
-    run_blocking(move || match identity.game {
-        GameId::Valheim => crate::podman::valheim::migrate(&paths, &db, &name),
-        GameId::Rust => crate::podman::rust::migrate(&paths, &db, &name),
-        _ => Err(unsupported_runtime().into()),
-    })
-    .await?;
+    let game = identity.game;
+    if !dispatch::is_container_game(game) {
+        return Err(unsupported_runtime().into());
+    }
+    run_blocking(move || dispatch::migrate(&paths, &db, game, &name)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -911,16 +919,12 @@ pub async fn get_runtime_health_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<crate::podman::lifecycle::RuntimeHealth>> {
     let identity = resolve_instance_id(&state, &id).await?;
-    let health = match identity.game {
-        GameId::Valheim => {
-            crate::podman::valheim::runtime_health(&state.paths, &state.db, &identity.name).await
-        }
-        GameId::Rust => {
-            crate::podman::rust::runtime_health(&state.paths, &state.db, &identity.name).await
-        }
-        _ => return Err(unsupported_runtime().into()),
+    if !dispatch::is_container_game(identity.game) {
+        return Err(unsupported_runtime().into());
     }
-    .map_err(|error| BadRequest(error.to_string()))?;
+    let health = dispatch::runtime_health(&state.paths, &state.db, identity.game, &identity.name)
+        .await
+        .map_err(|error| BadRequest(error.to_string()))?;
     Ok(Json(health))
 }
 
@@ -929,14 +933,12 @@ pub async fn repair_runtime_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     let identity = resolve_instance_id(&state, &id).await?;
-    match identity.game {
-        GameId::Valheim => {
-            crate::podman::valheim::repair(&state.paths, &state.db, &identity.name).await
-        }
-        GameId::Rust => crate::podman::rust::repair(&state.paths, &state.db, &identity.name).await,
-        _ => return Err(unsupported_runtime().into()),
+    if !dispatch::is_container_game(identity.game) {
+        return Err(unsupported_runtime().into());
     }
-    .map_err(|error| BadRequest(error.to_string()))?;
+    dispatch::repair(&state.paths, &state.db, identity.game, &identity.name)
+        .await
+        .map_err(|error| BadRequest(error.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -964,14 +966,7 @@ pub async fn update_runtime_by_id(
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            match game {
-                GameId::Rust => {
-                    runtime.block_on(crate::podman::rust::update(&paths, &db, &identity.name))?
-                }
-                _ => {
-                    runtime.block_on(crate::podman::valheim::update(&paths, &db, &identity.name))?
-                }
-            }
+            runtime.block_on(dispatch::update(&paths, &db, game, &identity.name))?;
             logger.line("update completed");
             Ok(())
         },
@@ -1124,7 +1119,9 @@ fn game_instance_view(
     match instance {
         game_instances_ops::GameInstance::Valheim(instance) => valheim_view(paths, db, instance),
         game_instances_ops::GameInstance::Rust(instance) => Ok(rust_view(paths, db, instance)),
-        game_instances_ops::GameInstance::Generic(instance) => Ok(generic_view(paths, instance)),
+        game_instances_ops::GameInstance::Generic(instance) => {
+            Ok(generic_view(paths, db, instance))
+        }
     }
 }
 
@@ -1145,27 +1142,16 @@ fn valheim_view(
         &instance.state.name,
         instance.state.created_at,
     )?;
-    let migrated = crate::podman::valheim::is_migrated(db, &instance)?;
+    let execution = dispatch::execution(paths, db, &identity)?;
+    let migrated = execution.migrated;
     let odin_version = if migrated {
-        crate::supervisor::client::ping_socket_blocking(
-            &crate::podman::lifecycle::control_socket(paths, &identity),
-            Duration::from_millis(300),
-        )
-        .ok()
-        .and_then(|response| match response {
-            crate::supervisor::protocol::Response::Pong { odin_version, .. } => odin_version,
-            _ => None,
-        })
+        execution.odin_version
     } else {
         supervisor_version(paths, GameId::Valheim, &instance.state.name)
     };
     Ok(ManagedInstanceView {
         identity,
-        running: migrated
-            && crate::podman::valheim::is_running(paths, db, &instance).unwrap_or_else(|error| {
-                tracing::debug!(instance = %instance.state.name, %error, "failed to inspect Podman container for instance view");
-                false
-            }),
+        running: execution.container_running,
         odin_version,
         capabilities: game::driver(GameId::Valheim).capabilities(),
         config: serde_json::json!({
@@ -1197,28 +1183,16 @@ fn rust_views(paths: &Paths, db: &crate::db::Db) -> anyhow::Result<Vec<ManagedIn
 }
 
 fn rust_view(paths: &Paths, db: &crate::db::Db, instance: RustInstance) -> ManagedInstanceView {
-    let migrated = crate::podman::rust::is_migrated(db, &instance).unwrap_or(false);
-    let running = rust::is_running(paths, db, &instance).unwrap_or_else(|error| {
-        tracing::debug!(instance = %instance.name(), %error, "failed to determine whether Rust is running");
-        false
-    });
-    let odin_version = if migrated {
-        crate::supervisor::client::ping_socket_blocking(
-            &crate::podman::lifecycle::control_socket(paths, &instance.identity),
-            Duration::from_millis(300),
-        )
-        .ok()
-        .and_then(|response| match response {
-            crate::supervisor::protocol::Response::Pong { odin_version, .. } => odin_version,
-            _ => None,
-        })
-    } else {
-        supervisor_version(paths, GameId::Rust, instance.name())
-    };
+    let state = execution_state(
+        paths,
+        db,
+        &instance.identity,
+        rust::is_running_directly(&instance),
+    );
     ManagedInstanceView {
         identity: instance.identity,
-        running,
-        odin_version,
+        running: state.running,
+        odin_version: state.odin_version,
         capabilities: game::driver(GameId::Rust).capabilities(),
         config: serde_json::json!({
             "port": instance.config.port,
@@ -1227,8 +1201,8 @@ fn rust_view(paths: &Paths, db: &crate::db::Db, instance: RustInstance) -> Manag
             "rcon_password": instance.config.rcon_password,
             "auto_restart": instance.config.auto_restart,
         }),
-        execution: if migrated { "podman" } else { "direct" },
-        migration_required: !migrated,
+        execution: state.execution,
+        migration_required: state.migration_required,
     }
 }
 
@@ -1239,27 +1213,78 @@ fn generic_views(
 ) -> anyhow::Result<Vec<ManagedInstanceView>> {
     Ok(game_instances::list_generic(db, game)?
         .into_iter()
-        .map(|instance| generic_view(paths, instance))
+        .map(|instance| generic_view(paths, db, instance))
         .collect())
 }
 
-fn generic_view(paths: &Paths, instance: GenericGameInstance) -> ManagedInstanceView {
+fn generic_view(
+    paths: &Paths,
+    db: &crate::db::Db,
+    instance: GenericGameInstance,
+) -> ManagedInstanceView {
     let game = instance.identity.game;
-    let name = instance.identity.name.clone();
     let config = serde_json::json!({
         "port": instance.config.port,
         "query_port": instance.config.query_port,
         "admin_port": instance.config.admin_port,
         "auto_restart": instance.config.auto_restart,
     });
+    let state = execution_state(
+        paths,
+        db,
+        &instance.identity,
+        instance.is_running_directly(),
+    );
     ManagedInstanceView {
-        running: instance.is_running(),
-        odin_version: supervisor_version(paths, game, &name),
+        running: state.running,
+        odin_version: state.odin_version,
         capabilities: game::driver(game).capabilities(),
         identity: instance.identity,
         config,
-        execution: "direct",
-        migration_required: false,
+        execution: state.execution,
+        migration_required: state.migration_required,
+    }
+}
+
+struct ExecutionState {
+    running: bool,
+    odin_version: Option<String>,
+    execution: &'static str,
+    migration_required: bool,
+}
+
+/// How a game that may run in a container is executing right now.
+/// `running_directly` is the host-process answer for an instance that has
+/// not been migrated yet.
+fn execution_state(
+    paths: &Paths,
+    db: &crate::db::Db,
+    identity: &GameInstanceIdentity,
+    running_directly: bool,
+) -> ExecutionState {
+    if !dispatch::is_container_game(identity.game) {
+        return ExecutionState {
+            running: running_directly,
+            odin_version: supervisor_version(paths, identity.game, &identity.name),
+            execution: "direct",
+            migration_required: false,
+        };
+    }
+    let execution = dispatch::execution(paths, db, identity).unwrap_or_default();
+    if execution.migrated {
+        ExecutionState {
+            running: execution.container_running,
+            odin_version: execution.odin_version,
+            execution: "podman",
+            migration_required: false,
+        }
+    } else {
+        ExecutionState {
+            running: running_directly,
+            odin_version: supervisor_version(paths, identity.game, &identity.name),
+            execution: "direct",
+            migration_required: true,
+        }
     }
 }
 
@@ -1279,7 +1304,7 @@ pub(crate) fn rust_resource_snapshot(
     if !rust::is_running(&state.paths, &state.db, instance)? {
         return Ok(InstanceSnapshot::default());
     }
-    if crate::podman::rust::is_migrated(&state.db, instance)? {
+    if dispatch::is_migrated(&state.paths, &state.db, GameId::Rust, instance.name())? {
         // Rust has no readiness signal, in a container or out of it.
         return Ok(InstanceSnapshot {
             ready: false,
@@ -1307,14 +1332,26 @@ pub(crate) fn rust_resource_snapshot(
     })
 }
 
-/// Samples a generic managed server process (V Rising, Palworld, or
-/// Dragonwilds), including descendants such as Proton's Wine processes.
+/// Samples a generic managed server: a container when its game runs in one
+/// and the instance has been migrated, otherwise its host process including
+/// descendants such as Proton's Wine processes. Fails when liveness cannot be
+/// determined, so a caller never mistakes "unknown" for "stopped".
 pub(crate) fn generic_resource_snapshot(
     state: &AppState,
     instance: &GenericGameInstance,
-) -> InstanceSnapshot {
-    if !instance.is_running() {
-        return InstanceSnapshot::default();
+) -> anyhow::Result<InstanceSnapshot> {
+    if dispatch::is_container_game(instance.identity.game)
+        && crate::db::container_instances::is_podman(&state.db, &instance.identity.id)?
+    {
+        if !crate::podman::lifecycle::container_is_running(&state.paths, &instance.identity)? {
+            return Ok(InstanceSnapshot::default());
+        }
+        return Ok(crate::web::routes::resources::container_snapshot(
+            &crate::podman::lifecycle::control_socket(&state.paths, &instance.identity),
+        ));
+    }
+    if !instance.is_running_directly() {
+        return Ok(InstanceSnapshot::default());
     }
 
     let root_pids: Vec<u32> = instance.pid.into_iter().collect();
@@ -1327,12 +1364,12 @@ pub(crate) fn generic_resource_snapshot(
             memory_bytes += process.memory();
         }
     }
-    InstanceSnapshot {
+    Ok(InstanceSnapshot {
         running: true,
         ready: false,
         cpu_percent,
         memory_bytes,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1367,7 +1404,7 @@ mod tests {
         let instance =
             game_instances::create_generic(&paths, &db, GameId::Palworld, "pals").unwrap();
 
-        let view = generic_view(&paths, instance);
+        let view = generic_view(&paths, &db, instance);
 
         assert_eq!(view.config["port"], 8211);
         assert!(view.config["admin_port"].is_null());

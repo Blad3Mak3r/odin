@@ -212,7 +212,12 @@ pub(crate) fn compute_instance_snapshot(
         instance.state.created_at,
     )?;
     if crate::db::container_instances::is_podman(&state.db, &identity.id)? {
-        if !crate::podman::valheim::is_running(&state.paths, &state.db, instance)? {
+        if !crate::podman::dispatch::is_running(
+            &state.paths,
+            &state.db,
+            crate::game::GameId::Valheim,
+            &instance.state.name,
+        )? {
             return Ok(InstanceSnapshot::default());
         }
         return Ok(container_snapshot(

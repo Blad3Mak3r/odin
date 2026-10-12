@@ -56,6 +56,9 @@ pub trait ContainerGame {
     fn extra_mounts(paths: &Paths) -> Vec<Mount>;
     /// Whether the pre-migration host process is alive.
     fn running_directly(instance: &Self::Instance) -> Result<bool>;
+    /// Stops a server that was started before the instance was migrated and
+    /// is therefore still a host process.
+    async fn stop_directly(paths: &Paths, db: &Db, instance: &Self::Instance) -> Result<()>;
 }
 
 /// Why a container is being stopped, which decides whether Odin remembers that
@@ -323,12 +326,18 @@ pub fn is_running<G: ContainerGame>(
     if !container_instances::is_podman(db, &identity.id)? {
         return G::running_directly(instance);
     }
+    container_is_running(paths, &identity)
+}
+
+/// Whether the container of a migrated instance is running. Without a
+/// configured Podman socket Odin cannot have created one.
+pub fn container_is_running(paths: &Paths, identity: &GameInstanceIdentity) -> Result<bool> {
     let Some(config) = GlobalConfig::load(paths)?.podman else {
         return Ok(false);
     };
     let client = PodmanClient::from_config(&config)?;
     Ok(client
-        .inspect_blocking(&container_name(G::GAME, &identity.id))?
+        .inspect_blocking(&container_name(identity.game, &identity.id))?
         .is_some_and(ContainerState::is_running))
 }
 

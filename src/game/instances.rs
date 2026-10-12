@@ -11,9 +11,8 @@ use crate::db::Db;
 use crate::db::game_instances::{self, GenericGameInstance, RustInstance};
 use crate::instance::{Instance, lifecycle};
 use crate::paths::Paths;
+use crate::podman::dispatch;
 use crate::podman::lifecycle::StopReason;
-use crate::podman::rust as podman_rust;
-use crate::podman::valheim as podman_valheim;
 
 use super::{GameId, generic, rust};
 
@@ -50,20 +49,12 @@ pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameIn
         GameInstance::Valheim(mut instance) => {
             instance.state.auto_restart = defaults.auto_restart;
             instance.save(db)?;
-            // New Valheim instances are born containerized. Existing rows do
-            // not receive this marker during a migration and therefore still
-            // require an explicit stopped-instance migration.
-            podman_valheim::mark_new_instance(db, &instance)?;
             GameInstance::Valheim(instance)
         }
         GameInstance::Rust(instance) => {
             let mut config = instance.config.clone();
             config.auto_restart = defaults.auto_restart;
-            let instance = game_instances::update_rust_config(db, name, &config)?;
-            // New Rust instances are born containerized, like Valheim ones.
-            // Existing rows keep running directly until explicitly migrated.
-            podman_rust::mark_new_instance(db, &instance)?;
-            GameInstance::Rust(instance)
+            GameInstance::Rust(game_instances::update_rust_config(db, name, &config)?)
         }
         GameInstance::Generic(mut instance) => {
             instance.config.auto_restart = defaults.auto_restart;
@@ -71,6 +62,12 @@ pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameIn
             GameInstance::Generic(instance)
         }
     };
+    // New instances of a containerized game are born containerized. Existing
+    // rows do not receive this marker and require an explicit stopped-instance
+    // migration.
+    if dispatch::is_container_game(game) {
+        dispatch::mark_new_instance(paths, db, game, name)?;
+    }
     crate::db::backup_schedules::upsert_for_game(
         db,
         game,
@@ -101,28 +98,23 @@ pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInst
 /// game. Used by background policy loops before they decide whether a
 /// lifecycle operation is needed.
 pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
+    if dispatch::is_container_game(game) {
+        return dispatch::is_running(paths, db, game, name);
+    }
     match load(paths, db, game, name)? {
-        GameInstance::Valheim(instance) => podman_valheim::is_running(paths, db, &instance),
-        GameInstance::Rust(instance) => rust::is_running(paths, db, &instance),
-        GameInstance::Generic(instance) => Ok(instance.is_running()),
+        GameInstance::Generic(instance) => Ok(instance.is_running_directly()),
+        GameInstance::Valheim(_) | GameInstance::Rust(_) => unreachable!("container games"),
     }
 }
 
 pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
-    match game {
-        GameId::Valheim => podman_valheim::start(paths, db, name)
-            .await
-            .map(GameInstance::Valheim),
-        GameId::Rust => podman_rust::start(paths, db, name)
-            .await
-            .map(GameInstance::Rust),
-        GameId::VRising
-        | GameId::Palworld
-        | GameId::RunescapeDragonwilds
-        | GameId::SevenDaysToDie => generic::start(paths, db, game, name)
-            .await
-            .map(GameInstance::Generic),
+    if dispatch::is_container_game(game) {
+        dispatch::start(paths, db, game, name).await?;
+        return load(paths, db, game, name);
     }
+    generic::start(paths, db, game, name)
+        .await
+        .map(GameInstance::Generic)
 }
 
 /// Stops an instance because an operator asked for it to stay down.
@@ -139,73 +131,49 @@ pub async fn stop_with(
     name: &str,
     reason: StopReason,
 ) -> Result<()> {
-    match game {
-        GameId::Valheim => podman_valheim::stop(paths, db, name, reason).await,
-        GameId::Rust => {
-            let instance =
-                game_instances::load_rust(db, name)?.context("Rust instance does not exist")?;
-            if podman_rust::is_migrated(db, &instance)? {
-                podman_rust::stop(paths, db, name, reason).await
-            } else {
-                // A server started before migration is still a host process.
-                rust::stop(paths, db, &instance).await
-            }
-        }
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => {
-            generic::stop(paths, db, game, name).await
-        }
-        GameId::SevenDaysToDie => {
-            generic::stop(paths, db, game, name).await?;
-            crate::db::player_sessions::close_active_for_game(
-                db,
-                GameId::SevenDaysToDie,
-                name,
-                chrono::Utc::now(),
-            )
-        }
+    if dispatch::is_container_game(game) {
+        dispatch::stop(paths, db, game, name, reason).await?;
+    } else {
+        generic::stop(paths, db, game, name).await?;
     }
+    close_player_sessions(db, game, name)
+}
+
+/// 7 Days to Die reports its players through the console, so their sessions
+/// are closed whenever the server goes down.
+fn close_player_sessions(db: &Db, game: GameId, name: &str) -> Result<()> {
+    if game != GameId::SevenDaysToDie {
+        return Ok(());
+    }
+    crate::db::player_sessions::close_active_for_game(db, game, name, chrono::Utc::now())
 }
 
 pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInstance> {
-    match game {
-        GameId::Valheim => podman_valheim::restart(paths, db, name)
-            .await
-            .map(GameInstance::Valheim),
-        GameId::Rust => podman_rust::restart(paths, db, name)
-            .await
-            .map(GameInstance::Rust),
-        GameId::VRising
-        | GameId::Palworld
-        | GameId::RunescapeDragonwilds
-        | GameId::SevenDaysToDie => {
-            if is_running(paths, db, game, name)? {
-                generic::stop(paths, db, game, name).await?;
-                if game == GameId::SevenDaysToDie {
-                    crate::db::player_sessions::close_active_for_game(
-                        db,
-                        GameId::SevenDaysToDie,
-                        name,
-                        chrono::Utc::now(),
-                    )?;
-                }
-            }
-            generic::start(paths, db, game, name)
-                .await
-                .map(GameInstance::Generic)
+    if dispatch::is_container_game(game) {
+        if is_running(paths, db, game, name)? {
+            close_player_sessions(db, game, name)?;
         }
+        dispatch::restart(paths, db, game, name).await?;
+        return load(paths, db, game, name);
     }
+    if is_running(paths, db, game, name)? {
+        generic::stop(paths, db, game, name).await?;
+        close_player_sessions(db, game, name)?;
+    }
+    generic::start(paths, db, game, name)
+        .await
+        .map(GameInstance::Generic)
 }
 
 pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bool) -> Result<()> {
     match game {
         GameId::Valheim => {
-            let instance = Instance::load_existing(paths, db, name)?;
-            if podman_valheim::is_running(paths, db, &instance)? {
+            if dispatch::is_running(paths, db, game, name)? {
                 anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
                     name.to_string()
                 ));
             }
-            podman_valheim::remove(paths, db, &instance)?;
+            dispatch::remove(paths, db, game, name)?;
             lifecycle::delete(paths, db, name, keep_backups)
         }
         GameId::Rust => {
@@ -216,7 +184,7 @@ pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bo
                     name.to_string()
                 ));
             }
-            podman_rust::remove(paths, db, &instance)?;
+            dispatch::remove(paths, db, game, name)?;
             rust::delete(paths, db, &instance, keep_backups)
         }
         GameId::VRising
@@ -226,13 +194,15 @@ pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bo
             let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
             let instance = game_instances::load_generic(db, game, name)?
                 .context("game instance does not exist")?;
-            if instance.identity.game == GameId::SevenDaysToDie && instance.is_running() {
-                anyhow::bail!("7 Days to Die backups require a stopped server");
+            if is_running(paths, db, game, name)? {
+                if game == GameId::SevenDaysToDie {
+                    anyhow::bail!("7 Days to Die backups require a stopped server");
+                }
+                anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
+                    instance.identity.name
+                ));
             }
-            anyhow::ensure!(
-                !instance.is_running(),
-                crate::instance::InstanceError::AlreadyRunning(instance.identity.name)
-            );
+            dispatch::remove(paths, db, game, name)?;
             crate::instance::lifecycle::delete_instance_dir(
                 &paths.game_instance_dir(instance.identity.game, instance.name()),
                 keep_backups,
@@ -264,7 +234,7 @@ pub fn create_backup(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
             // A filesystem copy made while Palworld is changing its world is
             // not a useful backup. Its local REST endpoint owns the save
             // operation, so ask it to flush before taking the snapshot.
-            if instance.identity.game == GameId::Palworld && instance.is_running() {
+            if instance.identity.game == GameId::Palworld && instance.is_running_directly() {
                 crate::game::palworld::save(paths, &instance)?;
             }
             crate::backup::create_at(
@@ -294,7 +264,7 @@ pub fn restore_backup(
         GameInstance::Rust(instance) => rust::restore_backup(paths, db, &instance, backup_id),
         GameInstance::Generic(instance) => {
             anyhow::ensure!(
-                !instance.is_running(),
+                !is_running(paths, db, game, name)?,
                 crate::instance::InstanceError::AlreadyRunning(instance.identity.name.clone())
             );
             crate::backup::restore_at(
@@ -323,12 +293,8 @@ pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Res
         crate::instance::InstanceError::InvalidName("Choose a different name".into())
     );
     let _locks = lifecycle::LifecycleLocks::acquire(paths, game, &[old, new])?;
-    let instance = load(paths, db, game, old)?;
-    let running = match &instance {
-        GameInstance::Valheim(i) => podman_valheim::is_running(paths, db, i)?,
-        GameInstance::Rust(i) => rust::is_running(paths, db, i)?,
-        GameInstance::Generic(i) => i.is_running(),
-    };
+    load(paths, db, game, old)?;
+    let running = is_running(paths, db, game, old)?;
     anyhow::ensure!(
         !running,
         crate::instance::InstanceError::AlreadyRunning(old.into())
@@ -346,11 +312,8 @@ pub fn rename(paths: &Paths, db: &Db, game: GameId, old: &str, new: &str) -> Res
             .context("could not recover original directory after rename failure")?;
         return Err(error);
     }
-    let renamed = load(paths, db, game, new)?;
-    if let GameInstance::Valheim(instance) = &renamed {
-        podman_valheim::sync_spec(paths, db, instance)?;
-    }
-    Ok(renamed)
+    dispatch::sync_spec(paths, db, game, new)?;
+    load(paths, db, game, new)
 }
 
 pub fn clone_rust(paths: &Paths, db: &Db, source: &str, target: &str) -> Result<RustInstance> {

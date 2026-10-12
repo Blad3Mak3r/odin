@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::validate_instance_name;
-use crate::game::{GameId, SEVEN_DAYS_TEMPLATE_BASELINE_FILE, rust};
+use crate::game::{GameId, rust};
 use crate::paths::Paths;
 
 pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) -> Result<()> {
@@ -222,7 +222,10 @@ pub struct GenericGameInstance {
 }
 
 impl GenericGameInstance {
-    pub fn is_running(&self) -> bool {
+    /// Whether the host process of an instance that has not been migrated to
+    /// a container is alive. Use [`crate::game::instances::is_running`] to
+    /// ask about an instance whose game may run in a container.
+    pub fn is_running_directly(&self) -> bool {
         matches!((self.pid, self.pid_started_at), (Some(pid), Some(started_at)) if crate::instance::process::is_alive(pid, started_at))
     }
 
@@ -340,27 +343,23 @@ pub fn create_generic(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now();
-    if game == GameId::SevenDaysToDie {
-        copy_seven_days_to_die_config(paths, name)?;
-    } else {
-        std::fs::create_dir_all(paths.game_instance_dir(game, name))?;
-        let pending = GenericGameInstance {
-            identity: GameInstanceIdentity {
-                tags: Vec::new(),
-                id: id.clone(),
-                game,
-                name: name.to_string(),
-                created_at,
-            },
-            config: config.clone(),
-            pid: None,
-            pid_started_at: None,
-            last_started_at: None,
-            last_stopped_at: None,
-        };
-        if game == GameId::RunescapeDragonwilds {
-            crate::game::config_documents::initialize(paths, &pending)?;
-        }
+    std::fs::create_dir_all(paths.game_instance_dir(game, name))?;
+    let pending = GenericGameInstance {
+        identity: GameInstanceIdentity {
+            tags: Vec::new(),
+            id: id.clone(),
+            game,
+            name: name.to_string(),
+            created_at,
+        },
+        config: config.clone(),
+        pid: None,
+        pid_started_at: None,
+        last_started_at: None,
+        last_stopped_at: None,
+    };
+    if game == GameId::RunescapeDragonwilds {
+        crate::game::config_documents::initialize(paths, &pending)?;
     }
     let mut conn = db.conn();
     let tx = conn.transaction()?;
@@ -372,47 +371,6 @@ pub fn create_generic(
     tx.commit()?;
     drop(conn);
     load_generic(db, game, name)?.context("failed to load newly-created game instance")
-}
-
-pub fn copy_seven_days_to_die_config(paths: &Paths, name: &str) -> Result<()> {
-    let template = paths
-        .game_install_dir(GameId::SevenDaysToDie)
-        .join("serverconfig.xml");
-    anyhow::ensure!(
-        template.is_file(),
-        "7 Days to Die is not installed (expected configuration template at {}); install it before creating an instance",
-        template.display()
-    );
-
-    let destination = paths
-        .game_instance_dir(GameId::SevenDaysToDie, name)
-        .join("config/serverconfig.xml");
-    anyhow::ensure!(
-        !destination.exists(),
-        "7 Days to Die configuration already exists at {}",
-        destination.display()
-    );
-    let parent = destination
-        .parent()
-        .context("7 Days to Die configuration path has no parent")?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create {}", parent.display()))?;
-    std::fs::copy(&template, &destination).with_context(|| {
-        format!(
-            "failed to copy 7 Days to Die configuration from {} to {}",
-            template.display(),
-            destination.display()
-        )
-    })?;
-    std::fs::copy(&template, parent.join(SEVEN_DAYS_TEMPLATE_BASELINE_FILE)).with_context(
-        || {
-            format!(
-                "failed to save 7 Days to Die configuration template from {}",
-                template.display()
-            )
-        },
-    )?;
-    Ok(())
 }
 
 /// Every persisted port, including stopped servers. Allocation uses this to
@@ -527,8 +485,8 @@ pub fn set_generic_auto_restart(
 }
 
 /// Changes a compiled generic driver's transport settings and its
-/// game-owned configuration document. Configuration is deliberately only
-/// mutable while stopped: Dragonwilds discards some live changes and the
+/// game-owned configuration document. Callers must only change configuration
+/// while the server is stopped: Dragonwilds discards some live changes and the
 /// other drivers do not provide an atomic live reload contract.
 pub fn update_generic_config(
     db: &crate::db::Db,
@@ -540,10 +498,7 @@ pub fn update_generic_config(
         is_generic_game(game),
         "{game} does not use generic configuration"
     );
-    let current = load_generic(db, game, name)?.context("game instance not found")?;
-    if current.is_running() {
-        bail!(crate::instance::InstanceError::AlreadyRunning(name.into()));
-    }
+    load_generic(db, game, name)?.context("game instance not found")?;
     let persisted = config.clone();
     validate_generic_config(game, &persisted)?;
     db.conn().execute(
@@ -1032,48 +987,16 @@ mod tests {
     }
 
     #[test]
-    fn seven_days_creation_copies_the_installed_server_config() {
-        let (paths, db) = temp_context("7d2d-config-copy");
-        let template = "<?xml version=\"1.0\"?>\n<ServerSettings><property name=\"ServerName\" value=\"Default\"/></ServerSettings>\n";
-        write_seven_days_template(&paths, template);
+    fn seven_days_creation_needs_neither_the_game_nor_a_config_file() {
+        let (paths, db) = temp_context("7d2d-offline-create");
 
         create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
 
-        let config = paths
-            .game_instance_dir(GameId::SevenDaysToDie, "undead")
-            .join("config/serverconfig.xml");
-        assert_eq!(std::fs::read_to_string(config).unwrap(), template);
-        assert_eq!(
-            std::fs::read_to_string(
-                paths
-                    .game_instance_dir(GameId::SevenDaysToDie, "undead")
-                    .join(format!("config/{SEVEN_DAYS_TEMPLATE_BASELINE_FILE}")),
-            )
-            .unwrap(),
-            template
-        );
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn seven_days_creation_requires_the_installed_server_config() {
-        let (paths, db) = temp_context("7d2d-missing-config");
-
-        let error = create_generic(&paths, &db, GameId::SevenDaysToDie, "undead")
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("install it before creating an instance"));
-        assert!(
-            load_generic(&db, GameId::SevenDaysToDie, "undead")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            !paths
-                .game_instance_dir(GameId::SevenDaysToDie, "undead")
-                .exists()
-        );
+        // The server seeds its native document from its own private install
+        // when it first starts; creation never writes it.
+        let root = paths.game_instance_dir(GameId::SevenDaysToDie, "undead");
+        assert!(root.is_dir());
+        assert!(!root.join("config/serverconfig.xml").exists());
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

@@ -10,8 +10,8 @@ use tokio::io::BufReader;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::game::{self, rust, valheim};
-use crate::instance::{Instance, process};
+use crate::game;
+use crate::instance::process;
 use crate::paths::{self, Paths};
 use crate::steamcmd::SteamCmd;
 use crate::supervisor::protocol::{
@@ -19,9 +19,7 @@ use crate::supervisor::protocol::{
 };
 use crate::supervisor::server::{StatsHandle, refresh_stats_periodically};
 
-use super::{Launch, RuntimeSpec};
-
-const RCON_QUIT_TIMEOUT: Duration = Duration::from_secs(5);
+use super::RuntimeSpec;
 
 enum Action {
     Stop(u64),
@@ -140,11 +138,11 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
                 return Ok(());
             }
             _ = tokio::signal::ctrl_c() => {
-                stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec.launch).await?;
+                stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec).await?;
                 return Ok(());
             }
             _ = sigterm.recv() => {
-                stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec.launch).await?;
+                stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec).await?;
                 return Ok(());
             }
             Ok((stream, _)) = control.accept() => {
@@ -162,13 +160,13 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener, events: UnixListener
             Some(action) = actions_rx.recv() => match action {
                 Action::Stop(timeout) => {
                     stop_child(
-                        &mut child, pid, pid_started_at, Duration::from_secs(timeout), &spec.launch,
+                        &mut child, pid, pid_started_at, Duration::from_secs(timeout), &spec,
                     ).await?;
                     return Ok(());
                 }
                 Action::Update(reply) => {
                     let update = async {
-                        stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec.launch)
+                        stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec)
                             .await?;
                         update_payload(&spec).await?;
                         child = spawn_child(&spec).await?;
@@ -264,26 +262,7 @@ async fn spawn_child(spec: &RuntimeSpec) -> Result<tokio::process::Child> {
     let logs = paths::instance_logs_dir(&spec.instance_dir);
     std::fs::create_dir_all(&logs)?;
     let console_log = logs.join("console.log");
-    let command = match &spec.launch {
-        Launch::Valheim { instance } => valheim::build_command_at(
-            &Instance {
-                dir: spec.instance_dir.clone(),
-                state: instance.clone(),
-            },
-            &spec.install_dir,
-            &paths::instance_saves_dir(&spec.instance_dir),
-            &console_log,
-        )?,
-        Launch::Rust(launch) => {
-            rust::prepare_runtime(
-                &spec.install_dir,
-                &spec.instance_dir,
-                &spec.steamcmd_dir,
-                launch,
-            )?;
-            rust::build_command_at(&spec.install_dir, &console_log, launch)?
-        }
-    };
+    let command = spec.launch.server_command(spec, &console_log)?;
     process::spawn_with_cgroup(command, None).await
 }
 
@@ -292,19 +271,9 @@ async fn stop_child(
     pid: u32,
     started_at: i64,
     timeout: Duration,
-    launch: &Launch,
+    spec: &RuntimeSpec,
 ) -> Result<()> {
-    // SIGINT ends Rust without saving the world; its console `quit` saves
-    // first, so SIGINT is only the fallback when the command can't be sent.
-    let quit_sent = match launch {
-        Launch::Rust(rust) => tokio::time::timeout(
-            RCON_QUIT_TIMEOUT,
-            rust::rcon::quit(rust.rcon_port, &rust.rcon_password),
-        )
-        .await
-        .is_ok_and(|result| result.is_ok()),
-        Launch::Valheim { .. } => false,
-    };
+    let quit_sent = spec.launch.request_graceful_stop(&spec.instance_dir).await;
     if !quit_sent {
         let _ = process::send_signal(pid, started_at, sysinfo::Signal::Interrupt);
     }
@@ -394,6 +363,8 @@ async fn handle_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::rust;
+    use crate::podman::Launch;
     use crate::supervisor::server::STATS_REFRESH_INTERVAL;
 
     async fn stats_response(stats: StatsHandle, pid: u32) -> Response {
@@ -517,6 +488,18 @@ chmod +x "$d/valheim_server.x86_64""#,
         })
     }
 
+    fn spec_for(launch: Launch) -> RuntimeSpec {
+        RuntimeSpec {
+            protocol_version: RuntimeSpec::PROTOCOL_VERSION,
+            instance_id: "id".into(),
+            instance_dir: PathBuf::from("/nonexistent/instance"),
+            install_dir: PathBuf::from("/nonexistent/install"),
+            steamcmd_dir: PathBuf::from("/nonexistent/steamcmd"),
+            update_log: PathBuf::from("/nonexistent/update.log"),
+            launch,
+        }
+    }
+
     fn spawn_shell(body: &str) -> (tokio::process::Child, u32, i64) {
         let child = tokio::process::Command::new("sh")
             .args(["-c", body])
@@ -551,7 +534,7 @@ chmod +x "$d/valheim_server.x86_64""#,
             pid,
             started_at,
             Duration::from_secs(10),
-            &rust_launch(port),
+            &spec_for(rust_launch(port)),
         )
         .await
         .unwrap();
@@ -579,12 +562,112 @@ chmod +x "$d/valheim_server.x86_64""#,
             pid,
             started_at,
             Duration::from_secs(10),
-            &rust_launch(port),
+            &spec_for(rust_launch(port)),
         )
         .await
         .unwrap();
 
         assert!(begun.elapsed() < Duration::from_secs(5));
+    }
+
+    fn seven_days_instance_dir(telnet_port: u16) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("odin-7d2d-stop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        std::fs::write(
+            dir.join("config/serverconfig.xml"),
+            format!(
+                r#"<ServerSettings>
+<property name="TelnetEnabled" value="true"/>
+<property name="TelnetPort" value="{telnet_port}"/>
+<property name="TelnetPassword" value="secret"/>
+</ServerSettings>"#
+            ),
+        )
+        .unwrap();
+        dir
+    }
+
+    fn seven_days_spec(instance_dir: PathBuf) -> RuntimeSpec {
+        RuntimeSpec {
+            instance_dir,
+            ..spec_for(Launch::SevenDaysToDie(
+                crate::game::seven_days_to_die::SevenDaysLaunch {
+                    name: "undead".into(),
+                    port: 26900,
+                    telnet_port: None,
+                },
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn seven_days_stop_asks_the_console_to_shut_down_instead_of_signalling() {
+        use std::io::{BufRead, Write};
+
+        let flag = std::env::temp_dir().join(format!("odin-sigint-{}", uuid::Uuid::new_v4()));
+        let (mut child, pid, started_at) = spawn_shell(&format!(
+            "trap 'touch {}' INT; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            flag.display()
+        ));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // A fake console: greeting, password, then the command, which ends
+        // the "server".
+        let console = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            stream.write_all(b"Please enter password:\r\n").unwrap();
+            let mut password = String::new();
+            reader.read_line(&mut password).unwrap();
+            stream.write_all(b"Logon successful.\r\n").unwrap();
+            let mut command = String::new();
+            reader.read_line(&mut command).unwrap();
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            (password, command)
+        });
+        let spec = seven_days_spec(seven_days_instance_dir(port));
+
+        stop_child(&mut child, pid, started_at, Duration::from_secs(10), &spec)
+            .await
+            .unwrap();
+
+        let (password, command) = console.join().unwrap();
+        assert_eq!(password.trim(), "secret");
+        assert_eq!(command.trim(), "shutdown");
+        assert!(
+            !flag.exists(),
+            "SIGINT must not be sent when shutdown was delivered"
+        );
+    }
+
+    #[tokio::test]
+    async fn seven_days_stop_falls_back_to_sigint_when_the_console_is_unreachable() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let (mut child, pid, started_at) =
+            spawn_shell("trap 'exit 0' INT; while :; do sleep 0.1; done");
+        let spec = seven_days_spec(seven_days_instance_dir(port));
+
+        let begun = std::time::Instant::now();
+        stop_child(&mut child, pid, started_at, Duration::from_secs(10), &spec)
+            .await
+            .unwrap();
+
+        assert!(begun.elapsed() < Duration::from_secs(8));
+    }
+
+    #[tokio::test]
+    async fn seven_days_stop_without_an_enabled_console_signals_the_server() {
+        let (mut child, pid, started_at) =
+            spawn_shell("trap 'exit 0' INT; while :; do sleep 0.1; done");
+        // No generated configuration, so there is no console to ask.
+        let spec = seven_days_spec(std::env::temp_dir().join("odin-7d2d-no-config"));
+
+        stop_child(&mut child, pid, started_at, Duration::from_secs(10), &spec)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

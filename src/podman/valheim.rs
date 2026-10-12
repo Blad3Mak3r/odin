@@ -14,9 +14,7 @@ use crate::paths::{self, Paths};
 use super::lifecycle::{self, ContainerGame, StopReason};
 use super::{Launch, Mount, bind, write_runtime_spec};
 
-pub use super::lifecycle::RuntimeHealth;
-
-struct Valheim;
+pub(super) struct Valheim;
 
 impl ContainerGame for Valheim {
     const GAME: GameId = GameId::Valheim;
@@ -68,38 +66,18 @@ impl ContainerGame for Valheim {
     fn running_directly(instance: &Instance) -> Result<bool> {
         direct::is_running(instance)
     }
-}
 
-pub fn migrate(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::migrate::<Valheim>(paths, db, name)
+    async fn stop_directly(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
+        direct::stop(paths, db, &instance.state.name).await
+    }
 }
 
 pub fn mark_new_instance(db: &Db, instance: &Instance) -> Result<()> {
     lifecycle::mark_new_instance::<Valheim>(db, instance)
 }
 
-pub fn is_migrated(db: &Db, instance: &Instance) -> Result<bool> {
-    lifecycle::is_migrated::<Valheim>(db, instance)
-}
-
-pub async fn runtime_health(paths: &Paths, db: &Db, name: &str) -> Result<RuntimeHealth> {
-    lifecycle::runtime_health::<Valheim>(paths, db, name).await
-}
-
-pub async fn repair(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::repair::<Valheim>(paths, db, name).await
-}
-
-pub fn sync_spec(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-    lifecycle::sync_spec::<Valheim>(paths, db, instance)
-}
-
 pub fn is_running(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
     lifecycle::is_running::<Valheim>(paths, db, instance)
-}
-
-pub async fn is_running_async(paths: &Paths, db: &Db, instance: &Instance) -> Result<bool> {
-    lifecycle::is_running_async::<Valheim>(paths, db, instance).await
 }
 
 pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
@@ -114,18 +92,11 @@ pub async fn restart(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     lifecycle::restart::<Valheim>(paths, db, name).await
 }
 
-pub async fn update(paths: &Paths, db: &Db, name: &str) -> Result<()> {
-    lifecycle::update::<Valheim>(paths, db, name).await
-}
-
-pub fn remove(paths: &Paths, db: &Db, instance: &Instance) -> Result<()> {
-    lifecycle::remove::<Valheim>(paths, db, instance)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::container_instances;
+    use crate::podman::dispatch;
     use crate::podman::lifecycle::require_migrated;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
@@ -211,7 +182,9 @@ mod tests {
         let stale_socket = socket_dir.join("stale.sock");
         let stale_listener = UnixListener::bind(&stale_socket).unwrap();
 
-        repair(&paths, &db, "valheim").await.unwrap();
+        dispatch::repair(&paths, &db, GameId::Valheim, "valheim")
+            .await
+            .unwrap();
 
         assert_eq!(std::fs::read_to_string(save).unwrap(), "save data");
         assert_eq!(std::fs::read_to_string(backup).unwrap(), "backup data");
@@ -269,7 +242,7 @@ mod tests {
         std::fs::create_dir_all(&saves).unwrap();
         std::fs::write(saves.join("world.db"), "save").unwrap();
 
-        remove(&paths, &db, &instance).unwrap();
+        dispatch::remove(&paths, &db, GameId::Valheim, "valheim").unwrap();
 
         assert!(server.join().unwrap().starts_with("DELETE "));
         assert!(!runtime.exists());
@@ -349,7 +322,9 @@ mod tests {
         let identity = Valheim::identity(&db, &instance).unwrap();
         container_instances::mark_podman(&db, &identity.id).unwrap();
 
-        let error = repair(&paths, &db, "valheim").await.unwrap_err();
+        let error = dispatch::repair(&paths, &db, GameId::Valheim, "valheim")
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("already running"));
         let requests = server.join().unwrap();

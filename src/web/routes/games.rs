@@ -203,7 +203,8 @@ pub async fn install_game(
                 .data_dir
                 .join("logs")
                 .join(format!("steamcmd-{}-install.log", driver.id()));
-            let steamcmd = crate::steamcmd::SteamCmd::new(paths.steamcmd_dir());
+            let steamcmd = crate::steamcmd::SteamCmd::new(paths.steamcmd_dir())
+                .with_platform(driver.steam_platform());
             steamcmd.update_app_expect_file(
                 driver.steam_app_id(),
                 &install_dir,

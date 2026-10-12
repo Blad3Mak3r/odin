@@ -92,6 +92,11 @@ pub trait GameDriver: Sync {
     fn id(&self) -> GameId;
     fn display_name(&self) -> &'static str;
     fn steam_app_id(&self) -> &'static str;
+    /// Platform SteamCMD must be forced to when the default selection makes
+    /// the app fail to install.
+    fn steam_platform(&self) -> Option<&'static str> {
+        None
+    }
     fn server_binary(&self) -> &'static str;
     fn capabilities(&self) -> GameCapabilities;
     fn port_requirements(&self) -> GamePortRequirements;
@@ -274,6 +279,10 @@ impl GameDriver for SevenDaysToDieDriver {
     }
     fn steam_app_id(&self) -> &'static str {
         "294420"
+    }
+    fn steam_platform(&self) -> Option<&'static str> {
+        // Without it SteamCMD stops with "Missing configuration".
+        Some("linux")
     }
     fn server_binary(&self) -> &'static str {
         "7DaysToDieServer.x86_64"

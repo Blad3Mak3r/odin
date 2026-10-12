@@ -1,0 +1,72 @@
+name: CodeQL
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      languages: ${{ steps.filter.outputs.languages }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Pull requests only analyze the languages whose files changed; pushes
+      # to main always analyze everything.
+      - name: Select languages
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          files=""
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          fi
+          matches() { [ "$EVENT" != "pull_request" ] || grep -Eq "$1" <<<"$files"; }
+          langs=()
+          if matches '^(src/|Cargo\.(toml|lock)$|build\.rs$)'; then langs+=(rust); fi
+          if matches '^web/'; then langs+=(javascript-typescript); fi
+          if matches '^\.github/workflows/'; then langs+=(actions); fi
+          echo "languages=$(jq -cn '$ARGS.positional' --args "${langs[@]}")" >> "$GITHUB_OUTPUT"
+
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    needs: changes
+    if: needs.changes.outputs.languages != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.changes.outputs.languages) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

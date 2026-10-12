@@ -235,32 +235,17 @@ impl GenericGameInstance {
 }
 
 pub fn is_generic_game(game: GameId) -> bool {
-    matches!(
-        game,
-        GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds | GameId::SevenDaysToDie
-    )
+    matches!(game, GameId::Palworld | GameId::SevenDaysToDie)
 }
 
 pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
     match game {
-        GameId::VRising => GenericGameConfig {
-            port: 27015,
-            query_port: Some(27016),
-            admin_port: Some(25575),
-            auto_restart: false,
-        },
         GameId::Palworld => GenericGameConfig {
             port: 8211,
             // Palworld's Steam server browser listener otherwise defaults to
             // 27015 for every process. It is a launch argument, rather than
             // an INI setting, and must be allocated per instance.
             query_port: Some(27015),
-            admin_port: None,
-            auto_restart: false,
-        },
-        GameId::RunescapeDragonwilds => GenericGameConfig {
-            port: 7777,
-            query_port: Some(8888),
             admin_port: None,
             auto_restart: false,
         },
@@ -344,23 +329,6 @@ pub fn create_generic(
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now();
     std::fs::create_dir_all(paths.game_instance_dir(game, name))?;
-    let pending = GenericGameInstance {
-        identity: GameInstanceIdentity {
-            tags: Vec::new(),
-            id: id.clone(),
-            game,
-            name: name.to_string(),
-            created_at,
-        },
-        config: config.clone(),
-        pid: None,
-        pid_started_at: None,
-        last_started_at: None,
-        last_stopped_at: None,
-    };
-    if game == GameId::RunescapeDragonwilds {
-        crate::game::config_documents::initialize(paths, &pending)?;
-    }
     let mut conn = db.conn();
     let tx = conn.transaction()?;
     tx.execute(
@@ -388,12 +356,7 @@ pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
             instance.config.rcon_port,
         ]);
     }
-    for game in [
-        GameId::VRising,
-        GameId::Palworld,
-        GameId::RunescapeDragonwilds,
-        GameId::SevenDaysToDie,
-    ] {
+    for game in [GameId::Palworld, GameId::SevenDaysToDie] {
         for instance in list_generic(db, game)? {
             ports.extend(claimed_ports(game, &instance.config)?);
         }
@@ -486,8 +449,8 @@ pub fn set_generic_auto_restart(
 
 /// Changes a compiled generic driver's transport settings and its
 /// game-owned configuration document. Callers must only change configuration
-/// while the server is stopped: Dragonwilds discards some live changes and the
-/// other drivers do not provide an atomic live reload contract.
+/// while the server is stopped: the drivers do not provide an atomic live reload
+/// contract.
 pub fn update_generic_config(
     db: &crate::db::Db,
     game: GameId,
@@ -527,11 +490,6 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
     if game == GameId::Palworld && config.admin_port.is_some() {
         bail!(InvalidGenericConfig(
             "Palworld REST API port belongs in PalWorldSettings.ini".into()
-        ));
-    }
-    if game == GameId::RunescapeDragonwilds && config.query_port.is_none() {
-        bail!(InvalidGenericConfig(
-            "RuneScape: Dragonwilds beacon port is required".into()
         ));
     }
     if game == GameId::SevenDaysToDie && config.admin_port.is_none() {
@@ -943,21 +901,6 @@ mod tests {
         assert_eq!(resolved.name, "rust-server");
         assert!(identity_by_id(&db, "missing").unwrap().is_none());
 
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn dragonwilds_operational_configuration_does_not_require_game_file_values() {
-        let (paths, db) = temp_context("dragonwilds-config");
-        let instance = create_generic(&paths, &db, GameId::RunescapeDragonwilds, "dragon").unwrap();
-        let updated = update_generic_config(
-            &db,
-            GameId::RunescapeDragonwilds,
-            "dragon",
-            &instance.config,
-        )
-        .unwrap();
-        assert_eq!(updated.config.port, instance.config.port);
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

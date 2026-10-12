@@ -23,8 +23,8 @@ updates supported servers through SteamCMD, runs isolated named instances,
 supervises their processes, exposes each game's configuration, and provides
 backups plus the game-specific capabilities Odin supports.
 
-The currently compiled game drivers are Valheim, Rust, V Rising, Palworld,
-RuneScape: Dragonwilds, and 7 Days to Die. Odin is not a general-purpose
+The currently compiled game drivers are Valheim, Rust, Palworld, and
+7 Days to Die. Odin is not a general-purpose
 plugin host: supported games ship as compiled drivers with explicit launch,
 storage, and configuration contracts.
 
@@ -74,10 +74,8 @@ capabilities are built in the web API and dashboard.
     readiness.
   - Rust supports access lists and RCON-backed administration, but not Odin
     mod management, player views, or readiness detection.
-  - V Rising supports access lists and RCON-backed administration.
   - Palworld supports player and access-list operations through its local,
     authenticated REST API, plus readiness detection.
-  - RuneScape: Dragonwilds supports access-list operations.
   - 7 Days to Die supports player views, mod management, and readiness
     detection.
 - Game configuration follows the native contract for each server. Odin keeps
@@ -91,8 +89,7 @@ capabilities are built in the web API and dashboard.
 - Valheim's shared BepInEx and Thunderstore store is deduplicated globally.
   This mod model is specific to Valheim; mod support is not presumed for the
   other games.
-- Linux only; there is no Windows or macOS host support. V Rising runs its
-  Windows dedicated server through an Odin-managed Proton-GE runtime.
+- Linux only; there is no Windows or macOS host support.
 - Odin's dashboard assets are embedded in the binary. Node.js is needed to
   build those assets, not to run the resulting service.
 

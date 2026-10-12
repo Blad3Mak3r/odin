@@ -190,12 +190,7 @@ pub async fn install_game(
         .jobs
         .spawn(JobKindDescr::SteamcmdInstall { game }, move |logger| {
             match game {
-                GameId::Valheim
-                | GameId::Rust
-                | GameId::VRising
-                | GameId::Palworld
-                | GameId::RunescapeDragonwilds
-                | GameId::SevenDaysToDie => {}
+                GameId::Valheim | GameId::Rust | GameId::Palworld | GameId::SevenDaysToDie => {}
             }
             let driver = game::driver(game);
             let install_dir = paths.game_install_dir(game);
@@ -226,12 +221,7 @@ pub async fn list_all_instances(
     let views = run_blocking(move || {
         let mut views = valheim_views(&paths, &db)?;
         views.extend(rust_views(&paths, &db)?);
-        for game in [
-            GameId::VRising,
-            GameId::Palworld,
-            GameId::RunescapeDragonwilds,
-            GameId::SevenDaysToDie,
-        ] {
+        for game in [GameId::Palworld, GameId::SevenDaysToDie] {
             views.extend(generic_views(&paths, &db, game)?);
         }
         views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
@@ -250,10 +240,7 @@ pub async fn list_instances(
     let views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
         GameId::Rust => rust_views(&paths, &db),
-        GameId::VRising
-        | GameId::Palworld
-        | GameId::RunescapeDragonwilds
-        | GameId::SevenDaysToDie => generic_views(&paths, &db, game),
+        GameId::Palworld | GameId::SevenDaysToDie => generic_views(&paths, &db, game),
     })
     .await?;
     Ok(Json(views))
@@ -408,10 +395,7 @@ pub async fn update_config_by_id(
                 .map_err(|error| BadRequest(format!("invalid Rust configuration: {error}")))?;
             update_rust_config_for(state, identity.name, request).await
         }
-        GameId::VRising
-        | GameId::Palworld
-        | GameId::RunescapeDragonwilds
-        | GameId::SevenDaysToDie => {
+        GameId::Palworld | GameId::SevenDaysToDie => {
             let request = serde_json::from_value(request)
                 .map_err(|error| BadRequest(format!("invalid game configuration: {error}")))?;
             update_generic_config_for(state, identity.game, identity.name, request).await
@@ -469,38 +453,6 @@ pub async fn execute_rust_rcon_by_id(
         return Err(BadRequest("this API is only available for Rust instances".into()).into());
     }
     execute_rust_rcon_for(state, identity.name, request).await
-}
-
-/// Executes V Rising's Source RCON command through the loopback listener
-/// configured by Odin. Its password is never returned to API clients.
-pub async fn execute_vrising_rcon_by_id(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<RconCommandRequest>,
-) -> ApiResult<Json<RconCommandResponse>> {
-    let command = request.command.trim().to_string();
-    if command.is_empty() {
-        return Err(BadRequest("V Rising RCON command cannot be empty".to_string()).into());
-    }
-    if command.len() > 16 * 1024 {
-        return Err(BadRequest("V Rising RCON command must be at most 16 KiB".to_string()).into());
-    }
-    let identity = resolve_instance_id(&state, &id).await?;
-    if identity.game != GameId::VRising {
-        return Err(BadRequest("this API is only available for V Rising instances".into()).into());
-    }
-    let db = state.db.clone();
-    let paths = state.paths.clone();
-    let name = identity.name;
-    let instance = run_blocking(move || {
-        game_instances::load_generic(&db, GameId::VRising, &name)?
-            .context("V Rising instance does not exist")
-    })
-    .await?;
-    let output =
-        run_blocking(move || crate::game::vrising::execute_rcon(&paths, &instance, &command))
-            .await?;
-    Ok(Json(RconCommandResponse { output }))
 }
 
 async fn wipe_rust_map_for(
@@ -806,7 +758,7 @@ async fn get_logs_for(
         load_view(&paths, &db, game, &name)?;
         let log_file = crate::paths::instance_logs_dir(&paths.game_instance_dir(game, &name))
             .join("console.log");
-        let mut lines = if log_file.is_file() {
+        let lines = if log_file.is_file() {
             crate::commands::logs::read_tail(&log_file, query.lines)?
                 .lines()
                 .map(str::to_string)
@@ -814,21 +766,6 @@ async fn get_logs_for(
         } else {
             Vec::new()
         };
-        // Dragonwilds writes its Unreal server log independently from stdout.
-        // Include it in Odin's normal log view rather than making operators
-        // hunt through the isolated runtime tree after a failed start.
-        if game == GameId::RunescapeDragonwilds {
-            let native_log = paths
-                .game_instance_dir(game, &name)
-                .join("runtime/RSDragonwilds/Saved/Logs/RSDragonwilds.log");
-            if native_log.is_file() {
-                lines.extend(
-                    crate::commands::logs::read_tail(&native_log, query.lines)?
-                        .lines()
-                        .map(|line| format!("[RSDragonwilds] {line}")),
-                );
-            }
-        }
         Ok(lines)
     })
     .await?;
@@ -1334,7 +1271,7 @@ pub(crate) fn rust_resource_snapshot(
 
 /// Samples a generic managed server: a container when its game runs in one
 /// and the instance has been migrated, otherwise its host process including
-/// descendants such as Proton's Wine processes. Fails when liveness cannot be
+/// its descendants. Fails when liveness cannot be
 /// determined, so a caller never mistakes "unknown" for "stopped".
 pub(crate) fn generic_resource_snapshot(
     state: &AppState,

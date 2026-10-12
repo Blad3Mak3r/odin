@@ -303,6 +303,54 @@ mod tests {
     }
 
     #[test]
+    fn v30_removes_unsupported_games_and_their_dependent_records() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 30 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES
+                ('pal', 'palworld', 'pal', '2026-01-01T00:00:00Z'),
+                ('vr', 'vrising', 'vr', '2026-01-01T00:00:00Z'),
+                ('dw', 'runescape-dragonwilds', 'dw', '2026-01-01T00:00:00Z');
+             INSERT INTO generic_game_instance_configs (instance_id, port, config_json) VALUES
+                ('pal', 8211, '{}'),
+                ('vr', 27015, '{}'),
+                ('dw', 7777, '{}');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        run(&mut conn).unwrap();
+
+        let games: Vec<String> = conn
+            .prepare("SELECT game FROM game_instances")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(games, vec!["palworld"]);
+        let configs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM generic_game_instance_configs",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(configs, 1);
+    }
+
+    #[test]
     fn v1_tmux_session_column_is_dropped_and_pid_columns_are_nullable() {
         let mut conn = Connection::open_in_memory().unwrap();
         // Apply only 0001 by hand, seed a v1-shaped row, then run the full

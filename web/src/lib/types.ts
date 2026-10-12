@@ -5,7 +5,7 @@ export interface VersionView {
   outdated_instances: string[]
 }
 
-export type GameId = 'valheim' | 'rust' | 'vrising' | 'palworld' | 'runescape-dragonwilds' | '7d2d'
+export type GameId = 'valheim' | 'rust' | 'palworld' | '7d2d'
 
 export interface GameCapabilities {
   backups: boolean
@@ -137,8 +137,6 @@ export interface SevenDaysPlayer {
   name: string
   platform_id: string | null
 }
-
-export type VRisingAccessListKind = 'admin' | 'banned'
 
 export interface ChangelogSection {
   title: string

@@ -52,7 +52,6 @@ import type {
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
-  VRisingAccessListKind,
   WebhookView,
 } from './types'
 
@@ -535,13 +534,6 @@ export function useExecuteRustRcon() {
   return useMutation({
     mutationFn: ({ id, command }: { id: string; command: string }) =>
       api.post<RconCommandResponse>(`/instances/${id}/rust/rcon`, { command }),
-  })
-}
-
-export function useExecuteVRisingRcon() {
-  return useMutation({
-    mutationFn: ({ id, command }: { id: string; command: string }) =>
-      api.post<RconCommandResponse>(`/instances/${id}/vrising/rcon`, { command }),
   })
 }
 
@@ -1130,29 +1122,6 @@ export function useRemoveRustAccessListEntry(id: string, kind: RustAccessListKin
   return useMutation({
     mutationFn: (entryId: string) =>
       api.delete<void>(`/instances/${id}/rust/lists/${kind}/${encodeURIComponent(entryId)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
-  })
-}
-
-export function useVRisingAccessList(id: string, kind: VRisingAccessListKind) {
-  return useQuery({
-    queryKey: ['managed-instances', id, 'lists', kind],
-    queryFn: () => api.get<ListView>(`/instances/${id}/vrising/lists/${kind}`),
-  })
-}
-
-export function useAddVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (entryId: string) => api.post<void>(`/instances/${id}/vrising/lists/${kind}`, { id: entryId }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
-  })
-}
-
-export function useRemoveVRisingAccessListEntry(id: string, kind: VRisingAccessListKind) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (entryId: string) => api.delete<void>(`/instances/${id}/vrising/lists/${kind}/${encodeURIComponent(entryId)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'lists', kind] }),
   })
 }

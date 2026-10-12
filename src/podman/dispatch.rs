@@ -44,7 +44,7 @@ macro_rules! for_container_game {
                 type $game_type = seven_days_to_die::SevenDaysToDie;
                 $body
             }
-            GameId::VRising | GameId::Palworld | GameId::RunescapeDragonwilds => $otherwise,
+            GameId::Palworld => $otherwise,
         }
     };
 }

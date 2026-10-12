@@ -84,12 +84,7 @@ pub fn ensure_available(
             }
         }
     }
-    for other_game in [
-        GameId::VRising,
-        GameId::Palworld,
-        GameId::RunescapeDragonwilds,
-        GameId::SevenDaysToDie,
-    ] {
+    for other_game in [GameId::Palworld, GameId::SevenDaysToDie] {
         for instance in crate::db::game_instances::list_generic(db, other_game)? {
             if game == other_game && instance.name() == name {
                 continue;

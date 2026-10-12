@@ -1,4 +1,4 @@
-//! Launch contracts shared by the first compiled, schema-driven game drivers.
+//! Launch contract of the host-process game drivers (currently Palworld).
 
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -39,16 +39,9 @@ pub fn prepare_start(
         );
     }
     match game {
-        GameId::VRising => {
-            crate::game::proton_ge::ensure(paths)?;
-            crate::game::config_documents::initialize(paths, &instance)?;
-        }
-        GameId::Palworld | GameId::RunescapeDragonwilds => {
+        GameId::Palworld => {
             prepare_native_runtime(paths, &instance)?;
             crate::game::config_documents::initialize(paths, &instance)?;
-            if game == GameId::RunescapeDragonwilds {
-                crate::game::config_documents::validate_dragonwilds(paths, &instance)?;
-            }
         }
         GameId::SevenDaysToDie => {
             bail!("7 Days to Die runs in Podman; start it through its container runtime")
@@ -65,8 +58,7 @@ fn native_runtime_dir(paths: &Paths, instance: &GenericGameInstance) -> PathBuf 
         .join("runtime")
 }
 
-/// Palworld and Dragonwilds write their Saved directory relative to their
-/// install tree. Build a lightweight, per-instance runtime with hard links
+/// Palworld writes its Saved directory relative to its install tree. Build a lightweight, per-instance runtime with hard links
 /// to immutable Steam files and a private Saved directory, so several
 /// servers never overwrite each other's configuration or worlds. The tree
 /// is refreshed on every start, making SteamCMD updates visible immediately.
@@ -74,12 +66,10 @@ fn prepare_native_runtime(paths: &Paths, instance: &GenericGameInstance) -> Resu
     let source = paths.game_install_dir(instance.identity.game);
     let destination = native_runtime_dir(paths, instance);
     sync_runtime_tree(&source, &destination, instance.identity.game, Path::new(""))?;
-    let saved = match instance.identity.game {
-        GameId::Palworld => destination.join("Pal/Saved"),
-        GameId::RunescapeDragonwilds => destination.join("RSDragonwilds/Saved"),
-        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => unreachable!(),
-    };
-    fs::create_dir_all(saved)?;
+    match instance.identity.game {
+        GameId::Palworld => fs::create_dir_all(destination.join("Pal/Saved"))?,
+        GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => unreachable!(),
+    }
     Ok(())
 }
 
@@ -120,8 +110,7 @@ fn sync_runtime_tree(
 fn is_instance_data_path(game: GameId, relative: &Path) -> bool {
     match game {
         GameId::Palworld => relative.starts_with("Pal/Saved"),
-        GameId::RunescapeDragonwilds => relative.starts_with("RSDragonwilds/Saved"),
-        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => false,
+        GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => false,
     }
 }
 
@@ -150,29 +139,12 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
         .open(log_dir.join("console.log"))?;
     let stderr = stdout.try_clone()?;
     let runtime_dir = match game {
-        GameId::Palworld | GameId::RunescapeDragonwilds => native_runtime_dir(paths, instance),
-        GameId::Valheim | GameId::Rust | GameId::VRising | GameId::SevenDaysToDie => {
-            install_dir.clone()
-        }
+        GameId::Palworld => native_runtime_dir(paths, instance),
+        GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => install_dir.clone(),
     };
     let binary = runtime_dir.join(driver(game).server_binary());
     let mut command = match game {
-        GameId::VRising => {
-            let proton = crate::game::proton_ge::binary(paths);
-            if !proton.is_file() {
-                bail!(
-                    "Proton-GE is not installed at {}; install the managed runtime before starting V Rising",
-                    proton.display()
-                );
-            }
-            let mut command = Command::new(proton);
-            command
-                .arg("run")
-                .arg(binary)
-                .env("STEAM_COMPAT_DATA_PATH", instance_dir.join("proton-prefix"));
-            command
-        }
-        GameId::Palworld | GameId::RunescapeDragonwilds => Command::new(binary),
+        GameId::Palworld => Command::new(binary),
         GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => {
             unreachable!("generic command called for a containerized or typed driver")
         }
@@ -184,20 +156,6 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
         .stderr(Stdio::from(stderr))
         .process_group(0);
     match game {
-        GameId::VRising => {
-            command
-                .arg("-persistentDataPath")
-                .arg(instance_dir.join("data"));
-            command
-                .arg("-gamePort")
-                .arg(instance.config.port.to_string());
-            if let Some(port) = instance.config.query_port {
-                command.arg("-queryPort").arg(port.to_string());
-            }
-            if let Some(port) = instance.config.admin_port {
-                command.arg("-rconPort").arg(port.to_string());
-            }
-        }
         GameId::Palworld => {
             let query_port = instance
                 .config
@@ -206,14 +164,6 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
             command
                 .arg(format!("-port={}", instance.config.port))
                 .arg(format!("-queryport={query_port}"));
-        }
-        GameId::RunescapeDragonwilds => {
-            command
-                .arg("-log")
-                .arg(format!("-Port={}", instance.config.port));
-            if let Some(port) = instance.config.query_port {
-                command.arg(format!("-BeaconPort={port}"));
-            }
         }
         GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => unreachable!(),
     }
@@ -311,11 +261,7 @@ mod tests {
             },
             config: GenericGameConfig {
                 port: if game == GameId::Palworld { 8211 } else { 7777 },
-                query_port: match game {
-                    GameId::Palworld => Some(27015),
-                    GameId::RunescapeDragonwilds => Some(8888),
-                    _ => None,
-                },
+                query_port: (game == GameId::Palworld).then_some(27015),
                 admin_port: None,
                 auto_restart: false,
             },
@@ -373,59 +319,6 @@ mod tests {
         assert_eq!(
             fs::read_to_string(runtime.join("Pal/Saved/SaveGames/world.sav")).unwrap(),
             "world"
-        );
-        fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn dragonwilds_command_passes_both_udp_ports() {
-        let dir =
-            std::env::temp_dir().join(format!("odin-dragon-command-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir.clone(),
-        };
-        let instance = generic_instance(GameId::RunescapeDragonwilds);
-
-        let command = build_command(&paths, &instance).unwrap();
-        let arguments = format!("{command:?}");
-        assert!(arguments.contains("-Port=7777"));
-        assert!(arguments.contains("-BeaconPort=8888"));
-        std::fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn vrising_command_uses_persistent_data_and_all_operational_ports() {
-        let dir =
-            std::env::temp_dir().join(format!("odin-vrising-command-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir.clone(),
-        };
-        let proton = crate::game::proton_ge::binary(&paths);
-        fs::create_dir_all(proton.parent().unwrap()).unwrap();
-        fs::write(&proton, "").unwrap();
-        let mut instance = generic_instance(GameId::VRising);
-        instance.config.port = 27015;
-        instance.config.query_port = Some(27016);
-        instance.config.admin_port = Some(25575);
-
-        let args: Vec<_> = build_command(&paths, &instance)
-            .unwrap()
-            .as_std()
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        for expected in [
-            ["-gamePort", "27015"],
-            ["-queryPort", "27016"],
-            ["-rconPort", "25575"],
-        ] {
-            assert!(args.windows(2).any(|pair| pair == expected));
-        }
-        assert!(
-            args.windows(2).any(|pair| pair[0] == "-persistentDataPath"
-                && pair[1].ends_with("instances/server/data"))
         );
         fs::remove_dir_all(paths.data_dir).ok();
     }

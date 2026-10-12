@@ -11,12 +11,10 @@ pub mod generic;
 pub mod instances;
 pub mod palworld;
 pub mod ports;
-pub mod proton_ge;
 pub mod rust;
 pub mod seven_days_to_die;
 pub mod update;
 pub mod valheim;
-pub mod vrising;
 
 pub const SEVEN_DAYS_TEMPLATE_BASELINE_FILE: &str = ".odin-serverconfig-template.xml";
 
@@ -25,9 +23,7 @@ pub const SEVEN_DAYS_TEMPLATE_BASELINE_FILE: &str = ".odin-serverconfig-template
 pub enum GameId {
     Valheim,
     Rust,
-    VRising,
     Palworld,
-    RunescapeDragonwilds,
     #[serde(rename = "7d2d")]
     SevenDaysToDie,
 }
@@ -37,9 +33,7 @@ impl GameId {
         match self {
             Self::Valheim => "valheim",
             Self::Rust => "rust",
-            Self::VRising => "vrising",
             Self::Palworld => "palworld",
-            Self::RunescapeDragonwilds => "runescape-dragonwilds",
             Self::SevenDaysToDie => "7d2d",
         }
     }
@@ -58,9 +52,7 @@ impl FromStr for GameId {
         match value {
             "valheim" => Ok(Self::Valheim),
             "rust" => Ok(Self::Rust),
-            "vrising" => Ok(Self::VRising),
             "palworld" => Ok(Self::Palworld),
-            "runescape-dragonwilds" => Ok(Self::RunescapeDragonwilds),
             "7d2d" => Ok(Self::SevenDaysToDie),
             _ => Err(format!("unsupported game '{value}'")),
         }
@@ -87,7 +79,7 @@ pub struct GamePortRequirements {
 }
 
 /// A statically compiled game module. Runtime-installed modules are
-/// intentionally out of scope: both supported games ship with Odin.
+/// intentionally out of scope: every supported game ships with Odin.
 pub trait GameDriver: Sync {
     fn id(&self) -> GameId;
     fn display_name(&self) -> &'static str;
@@ -104,9 +96,7 @@ pub trait GameDriver: Sync {
 
 struct ValheimDriver;
 struct RustDriver;
-struct VRisingDriver;
 struct PalworldDriver;
-struct RunescapeDragonwildsDriver;
 struct SevenDaysToDieDriver;
 
 impl GameDriver for ValheimDriver {
@@ -181,34 +171,6 @@ impl GameDriver for RustDriver {
     }
 }
 
-impl GameDriver for VRisingDriver {
-    fn id(&self) -> GameId {
-        GameId::VRising
-    }
-    fn display_name(&self) -> &'static str {
-        "V Rising"
-    }
-    fn steam_app_id(&self) -> &'static str {
-        "1829350"
-    }
-    fn server_binary(&self) -> &'static str {
-        "VRisingServer.exe"
-    }
-    fn capabilities(&self) -> GameCapabilities {
-        GameCapabilities {
-            backups: true,
-            players: false,
-            mods: false,
-            access_lists: true,
-            readiness: false,
-            container_runtime: false,
-        }
-    }
-    fn port_requirements(&self) -> GamePortRequirements {
-        GamePortRequirements { count: 2 }
-    }
-}
-
 impl GameDriver for PalworldDriver {
     fn id(&self) -> GameId {
         GameId::Palworld
@@ -234,34 +196,6 @@ impl GameDriver for PalworldDriver {
     }
     fn port_requirements(&self) -> GamePortRequirements {
         GamePortRequirements { count: 1 }
-    }
-}
-
-impl GameDriver for RunescapeDragonwildsDriver {
-    fn id(&self) -> GameId {
-        GameId::RunescapeDragonwilds
-    }
-    fn display_name(&self) -> &'static str {
-        "RuneScape: Dragonwilds"
-    }
-    fn steam_app_id(&self) -> &'static str {
-        "4019830"
-    }
-    fn server_binary(&self) -> &'static str {
-        "RSDragonwildsServer.sh"
-    }
-    fn capabilities(&self) -> GameCapabilities {
-        GameCapabilities {
-            backups: true,
-            players: false,
-            mods: false,
-            access_lists: true,
-            readiness: false,
-            container_runtime: false,
-        }
-    }
-    fn port_requirements(&self) -> GamePortRequirements {
-        GamePortRequirements { count: 2 }
     }
 }
 
@@ -299,31 +233,20 @@ impl GameDriver for SevenDaysToDieDriver {
 
 static VALHEIM: ValheimDriver = ValheimDriver;
 static RUST: RustDriver = RustDriver;
-static V_RISING: VRisingDriver = VRisingDriver;
 static PALWORLD: PalworldDriver = PalworldDriver;
-static RUNESCAPE_DRAGONWILDS: RunescapeDragonwildsDriver = RunescapeDragonwildsDriver;
 static SEVEN_DAYS_TO_DIE: SevenDaysToDieDriver = SevenDaysToDieDriver;
 
 pub fn driver(game: GameId) -> &'static dyn GameDriver {
     match game {
         GameId::Valheim => &VALHEIM,
         GameId::Rust => &RUST,
-        GameId::VRising => &V_RISING,
         GameId::Palworld => &PALWORLD,
-        GameId::RunescapeDragonwilds => &RUNESCAPE_DRAGONWILDS,
         GameId::SevenDaysToDie => &SEVEN_DAYS_TO_DIE,
     }
 }
 
-pub fn drivers() -> [&'static dyn GameDriver; 6] {
-    [
-        &VALHEIM,
-        &RUST,
-        &V_RISING,
-        &PALWORLD,
-        &RUNESCAPE_DRAGONWILDS,
-        &SEVEN_DAYS_TO_DIE,
-    ]
+pub fn drivers() -> [&'static dyn GameDriver; 4] {
+    [&VALHEIM, &RUST, &PALWORLD, &SEVEN_DAYS_TO_DIE]
 }
 
 #[cfg(test)]

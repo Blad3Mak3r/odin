@@ -75,11 +75,7 @@ impl Paths {
     pub fn game_install_dir(&self, game: GameId) -> PathBuf {
         match game {
             GameId::Valheim => self.shared_install_dir(),
-            GameId::Rust
-            | GameId::VRising
-            | GameId::Palworld
-            | GameId::RunescapeDragonwilds
-            | GameId::SevenDaysToDie => self
+            GameId::Rust | GameId::Palworld | GameId::SevenDaysToDie => self
                 .data_dir
                 .join("games")
                 .join(game.as_str())
@@ -90,11 +86,7 @@ impl Paths {
     pub fn game_instance_dir(&self, game: GameId, name: &str) -> PathBuf {
         match game {
             GameId::Valheim => self.instance_dir(name),
-            GameId::Rust
-            | GameId::VRising
-            | GameId::Palworld
-            | GameId::RunescapeDragonwilds
-            | GameId::SevenDaysToDie => self
+            GameId::Rust | GameId::Palworld | GameId::SevenDaysToDie => self
                 .data_dir
                 .join("games")
                 .join(game.as_str())

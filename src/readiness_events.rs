@@ -22,10 +22,7 @@ pub fn is_ready_line(game: crate::game::GameId, line: &str) -> bool {
                 || line.contains("GamePref.ServerIsRunning = true")
                 || line.contains("Started game server")
         }
-        crate::game::GameId::Rust
-        | crate::game::GameId::VRising
-        | crate::game::GameId::Palworld
-        | crate::game::GameId::RunescapeDragonwilds => false,
+        crate::game::GameId::Rust | crate::game::GameId::Palworld => false,
     }
 }
 

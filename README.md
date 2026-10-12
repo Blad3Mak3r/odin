@@ -2,7 +2,7 @@
 
 **Odin** is a self-hosted web service for orchestrating dedicated game
 servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/),
-Rust, V Rising, Palworld, RuneScape: Dragonwilds, and 7 Days to Die from one binary and one
+Rust, Palworld, and 7 Days to Die from one binary and one
 web dashboard. In Norse mythology, Odin is
 the All-Father who watches over the nine realms; this Odin watches over your
 game servers — installing and updating them, running and supervising named
@@ -41,15 +41,14 @@ Rust v1 otherwise focuses on core operation.
   SteamCMD and a handful of OS shared libraries — no Python, no Docker, no
   terminal multiplexer required.
 - **Multiple games and UUID-addressed instances.** Orchestrate Valheim, Rust,
-  V Rising, Palworld, RuneScape: Dragonwilds, and 7 Days to Die side by side on one host.
+  Palworld, and 7 Days to Die side by side on one host.
   Each instance has a persistent UUID for dashboard navigation and API calls;
   names remain editable labels and may be reused by another game without
   sharing data or ports.
 
 - **Compiled game drivers.** Odin ships drivers rather than loading plugins:
-  V Rising runs in an isolated Proton-GE prefix; Palworld uses its local,
-  authenticated REST API; and Dragonwilds uses isolated runtime/config/save
-  trees with separate game and beacon UDP ports.
+  Palworld uses its local, authenticated REST API and an isolated
+  runtime/config/save tree.
 - **Detached by default, and restart-proof.** Every instance runs as its
   own directly-supervised background process, so it keeps running after you
   disconnect — and after `odin serve` itself is restarted or upgraded.
@@ -250,7 +249,7 @@ odin serve
 
 Then open `http://127.0.0.1:7331` in a browser: install/update the supported
 games, create and start instances, edit game-specific configuration, watch
-logs, and take backups. Rust and V Rising support access lists; Valheim
+logs, and take backups. Rust supports access lists; Valheim
 additionally offers mods, live player state, and readiness. See [Web
 dashboard](#web-dashboard) for details.
 
@@ -399,18 +398,13 @@ removed; integrations must resolve and retain the UUID from the instance list.
 Historical dashboard URLs are redirected to their UUID route, so a rename
 never changes a bookmark's target.
 
-V Rising uses a managed, cached Proton-GE runtime and keeps its persistent
-data and RCON listener per instance. Palworld's administrative REST API is
-called only on its loopback port by Odin; it is never proxied directly to the
-network. Dragonwilds configuration is editable only while stopped, because
-the game discards live edits; its game and beacon UDP ports are configured
-independently. Creating a Dragonwilds configuration requires an owner ID,
-server name, default world, and administration password before it can start.
+Palworld's administrative REST API is called only on its loopback port by
+Odin; it is never proxied directly to the network.
 
-For games with a declared server configuration document (7 Days to Die, V
-Rising, Palworld, and Dragonwilds), the Configuration tab also has a collapsed
-**Advanced configuration** section. It reads only Odin-declared XML, JSON, or
-INI files, separates settings Odin manages from settings supplied by the game,
+For games with a declared server configuration document (7 Days to Die and
+Palworld), the Configuration tab also has a collapsed
+**Advanced configuration** section. It reads only Odin-declared XML or
+Palworld settings files, separates settings Odin manages from settings supplied by the game,
 and lets an operator change existing unmanaged values while the instance is
 stopped. Odin validates the complete change set and writes it atomically; it
 does not discover arbitrary files, mod configuration, or permit adding and

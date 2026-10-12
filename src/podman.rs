@@ -170,7 +170,7 @@ impl PodmanClient {
     pub async fn create(&self, spec: &ContainerSpec) -> Result<()> {
         let response = self
             .client
-            .post(format!("{API_PREFIX}/containers/create?name={}", spec.name))
+            .post(format!("{API_PREFIX}/containers/create"))
             .json(&spec.request)
             .send()
             .await
@@ -418,7 +418,6 @@ pub fn write_runtime_spec(
 
 #[derive(Debug, Clone)]
 pub struct ContainerSpec {
-    pub name: String,
     pub request: CreateContainerRequest,
 }
 
@@ -453,8 +452,8 @@ impl ContainerSpec {
         );
 
         Self {
-            name: container_name(&identity.id),
             request: CreateContainerRequest {
+                name: container_name(&identity.id),
                 image,
                 entrypoint: vec!["/usr/local/bin/odin".to_string()],
                 command: vec![
@@ -498,6 +497,7 @@ fn cpu_quota(percent: f64) -> i64 {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateContainerRequest {
+    pub name: String,
     pub image: String,
     pub entrypoint: Vec<String>,
     pub command: Vec<String>,
@@ -575,7 +575,7 @@ mod tests {
                 memory_max_bytes: Some(123),
             },
         );
-        assert_eq!(spec.name, container_name(&identity.id));
+        assert_eq!(spec.request.name, container_name(&identity.id));
         assert_eq!(spec.request.entrypoint, ["/usr/local/bin/odin"]);
         assert_eq!(
             spec.request.command,
@@ -688,11 +688,9 @@ mod tests {
             .await
             .unwrap();
         let (line, body) = server.join().unwrap();
-        assert!(line.starts_with(&format!(
-            "POST /v4.0.0/libpod/containers/create?name={} ",
-            spec.name
-        )));
+        assert!(line.starts_with("POST /v4.0.0/libpod/containers/create "));
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["name"], spec.request.name);
         assert_eq!(
             body["entrypoint"],
             serde_json::json!(["/usr/local/bin/odin"])

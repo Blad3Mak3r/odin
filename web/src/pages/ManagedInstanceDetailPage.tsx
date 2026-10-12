@@ -316,7 +316,7 @@ export function ManagedInstanceDetailPage() {
           {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
           </TabsList>
         </div>
-        <TabsContent value="logs"><ManagedLogsTab id={detail.id} hasInstallLog={detail.game === 'valheim' && detail.execution === 'podman'} /></TabsContent>
+        <TabsContent value="logs"><ManagedLogsTab id={detail.id} hasInstallLog={detail.execution === 'podman'} /></TabsContent>
         {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab id={detail.id} running={detail.running} /></TabsContent>}
         {detail.game === 'vrising' && <TabsContent value="rcon"><VRisingRconTab id={detail.id} running={detail.running} /></TabsContent>}
         {detail.game === '7d2d' && <TabsContent value="console"><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabsContent>}

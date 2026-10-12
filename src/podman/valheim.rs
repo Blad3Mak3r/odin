@@ -320,6 +320,10 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
         None => {
             client.ensure_image(&image).await?;
             client.create(&spec).await?;
+            anyhow::ensure!(
+                client.inspect(&container).await?.is_some(),
+                "Podman created container {container} but it is unavailable"
+            );
             client.start(&container).await?;
         }
     }

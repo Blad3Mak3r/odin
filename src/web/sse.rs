@@ -50,6 +50,7 @@ async fn game_logs_sse_for(
     state: AppState,
     game: GameId,
     name: String,
+    file_name: &str,
 ) -> Result<Response, ApiError> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -60,7 +61,7 @@ async fn game_logs_sse_for(
     .await?;
 
     let log_file = crate::paths::instance_logs_dir(&state.paths.game_instance_dir(game, &name))
-        .join("console.log");
+        .join(file_name);
     let tail_file = log_file.clone();
     let tail = tokio::task::spawn_blocking(move || {
         crate::commands::logs::read_tail(&tail_file, TAIL_LINES).unwrap_or_default()
@@ -88,7 +89,21 @@ pub async fn game_logs_sse_by_id(
     if identity.game == GameId::Valheim {
         return logs_sse(State(state), Path(identity.name)).await;
     }
-    game_logs_sse_for(state, identity.game, identity.name).await
+    game_logs_sse_for(state, identity.game, identity.name, "console.log").await
+}
+
+/// Streams the SteamCMD `update.log` that the Valheim container runtime
+/// writes while it downloads the server on first start.
+pub async fn update_logs_sse_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let db = state.db.clone();
+    let identity = crate::web::error::run_blocking(move || {
+        crate::db::game_instances::identity_by_id(&db, &id)?.context("game instance does not exist")
+    })
+    .await?;
+    game_logs_sse_for(state, identity.game, identity.name, "update.log").await
 }
 
 fn file_log_stream(

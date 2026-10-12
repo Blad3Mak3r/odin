@@ -288,7 +288,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 | `odin restart <server-name>` | Stop the instance if it's running, then start it again. Useful after installing mods or changing config. |
 | `odin rename <old-name> <new-name>` | Rename an instance. Must be stopped first. Only its identity changes — the world name and save files are left untouched. |
 | `odin delete <server-name> [-y\|--yes] [--keep-backups]` | Permanently delete an instance. Must be stopped first, and asks for confirmation unless `-y` is given. `--keep-backups` deletes everything except the `backups/` directory. |
-| `odin status` | List every known instance with its live status, address (public IP:port), world, uptime, mod count, and password — everything needed to hand a friend a join string. |
+| `odin status` | List every known instance with its live status, address (public IP:port), world and mod count. Use `odin config get` for the password. |
 | `odin console <server-name>` | No longer attaches an interactive terminal — prints a pointer to `odin logs --follow`, `odin exec`, or the web dashboard instead. |
 | `odin logs <server-name> [-f\|--follow] [-n\|--lines N]` | Print (and optionally follow) the instance's captured console output. Default 50 lines. |
 | `odin exec <server-name> <command>` | Send a line of input to a running instance's console without attaching — handy for scripting. |

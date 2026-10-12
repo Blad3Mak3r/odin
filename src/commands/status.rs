@@ -20,21 +20,20 @@ pub fn run(paths: &Paths, db: &Db) -> Result<()> {
     let ip = public_ip();
 
     println!(
-        "{:<20} {:<10} {:<22} {:<20} {:<6} PASSWORD",
-        "NAME", "STATUS", "ADDRESS", "WORLD", "MODS"
+        "{:<20} {:<10} {:<22} {:<20} MODS",
+        "NAME", "STATUS", "ADDRESS", "WORLD"
     );
     for inst in &instances {
         let running = valheim::is_running(paths, db, inst)?;
         let status = if running { "running" } else { "stopped" };
         let address = format!("{}:{}", ip.as_deref().unwrap_or("-"), inst.state.port);
         println!(
-            "{:<20} {:<10} {:<22} {:<20} {:<6} {}",
+            "{:<20} {:<10} {:<22} {:<20} {}",
             inst.state.name,
             status,
             address,
             inst.state.world_name,
-            inst.state.installed_mods.len(),
-            inst.state.password.as_deref().unwrap_or("-")
+            inst.state.installed_mods.len()
         );
     }
 

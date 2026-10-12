@@ -1,10 +1,12 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AnsiText } from '@/components/instance/AnsiText'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useLogSocket, type LogSource } from '@/hooks/useLogSocket'
+import { stripAnsi } from '@/lib/ansi'
 import { useManagedInstanceLogs } from '@/lib/queries'
 
 const LINE_OPTIONS = [100, 200, 500, 1000]
@@ -26,7 +28,7 @@ export function ManagedLogsTab({ id, hasInstallLog = false }: { id: string; hasI
   )
   const lines = useMemo(() => {
     const needle = filter.trim().toLowerCase()
-    return needle ? allLines.filter((line) => line.toLowerCase().includes(needle)) : allLines
+    return needle ? allLines.filter((line) => stripAnsi(line).toLowerCase().includes(needle)) : allLines
   }, [allLines, filter])
   const virtualizer = useVirtualizer({
     count: lines.length,
@@ -78,7 +80,7 @@ export function ManagedLogsTab({ id, hasInstallLog = false }: { id: string; hasI
               className="absolute top-0 left-0 w-full whitespace-pre-wrap"
               style={{ transform: `translateY(${item.start}px)` }}
             >
-              {lines[item.index]}
+              <AnsiText text={lines[item.index]} />
             </div>
           ))}
         </div>

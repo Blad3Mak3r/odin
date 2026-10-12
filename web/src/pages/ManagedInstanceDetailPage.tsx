@@ -12,10 +12,10 @@ import { ModsTab } from '@/components/instance/ModsTab'
 import { SevenDaysModsTab } from '@/components/instance/SevenDaysModsTab'
 import { SevenDaysConsoleTab } from '@/components/instance/SevenDaysConsoleTab'
 import { SevenDaysPlayersTab } from '@/components/instance/SevenDaysPlayersTab'
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ManagedInstanceHeader } from '@/components/instance/ManagedInstanceHeader'
 import { ManagedLogsTab } from '@/components/instance/ManagedLogsTab'
@@ -28,7 +28,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { RouteTabs } from '@/components/RouteTabs'
+import { GameBackdrop } from '@/components/GameBackdrop'
+import { Skeleton } from '@/components/ui/skeleton'
 import { QueryError } from '@/components/QueryError'
 import {
   useManagedInstanceById,
@@ -258,9 +260,12 @@ function GenericConfigForm({ id, game, config, running }: { id: string; game: Ex
   return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : game === 'runescape-dragonwilds' ? 'Beacon port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === '7d2d' ? 'Local console port' : 'RCON port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form><AdvancedConfigSection id={id} game={game} running={running} />{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
 }
 
+function TabPanel({ active, className, children }: { active: boolean; className?: string; children: ReactNode }) {
+  return active ? <div className={className}>{children}</div> : null
+}
+
 export function ManagedInstanceDetailPage() {
   const { id, game, name, '*': tabPath } = useParams<{ id: string; game: string; name: string; '*': string }>()
-  const navigate = useNavigate()
   const gameId = isGameId(game) ? game : 'valheim'
   const instanceById = useManagedInstanceById(id ?? '')
   const managedInstances = useManagedInstances()
@@ -275,7 +280,7 @@ export function ManagedInstanceDetailPage() {
   const errorLines = consoleLines.filter(isConsoleError)
   if (!id && (!isGameId(game) || !name)) return null
   if (instance.isError) return <QueryError error={instance.error} />
-  if (!instance.data) return null
+  if (!instance.data) return <Skeleton className="h-40" />
   const detail = instance.data
   // Keep bookmarks to the historical game/name URL working, but immediately
   // replace them with the immutable UUID route so a later rename is safe.
@@ -307,22 +312,21 @@ export function ManagedInstanceDetailPage() {
     return <Navigate replace to={`/instance/${id}/logs`} />
   }
 
+  if (tab === 'lists' && nestedPath.length === 0) return <Navigate replace to={`${listsBasePath}/${defaultListTab}`} />
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="relative isolate flex flex-col gap-6">
+      <GameBackdrop game={detail.game} />
       <ManagedInstanceHeader instance={detail} />
       {detail.execution === 'podman' && <RuntimeHealthCard id={detail.id} game={detail.game} running={detail.running} />}
-      <Tabs value={tab} onValueChange={(value) => navigate(value === 'lists' ? `/instance/${id}/lists/${defaultListTab}` : `/instance/${id}/${value}`)}>
-        <div className="overflow-x-auto">
-          <TabsList className="w-max">
-          {tabs.map((item) => <TabsTrigger key={item.id} value={item.id}>{item.label}</TabsTrigger>)}
-          </TabsList>
-        </div>
-        <TabsContent value="logs"><ManagedLogsTab id={detail.id} hasInstallLog={detail.execution === 'podman'} /></TabsContent>
-        {detail.game === 'rust' && <TabsContent value="rcon"><RustRconTab id={detail.id} running={detail.running} /></TabsContent>}
-        {detail.game === 'vrising' && <TabsContent value="rcon"><VRisingRconTab id={detail.id} running={detail.running} /></TabsContent>}
-        {detail.game === '7d2d' && <TabsContent value="console"><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabsContent>}
-        {detail.game === '7d2d' && <TabsContent value="players"><SevenDaysPlayersTab id={detail.id} running={detail.running} /></TabsContent>}
-        <TabsContent value="errors">
+      <RouteTabs label="Instance sections" tabs={tabs.map((item) => ({ label: item.label, to: `/instance/${id}/${item.id}` }))} />
+      <div className="flex flex-col gap-2">
+        <TabPanel active={tab === 'logs'}><ManagedLogsTab id={detail.id} hasInstallLog={detail.execution === 'podman'} /></TabPanel>
+        {detail.game === 'rust' && <TabPanel active={tab === 'rcon'}><RustRconTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === 'vrising' && <TabPanel active={tab === 'rcon'}><VRisingRconTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === '7d2d' && <TabPanel active={tab === 'console'}><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === '7d2d' && <TabPanel active={tab === 'players'}><SevenDaysPlayersTab id={detail.id} running={detail.running} /></TabPanel>}
+        <TabPanel active={tab === 'errors'}>
           <Card>
             <CardHeader>
               <CardTitle>Errors</CardTitle>
@@ -334,8 +338,8 @@ export function ManagedInstanceDetailPage() {
                 : <LiveLogOutput lines={errorLines} emptyMessage="No errors found in the available console output." />}
             </CardContent>
           </Card>
-        </TabsContent>
-        <TabsContent value="config" className="flex flex-col gap-6">
+        </TabPanel>
+        <TabPanel active={tab === 'config'} className="flex flex-col gap-6">
           {detail.game === 'valheim'
             ? <ConfigTab id={detail.id} />
             : rustConfig
@@ -345,29 +349,29 @@ export function ManagedInstanceDetailPage() {
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
           <UptimeScheduleCard id={detail.id} />
           {detail.game === 'rust' && <WipeMapCard id={detail.id} name={detail.name} running={detail.running} />}
-        </TabsContent>
-        {detail.game === 'palworld' && <TabsContent value="admin"><PalworldAdminTab id={detail.id} running={detail.running} /></TabsContent>}
+        </TabPanel>
+        {detail.game === 'palworld' && <TabPanel active={tab === 'admin'}><PalworldAdminTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.capabilities.backups && (
-          <TabsContent value="backups"><BackupsTab id={detail.id} name={detail.name} game={detail.game} running={detail.running} /></TabsContent>
+          <TabPanel active={tab === 'backups'}><BackupsTab id={detail.id} name={detail.name} game={detail.game} running={detail.running} /></TabPanel>
         )}
         {detail.game === 'rust' && tab === 'lists' && (
-          <TabsContent value="lists"><RustAccessListsTab id={detail.id} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabsContent>
+          <TabPanel active={tab === 'lists'}><RustAccessListsTab id={detail.id} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabPanel>
         )}
         {detail.game === 'vrising' && tab === 'lists' && (
-          <TabsContent value="lists"><VRisingAccessListsTab id={detail.id} path={nestedPath} basePath={listsBasePath} /></TabsContent>
+          <TabPanel active={tab === 'lists'}><VRisingAccessListsTab id={detail.id} path={nestedPath} basePath={listsBasePath} /></TabPanel>
         )}
         {detail.game === 'valheim' && tab === 'lists' && (
-          <TabsContent value="lists"><AccessListsTab id={detail.id} path={nestedPath} /></TabsContent>
+          <TabPanel active={tab === 'lists'}><AccessListsTab id={detail.id} path={nestedPath} /></TabPanel>
         )}
         {detail.game === 'valheim' && tab === 'mods' && (
-          <TabsContent value="mods"><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabsContent>
+          <TabPanel active={tab === 'mods'}><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabPanel>
         )}
-        {detail.game === '7d2d' && tab === 'mods' && <TabsContent value="mods"><SevenDaysModsTab id={detail.id} running={detail.running} /></TabsContent>}
-        <TabsContent value="saves"><SaveFilesTab id={detail.id} running={detail.running} /></TabsContent>
-        <TabsContent value="resources"><ManagedResourcesTab id={detail.id} running={detail.running} /></TabsContent>
-        <TabsContent value="limits"><ResourceLimitsTab id={detail.id} /></TabsContent>
-        {detail.game === 'valheim' && <TabsContent value="players"><PlayersTab id={detail.id} running={detail.running} /></TabsContent>}
-      </Tabs>
+        {detail.game === '7d2d' && tab === 'mods' && <TabPanel active={tab === 'mods'}><SevenDaysModsTab id={detail.id} running={detail.running} /></TabPanel>}
+        <TabPanel active={tab === 'saves'}><SaveFilesTab id={detail.id} running={detail.running} /></TabPanel>
+        <TabPanel active={tab === 'resources'}><ManagedResourcesTab id={detail.id} running={detail.running} /></TabPanel>
+        <TabPanel active={tab === 'limits'}><ResourceLimitsTab id={detail.id} /></TabPanel>
+        {detail.game === 'valheim' && <TabPanel active={tab === 'players'}><PlayersTab id={detail.id} running={detail.running} /></TabPanel>}
+      </div>
     </div>
   )
 }

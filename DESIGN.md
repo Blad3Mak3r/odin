@@ -101,8 +101,9 @@ Its painterly cyan and amber language does not enter the interface system.
 The interface is nearly achromatic in both themes. Light mode uses paper and
 ink; dark mode inverts the surfaces while preserving the same rule hierarchy.
 `--border` is intentionally more visible than a decorative hairline so a
-panel's boundary reads at a glance. There are no gradients, textures, or
-decorative accent colors.
+panel's boundary reads at a glance. There are no decorative gradients,
+textures, or accent colors; the one exception is the game atmosphere described
+under Layout and shape.
 
 - **Paper / Ink:** primary surfaces and content in light mode.
 - **Charcoal / Charcoal Foreground:** the primary action and its text.
@@ -114,8 +115,8 @@ decorative accent colors.
   failed, passing, or warning states.
 
 **Signal-only rule.** Routine running and stopped states stay neutral. Color
-reports a meaningful operational fact, never a route, game, button, or
-decoration.
+reports a meaningful operational fact, never a route, button, or decoration.
+Game banner art is atmosphere, not a signal, and never encodes state.
 
 ## Typography and data
 
@@ -144,6 +145,18 @@ Depth is never simulated with a shadow. A 1px rule plus an adjacent surface
 change establishes every panel. Browser surfaces belong to the system too:
 selection uses the primary pairing, scrollbars use the rule color, and focus
 remains visible in either theme.
+
+### Game atmosphere
+
+A game's banner (`web/src/assets/game-banners`) may appear in exactly two
+ways: as a thumbnail strip on its card in the games list, and as a page
+backdrop behind the game and instance headers. The backdrop is anchored to
+the top of the page and fades downward into `--background` (a scrim built
+from that token, so it holds in both themes), reaching the plain page
+surface within the first screenful. Past the headers, anything that overlaps
+the backdrop (tabs, the first panel, a console) sits under a scrim of at least
+88%, so reading and controls never depend on the art. The backdrop never
+carries state or replaces a rule.
 
 ## Components
 
@@ -195,5 +208,6 @@ Do:
 Don't:
 
 - Add shadows, soft cards, pill badges, or rounded control groups.
-- Use the logo's palette, neon effects, or game imagery as interface chrome.
+- Use the logo's palette or neon effects, or use game imagery anywhere beyond
+  the game atmosphere above.
 - Use mono as a generic technical costume or color to signify steady state.

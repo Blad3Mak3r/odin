@@ -14,6 +14,76 @@ use serde::{Deserialize, Serialize};
 use crate::game::GameId;
 use crate::paths::Paths;
 
+/// The launch arguments Odin passes to the server itself. Every other setting
+/// lives in the game's own `serverconfig.xml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SevenDaysLaunch {
+    pub name: String,
+    pub port: u16,
+    pub telnet_port: Option<u16>,
+}
+
+impl From<&crate::db::game_instances::GenericGameInstance> for SevenDaysLaunch {
+    fn from(instance: &crate::db::game_instances::GenericGameInstance) -> Self {
+        Self {
+            name: instance.name().to_string(),
+            port: instance.config.port,
+            telnet_port: instance.config.admin_port,
+        }
+    }
+}
+
+/// The single definition of the dedicated server's launch contract. The
+/// instance directory holds the native `config/serverconfig.xml`, the saves,
+/// the mods and the logs, so it doubles as the game's user data folder.
+pub fn build_command_at(
+    install_dir: &Path,
+    instance_dir: &Path,
+    console_log: &Path,
+    launch: &SevenDaysLaunch,
+) -> Result<tokio::process::Command> {
+    let binary = install_dir.join(crate::game::driver(GameId::SevenDaysToDie).server_binary());
+    if !binary.is_file() {
+        bail!(
+            "7 Days to Die is not installed (expected {})",
+            binary.display()
+        );
+    }
+    let stdout = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(console_log)
+        .with_context(|| format!("failed to open {}", console_log.display()))?;
+    let stderr = stdout
+        .try_clone()
+        .context("failed to duplicate 7 Days to Die log handle")?;
+    let mut command = tokio::process::Command::new(binary);
+    command
+        .current_dir(install_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(stdout))
+        .stderr(std::process::Stdio::from(stderr))
+        .process_group(0)
+        .arg(format!(
+            "-configfile={}",
+            instance_dir.join(CONFIG_FILE).display()
+        ))
+        .arg(format!("-UserDataFolder={}", instance_dir.display()))
+        .arg(format!("-ServerPort={}", launch.port))
+        .arg(format!("-logfile={}", console_log.display()))
+        .arg("-quit")
+        .arg("-batchmode")
+        .arg("-nographics");
+    if let Some(port) = launch.telnet_port {
+        command.arg(format!("-TelnetPort={port}"));
+    }
+    // The dedicated flag must stay last.
+    command.arg("-dedicated");
+    Ok(command)
+}
+
+/// Relative to the instance directory.
+pub const CONFIG_FILE: &str = "config/serverconfig.xml";
 pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 pub const MAX_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const CONSOLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -377,6 +447,66 @@ mod console_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_command_is_the_complete_server_contract() {
+        let root = std::env::temp_dir().join(format!("odin-7d2d-command-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        let instance = root.join("instance");
+        fs::create_dir_all(&install).unwrap();
+        fs::create_dir_all(instance.join("logs")).unwrap();
+        fs::write(install.join("7DaysToDieServer.x86_64"), "").unwrap();
+        let log = instance.join("logs/console.log");
+        let launch = SevenDaysLaunch {
+            name: "undead".into(),
+            port: 26900,
+            telnet_port: Some(26903),
+        };
+
+        let command = build_command_at(&install, &instance, &log, &launch).unwrap();
+        let command = command.as_std();
+        assert_eq!(
+            command.get_program(),
+            install.join("7DaysToDieServer.x86_64")
+        );
+        assert_eq!(command.get_current_dir(), Some(install.as_path()));
+        let arguments: Vec<_> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            arguments,
+            [
+                format!(
+                    "-configfile={}",
+                    instance.join("config/serverconfig.xml").display()
+                ),
+                format!("-UserDataFolder={}", instance.display()),
+                "-ServerPort=26900".to_string(),
+                format!("-logfile={}", log.display()),
+                "-quit".to_string(),
+                "-batchmode".to_string(),
+                "-nographics".to_string(),
+                "-TelnetPort=26903".to_string(),
+                "-dedicated".to_string(),
+            ]
+        );
+        // The native document is never created by building the command.
+        assert!(!instance.join("config/serverconfig.xml").exists());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn launch_command_requires_an_installed_server() {
+        let root = std::env::temp_dir().join(format!("odin-7d2d-missing-{}", uuid::Uuid::new_v4()));
+        let launch = SevenDaysLaunch {
+            name: "undead".into(),
+            port: 26900,
+            telnet_port: None,
+        };
+        let error = build_command_at(&root, &root, &root.join("console.log"), &launch).unwrap_err();
+        assert!(error.to_string().contains("not installed"));
+    }
 
     const MOD_INFO: &str = r#"<xml><Name value="Example_Mod"/><DisplayName value="Example Mod"/><Version value="1.2.3"/><Author value="Odin"/></xml>"#;
 

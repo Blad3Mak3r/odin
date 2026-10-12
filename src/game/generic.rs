@@ -51,25 +51,12 @@ pub fn prepare_start(
             }
         }
         GameId::SevenDaysToDie => {
-            let instance_dir = paths.game_instance_dir(GameId::SevenDaysToDie, instance.name());
-            let config = seven_d2d_config_path(paths, &instance);
-            if let Some(parent) = config.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::create_dir_all(instance_dir.join("Saves"))?;
-            fs::create_dir_all(instance_dir.join("Mods"))?;
-            crate::game::config_documents::remove_legacy_control_panel(paths, &instance)?;
+            bail!("7 Days to Die runs in Podman; start it through its container runtime")
         }
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
     crate::game::config_documents::sync_operational(paths, &instance)?;
     Ok(instance)
-}
-
-fn seven_d2d_config_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
-    paths
-        .game_instance_dir(GameId::SevenDaysToDie, instance.name())
-        .join("config/serverconfig.xml")
 }
 
 fn native_runtime_dir(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
@@ -185,10 +172,10 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
                 .env("STEAM_COMPAT_DATA_PATH", instance_dir.join("proton-prefix"));
             command
         }
-        GameId::Palworld | GameId::RunescapeDragonwilds | GameId::SevenDaysToDie => {
-            Command::new(binary)
+        GameId::Palworld | GameId::RunescapeDragonwilds => Command::new(binary),
+        GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => {
+            unreachable!("generic command called for a containerized or typed driver")
         }
-        GameId::Valheim | GameId::Rust => unreachable!("generic command called for typed driver"),
     };
     command
         .current_dir(&runtime_dir)
@@ -228,27 +215,7 @@ pub fn build_command(paths: &Paths, instance: &GenericGameInstance) -> Result<Co
                 command.arg(format!("-BeaconPort={port}"));
             }
         }
-        GameId::SevenDaysToDie => {
-            command
-                .arg(format!(
-                    "-configfile={}",
-                    seven_d2d_config_path(paths, instance).display()
-                ))
-                .arg(format!("-UserDataFolder={}", instance_dir.display()))
-                .arg(format!("-ServerPort={}", instance.config.port))
-                .arg(format!(
-                    "-logfile={}",
-                    log_dir.join("console.log").display()
-                ))
-                .arg("-quit")
-                .arg("-batchmode")
-                .arg("-nographics");
-            if let Some(port) = instance.config.admin_port {
-                command.arg(format!("-TelnetPort={port}"));
-            }
-            command.arg("-dedicated");
-        }
-        GameId::Valheim | GameId::Rust => unreachable!(),
+        GameId::Valheim | GameId::Rust | GameId::SevenDaysToDie => unreachable!(),
     }
     Ok(command)
 }
@@ -477,38 +444,6 @@ mod tests {
         let arguments = format!("{command:?}");
         assert!(arguments.contains("-port=8211"));
         assert!(arguments.contains("-queryport=27015"));
-        fs::remove_dir_all(paths.data_dir).ok();
-    }
-
-    #[test]
-    fn seven_days_command_uses_instance_specific_paths_without_creating_config() {
-        let dir = std::env::temp_dir().join(format!("odin-7d2d-settings-{}", uuid::Uuid::new_v4()));
-        let paths = Paths {
-            data_dir: dir.clone(),
-            config_dir: dir.clone(),
-        };
-        let mut instance = generic_instance(GameId::SevenDaysToDie);
-        instance.identity.name = "undead".into();
-        instance.config.port = 26900;
-
-        let root = paths.game_instance_dir(GameId::SevenDaysToDie, "undead");
-        let command = build_command(&paths, &instance).unwrap();
-        let arguments = format!("{command:?}");
-        assert!(arguments.contains(&format!(
-            "-configfile={}",
-            root.join("config/serverconfig.xml").display()
-        )));
-        assert!(arguments.contains(&format!("-UserDataFolder={}", root.display())));
-        assert!(!root.join("config/serverconfig.xml").exists());
-        assert_eq!(
-            command
-                .as_std()
-                .get_args()
-                .last()
-                .unwrap()
-                .to_string_lossy(),
-            "-dedicated"
-        );
         fs::remove_dir_all(paths.data_dir).ok();
     }
 }

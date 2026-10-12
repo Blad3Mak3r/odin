@@ -18,7 +18,9 @@ use crate::instance::{Instance, InstanceError, lifecycle};
 use crate::paths::{self, Paths};
 use crate::supervisor;
 
-use super::{ContainerSpec, ContainerState, PodmanClient, container_name, write_runtime_spec};
+use super::{
+    ContainerSpec, ContainerState, Launch, PodmanClient, bind, container_name, write_runtime_spec,
+};
 
 const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const STOP_TIMEOUT_SECS: u64 = 30;
@@ -89,7 +91,13 @@ fn prepare_layout(
     std::fs::create_dir_all(paths.container_runtime_dir(GameId::Valheim, &identity.id))?;
     std::fs::create_dir_all(paths.container_socket_dir(&identity.id))?;
     std::fs::create_dir_all(paths.mods_dir())?;
-    write_runtime_spec(paths, identity, instance)?;
+    write_runtime_spec(
+        paths,
+        identity,
+        Launch::Valheim {
+            instance: instance.state.clone(),
+        },
+    )?;
     Ok(())
 }
 
@@ -318,7 +326,18 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
     let limits = resource_limits::load(db, &identity.id)?;
     let container = container_name(GameId::Valheim, &identity.id);
     let image = config.runtime_image();
-    let spec = ContainerSpec::valheim(paths, &identity, &instance, image.clone(), &limits);
+    // Existing BepInEx plugin links point at the host-absolute mod store.
+    // Mounting it at that exact path preserves those links without
+    // rewriting an operator's mod state.
+    let mods = bind(&paths.mods_dir(), &paths.mods_dir());
+    let spec = ContainerSpec::new(
+        paths,
+        &identity,
+        &instance.dir,
+        vec![mods],
+        image.clone(),
+        &limits,
+    );
     match client.inspect(&container).await? {
         Some(state) if state.is_running() => bail!(InstanceError::AlreadyRunning(name.to_string())),
         Some(_) => {
@@ -804,7 +823,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(save).unwrap(), "save data");
         assert_eq!(std::fs::read_to_string(backup).unwrap(), "backup data");
         assert_eq!(std::fs::read_to_string(mod_file).unwrap(), "mod data");
-        assert!(crate::podman::runtime_spec_path(&paths, &identity.id).is_file());
+        assert!(crate::podman::runtime_spec_path(&paths, GameId::Valheim, &identity.id).is_file());
         assert!(!stale_socket.exists());
         let requests = server.join().unwrap();
         assert!(

@@ -10,6 +10,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use sysinfo::Signal;
 use tokio::process::Command;
 
@@ -27,6 +28,31 @@ pub struct RustFileConfig {
     pub seed: u32,
     pub world_size: u32,
     pub max_players: u16,
+}
+
+/// Everything `RustDedicated` needs on its command line. Launch arguments only:
+/// game settings stay in the native `server.cfg`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RustLaunch {
+    pub name: String,
+    pub identity: String,
+    pub port: u16,
+    pub query_port: u16,
+    pub rcon_port: u16,
+    pub rcon_password: String,
+}
+
+impl From<&RustInstance> for RustLaunch {
+    fn from(instance: &RustInstance) -> Self {
+        Self {
+            name: instance.name().to_string(),
+            identity: instance.identity.id.clone(),
+            port: instance.config.port,
+            query_port: instance.config.query_port,
+            rcon_port: instance.config.rcon_port,
+            rcon_password: instance.config.rcon_password.clone(),
+        }
+    }
 }
 
 /// The physical Rust identity directory owned by one Odin instance.
@@ -150,9 +176,7 @@ pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Ru
         ],
     )?;
 
-    crate::steamcmd::SteamCmd::new(paths.steamcmd_dir())
-        .ensure_sdk64_client_at(&crate::steamcmd::steam_home_dir()?)
-        .context("failed to prepare Rust's Steamworks runtime")?;
+    link_steam_client(&paths.steamcmd_dir())?;
     crate::game::config_documents::sync_rust_operational(paths, &instance)?;
     build_command(paths, &instance)?;
     Ok(instance)
@@ -162,7 +186,25 @@ pub fn prepare_start(paths: &Paths, db: &crate::db::Db, name: &str) -> Result<Ru
 /// instance layout. Spawning itself is shared with Valheim through
 /// [`process::spawn`].
 pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> {
-    let install_dir = paths.game_install_dir(crate::game::GameId::Rust);
+    let log_dir = paths
+        .game_instance_dir(crate::game::GameId::Rust, instance.name())
+        .join("logs");
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("failed to create {}", log_dir.display()))?;
+    build_command_at(
+        &paths.game_install_dir(crate::game::GameId::Rust),
+        &log_dir.join("console.log"),
+        &RustLaunch::from(instance),
+    )
+}
+
+/// The single definition of Rust Dedicated's launch contract, used both for
+/// the host's direct process and by the Podman runtime with container paths.
+pub fn build_command_at(
+    install_dir: &Path,
+    console_log: &Path,
+    launch: &RustLaunch,
+) -> Result<Command> {
     let binary = install_dir.join("RustDedicated");
     if !binary.is_file() {
         bail!(
@@ -170,46 +212,103 @@ pub fn build_command(paths: &Paths, instance: &RustInstance) -> Result<Command> 
             binary.display()
         );
     }
-    let instance_dir = paths.game_instance_dir(crate::game::GameId::Rust, instance.name());
-    let log_dir = instance_dir.join("logs");
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("failed to create {}", log_dir.display()))?;
-    let log_path = log_dir.join("console.log");
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&log_path)
-        .with_context(|| format!("failed to open {}", log_path.display()))?;
+        .open(console_log)
+        .with_context(|| format!("failed to open {}", console_log.display()))?;
     let stderr = stdout
         .try_clone()
         .context("failed to duplicate Rust log handle")?;
 
-    let config = &instance.config;
-    let library_path = rust_library_path(&install_dir)?;
+    let library_path = rust_library_path(install_dir)?;
     let mut command = Command::new(binary);
     command
-        .current_dir(&install_dir)
+        .current_dir(install_dir)
         .env("LD_LIBRARY_PATH", library_path)
         .arg("-batchmode")
         .arg("-nographics")
         .arg("+server.port")
-        .arg(config.port.to_string())
+        .arg(launch.port.to_string())
         .arg("+server.queryport")
-        .arg(config.query_port.to_string())
+        .arg(launch.query_port.to_string())
         .arg("+rcon.port")
-        .arg(config.rcon_port.to_string())
+        .arg(launch.rcon_port.to_string())
         .arg("+rcon.password")
-        .arg(&config.rcon_password)
+        .arg(&launch.rcon_password)
         .arg("+rcon.web")
         .arg("1")
         .arg("+server.identity")
-        .arg(&instance.identity.id)
+        .arg(&launch.identity)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .process_group(0);
 
     Ok(command)
+}
+
+/// Container-side counterpart of [`ensure_layout`]: exposes the instance's
+/// identity directory where `RustDedicated` looks for it and refreshes the
+/// Steamworks client link. Both live in the instance's private runtime volume,
+/// so the link is repaired before every launch, including after an update.
+pub fn prepare_runtime(
+    install_dir: &Path,
+    instance_dir: &Path,
+    steamcmd_dir: &Path,
+    launch: &RustLaunch,
+) -> Result<()> {
+    prepare_runtime_at(
+        install_dir,
+        instance_dir,
+        steamcmd_dir,
+        &crate::steamcmd::steam_home_dir()?,
+        launch,
+    )
+}
+
+fn prepare_runtime_at(
+    install_dir: &Path,
+    instance_dir: &Path,
+    steamcmd_dir: &Path,
+    steam_home: &Path,
+    launch: &RustLaunch,
+) -> Result<()> {
+    let identity = instance_dir.join("server");
+    fs::create_dir_all(&identity)
+        .with_context(|| format!("failed to create {}", identity.display()))?;
+    let bridge = install_dir.join("server").join(&launch.identity);
+    fs::create_dir_all(bridge.parent().context("Rust bridge has no parent")?)?;
+    match bridge.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            if fs::read_link(&bridge)? == identity {
+                return link_steam_client_at(steamcmd_dir, steam_home);
+            }
+            fs::remove_file(&bridge)?;
+        }
+        Ok(_) => bail!(
+            "{} exists and is not a symlink; refusing to replace it",
+            bridge.display()
+        ),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", bridge.display()));
+        }
+    }
+    std::os::unix::fs::symlink(&identity, &bridge)
+        .with_context(|| format!("failed to create {}", bridge.display()))?;
+    link_steam_client_at(steamcmd_dir, steam_home)
+}
+
+fn link_steam_client(steamcmd_dir: &Path) -> Result<()> {
+    link_steam_client_at(steamcmd_dir, &crate::steamcmd::steam_home_dir()?)
+}
+
+fn link_steam_client_at(steamcmd_dir: &Path, steam_home: &Path) -> Result<()> {
+    crate::steamcmd::SteamCmd::new(steamcmd_dir.to_path_buf())
+        .ensure_sdk64_client_at(steam_home)
+        .context("failed to prepare Rust's Steamworks runtime")?;
+    Ok(())
 }
 
 fn rust_library_path(install_dir: &Path) -> Result<std::ffi::OsString> {
@@ -821,5 +920,125 @@ mod tests {
         assert_eq!(list_backups(&paths, &db, &instance).unwrap().len(), 2);
 
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    fn launch(identity: &str) -> RustLaunch {
+        RustLaunch {
+            name: "rusty".into(),
+            identity: identity.into(),
+            port: 28015,
+            query_port: 28016,
+            rcon_port: 28017,
+            rcon_password: "secret".into(),
+        }
+    }
+
+    fn container_layout(
+        label: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("odin-rust-{label}-{}", uuid::Uuid::new_v4()));
+        let install = root.join("runtime/rust");
+        let instance = root.join("instance");
+        let steamcmd = root.join("runtime/steamcmd");
+        std::fs::create_dir_all(steamcmd.join("linux64")).unwrap();
+        std::fs::write(steamcmd.join("linux64/steamclient.so"), "client").unwrap();
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(&instance).unwrap();
+        (install, instance, steamcmd)
+    }
+
+    #[test]
+    fn container_command_is_the_complete_rust_launch_contract() {
+        let (install, instance, _steamcmd) = container_layout("command");
+        std::fs::write(install.join("RustDedicated"), "").unwrap();
+        let log = instance.join("console.log");
+
+        let command = build_command_at(&install, &log, &launch("0e0f")).unwrap();
+
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "-batchmode",
+                "-nographics",
+                "+server.port",
+                "28015",
+                "+server.queryport",
+                "28016",
+                "+rcon.port",
+                "28017",
+                "+rcon.password",
+                "secret",
+                "+rcon.web",
+                "1",
+                "+server.identity",
+                "0e0f",
+            ]
+        );
+        assert_eq!(command.as_std().get_current_dir(), Some(install.as_path()));
+        assert_eq!(
+            command.as_std().get_program(),
+            install.join("RustDedicated")
+        );
+        let library_path = command
+            .as_std()
+            .get_envs()
+            .find_map(|(name, value)| (name == "LD_LIBRARY_PATH").then_some(value.unwrap()))
+            .unwrap();
+        let first_two: Vec<_> = std::env::split_paths(library_path).take(2).collect();
+        assert_eq!(
+            first_two,
+            [
+                install.clone(),
+                install.join("RustDedicated_Data/Plugins/x86_64")
+            ]
+        );
+        std::fs::remove_dir_all(install.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn prepare_runtime_exposes_the_identity_and_links_the_steam_client() {
+        let (install, instance, steamcmd) = container_layout("prepare");
+        let home = install.parent().unwrap().to_path_buf();
+
+        prepare_runtime_at(&install, &instance, &steamcmd, &home, &launch("0e0f")).unwrap();
+        prepare_runtime_at(&install, &instance, &steamcmd, &home, &launch("0e0f")).unwrap();
+
+        assert_eq!(
+            std::fs::read_link(install.join("server/0e0f")).unwrap(),
+            instance.join("server")
+        );
+        assert!(instance.join("server").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(home.join(".steam/sdk64/steamclient.so")).unwrap(),
+            "client"
+        );
+        std::fs::remove_dir_all(home.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn prepare_runtime_repoints_a_stale_bridge_but_never_replaces_real_data() {
+        let (install, instance, steamcmd) = container_layout("stale");
+        let home = install.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(install.join("server")).unwrap();
+        std::os::unix::fs::symlink("/elsewhere", install.join("server/0e0f")).unwrap();
+
+        prepare_runtime_at(&install, &instance, &steamcmd, &home, &launch("0e0f")).unwrap();
+        assert_eq!(
+            std::fs::read_link(install.join("server/0e0f")).unwrap(),
+            instance.join("server")
+        );
+
+        std::fs::create_dir_all(install.join("server/real")).unwrap();
+        std::fs::write(install.join("server/real/world.sav"), "world").unwrap();
+        assert!(
+            prepare_runtime_at(&install, &instance, &steamcmd, &home, &launch("real")).is_err()
+        );
+        assert!(install.join("server/real/world.sav").is_file());
+        std::fs::remove_dir_all(home.parent().unwrap()).ok();
     }
 }

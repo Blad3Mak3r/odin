@@ -18,7 +18,8 @@ use crate::config::PodmanConfig;
 use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits::ResourceLimits;
 use crate::game::GameId;
-use crate::instance::Instance;
+use crate::game::rust::RustLaunch;
+use crate::instance::state::InstanceState;
 use crate::paths::Paths;
 
 pub mod runtime;
@@ -364,47 +365,73 @@ struct PullImageResponse {
 pub struct RuntimeSpec {
     pub protocol_version: u16,
     pub instance_id: String,
-    pub instance: crate::instance::state::InstanceState,
     pub instance_dir: PathBuf,
     pub install_dir: PathBuf,
     pub steamcmd_dir: PathBuf,
     pub update_log: PathBuf,
+    #[serde(flatten)]
+    pub launch: Launch,
+}
+
+/// The per-game part of a [`RuntimeSpec`]: exactly the launch arguments the
+/// game's driver needs, tagged by game so the runtime can pick its driver.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "game", rename_all = "snake_case")]
+pub enum Launch {
+    Valheim { instance: InstanceState },
+    Rust(RustLaunch),
+}
+
+impl Launch {
+    pub fn game(&self) -> GameId {
+        match self {
+            Self::Valheim { .. } => GameId::Valheim,
+            Self::Rust(_) => GameId::Rust,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Valheim { instance } => &instance.name,
+            Self::Rust(launch) => &launch.name,
+        }
+    }
 }
 
 impl RuntimeSpec {
     pub const PROTOCOL_VERSION: u16 = 1;
 
-    fn for_instance(identity: &GameInstanceIdentity, instance: &Instance) -> Self {
+    fn new(instance_id: &str, launch: Launch) -> Self {
         Self {
             protocol_version: Self::PROTOCOL_VERSION,
-            instance_id: identity.id.clone(),
-            instance: instance.state.clone(),
+            instance_id: instance_id.to_string(),
             instance_dir: PathBuf::from(format!("{CONTAINER_ROOT}/instance")),
-            install_dir: PathBuf::from(format!("{CONTAINER_ROOT}/runtime/valheim")),
+            install_dir: PathBuf::from(format!("{CONTAINER_ROOT}/runtime/{}", launch.game())),
             steamcmd_dir: PathBuf::from(format!("{CONTAINER_ROOT}/runtime/steamcmd")),
             update_log: PathBuf::from(format!("{CONTAINER_ROOT}/instance/logs/update.log")),
+            launch,
         }
     }
 }
 
-pub fn runtime_spec_path(paths: &Paths, instance_id: &str) -> PathBuf {
+pub fn runtime_spec_path(paths: &Paths, game: GameId, instance_id: &str) -> PathBuf {
     paths
-        .container_runtime_dir(GameId::Valheim, instance_id)
+        .container_runtime_dir(game, instance_id)
         .join("runtime.json")
 }
 
 pub fn write_runtime_spec(
     paths: &Paths,
     identity: &GameInstanceIdentity,
-    instance: &Instance,
+    launch: Launch,
 ) -> Result<PathBuf> {
-    let runtime_dir = paths.container_runtime_dir(GameId::Valheim, &identity.id);
+    let runtime_dir = paths.container_runtime_dir(identity.game, &identity.id);
     std::fs::create_dir_all(&runtime_dir)
         .with_context(|| format!("failed to create {}", runtime_dir.display()))?;
-    let spec_path = runtime_spec_path(paths, &identity.id);
+    let spec_path = runtime_spec_path(paths, identity.game, &identity.id);
     let temporary = spec_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let encoded = serde_json::to_vec_pretty(&RuntimeSpec::for_instance(identity, instance))
-        .context("failed to encode Valheim runtime specification")?;
+    let encoded = serde_json::to_vec_pretty(&RuntimeSpec::new(&identity.id, launch))
+        .context("failed to encode runtime specification")?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -430,36 +457,37 @@ pub struct ContainerSpec {
 }
 
 impl ContainerSpec {
-    pub fn valheim(
+    /// The container shape shared by every game: a private runtime volume, the
+    /// instance directory and the control-socket directory, on the host
+    /// network. `extra_mounts` carries anything only one game needs.
+    pub fn new(
         paths: &Paths,
         identity: &GameInstanceIdentity,
-        instance: &Instance,
+        instance_dir: &Path,
+        extra_mounts: Vec<Mount>,
         image: String,
         limits: &ResourceLimits,
     ) -> Self {
-        let runtime_root = paths.container_runtime_dir(GameId::Valheim, &identity.id);
+        let runtime_root = paths.container_runtime_dir(identity.game, &identity.id);
         let socket_root = paths.container_socket_dir(&identity.id);
         let mut mounts = vec![
             bind(&runtime_root, Path::new("/srv/odin/runtime")),
-            bind(&instance.dir, Path::new("/srv/odin/instance")),
+            bind(instance_dir, Path::new("/srv/odin/instance")),
             bind(&socket_root, Path::new("/run/odin")),
         ];
-        // Existing BepInEx plugin links point at this host-absolute store.
-        // Mounting it at that exact path preserves those links without
-        // rewriting an operator's mod state.
-        mounts.push(bind(&paths.mods_dir(), &paths.mods_dir()));
+        mounts.extend(extra_mounts);
         let user = format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
             libc::getegid()
         });
         let mut labels = std::collections::BTreeMap::new();
-        labels.insert("io.odin.game".to_string(), "valheim".to_string());
+        labels.insert("io.odin.game".to_string(), identity.game.to_string());
         labels.insert("io.odin.instance-id".to_string(), identity.id.clone());
         labels.insert(
             "io.odin.runtime-version".to_string(),
             RUNTIME_VERSION.to_string(),
         );
 
-        let name = container_name(GameId::Valheim, &identity.id);
+        let name = container_name(identity.game, &identity.id);
         Self {
             request: CreateContainerRequest {
                 name,
@@ -490,7 +518,8 @@ impl ContainerSpec {
     }
 }
 
-fn bind(host: &Path, container: &Path) -> Mount {
+/// Bind mount of `host` at `container`, read-write.
+pub fn bind(host: &Path, container: &Path) -> Mount {
     Mount {
         destination: container.display().to_string(),
         kind: "bind".to_string(),
@@ -578,6 +607,7 @@ impl From<&ResourceLimits> for LinuxResources {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instance::Instance;
     use chrono::Utc;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::net::UnixListener;
@@ -604,10 +634,11 @@ mod tests {
             dir: paths.instance_dir("renamable"),
             state: crate::instance::state::InstanceState::new("renamable", 2456),
         };
-        let spec = ContainerSpec::valheim(
+        let spec = ContainerSpec::new(
             &paths,
             &identity,
-            &instance,
+            &instance.dir,
+            vec![bind(&paths.mods_dir(), &paths.mods_dir())],
             "example/runtime:1".into(),
             &ResourceLimits {
                 cpu_percent: Some(125.5),
@@ -651,6 +682,117 @@ mod tests {
         );
     }
 
+    fn rust_identity() -> GameInstanceIdentity {
+        GameInstanceIdentity {
+            id: "0e0f6d1c-7a39-4b5e-8c1a-2d6f5b0a9e11".into(),
+            game: GameId::Rust,
+            name: "rusty".into(),
+            created_at: Utc::now(),
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn rust_container_has_the_shared_shape_without_valheim_mounts() {
+        let paths = paths();
+        let identity = rust_identity();
+        let instance_dir = paths.game_instance_dir(GameId::Rust, "rusty");
+
+        let request = ContainerSpec::new(
+            &paths,
+            &identity,
+            &instance_dir,
+            Vec::new(),
+            "example/odin-srv:1".into(),
+            &ResourceLimits::default(),
+        )
+        .request;
+
+        assert_eq!(request.name, format!("odin-rust-{}", identity.id));
+        assert_eq!(request.entrypoint, ["/usr/local/bin/odin"]);
+        assert_eq!(
+            request.command,
+            ["run", "--instance-id", identity.id.as_str()]
+        );
+        assert_eq!(request.netns.nsmode, "host");
+        assert_eq!(
+            request.labels.get("io.odin.game").map(String::as_str),
+            Some("rust")
+        );
+        assert_eq!(
+            request
+                .mounts
+                .iter()
+                .map(|mount| (mount.destination.as_str(), mount.source.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "/srv/odin/runtime",
+                    paths
+                        .container_runtime_dir(GameId::Rust, &identity.id)
+                        .to_str()
+                        .unwrap()
+                ),
+                ("/srv/odin/instance", instance_dir.to_str().unwrap()),
+                (
+                    "/run/odin",
+                    paths.container_socket_dir(&identity.id).to_str().unwrap()
+                ),
+            ]
+        );
+        assert!(request.resource_limits.is_none());
+    }
+
+    #[test]
+    fn runtime_spec_round_trips_the_rust_launch_with_container_paths() {
+        let paths = paths();
+        let identity = rust_identity();
+        let launch = RustLaunch {
+            name: "rusty".into(),
+            identity: identity.id.clone(),
+            port: 28015,
+            query_port: 28016,
+            rcon_port: 28017,
+            rcon_password: "secret".into(),
+        };
+
+        let path = write_runtime_spec(&paths, &identity, Launch::Rust(launch)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let spec: RuntimeSpec = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(
+            path,
+            paths
+                .container_runtime_dir(GameId::Rust, &identity.id)
+                .join("runtime.json")
+        );
+        assert_eq!(json["game"], "rust");
+        assert_eq!(spec.install_dir, PathBuf::from("/srv/odin/runtime/rust"));
+        assert_eq!(
+            spec.steamcmd_dir,
+            PathBuf::from("/srv/odin/runtime/steamcmd")
+        );
+        assert_eq!(spec.instance_dir, PathBuf::from("/srv/odin/instance"));
+        assert!(matches!(
+            spec.launch,
+            Launch::Rust(launch) if launch.rcon_port == 28017 && launch.rcon_password == "secret"
+        ));
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn valheim_runtime_spec_keeps_its_instance_key_for_older_runtimes() {
+        let state = crate::instance::state::InstanceState::new("one", 2456);
+        let spec = RuntimeSpec::new("id", Launch::Valheim { instance: state });
+
+        let json = serde_json::to_value(&spec).unwrap();
+
+        assert_eq!(json["game"], "valheim");
+        assert_eq!(json["instance"]["name"], "one");
+        assert_eq!(json["install_dir"], "/srv/odin/runtime/valheim");
+    }
+
     #[test]
     fn container_names_are_namespaced_by_game() {
         assert_eq!(
@@ -677,7 +819,14 @@ mod tests {
             dir: paths.instance_dir("one"),
             state: crate::instance::state::InstanceState::new("one", 2456),
         };
-        let path = write_runtime_spec(&paths, &identity, &instance).unwrap();
+        let path = write_runtime_spec(
+            &paths,
+            &identity,
+            Launch::Valheim {
+                instance: instance.state.clone(),
+            },
+        )
+        .unwrap();
         let spec: RuntimeSpec = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(spec.instance_id, identity.id);
         assert_eq!(spec.install_dir, PathBuf::from("/srv/odin/runtime/valheim"));
@@ -734,10 +883,11 @@ mod tests {
             dir: paths.instance_dir("one"),
             state: crate::instance::state::InstanceState::new("one", 2456),
         };
-        let spec = ContainerSpec::valheim(
+        let spec = ContainerSpec::new(
             &paths,
             &identity,
-            &instance,
+            &instance.dir,
+            Vec::new(),
             "example/odin-srv:1".into(),
             &ResourceLimits::default(),
         );

@@ -33,24 +33,19 @@ pub async fn execute(instance: &RustInstance, command: &str) -> Result<String> {
     if !instance.is_running() {
         bail!(InstanceError::NotRunning(instance.name().to_owned()));
     }
-
-    let endpoint = websocket_url(instance.config.rcon_port, &instance.config.rcon_password);
-    let (mut socket, _) = timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(endpoint))
-        .await
-        .context("timed out connecting to Rust WebRCON")?
-        .context("failed to connect to Rust WebRCON")?;
-    let request = serde_json::json!({
-        "Identifier": REQUEST_IDENTIFIER,
-        "Message": command,
-        "Name": "WebRcon",
-    });
-    timeout(
-        RESPONSE_TIMEOUT,
-        socket.send(Message::Text(request.to_string().into())),
+    execute_at(
+        instance.config.rcon_port,
+        &instance.config.rcon_password,
+        command,
     )
     .await
-    .context("timed out sending command to Rust WebRCON")?
-    .context("failed to send command to Rust WebRCON")?;
+}
+
+/// Same exchange as [`execute`] for a caller that already knows the server is
+/// reachable, such as the container runtime that owns the Rust process.
+pub async fn execute_at(port: u16, password: &str, command: &str) -> Result<String> {
+    let mut socket = connect(port, password).await?;
+    send(&mut socket, command).await?;
 
     loop {
         let frame = timeout(RESPONSE_TIMEOUT, socket.next())
@@ -70,6 +65,44 @@ pub async fn execute(instance: &RustInstance, command: &str) -> Result<String> {
             _ => {}
         }
     }
+}
+
+/// Asks the server to save the world and exit. Unlike a process signal, the
+/// console's `quit` writes the `.sav` first. Returns once the command is
+/// delivered: the server closes the socket as it exits, so waiting for a
+/// reply would report a successful shutdown as a failure.
+pub async fn quit(port: u16, password: &str) -> Result<()> {
+    let mut socket = connect(port, password).await?;
+    send(&mut socket, "quit").await
+}
+
+type WebRconSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn connect(port: u16, password: &str) -> Result<WebRconSocket> {
+    let (socket, _) = timeout(
+        CONNECT_TIMEOUT,
+        tokio_tungstenite::connect_async(websocket_url(port, password)),
+    )
+    .await
+    .context("timed out connecting to Rust WebRCON")?
+    .context("failed to connect to Rust WebRCON")?;
+    Ok(socket)
+}
+
+async fn send(socket: &mut WebRconSocket, command: &str) -> Result<()> {
+    let request = serde_json::json!({
+        "Identifier": REQUEST_IDENTIFIER,
+        "Message": command,
+        "Name": "WebRcon",
+    });
+    timeout(
+        RESPONSE_TIMEOUT,
+        socket.send(Message::Text(request.to_string().into())),
+    )
+    .await
+    .context("timed out sending command to Rust WebRCON")?
+    .context("failed to send command to Rust WebRCON")
 }
 
 fn websocket_url(port: u16, password: &str) -> String {

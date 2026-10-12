@@ -670,6 +670,122 @@ chmod +x "$d/valheim_server.x86_64""#,
             .unwrap();
     }
 
+    fn palworld_instance_dir(rest_port: u16, enabled: bool) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("odin-palworld-stop-{}", uuid::Uuid::new_v4()));
+        let config = dir.join(crate::game::palworld::CONFIG_FILE);
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            config,
+            format!(
+                "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(RESTAPIEnabled={},AdminPassword=\"secret\",RESTAPIPort={rest_port})\n",
+                if enabled { "True" } else { "False" }
+            ),
+        )
+        .unwrap();
+        dir
+    }
+
+    fn palworld_spec(instance_dir: PathBuf) -> RuntimeSpec {
+        RuntimeSpec {
+            instance_dir,
+            ..spec_for(Launch::Palworld(crate::game::palworld::PalworldLaunch {
+                name: "pals".into(),
+                port: 8211,
+                query_port: 27015,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn palworld_stop_asks_the_rest_api_to_shut_down_instead_of_signalling() {
+        use std::io::{BufRead, Read, Write};
+
+        let flag = std::env::temp_dir().join(format!("odin-sigint-{}", uuid::Uuid::new_v4()));
+        let (mut child, pid, started_at) = spawn_shell(&format!(
+            "trap 'touch {}' INT; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            flag.display()
+        ));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // A fake REST API: records the request, answers, and ends the "server".
+        let rest = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap();
+                }
+                request.push_str(&line);
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            (request, String::from_utf8(body).unwrap())
+        });
+        let spec = palworld_spec(palworld_instance_dir(port, true));
+
+        stop_child(&mut child, pid, started_at, Duration::from_secs(10), &spec)
+            .await
+            .unwrap();
+
+        let (request, body) = rest.join().unwrap();
+        assert!(
+            request.starts_with("POST /v1/api/shutdown "),
+            "got {request}"
+        );
+        // Basic auth for admin:secret.
+        assert!(request.contains("authorization: Basic YWRtaW46c2VjcmV0"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"waittime": 0})
+        );
+        assert!(
+            !flag.exists(),
+            "SIGINT must not be sent when shutdown was delivered"
+        );
+    }
+
+    #[tokio::test]
+    async fn palworld_stop_falls_back_to_sigint_when_the_rest_api_is_unreachable() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let (mut child, pid, started_at) =
+            spawn_shell("trap 'exit 0' INT; while :; do sleep 0.1; done");
+        let spec = palworld_spec(palworld_instance_dir(port, true));
+
+        let begun = std::time::Instant::now();
+        stop_child(&mut child, pid, started_at, Duration::from_secs(10), &spec)
+            .await
+            .unwrap();
+
+        assert!(begun.elapsed() < Duration::from_secs(8));
+    }
+
+    #[tokio::test]
+    async fn palworld_stop_with_the_rest_api_disabled_signals_the_server() {
+        let (mut child, pid, started_at) =
+            spawn_shell("trap 'exit 0' INT; while :; do sleep 0.1; done");
+        let spec = palworld_spec(palworld_instance_dir(1, false));
+
+        stop_child(&mut child, pid, started_at, Duration::from_secs(10), &spec)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn ping_during_bootstrap_reports_not_ready() {
         let (mut client, server) = UnixStream::pair().unwrap();

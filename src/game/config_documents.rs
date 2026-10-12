@@ -116,7 +116,7 @@ fn specs(game: GameId) -> &'static [FileSpec] {
         }],
         GameId::Palworld => &[FileSpec {
             id: "server",
-            path: "runtime/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini",
+            path: crate::game::palworld::CONFIG_FILE,
             format: Format::PalworldOptions,
             managed: PALWORLD_MANAGED,
         }],
@@ -381,20 +381,15 @@ pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
             &seven_days_template_path(paths, instance),
             &instance_root(paths, instance),
         ),
-        GameId::Palworld => {
-            let source = paths
-                .game_install_dir(GameId::Palworld)
-                .join("DefaultPalWorldSettings.ini");
-            copy_template_if_missing(
-                &source,
-                &document_path(paths, instance, specs(GameId::Palworld)[0]),
-            )
-        }
+        GameId::Palworld => copy_template_if_missing(
+            &crate::game::palworld::template_path(paths, &instance.identity),
+            &document_path(paths, instance, specs(GameId::Palworld)[0]),
+        ),
         GameId::Valheim | GameId::Rust => bail!("this game has no native configuration template"),
     }
 }
 
-fn copy_template_if_missing(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn copy_template_if_missing(source: &Path, target: &Path) -> Result<()> {
     if target.exists() {
         return Ok(());
     }
@@ -928,6 +923,20 @@ pub fn value(paths: &Paths, instance: &GenericGameInstance, key: &str) -> Result
         return Ok(None);
     };
     Ok(parse(spec.format, &contents)?
+        .into_iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.value))
+}
+
+/// Reads one option from a Palworld `PalWorldSettings.ini` at `path`, for
+/// callers that only have the instance directory (the container runtime).
+pub fn palworld_value(path: &Path, key: &str) -> Result<Option<String>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(parse(Format::PalworldOptions, &contents)?
         .into_iter()
         .find(|entry| entry.key == key)
         .map(|entry| entry.value))

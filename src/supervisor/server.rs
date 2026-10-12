@@ -144,7 +144,10 @@ impl SupervisedInstance {
         match self {
             Self::Valheim(instance) => crate::game::valheim::build_command(instance, paths),
             Self::Rust(instance) => crate::game::rust::build_command(paths, instance),
-            Self::Generic(instance) => crate::game::generic::build_command(paths, instance),
+            Self::Generic(instance) => anyhow::bail!(
+                "{} runs in Podman and has no host command",
+                instance.identity.game
+            ),
         }
     }
 

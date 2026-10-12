@@ -1036,4 +1036,45 @@ mod tests {
         );
         std::fs::remove_dir_all(root).ok();
     }
+
+    #[test]
+    fn a_crashed_palworld_container_is_restarted_when_automatic_restart_is_on() {
+        let Some((state, db, root)) = container_state("crash-palworld") else {
+            return;
+        };
+        let instance =
+            crate::db::game_instances::create_generic(&state.paths, &db, GameId::Palworld, "pals")
+                .unwrap();
+        crate::db::game_instances::set_generic_auto_restart(&db, GameId::Palworld, "pals", true)
+            .unwrap();
+        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
+        crate::db::container_instances::set_desired_running(&db, &instance.identity.id, true)
+            .unwrap();
+
+        assert_eq!(
+            run_telemetry_tick(&state).crashed_generic_with_auto_restart,
+            [(GameId::Palworld, "pals".to_string())]
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_stopped_palworld_container_is_not_restarted_after_an_operator_stop() {
+        let Some((state, db, root)) = container_state("stop-palworld") else {
+            return;
+        };
+        let instance =
+            crate::db::game_instances::create_generic(&state.paths, &db, GameId::Palworld, "pals")
+                .unwrap();
+        crate::db::game_instances::set_generic_auto_restart(&db, GameId::Palworld, "pals", true)
+            .unwrap();
+        crate::db::container_instances::mark_podman(&db, &instance.identity.id).unwrap();
+
+        assert!(
+            run_telemetry_tick(&state)
+                .crashed_generic_with_auto_restart
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
 }

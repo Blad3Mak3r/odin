@@ -223,7 +223,7 @@ pub fn create_backup(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result
             // A filesystem copy made while Palworld is changing its world is
             // not a useful backup. Its local REST endpoint owns the save
             // operation, so ask it to flush before taking the snapshot.
-            if instance.identity.game == GameId::Palworld && instance.is_running_directly() {
+            if instance.identity.game == GameId::Palworld && is_running(paths, db, game, name)? {
                 crate::game::palworld::save(paths, &instance)?;
             }
             crate::backup::create_at(

@@ -18,6 +18,7 @@ use crate::config::PodmanConfig;
 use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits::ResourceLimits;
 use crate::game::GameId;
+use crate::game::palworld::PalworldLaunch;
 use crate::game::rust::RustLaunch;
 use crate::game::seven_days_to_die::SevenDaysLaunch;
 use crate::instance::state::InstanceState;
@@ -25,6 +26,7 @@ use crate::paths::Paths;
 
 pub mod dispatch;
 pub mod lifecycle;
+pub mod palworld;
 pub mod runtime;
 pub mod rust;
 pub mod seven_days_to_die;
@@ -391,6 +393,7 @@ pub enum Launch {
     Rust(RustLaunch),
     #[serde(rename = "7d2d")]
     SevenDaysToDie(SevenDaysLaunch),
+    Palworld(PalworldLaunch),
 }
 
 impl Launch {
@@ -399,6 +402,7 @@ impl Launch {
             Self::Valheim { .. } => GameId::Valheim,
             Self::Rust(_) => GameId::Rust,
             Self::SevenDaysToDie(_) => GameId::SevenDaysToDie,
+            Self::Palworld(_) => GameId::Palworld,
         }
     }
 
@@ -407,6 +411,7 @@ impl Launch {
             Self::Valheim { instance } => &instance.name,
             Self::Rust(launch) => &launch.name,
             Self::SevenDaysToDie(launch) => &launch.name,
+            Self::Palworld(launch) => &launch.name,
         }
     }
 
@@ -449,6 +454,10 @@ impl Launch {
                     launch,
                 )
             }
+            Self::Palworld(launch) => {
+                crate::game::palworld::prepare_runtime(&spec.install_dir, &spec.instance_dir)?;
+                crate::game::palworld::build_command_at(&spec.install_dir, console_log, launch)
+            }
         }
     }
 
@@ -472,6 +481,18 @@ impl Launch {
                     CONSOLE_STOP_TIMEOUT,
                     tokio::task::spawn_blocking(move || {
                         crate::game::seven_days_to_die::shutdown(&instance_dir)
+                    }),
+                )
+                .await
+                .is_ok_and(|joined| joined.is_ok_and(|result| result.is_ok()))
+            }
+            // The REST API's `shutdown` saves the world before the server exits.
+            Self::Palworld(_) => {
+                let instance_dir = instance_dir.to_path_buf();
+                tokio::time::timeout(
+                    CONSOLE_STOP_TIMEOUT,
+                    tokio::task::spawn_blocking(move || {
+                        crate::game::palworld::shutdown_at(&instance_dir)
                     }),
                 )
                 .await
@@ -901,6 +922,44 @@ mod tests {
         assert!(matches!(
             spec.launch,
             Launch::SevenDaysToDie(launch) if launch.port == 26900 && launch.telnet_port == Some(26903)
+        ));
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn runtime_spec_round_trips_the_palworld_launch_under_its_game_id() {
+        let paths = paths();
+        let identity = GameInstanceIdentity {
+            game: GameId::Palworld,
+            name: "pals".into(),
+            ..rust_identity()
+        };
+        let launch = PalworldLaunch {
+            name: "pals".into(),
+            port: 8211,
+            query_port: 27015,
+        };
+
+        let path = write_runtime_spec(&paths, &identity, Launch::Palworld(launch)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let spec: RuntimeSpec = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(
+            path,
+            paths
+                .container_runtime_dir(GameId::Palworld, &identity.id)
+                .join("runtime.json")
+        );
+        assert_eq!(json["game"], "palworld");
+        assert_eq!(
+            spec.install_dir,
+            PathBuf::from("/srv/odin/runtime/palworld")
+        );
+        assert_eq!(spec.launch.game(), GameId::Palworld);
+        assert!(matches!(
+            spec.launch,
+            Launch::Palworld(launch) if launch.port == 8211 && launch.query_port == 27015
         ));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

@@ -13,7 +13,9 @@
 //! 4. Set `container_runtime: true` (and `stop_timeout_secs` if the game needs
 //!    longer than 30 seconds to save) in the game's driver.
 //!
-//! No other host-side code enumerates container games.
+//! No other host-side code enumerates container games. The full migration
+//! checklist, with the traps each earlier game hit, is
+//! `docs/container-game-migration.md`.
 
 use anyhow::Result;
 
@@ -25,12 +27,11 @@ use crate::paths::Paths;
 use crate::supervisor;
 
 use super::lifecycle::{self, ContainerGame, RuntimeHealth, StopReason};
-use super::{rust, seven_days_to_die, valheim};
+use super::{palworld, rust, seven_days_to_die, valheim};
 
-/// Runs `$body` with `$game_type` bound to the [`ContainerGame`] of `$game`,
-/// or evaluates `$otherwise` when that game does not run in a container.
+/// Runs `$body` with `$game_type` bound to the [`ContainerGame`] of `$game`.
 macro_rules! for_container_game {
-    ($game:expr, $game_type:ident => $body:expr, otherwise => $otherwise:expr) => {
+    ($game:expr, $game_type:ident => $body:expr) => {
         match $game {
             GameId::Valheim => {
                 type $game_type = valheim::Valheim;
@@ -44,23 +45,21 @@ macro_rules! for_container_game {
                 type $game_type = seven_days_to_die::SevenDaysToDie;
                 $body
             }
-            GameId::Palworld => $otherwise,
+            GameId::Palworld => {
+                type $game_type = palworld::Palworld;
+                $body
+            }
         }
     };
 }
 
-fn unsupported(game: GameId) -> anyhow::Error {
-    anyhow::anyhow!("{game} does not run in Podman")
-}
-
 /// Whether instances of `game` are managed by the container lifecycle.
 pub fn is_container_game(game: GameId) -> bool {
-    for_container_game!(game, G => { let _ = G::GAME; true }, otherwise => false)
+    for_container_game!(game, G => { let _ = G::GAME; true })
 }
 
 pub fn migrate(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
-    for_container_game!(game, G => lifecycle::migrate::<G>(paths, db, name),
-        otherwise => Err(unsupported(game)))
+    for_container_game!(game, G => lifecycle::migrate::<G>(paths, db, name))
 }
 
 pub async fn runtime_health(
@@ -69,18 +68,15 @@ pub async fn runtime_health(
     game: GameId,
     name: &str,
 ) -> Result<RuntimeHealth> {
-    for_container_game!(game, G => lifecycle::runtime_health::<G>(paths, db, name).await,
-        otherwise => Err(unsupported(game)))
+    for_container_game!(game, G => lifecycle::runtime_health::<G>(paths, db, name).await)
 }
 
 pub async fn repair(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
-    for_container_game!(game, G => lifecycle::repair::<G>(paths, db, name).await,
-        otherwise => Err(unsupported(game)))
+    for_container_game!(game, G => lifecycle::repair::<G>(paths, db, name).await)
 }
 
 pub async fn update(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
-    for_container_game!(game, G => lifecycle::update::<G>(paths, db, name).await,
-        otherwise => Err(unsupported(game)))
+    for_container_game!(game, G => lifecycle::update::<G>(paths, db, name).await)
 }
 
 /// Marks a newly created instance as containerized.
@@ -88,14 +84,14 @@ pub fn mark_new_instance(paths: &Paths, db: &Db, game: GameId, name: &str) -> Re
     for_container_game!(game, G => {
         let instance = G::load(paths, db, name)?;
         lifecycle::mark_new_instance::<G>(db, &instance)
-    }, otherwise => Err(unsupported(game)))
+    })
 }
 
 pub fn is_migrated(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
     for_container_game!(game, G => {
         let instance = G::load(paths, db, name)?;
         lifecycle::is_migrated::<G>(db, &instance)
-    }, otherwise => Ok(false))
+    })
 }
 
 /// Authoritative liveness: the container for a migrated instance, the host
@@ -104,19 +100,18 @@ pub fn is_running(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bo
     for_container_game!(game, G => {
         let instance = G::load(paths, db, name)?;
         lifecycle::is_running::<G>(paths, db, &instance)
-    }, otherwise => Err(unsupported(game)))
+    })
 }
 
 pub async fn is_running_async(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<bool> {
     for_container_game!(game, G => {
         let instance = G::load(paths, db, name)?;
         lifecycle::is_running_async::<G>(paths, db, &instance).await
-    }, otherwise => Err(unsupported(game)))
+    })
 }
 
 pub async fn start(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
-    for_container_game!(game, G => lifecycle::start::<G>(paths, db, name).await.map(|_| ()),
-        otherwise => Err(unsupported(game)))
+    for_container_game!(game, G => lifecycle::start::<G>(paths, db, name).await.map(|_| ()))
 }
 
 /// Stops the container of a migrated instance. A server started before its
@@ -135,12 +130,11 @@ pub async fn stop(
         } else {
             G::stop_directly(paths, db, &instance).await
         }
-    }, otherwise => Err(unsupported(game)))
+    })
 }
 
 pub async fn restart(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
-    for_container_game!(game, G => lifecycle::restart::<G>(paths, db, name).await.map(|_| ()),
-        otherwise => Err(unsupported(game)))
+    for_container_game!(game, G => lifecycle::restart::<G>(paths, db, name).await.map(|_| ()))
 }
 
 /// Removes the container and the private runtime volume of a deleted instance.
@@ -148,7 +142,7 @@ pub fn remove(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
     for_container_game!(game, G => {
         let instance = G::load(paths, db, name)?;
         lifecycle::remove::<G>(paths, db, &instance)
-    }, otherwise => Ok(()))
+    })
 }
 
 /// Rewrites the runtime spec of a migrated instance after its identity on
@@ -157,7 +151,7 @@ pub fn sync_spec(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()>
     for_container_game!(game, G => {
         let instance = G::load(paths, db, name)?;
         lifecycle::sync_spec::<G>(paths, db, &instance)
-    }, otherwise => Ok(()))
+    })
 }
 
 /// How an instance is executed right now, for views that must stay available

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use tokio::time::{Instant, sleep};
 
 use crate::config::{GlobalConfig, PodmanConfig};
 use crate::db::Db;
@@ -21,6 +22,8 @@ use super::{ContainerSpec, ContainerState, PodmanClient, container_name, write_r
 
 const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const STOP_TIMEOUT_SECS: u64 = 30;
+const CONTAINER_CREATE_TIMEOUT: Duration = Duration::from_secs(5);
+const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Serialize)]
 pub struct RuntimeHealth {
@@ -320,10 +323,7 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
         None => {
             client.ensure_image(&image).await?;
             client.create(&spec).await?;
-            anyhow::ensure!(
-                client.inspect(&container).await?.is_some(),
-                "Podman created container {container} but it is unavailable"
-            );
+            wait_for_container(&client, &container).await?;
             client.start(&container).await?;
         }
     }
@@ -348,6 +348,22 @@ pub async fn start(paths: &Paths, db: &Db, name: &str) -> Result<Instance> {
         other => bail!("runtime image returned an unexpected startup response: {other:?}"),
     }
     Ok(instance)
+}
+
+async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {
+    let deadline = Instant::now() + CONTAINER_CREATE_TIMEOUT;
+    loop {
+        if client.inspect(name).await?.is_some() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "Podman created container {name} but it did not become available within {} seconds",
+                CONTAINER_CREATE_TIMEOUT.as_secs()
+            );
+        }
+        sleep(CONTAINER_CREATE_POLL_INTERVAL).await;
+    }
 }
 
 pub async fn stop(paths: &Paths, db: &Db, name: &str) -> Result<()> {
@@ -601,6 +617,54 @@ mod tests {
         assert_eq!(health.status, "orphaned");
         drop(listener);
         std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[tokio::test]
+    async fn wait_for_container_retries_until_podman_exposes_it() {
+        let socket =
+            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in [
+                ("404 Not Found", r#"{"cause":"no such container"}"#),
+                (
+                    "200 OK",
+                    r#"{"State":{"Running":false,"Status":"created"}}"#,
+                ),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut request)
+                    .unwrap();
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+
+        wait_for_container(
+            &PodmanClient::new(&socket).unwrap(),
+            "odin-valheim-instance",
+        )
+        .await
+        .unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| {
+            request.starts_with("GET /v4.0.0/libpod/containers/odin-valheim-instance/json ")
+        }));
+        std::fs::remove_file(socket).ok();
     }
 
     #[tokio::test]

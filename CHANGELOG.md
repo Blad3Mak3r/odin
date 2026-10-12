@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-10-12
+
+### What's Changed
+- fix: retry a failed SteamCMD app update by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/139
+- feat(web): game banner backdrop and rework of games list, game view and instance view by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/140
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.18.1...v0.18.2
+
 ## [0.18.1] - 2026-10-12
 
 ### What's Changed

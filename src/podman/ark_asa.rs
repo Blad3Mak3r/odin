@@ -73,13 +73,55 @@ pub fn install_shared(paths: &Paths, mut logger: impl FnMut(&str)) -> Result<()>
     logger("creating shared ARK installer container");
     client.create_blocking(&spec)?;
     client.start_blocking(SHARED_INSTALL_CONTAINER)?;
-    let status = client.wait_blocking(SHARED_INSTALL_CONTAINER)?;
+    let status = wait_streaming_log(&client, &shared.join("logs/update.log"), &mut logger)?;
     client.remove_blocking(SHARED_INSTALL_CONTAINER, false)?;
     if status != 0 {
         bail!("shared ARK installation container exited with status {status}");
     }
     logger("shared ARK installation completed");
     Ok(())
+}
+
+/// Waits for the installer container while forwarding the SteamCMD output it
+/// appends to the bind-mounted `update.log`.
+fn wait_streaming_log(
+    client: &PodmanClient,
+    log: &Path,
+    logger: &mut impl FnMut(&str),
+) -> Result<i64> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut offset = 0u64;
+    let mut pending = String::new();
+    let mut drain = |logger: &mut dyn FnMut(&str)| {
+        // The installer truncates the file when it starts a fresh attempt.
+        let Ok(mut file) = std::fs::File::open(log) else {
+            return;
+        };
+        if file.metadata().map_or(0, |meta| meta.len()) < offset {
+            offset = 0;
+        }
+        let mut chunk = Vec::new();
+        if file.seek(SeekFrom::Start(offset)).is_ok() && file.read_to_end(&mut chunk).is_ok() {
+            offset += chunk.len() as u64;
+            pending.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(end) = pending.find('\n') {
+                let line: String = pending.drain(..=end).collect();
+                logger(line.trim_end());
+            }
+        }
+    };
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| client.wait_blocking(SHARED_INSTALL_CONTAINER));
+        while !waiter.is_finished() {
+            drain(logger);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        drain(logger);
+        waiter
+            .join()
+            .map_err(|_| anyhow::anyhow!("Podman wait thread panicked"))?
+    })
 }
 
 pub fn shared_install_build_id(paths: &Paths) -> Option<String> {

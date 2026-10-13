@@ -396,8 +396,14 @@ impl PodmanClient {
             #[serde(rename = "StatusCode")]
             status_code: i64,
         }
-        let response = self
-            .blocking_client()?
+        // The container may run for as long as SteamCMD needs, so the
+        // default 30 s request timeout of the blocking client must not apply.
+        let client = reqwest::blocking::Client::builder()
+            .unix_socket(self.socket.as_path())
+            .timeout(None)
+            .build()
+            .context("failed to create blocking Podman Unix-socket client")?;
+        let response = client
             .post(format!("{API_PREFIX}/containers/{name}/wait"))
             .send()
             .context("failed to wait for Podman container")?;

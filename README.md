@@ -456,10 +456,11 @@ is a link to it. Odin creates `PalWorldSettings.ini` from the server's shipped
 file. Files that earlier versions left in `runtime/` besides `Pal/Saved/` are
 unused and can be deleted.
 
-ARK: Survival Ascended runs through Proton. Instances can have private game
-files or reuse a shared installation; the dashboard's ARK page installs the
-shared payload and exposes its common native INI files under the game's
-Configuration tab. ARK clusters are local to one Odin host: create a cluster in
+7 Days to Die and ARK: Survival Ascended instances can have private game
+files or reuse a shared installation; the game's page in the dashboard installs
+and updates the shared payload, and all shared instances must be stopped while
+it does. ARK: Survival Ascended runs through Proton and exposes its common
+native INI files under the game's Configuration tab. ARK clusters are local to one Odin host: create a cluster in
 that page, select stopped ARK instances as members, and Odin mounts one
 transfer directory for the cluster while passing the shared cluster ID to each
 member. Odin does not configure cross-host filesystems; use a separately

@@ -163,6 +163,43 @@ runs with `HOME=/srv/odin/runtime`. Rust additionally maintains the link before
 every start because Steamworks needs it; only add that for a game that is
 shown to need it (`SteamCmd::ensure_sdk64_client_at`).
 
+## Shared installs
+
+A game can let its instances reuse one copy of the game files instead of each
+downloading a private one (ARK: Survival Ascended and 7 Days to Die do; the
+others do not yet). 7 Days to Die is the minimal example: its server writes
+everything under `-UserDataFolder`, so it needs the shared mount and nothing
+else.
+The game-neutral part lives in `src/podman/shared_install.rs`; a game opts in
+with `shared_install: true` in its driver capabilities and supplies only what is
+specific to it.
+
+Game-neutral, nothing to add per game:
+
+- `POST /games/{game}/install` runs the installer job, `GET` reports whether the
+  server binary exists and the Steam build id. The installer is a short-lived
+  `odin-<game>-install` container running `odin install-shared --game <id>` in
+  the driver's runtime image; it refuses to run while a shared instance of the
+  game is running.
+- The `install_mode` of a new instance is accepted for every game that declares
+  the capability, stored in `game_instance_install`, and an instance's own
+  update is refused when it is shared.
+- The dashboard shows the install card on the game's overview and the install
+  mode selector in the create dialog from the capability alone.
+
+What the game provides in `src/podman/<game>.rs`:
+
+- `ensure_ready_to_start` calls `shared_install::ensure_ready`.
+- `prepare_layout` writes the runtime spec with
+  `write_runtime_spec_with_install_dir(.., Some(shared_install::MOUNT_DIR))`
+  when `game_instances::is_shared_install`.
+- `extra_mounts` pushes `shared_install::mount` **first** and then mounts every
+  per-instance path the server writes inside the install tree (saves, mods,
+  identity directories) on top of it. A symlink created inside the install tree
+  cannot do this job: the tree is shared, so the link target would be too.
+  Create the mountpoints on the host before the first start; otherwise Podman
+  creates them inside the shared tree as root.
+
 ## 5. Existing data
 
 When a game's layout changes, existing instances keep working:

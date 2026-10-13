@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
 import { GAME_DESCRIPTIONS } from '@/lib/games'
-import { useArkClusters, useCreateArkCluster, useGames, useInstallShared, useManagedInstances, useSetArkClusterMembers, useSharedInstall } from '@/lib/queries'
+import { useArkClusters, useCreateArkCluster, useDeleteArkCluster, useGames, useInstallShared, useManagedInstances, useSetArkClusterMembers, useSharedInstall } from '@/lib/queries'
 import { useState } from 'react'
 import type { GameView } from '@/lib/types'
 import { toast } from 'sonner'
@@ -33,12 +33,13 @@ function ArkClustersCard() {
   const clusters = useArkClusters()
   const instances = useManagedInstances()
   const create = useCreateArkCluster()
+  const remove = useDeleteArkCluster()
   const setMembers = useSetArkClusterMembers()
   const [name, setName] = useState('')
   const [clusterId, setClusterId] = useState('')
   const arkInstances = instances.data?.filter((instance) => instance.game === 'ark-asa') ?? []
   const submit = () => create.mutate({ name, cluster_id: clusterId }, { onSuccess: () => { setName(''); setClusterId(''); toast.success('ARK cluster created') }, onError: (error) => toast.error(error.message) })
-  return <Card><CardHeader><CardTitle>Clusters</CardTitle><CardDescription>Members share Cross-ARK transfer storage. Stop all affected servers before changing membership.</CardDescription></CardHeader><CardContent className="flex flex-col gap-4"><div className="grid gap-3 sm:grid-cols-3"><Input placeholder="Cluster name" value={name} onChange={(event) => setName(event.target.value)} /><Input placeholder="Cluster ID" value={clusterId} onChange={(event) => setClusterId(event.target.value)} /><Button type="button" disabled={!name || !clusterId || create.isPending} onClick={submit}>Create cluster</Button></div>{clusters.data?.map((cluster) => <div key={cluster.id} className="border p-4"><div className="flex items-baseline justify-between gap-4"><p className="font-medium">{cluster.name}</p><p className="text-xs text-muted-foreground">ID: {cluster.cluster_id}</p></div><div className="mt-3 grid gap-2">{arkInstances.map((instance) => <label key={instance.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cluster.members.includes(instance.id)} disabled={instance.running || setMembers.isPending} onChange={(event) => { const members = event.target.checked ? [...cluster.members, instance.id] : cluster.members.filter((id) => id !== instance.id); setMembers.mutate({ id: cluster.id, members }, { onError: (error) => toast.error(error.message) }) }} />{instance.name}{instance.running ? ' (running)' : ''}</label>)}</div></div>)}</CardContent></Card>
+  return <Card><CardHeader><CardTitle>Clusters</CardTitle><CardDescription>Members share Cross-ARK transfer storage. Stop all affected servers before changing membership.</CardDescription></CardHeader><CardContent className="flex flex-col gap-4"><div className="grid gap-3 sm:grid-cols-3"><Input placeholder="Cluster name" value={name} onChange={(event) => setName(event.target.value)} /><Input placeholder="Cluster ID" value={clusterId} onChange={(event) => setClusterId(event.target.value)} /><Button type="button" disabled={!name || !clusterId || create.isPending} onClick={submit}>Create cluster</Button></div>{clusters.data?.map((cluster) => <div key={cluster.id} className="border p-4"><div className="flex items-baseline justify-between gap-4"><p className="font-medium">{cluster.name}</p><div className="flex items-center gap-3"><p className="text-xs text-muted-foreground">ID: {cluster.cluster_id}</p><Button type="button" variant="outline" size="sm" disabled={remove.isPending} onClick={() => { if (window.confirm(`Delete cluster ${cluster.name}?`)) remove.mutate(cluster.id, { onSuccess: () => toast.success('ARK cluster deleted'), onError: (error) => toast.error(error.message) }) }}>Delete</Button></div></div><div className="mt-3 grid gap-2">{arkInstances.map((instance) => <label key={instance.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cluster.members.includes(instance.id)} disabled={instance.running || setMembers.isPending} onChange={(event) => { const members = event.target.checked ? [...cluster.members, instance.id] : cluster.members.filter((id) => id !== instance.id); setMembers.mutate({ id: cluster.id, members }, { onError: (error) => toast.error(error.message) }) }} />{instance.name}{instance.running ? ' (running)' : ''}</label>)}</div></div>)}</CardContent></Card>
 }
 
 function GameInstances({ game }: { game: GameView }) {

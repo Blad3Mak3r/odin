@@ -596,6 +596,10 @@ pub fn set_ark_cluster_members(
     )?;
     for member in members {
         transaction.execute(
+            "DELETE FROM ark_cluster_members WHERE instance_id = ?1",
+            params![member],
+        )?;
+        transaction.execute(
             "INSERT INTO ark_cluster_members (instance_id, cluster_id) VALUES (?1, ?2)",
             params![member, cluster_id],
         )?;
@@ -1088,6 +1092,34 @@ mod tests {
         assert_eq!(
             launch.cluster.unwrap().directory,
             "/srv/odin/clusters/home_cluster"
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn ark_instance_can_move_between_clusters() {
+        let (paths, db) = temp_context("ark-cluster-move");
+        let instance = match crate::game::instances::create(
+            &paths,
+            &db,
+            GameId::ArkSurvivalAscended,
+            "island",
+        )
+        .unwrap()
+        {
+            crate::game::instances::GameInstance::Generic(instance) => instance,
+            _ => unreachable!(),
+        };
+        let first = create_ark_cluster(&db, "first", "first_cluster").unwrap();
+        let second = create_ark_cluster(&db, "second", "second_cluster").unwrap();
+        set_ark_cluster_members(&db, &first.id, std::slice::from_ref(&instance.identity.id))
+            .unwrap();
+        set_ark_cluster_members(&db, &second.id, std::slice::from_ref(&instance.identity.id))
+            .unwrap();
+
+        assert_eq!(
+            ark_cluster(&db, &instance.identity.id).unwrap().unwrap().id,
+            second.id
         );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

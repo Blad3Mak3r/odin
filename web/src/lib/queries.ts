@@ -451,6 +451,11 @@ export function useSetArkClusterMembers() {
   return useMutation({ mutationFn: ({ id, members }: { id: string; members: string[] }) => api.put<void>(`/ark-clusters/${id}/members`, { members }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ark-clusters'] }) })
 }
 
+export function useDeleteArkCluster() {
+  const queryClient = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => api.delete<void>(`/ark-clusters/${id}`), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ark-clusters'] }) })
+}
+
 export function useInstallShared(game: GameId) {
   const queryClient = useQueryClient()
   return useMutation({

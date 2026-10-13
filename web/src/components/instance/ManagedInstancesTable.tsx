@@ -1,3 +1,4 @@
+import { TriangleAlert } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -138,7 +139,11 @@ function ManagedInstanceRow({
       )}
       <TableCell className="font-medium">
         <Link className="hover:underline" to={`/instance/${instance.id}`}>{instance.name}</Link>
-        <div className="text-xs font-normal text-muted-foreground">Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}</div>
+        <div className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
+          {instance.restart_required && <TriangleAlert className="size-3 shrink-0 text-amber-500" aria-hidden="true" />}
+          Odin {instance.odin_version ? `v${instance.odin_version}` : '—'}
+          {instance.restart_required && ' · restart to update'}
+        </div>
         <div className="flex flex-wrap gap-1">{instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div>
       </TableCell>
       {withGame && <TableCell><Badge variant="secondary"><GameIcon game={instance.game} className="size-4 rounded-sm" />{gameLabel(instance.game)}</Badge></TableCell>}

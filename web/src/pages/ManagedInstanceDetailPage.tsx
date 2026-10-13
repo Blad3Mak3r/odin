@@ -350,7 +350,7 @@ export function ManagedInstanceDetailPage() {
     <div className="relative isolate flex flex-col gap-6">
       <GameBackdrop game={detail.game} />
       <ManagedInstanceHeader instance={detail} />
-      <RuntimeHealthCard id={detail.id} game={detail.game} running={detail.running} />
+      <RuntimeHealthCard id={detail.id} game={detail.game} running={detail.running} restartRequired={detail.restart_required} />
       <RouteTabs label="Instance sections" tabs={tabs.map((item) => ({ label: item.label, to: `/instance/${id}/${item.id}` }))} />
       <div className="flex flex-col gap-2">
         <TabPanel active={tab === 'logs'}><ManagedLogsTab id={detail.id} /></TabPanel>

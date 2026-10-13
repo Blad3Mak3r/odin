@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
+import { gameLabel } from '@/lib/games'
 import { useSystemUpdate, useVersion } from '@/lib/queries'
 
 const DISMISSED_KEY = 'odin-update-dismissed-version'
@@ -66,7 +67,7 @@ export function UpdateBanner() {
             <span>
               {outdated.length} running{' '}
               {outdated.length === 1 ? 'instance still uses' : 'instances still use'} an older
-              Odin supervisor. Restart {outdated.join(', ')} to finish applying the update.
+              Odin supervisor. Restart {outdated.map(({ game, name }) => `${gameLabel(game)} / ${name}`).join(', ')} to finish applying the update.
             </span>
           </span>
         )}

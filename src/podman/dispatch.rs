@@ -130,6 +130,10 @@ pub struct Execution {
     /// Whether the container is running. `false` when it cannot be inspected.
     pub container_running: bool,
     pub odin_version: Option<String>,
+    /// The running supervisor predates this Odin and only a restart (which
+    /// re-mounts the host binary) brings it up to date. `false` when the
+    /// supervisor cannot be reached: unknown is not outdated.
+    pub restart_required: bool,
 }
 
 pub fn execution(paths: &Paths, identity: &GameInstanceIdentity) -> Execution {
@@ -137,17 +141,68 @@ pub fn execution(paths: &Paths, identity: &GameInstanceIdentity) -> Execution {
         tracing::debug!(instance = %identity.name, %error, "failed to inspect Podman container");
         false
     });
-    let odin_version = supervisor::client::ping_socket_blocking(
+    let pong = supervisor::client::ping_socket_blocking(
         &lifecycle::control_socket(paths, identity),
         std::time::Duration::from_millis(300),
     )
-    .ok()
-    .and_then(|response| match response {
-        supervisor::protocol::Response::Pong { odin_version, .. } => odin_version,
-        _ => None,
-    });
+    .ok();
+    let (odin_version, restart_required) = match pong {
+        Some(supervisor::protocol::Response::Pong {
+            protocol_version,
+            odin_version,
+            ..
+        }) => {
+            let outdated = container_running
+                && supervisor_is_outdated(
+                    protocol_version,
+                    odin_version.as_deref(),
+                    env!("CARGO_PKG_VERSION"),
+                );
+            (odin_version, outdated)
+        }
+        _ => (None, false),
+    };
     Execution {
         container_running,
         odin_version,
+        restart_required,
+    }
+}
+
+fn supervisor_is_outdated(
+    protocol_version: u16,
+    supervisor_version: Option<&str>,
+    current_version: &str,
+) -> bool {
+    protocol_version < supervisor::protocol::PROTOCOL_VERSION
+        || supervisor_version
+            .is_none_or(|version| crate::odin_update::is_newer(current_version, version))
+}
+
+#[cfg(test)]
+mod supervisor_version_tests {
+    use super::*;
+
+    const PROTOCOL: u16 = supervisor::protocol::PROTOCOL_VERSION;
+
+    #[test]
+    fn missing_supervisor_version_is_outdated() {
+        assert!(supervisor_is_outdated(PROTOCOL, None, "0.8.0"));
+    }
+
+    #[test]
+    fn lower_supervisor_version_is_outdated() {
+        assert!(supervisor_is_outdated(PROTOCOL, Some("0.7.0"), "0.8.0"));
+    }
+
+    #[test]
+    fn older_protocol_is_outdated_even_with_the_current_version() {
+        assert!(supervisor_is_outdated(PROTOCOL - 1, Some("0.8.0"), "0.8.0"));
+    }
+
+    #[test]
+    fn current_or_newer_supervisor_is_not_outdated() {
+        assert!(!supervisor_is_outdated(PROTOCOL, Some("0.8.0"), "0.8.0"));
+        assert!(!supervisor_is_outdated(PROTOCOL, Some("0.9.0"), "0.8.0"));
     }
 }

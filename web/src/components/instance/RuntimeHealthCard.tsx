@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, Wrench } from 'lucide-react'
+import { Loader2, RefreshCw, TriangleAlert, Wrench } from 'lucide-react'
 import { toast } from 'sonner'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
@@ -16,7 +16,7 @@ function statusVariant(status: string) {
   return status === 'responding' || status === 'running' ? 'default' : status === 'missing' || status === 'created' || status === 'exited' || status === 'orphaned' ? 'secondary' : 'destructive'
 }
 
-export function RuntimeHealthCard({ id, game, running }: { id: string; game: GameId; running: boolean }) {
+export function RuntimeHealthCard({ id, game, running, restartRequired }: { id: string; game: GameId; running: boolean; restartRequired: boolean }) {
   const health = useRuntimeHealth(id)
   const repair = useRepairRuntime()
   const data = health.data
@@ -45,7 +45,11 @@ export function RuntimeHealthCard({ id, game, running }: { id: string; game: Gam
             </div>
             <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
               <span>Podman version: {data.podman.version ?? '—'}</span>
-              <span>Runtime Odin: {data.socket.odin_version ?? '—'}</span>
+              <span className="flex items-center gap-1">
+                {restartRequired && <TriangleAlert className="size-4 shrink-0 text-amber-500" aria-hidden="true" />}
+                Runtime Odin: {data.socket.odin_version ?? '—'}
+                {restartRequired && ' · restart to update'}
+              </span>
               <span>Runtime protocol: {data.socket.protocol_version ?? '—'}</span>
             </div>
             {[data.podman.error, data.container.error, data.socket.error].filter((message): message is string => Boolean(message)).map((message) => (

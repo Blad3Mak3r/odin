@@ -2,7 +2,7 @@ export interface VersionView {
   latest_version: string | null
   latest_release_url: string | null
   update_available: boolean
-  outdated_instances: string[]
+  outdated_instances: Array<{ game: GameId; name: string }>
   system_update_supported: boolean
   system_update_running: boolean
 }
@@ -46,6 +46,7 @@ export interface ManagedInstanceView {
   created_at: string
   running: boolean
   odin_version: string | null
+  restart_required: boolean
   capabilities: GameCapabilities
   install_mode: 'isolated' | 'shared'
   config: Record<string, unknown>

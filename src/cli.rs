@@ -123,9 +123,12 @@ pub enum Command {
         instance_id: String,
     },
 
-    /// Hidden: installs the shared ARK payload inside a short-lived runtime container.
+    /// Hidden: installs a game's shared payload inside a short-lived runtime container.
     #[command(hide = true)]
-    InstallArkShared,
+    InstallShared {
+        #[arg(long)]
+        game: crate::game::GameId,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -257,5 +260,18 @@ mod tests {
         assert!(validate_instance_name("server-").is_err());
         assert!(validate_instance_name("server_1").is_err());
         assert!(validate_instance_name(&"a".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn installer_subcommand_accepts_every_game_id() {
+        use clap::Parser;
+        // The installer container runs exactly this command line.
+        for driver in crate::game::drivers() {
+            let cli =
+                Cli::try_parse_from(["odin", "install-shared", "--game", &driver.id().to_string()])
+                    .unwrap();
+            assert!(matches!(cli.command, Command::InstallShared { game } if game == driver.id()));
+        }
+        assert!(Cli::try_parse_from(["odin", "install-shared", "--game", "nope"]).is_err());
     }
 }

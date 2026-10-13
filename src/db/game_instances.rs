@@ -498,6 +498,35 @@ pub fn install_mode(db: &crate::db::Db, instance_id: &str) -> Result<InstallMode
     }
 }
 
+pub fn is_shared_install(db: &crate::db::Db, instance_id: &str) -> Result<bool> {
+    Ok(install_mode(db, instance_id)? == InstallMode::Shared)
+}
+
+/// Every instance of `game` that runs from the game's shared installation.
+pub fn shared_install_instances(
+    db: &crate::db::Db,
+    game: GameId,
+) -> Result<Vec<GameInstanceIdentity>> {
+    let conn = db.conn();
+    let mut statement = conn.prepare(
+        "SELECT g.id, g.name, g.created_at, g.tags \
+         FROM game_instances g JOIN game_instance_install i ON i.instance_id = g.id \
+         WHERE g.game = ?1 AND i.install_mode = 'shared' ORDER BY g.name",
+    )?;
+    statement
+        .query_map(params![game.as_str()], |row| {
+            Ok(GameInstanceIdentity {
+                id: row.get(0)?,
+                game,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+                tags: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default(),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 pub fn set_install_mode(db: &crate::db::Db, instance_id: &str, mode: InstallMode) -> Result<()> {
     db.conn().execute(
         "INSERT INTO game_instance_install (instance_id, install_mode) VALUES (?1, ?2)
@@ -1059,6 +1088,26 @@ mod tests {
         assert_eq!(resolved.game, GameId::Rust);
         assert_eq!(resolved.name, "rust-server");
         assert!(identity_by_id(&db, "missing").unwrap().is_none());
+
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn shared_install_instances_lists_only_shared_instances_of_the_game() {
+        let (paths, db) = temp_context("shared-install-instances");
+        let shared = create_generic(&paths, &db, GameId::Palworld, "shared").unwrap();
+        let isolated = create_generic(&paths, &db, GameId::Palworld, "isolated").unwrap();
+        let other_game = create_generic(&paths, &db, GameId::SevenDaysToDie, "other").unwrap();
+        set_install_mode(&db, &shared.identity.id, InstallMode::Shared).unwrap();
+        set_install_mode(&db, &isolated.identity.id, InstallMode::Isolated).unwrap();
+        set_install_mode(&db, &other_game.identity.id, InstallMode::Shared).unwrap();
+
+        let listed = shared_install_instances(&db, GameId::Palworld).unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, shared.identity.id);
+        assert!(is_shared_install(&db, &shared.identity.id).unwrap());
+        assert!(!is_shared_install(&db, &isolated.identity.id).unwrap());
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

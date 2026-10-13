@@ -32,6 +32,7 @@ pub mod palworld;
 pub mod runtime;
 pub mod rust;
 pub mod seven_days_to_die;
+pub mod shared_install;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod valheim;

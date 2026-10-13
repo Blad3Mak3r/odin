@@ -198,7 +198,7 @@ async fn bootstrap(spec: &RuntimeSpec) -> Result<()> {
     if spec.shared_install {
         anyhow::ensure!(
             server_file(spec).is_file(),
-            "Install the game files from Games › ARK: Survival Ascended before starting a shared instance"
+            super::shared_install::not_installed_message(spec.launch.game())
         );
         return Ok(());
     }
@@ -244,7 +244,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
 async fn update_payload(spec: &RuntimeSpec) -> Result<()> {
     anyhow::ensure!(
         !spec.shared_install,
-        "shared installs are updated from Games › ARK: Survival Ascended"
+        super::shared_install::update_elsewhere_message(spec.launch.game())
     );
     let steamcmd = spec.steamcmd_dir.clone();
     let install = spec.install_dir.clone();

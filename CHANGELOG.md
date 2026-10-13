@@ -4,6 +4,22 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-13
+
+### What's Changed
+- feat: run Palworld in a Podman container by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/141
+- chore: remove V Rising and Dragonwilds, and the host-process execution path by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/142
+- refactor: drop the empty pid and last_*_at columns by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/143
+- feature: update Odin from dashboard by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/146
+- WIP: Add ARK: Survival Ascended runtime by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/145
+- fix: resolve and validate the bind-mounted odin binary by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/147
+- ci: log in to GHCR before pushing runtime images by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/148
+- feature: flag instances running an outdated Odin supervisor by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/149
+- ci: remove the Container job from the release workflow by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/150
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.18.2...v0.19.0
+
 ## [0.18.2] - 2026-10-12
 
 ### What's Changed

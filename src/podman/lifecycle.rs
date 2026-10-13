@@ -335,11 +335,7 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
                 .inspect_image(&image)
                 .await?
                 .context("runtime image disappeared after it was pulled")?;
-            if container_state
-                .image_id
-                .as_deref()
-                .is_some_and(|current| current != local_image.id)
-            {
+            if image_changed(container_state.image_id.as_deref(), &local_image.id) {
                 client.remove(&container, false).await?;
                 client.create(&spec).await?;
                 wait_for_container(&client, &container).await?;
@@ -377,6 +373,10 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     }
     container_instances::set_desired_running(db, &identity.id, true)?;
     Ok(instance)
+}
+
+fn image_changed(container_image: Option<&str>, local_image: &str) -> bool {
+    container_image.is_some_and(|current| current != local_image)
 }
 
 async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {
@@ -778,5 +778,12 @@ mod tests {
 
         server.join().unwrap();
         std::fs::remove_file(socket).ok();
+    }
+
+    #[test]
+    fn stopped_container_is_recreated_only_when_its_image_changed() {
+        assert!(image_changed(Some("sha256:old"), "sha256:new"));
+        assert!(!image_changed(Some("sha256:same"), "sha256:same"));
+        assert!(!image_changed(None, "sha256:new"));
     }
 }

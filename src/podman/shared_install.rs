@@ -33,6 +33,13 @@ pub fn mount(paths: &Paths, game: GameId) -> Mount {
     bind(&paths.shared_install_dir(game), Path::new(MOUNT_DIR))
 }
 
+/// The shared installation read-only, for games whose server never writes
+/// into its install tree. One instance cannot then damage the files the
+/// others run from.
+pub fn mount_read_only(paths: &Paths, game: GameId) -> Mount {
+    bind_ro(&paths.shared_install_dir(game), Path::new(MOUNT_DIR))
+}
+
 pub fn is_installed(paths: &Paths, game: GameId) -> bool {
     paths
         .shared_install_dir(game)

@@ -168,8 +168,8 @@ shown to need it (`SteamCmd::ensure_sdk64_client_at`).
 A game can let its instances reuse one copy of the game files instead of each
 downloading a private one (ARK: Survival Ascended and 7 Days to Die do; the
 others do not yet). 7 Days to Die is the minimal example: its server writes
-everything under `-UserDataFolder`, so it needs the shared mount and nothing
-else.
+everything under `-UserDataFolder`, so it needs the shared mount (read-only,
+checked by running it against a read-only install tree) and nothing else.
 The game-neutral part lives in `src/podman/shared_install.rs`; a game opts in
 with `shared_install: true` in its driver capabilities and supplies only what is
 specific to it.

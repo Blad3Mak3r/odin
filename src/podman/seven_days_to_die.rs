@@ -74,10 +74,12 @@ impl ContainerGame for SevenDaysToDie {
 
     fn extra_mounts(paths: &Paths, db: &Db, instance: &GenericGameInstance) -> Result<Vec<Mount>> {
         // The server keeps everything it writes in the instance directory
-        // (`-UserDataFolder`, `-configfile`, `-logfile`), so the shared files
-        // need no per-instance submount.
+        // (`-UserDataFolder`, `-configfile`, `-logfile`) and under its private
+        // `$HOME`, so the shared files need no per-instance submount and can
+        // be read-only. A run with a read-only install tree booted, saved and
+        // stopped cleanly, and left every file in it untouched.
         if game_instances::is_shared_install(db, &instance.identity.id)? {
-            Ok(vec![shared_install::mount(paths, Self::GAME)])
+            Ok(vec![shared_install::mount_read_only(paths, Self::GAME)])
         } else {
             Ok(Vec::new())
         }
@@ -244,13 +246,14 @@ mod tests {
                 (
                     mount["source"].as_str().unwrap(),
                     mount["destination"].as_str().unwrap(),
+                    mount["options"][0].as_str().unwrap(),
                 )
             })
             .collect();
         let shared = paths.shared_install_dir(GameId::SevenDaysToDie);
         assert_eq!(
             mounts.last().copied(),
-            Some((shared.to_str().unwrap(), "/srv/odin/shared"))
+            Some((shared.to_str().unwrap(), "/srv/odin/shared", "ro"))
         );
         assert_eq!(mounts.len(), 5);
 

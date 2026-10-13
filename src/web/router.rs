@@ -330,6 +330,10 @@ pub fn build_router(state: AppState) -> Router {
             get(games::list_instances).post(games::create_instance),
         )
         .route(
+            "/games/{game}/install",
+            get(games::shared_install_status).post(games::install_shared),
+        )
+        .route(
             "/instances",
             get(instances::list_instances).post(instances::create_instance),
         )

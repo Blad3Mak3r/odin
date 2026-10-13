@@ -190,6 +190,40 @@ impl PodmanClient {
         Ok(())
     }
 
+    pub fn ensure_supported_blocking(&self) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .get("http://d/version")
+            .send()
+            .context("failed to contact Podman version API")?;
+        let version: PodmanVersion = blocking_success(response)?
+            .json()
+            .context("failed to decode Podman version response")?;
+        if version.is_supported() {
+            Ok(())
+        } else {
+            bail!(
+                "Podman {} is unsupported; Odin requires Podman 5.0.0 or newer",
+                version.version
+            )
+        }
+    }
+
+    pub fn ensure_image_blocking(&self, image: &str) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .get(format!("{API_PREFIX}/images/{image}/exists"))
+            .send()
+            .context("failed to contact Podman image API")?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        if response.status() != StatusCode::NOT_FOUND {
+            return Err(blocking_status_error(response));
+        }
+        self.pull_image_blocking(image)
+    }
+
     pub async fn inspect(&self, name: &str) -> Result<Option<ContainerState>> {
         let response = self
             .client
@@ -297,6 +331,49 @@ impl PodmanClient {
         Ok(())
     }
 
+    pub fn create_blocking(&self, spec: &ContainerSpec) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .post(format!("{API_PREFIX}/containers/create"))
+            .json(&spec.request)
+            .send()
+            .context("failed to create Podman container")?;
+        blocking_success(response)?
+            .bytes()
+            .context("failed to read Podman container create response")?;
+        Ok(())
+    }
+
+    pub fn start_blocking(&self, name: &str) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .post(format!("{API_PREFIX}/containers/{name}/start"))
+            .send()
+            .context("failed to start Podman container")?;
+        if response.status() == StatusCode::NOT_MODIFIED {
+            return Ok(());
+        }
+        blocking_success(response)?;
+        Ok(())
+    }
+
+    pub fn wait_blocking(&self, name: &str) -> Result<i64> {
+        #[derive(Deserialize)]
+        struct WaitResponse {
+            #[serde(rename = "StatusCode")]
+            status_code: i64,
+        }
+        let response = self
+            .blocking_client()?
+            .post(format!("{API_PREFIX}/containers/{name}/wait"))
+            .send()
+            .context("failed to wait for Podman container")?;
+        Ok(blocking_success(response)?
+            .json::<WaitResponse>()
+            .context("failed to decode Podman container wait response")?
+            .status_code)
+    }
+
     pub async fn update_limits(&self, name: &str, limits: &ResourceLimits) -> Result<()> {
         limits.validate()?;
         let request = LinuxResources::from(limits);
@@ -341,6 +418,12 @@ fn blocking_success(response: reqwest::blocking::Response) -> Result<reqwest::bl
         let body = response.text().unwrap_or_default();
         Err(anyhow::anyhow!("Podman API returned {status}: {body}"))
     }
+}
+
+fn blocking_status_error(response: reqwest::blocking::Response) -> anyhow::Error {
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    anyhow::anyhow!("Podman API returned {status}: {body}")
 }
 
 #[derive(Debug, Clone, Deserialize)]

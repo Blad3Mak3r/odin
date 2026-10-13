@@ -40,6 +40,9 @@ pub enum JobKindDescr {
     ImagePull {
         image: RuntimeImage,
     },
+    SharedInstall {
+        game: GameId,
+    },
     ModAdd {
         instance: String,
         mod_id: String,

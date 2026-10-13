@@ -28,6 +28,13 @@ pub struct GameView {
 }
 
 #[derive(Serialize)]
+pub struct SharedInstallView {
+    pub installed: bool,
+    pub build_id: Option<String>,
+    pub running: bool,
+}
+
+#[derive(Serialize)]
 pub struct ManagedInstanceView {
     #[serde(flatten)]
     pub identity: GameInstanceIdentity,
@@ -104,6 +111,76 @@ pub async fn list_games() -> Json<Vec<GameView>> {
             })
             .collect(),
     )
+}
+
+pub async fn shared_install_status(
+    State(state): State<AppState>,
+    Path(game): Path<GameId>,
+) -> ApiResult<Json<SharedInstallView>> {
+    if game != GameId::ArkSurvivalAscended {
+        return Err(BadRequest("this game does not use a shared install".into()).into());
+    }
+    let installed = state
+        .paths
+        .shared_install_dir(game)
+        .join(game::driver(game).server_binary())
+        .is_file();
+    let running = state.jobs.list().into_iter().any(|job| {
+        matches!(job.kind, JobKindDescr::SharedInstall { game: job_game } if job_game == game)
+            && matches!(
+                job.status,
+                crate::web::jobs::JobStatus::Queued | crate::web::jobs::JobStatus::Running
+            )
+    });
+    Ok(Json(SharedInstallView {
+        installed,
+        build_id: crate::podman::ark_asa::shared_install_build_id(&state.paths),
+        running,
+    }))
+}
+
+pub async fn install_shared(
+    State(state): State<AppState>,
+    Path(game): Path<GameId>,
+) -> ApiResult<Json<JobHandle>> {
+    if game != GameId::ArkSurvivalAscended {
+        return Err(BadRequest("this game does not use a shared install".into()).into());
+    }
+    if state.jobs.list().into_iter().any(|job| {
+        matches!(job.kind, JobKindDescr::SharedInstall { game: job_game } if job_game == game)
+            && matches!(
+                job.status,
+                crate::web::jobs::JobStatus::Queued | crate::web::jobs::JobStatus::Running
+            )
+    }) {
+        return Err(crate::instance::InstanceError::TransitionInProgress(
+            "ARK shared install".into(),
+        )
+        .into());
+    }
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let id = state
+        .jobs
+        .spawn(JobKindDescr::SharedInstall { game }, move |logger| {
+            let instances = game_instances::list_generic(&db, game)?;
+            if instances
+                .into_iter()
+                .filter(|instance| {
+                    game_instances::install_mode(&db, &instance.identity.id).ok()
+                        == Some(game_instances::InstallMode::Shared)
+                })
+                .any(|instance| {
+                    dispatch::is_running(&paths, &db, game, instance.name()).unwrap_or(true)
+                })
+            {
+                anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
+                    "a shared ARK instance".into()
+                ));
+            }
+            crate::podman::ark_asa::install_shared(&paths, |line| logger.line(line))
+        });
+    Ok(Json(JobHandle { id }))
 }
 
 #[derive(Serialize)]
@@ -842,6 +919,15 @@ pub async fn update_runtime_by_id(
     Path(id): Path<String>,
 ) -> ApiResult<Json<JobHandle>> {
     let identity = resolve_instance_id(&state, &id).await?;
+    if identity.game == GameId::ArkSurvivalAscended
+        && game_instances::install_mode(&state.db, &identity.id)?
+            == game_instances::InstallMode::Shared
+    {
+        return Err(BadRequest(
+            "shared ARK installs are updated from Games › ARK: Survival Ascended".into(),
+        )
+        .into());
+    }
     let paths = state.paths.clone();
     let db = state.db.clone();
     let game = identity.game;

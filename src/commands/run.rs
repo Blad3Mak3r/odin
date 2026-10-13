@@ -11,3 +11,19 @@ pub fn run_container(spec_path: &std::path::Path, instance_id: String) -> Result
     runtime.shutdown_background();
     result
 }
+
+pub fn install_ark_shared(
+    install_dir: &std::path::Path,
+    steamcmd_dir: &std::path::Path,
+    log_file: &std::path::Path,
+) -> Result<()> {
+    let game = crate::game::GameId::ArkSurvivalAscended;
+    let expected = install_dir.join(crate::game::driver(game).server_binary());
+    crate::steamcmd::SteamCmd::new(steamcmd_dir.to_path_buf()).update_app_expect_file(
+        crate::game::driver(game).steam_app_id(),
+        install_dir,
+        log_file,
+        expected,
+        |_| {},
+    )
+}

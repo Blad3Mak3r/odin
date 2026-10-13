@@ -122,6 +122,10 @@ pub enum Command {
         #[arg(long, env = "ODIN_SUPERVISOR_INSTANCE_ID")]
         instance_id: String,
     },
+
+    /// Hidden: installs the shared ARK payload inside a short-lived runtime container.
+    #[command(hide = true)]
+    InstallArkShared,
 }
 
 #[derive(Subcommand, Debug)]

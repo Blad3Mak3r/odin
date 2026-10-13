@@ -116,6 +116,11 @@ export interface AdvancedConfigView {
   files: AdvancedConfigFile[]
 }
 
+export interface RawAdvancedConfigFile {
+  content: string
+  format: string
+}
+
 export interface AdvancedConfigChange {
   file: string
   key: string

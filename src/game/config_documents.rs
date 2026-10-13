@@ -57,6 +57,12 @@ pub struct AdvancedConfigChange {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RawAdvancedConfigFile {
+    pub content: String,
+    pub format: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SevenDaysTemplateReview {
     pub instance_config_exists: bool,
     pub template_exists: bool,
@@ -455,6 +461,93 @@ pub fn initialize_shared(paths: &Paths, game: GameId) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn read_raw(
+    paths: &Paths,
+    instance: &GenericGameInstance,
+    file: &str,
+) -> Result<RawAdvancedConfigFile> {
+    read_raw_at(
+        &instance_root(paths, instance),
+        instance.identity.game,
+        file,
+    )
+}
+
+pub fn read_raw_shared(paths: &Paths, game: GameId, file: &str) -> Result<RawAdvancedConfigFile> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    read_raw_at(&shared_root(paths, game), game, file)
+}
+
+pub fn write_raw(
+    paths: &Paths,
+    instance: &GenericGameInstance,
+    file: &str,
+    content: &str,
+) -> Result<()> {
+    write_raw_at(
+        &instance_root(paths, instance),
+        instance.identity.game,
+        file,
+        content,
+    )
+}
+
+pub fn write_raw_shared(paths: &Paths, game: GameId, file: &str, content: &str) -> Result<()> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    write_raw_at(&shared_root(paths, game), game, file, content)
+}
+
+fn raw_spec(game: GameId, file: &str) -> Result<FileSpec> {
+    specs(game)
+        .iter()
+        .copied()
+        .find(|spec| spec.id == file)
+        .context("configuration file is not declared for this game")
+}
+
+fn read_raw_at(root: &Path, game: GameId, file: &str) -> Result<RawAdvancedConfigFile> {
+    let spec = raw_spec(game, file)?;
+    let content = read_document(root, spec)?.unwrap_or_default();
+    Ok(RawAdvancedConfigFile {
+        content,
+        format: format_name(spec.format),
+    })
+}
+
+fn write_raw_at(root: &Path, game: GameId, file: &str, content: &str) -> Result<()> {
+    const MAX_RAW_CONFIG_BYTES: usize = 1024 * 1024;
+    anyhow::ensure!(
+        content.len() <= MAX_RAW_CONFIG_BYTES,
+        "configuration files may not exceed 1 MiB"
+    );
+    let spec = raw_spec(game, file)?;
+    let updated = parse(spec.format, content)?;
+    let path = document_path(root, spec);
+    let current = read_document(root, spec)?.unwrap_or_default();
+    let existing = parse(spec.format, &current)?;
+    let values = |entries: Vec<ParsedEntry>| -> BTreeMap<String, String> {
+        entries
+            .into_iter()
+            .map(|entry| (entry.key, entry.value))
+            .collect()
+    };
+    let before = values(existing);
+    let after = values(updated);
+    for key in spec.managed {
+        anyhow::ensure!(
+            before.get(*key) == after.get(*key),
+            "{key} is managed by Odin"
+        );
+    }
+    replace_or_create_atomically(&path, content)
 }
 
 pub(crate) fn copy_template_if_missing(source: &Path, target: &Path) -> Result<()> {
@@ -1941,6 +2034,46 @@ mod tests {
             !paths
                 .game_instance_dir(GameId::ArkSurvivalAscended, "server")
                 .exists()
+        );
+        fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn raw_ark_editor_rejects_managed_key_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-raw-ark-config-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        initialize_shared(&paths, GameId::ArkSurvivalAscended).unwrap();
+        let root = shared_root(&paths, GameId::ArkSurvivalAscended);
+        let config = document_path(&root, specs(GameId::ArkSurvivalAscended)[0]);
+        fs::write(
+            &config,
+            "[SessionSettings]\nSessionName=Odin\n[ServerSettings]\nRCONEnabled=True\n",
+        )
+        .unwrap();
+
+        assert!(
+            write_raw_shared(
+                &paths,
+                GameId::ArkSurvivalAscended,
+                "game-user-settings",
+                "[SessionSettings]\nSessionName=Other\n[ServerSettings]\nRCONEnabled=True\n",
+            )
+            .is_err()
+        );
+        write_raw_shared(
+            &paths,
+            GameId::ArkSurvivalAscended,
+            "game-user-settings",
+            "[SessionSettings]\nSessionName=Odin\n[ServerSettings]\nRCONEnabled=True\nDifficultyOffset=1.0\n",
+        ).unwrap();
+        assert!(
+            fs::read_to_string(config)
+                .unwrap()
+                .contains("DifficultyOffset=1.0")
         );
         fs::remove_dir_all(paths.data_dir).ok();
     }

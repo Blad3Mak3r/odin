@@ -42,6 +42,7 @@ import type {
   ResourceLimits,
   RuntimeImageRole,
   RuntimeImageView,
+  RawAdvancedConfigFile,
   SharedInstallView,
   SevenDaysTemplateReview,
   RustAccessListKind,
@@ -445,6 +446,36 @@ export function useInitializeSharedAdvancedConfig(game: GameId) {
   return useMutation({
     mutationFn: () => api.post<void>(`/games/${game}/config/advanced/init`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] }),
+  })
+}
+
+export function useSharedRawAdvancedConfig(game: GameId, file: string, enabled: boolean) {
+  return useQuery({ queryKey: ['games', game, 'advanced-config', file, 'code'], queryFn: () => api.get<RawAdvancedConfigFile>(`/games/${game}/config/files/${file}`), enabled })
+}
+
+export function useUpdateSharedRawAdvancedConfig(game: GameId, file: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (content: string) => api.put<void>(`/games/${game}/config/files/${file}`, { content }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] })
+      queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config', file, 'code'] })
+    },
+  })
+}
+
+export function useRawAdvancedConfig(id: string, file: string, enabled: boolean) {
+  return useQuery({ queryKey: ['managed-instances', id, 'advanced-config', file, 'code'], queryFn: () => api.get<RawAdvancedConfigFile>(`/instances/${id}/config/files/${file}`), enabled })
+}
+
+export function useUpdateRawAdvancedConfig(id: string, file: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (content: string) => api.put<void>(`/instances/${id}/config/files/${file}`, { content }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config', file, 'code'] })
+    },
   })
 }
 

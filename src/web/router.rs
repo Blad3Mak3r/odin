@@ -103,6 +103,11 @@ pub fn build_router(state: AppState) -> Router {
             post(config_files::initialize_advanced_config_by_id),
         )
         .route(
+            "/instances/{id}/config/files/{file}",
+            get(config_files::get_raw_advanced_config_by_id)
+                .put(config_files::set_raw_advanced_config_by_id),
+        )
+        .route(
             "/instances/{id}/7d2d/config-template",
             get(config_files::get_seven_days_template_review_by_id)
                 .post(config_files::apply_seven_days_template_review_by_id),
@@ -350,6 +355,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/games/{game}/config/advanced/init",
             post(config_files::initialize_shared_advanced_config),
+        )
+        .route(
+            "/games/{game}/config/files/{file}",
+            get(config_files::get_shared_raw_advanced_config)
+                .put(config_files::set_shared_raw_advanced_config),
         )
         .route(
             "/instances",

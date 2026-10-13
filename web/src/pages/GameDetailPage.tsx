@@ -9,10 +9,11 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NativeConfigCodeEditor } from '@/components/instance/NativeConfigCodeEditor'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
 import { GAME_DESCRIPTIONS } from '@/lib/games'
-import { useArkClusters, useCreateArkCluster, useDeleteArkCluster, useGames, useInitializeSharedAdvancedConfig, useInstallShared, useManagedInstances, useSetArkClusterMembers, useSharedAdvancedConfig, useSharedInstall, useUpdateSharedAdvancedConfig } from '@/lib/queries'
+import { useArkClusters, useCreateArkCluster, useDeleteArkCluster, useGames, useInitializeSharedAdvancedConfig, useInstallShared, useManagedInstances, useSetArkClusterMembers, useSharedAdvancedConfig, useSharedInstall, useSharedRawAdvancedConfig, useUpdateSharedAdvancedConfig, useUpdateSharedRawAdvancedConfig } from '@/lib/queries'
 import { useState } from 'react'
 import type { GameView } from '@/lib/types'
 import { toast } from 'sonner'
@@ -47,7 +48,15 @@ function ArkSharedConfigCard() {
     })
     if (changes.length) update.mutate(changes, { onSuccess: () => { setValues({}); toast.success('Shared ARK configuration saved') }, onError: (error) => toast.error(error.message) })
   }
-  return <Card><CardHeader><CardTitle>Shared configuration</CardTitle><CardDescription>These native ARK INI files apply to every shared-install server. Stop all shared servers before saving.</CardDescription></CardHeader><CardContent className="flex flex-col gap-5">{files.some((file) => !file.exists) && <Button className="w-fit" type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Shared configuration initialized'), onError: (error) => toast.error(error.message) })}>Initialize configuration files</Button>}{files.filter((file) => file.exists).map((file) => <div key={file.id} className="border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p></div><div className="grid gap-3 p-4 sm:grid-cols-2">{file.sections.flatMap((section) => section.entries).map((entry) => { const id = `${file.id}:${entry.key}`; return <div key={id} className="flex flex-col gap-1"><Label htmlFor={id}>{entry.key}</Label><Input id={id} type={entry.sensitive ? 'password' : 'text'} defaultValue={entry.value} placeholder={entry.sensitive && entry.configured ? '••••••••' : undefined} disabled={running || entry.managed} onChange={(event) => setValues((current) => ({ ...current, [id]: event.target.value }))} /></div> })}</div></div>)}<Button className="w-fit" type="button" disabled={running || update.isPending || Object.keys(values).length === 0} onClick={save}>Save shared configuration</Button></CardContent></Card>
+  return <Card><CardHeader><CardTitle>Shared configuration</CardTitle><CardDescription>These native ARK INI files apply to every shared-install server. Stop all shared servers before saving.</CardDescription></CardHeader><CardContent className="flex flex-col gap-5">{files.some((file) => !file.exists) && <Button className="w-fit" type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Shared configuration initialized'), onError: (error) => toast.error(error.message) })}>Initialize configuration files</Button>}{files.filter((file) => file.exists).map((file) => <div key={file.id} className="border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p></div><div className="grid gap-3 p-4 sm:grid-cols-2">{file.sections.flatMap((section) => section.entries).map((entry) => { const id = `${file.id}:${entry.key}`; return <div key={id} className="flex flex-col gap-1"><Label htmlFor={id}>{entry.key}</Label><Input id={id} type={entry.sensitive ? 'password' : 'text'} defaultValue={entry.value} placeholder={entry.sensitive && entry.configured ? '••••••••' : undefined} disabled={running || entry.managed} onChange={(event) => setValues((current) => ({ ...current, [id]: event.target.value }))} /></div> })}</div><details className="border-t"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">Edit source</summary><div className="p-4"><ArkSharedConfigCodeFile file={file.id} running={running} /></div></details></div>)}<Button className="w-fit" type="button" disabled={running || update.isPending || Object.keys(values).length === 0} onClick={save}>Save shared configuration</Button></CardContent></Card>
+}
+
+function ArkSharedConfigCodeFile({ file, running }: { file: string; running: boolean }) {
+  const source = useSharedRawAdvancedConfig('ark-asa', file, true)
+  const save = useUpdateSharedRawAdvancedConfig('ark-asa', file)
+  if (source.isLoading) return <p className="text-sm text-muted-foreground">Loading source…</p>
+  if (source.isError || !source.data) return <p className="text-sm text-destructive">Source could not be loaded.</p>
+  return <NativeConfigCodeEditor content={source.data.content} format={source.data.format} disabled={running} saving={save.isPending} onSave={(content) => save.mutate(content, { onSuccess: () => toast.success('Configuration source saved'), onError: (error) => toast.error(error.message) })} />
 }
 
 function ArkClustersCard() {

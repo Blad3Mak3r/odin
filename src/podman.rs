@@ -5,7 +5,7 @@
 //! (the dashboard and legacy CLI) on the same lifecycle implementation.
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
@@ -396,14 +396,8 @@ impl PodmanClient {
             #[serde(rename = "StatusCode")]
             status_code: i64,
         }
-        // The container may run for as long as SteamCMD needs, so the
-        // default 30 s request timeout of the blocking client must not apply.
-        let client = reqwest::blocking::Client::builder()
-            .unix_socket(self.socket.as_path())
-            .timeout(None)
-            .build()
-            .context("failed to create blocking Podman Unix-socket client")?;
-        let response = client
+        let response = self
+            .blocking_client()?
             .post(format!("{API_PREFIX}/containers/{name}/wait"))
             .send()
             .context("failed to wait for Podman container")?;
@@ -411,6 +405,25 @@ impl PodmanClient {
             .json::<WaitResponse>()
             .context("failed to decode Podman container wait response")?
             .status_code)
+    }
+
+    /// Streams a container's stdout and stderr to `on_line` until the
+    /// container stops (libpod ends a `follow` stream when it exits). The
+    /// stream is open-ended, so this uses a client without a request timeout.
+    pub fn follow_logs_blocking(&self, name: &str, on_line: impl FnMut(&str)) -> Result<()> {
+        let client = reqwest::blocking::Client::builder()
+            .unix_socket(self.socket.as_path())
+            .timeout(None)
+            .build()
+            .context("failed to create blocking Podman Unix-socket client")?;
+        let response = client
+            .get(format!(
+                "{API_PREFIX}/containers/{name}/logs?follow=true&stdout=true&stderr=true"
+            ))
+            .send()
+            .context("failed to request Podman container logs")?;
+        read_log_lines(blocking_success(response)?, on_line)
+            .context("failed to read Podman container logs")
     }
 
     pub async fn update_limits(&self, name: &str, limits: &ResourceLimits) -> Result<()> {
@@ -433,6 +446,49 @@ impl PodmanClient {
             .build()
             .context("failed to create blocking Podman Unix-socket client")
     }
+}
+
+/// Decodes a libpod log stream into lines. Containers created without a TTY
+/// (every Odin container) multiplex stdout and stderr into frames of an
+/// 8-byte header (stream type, three zero bytes, big-endian payload length)
+/// followed by the payload; a line may span several frames, and each stream
+/// keeps its own partial line.
+fn read_log_lines(mut reader: impl Read, mut on_line: impl FnMut(&str)) -> std::io::Result<()> {
+    let mut pending: [Vec<u8>; 3] = Default::default();
+    let mut emit = |bytes: &[u8]| {
+        let line = String::from_utf8_lossy(bytes);
+        on_line(line.trim_end_matches('\r'));
+    };
+    let result = loop {
+        let mut header = [0u8; 8];
+        match reader.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break Ok(()),
+            Err(error) => break Err(error),
+        }
+        let stream = usize::from(header[0]).min(2);
+        let length = u64::from(u32::from_be_bytes([
+            header[4], header[5], header[6], header[7],
+        ]));
+        let mut payload = Vec::new();
+        if let Err(error) = (&mut reader).take(length).read_to_end(&mut payload) {
+            break Err(error);
+        }
+        let buffer = &mut pending[stream];
+        buffer.extend_from_slice(&payload);
+        while let Some(end) = buffer.iter().position(|&byte| byte == b'\n') {
+            let line: Vec<u8> = buffer.drain(..=end).collect();
+            emit(&line[..end]);
+        }
+        if (payload.len() as u64) < length {
+            // Truncated frame: the connection closed mid-payload.
+            break Ok(());
+        }
+    };
+    for buffer in pending.iter().filter(|buffer| !buffer.is_empty()) {
+        emit(buffer);
+    }
+    result
 }
 
 async fn success(response: Response) -> Result<Response> {
@@ -951,6 +1007,49 @@ impl From<&ResourceLimits> for LinuxResources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn frame(stream: u8, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![stream, 0, 0, 0];
+        bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn decode(stream: &[u8]) -> Vec<String> {
+        let mut lines = Vec::new();
+        read_log_lines(stream, |line| lines.push(line.to_owned())).unwrap();
+        lines
+    }
+
+    #[test]
+    fn log_stream_joins_lines_split_across_frames_per_stream() {
+        let mut stream = frame(1, b"Update state (0x61) down");
+        stream.extend(frame(2, b"warning: slow\n"));
+        stream.extend(frame(1, b"loading, progress: 4.1\r\nnext\n"));
+        assert_eq!(
+            decode(&stream),
+            [
+                "warning: slow",
+                "Update state (0x61) downloading, progress: 4.1",
+                "next",
+            ]
+        );
+    }
+
+    #[test]
+    fn log_stream_flushes_an_unterminated_last_line() {
+        assert_eq!(decode(&frame(1, b"done")), ["done"]);
+    }
+
+    #[test]
+    fn log_stream_stops_cleanly_on_a_truncated_frame() {
+        let mut stream = frame(1, b"first\n");
+        let mut cut = frame(1, b"second line\n");
+        cut.truncate(12);
+        stream.extend(cut);
+        assert_eq!(decode(&stream), ["first", "seco"]);
+    }
+
     use crate::instance::Instance;
     use chrono::Utc;
     use std::io::{BufRead, BufReader, Read, Write};

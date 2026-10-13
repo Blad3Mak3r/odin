@@ -24,6 +24,7 @@ pub fn install_ark_shared(
         install_dir,
         log_file,
         expected,
-        |_| {},
+        // The container's stdout is streamed to the dashboard job log.
+        |line| println!("{line}"),
     )
 }

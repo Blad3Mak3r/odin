@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-13
+
+### What's Changed
+- fix: keep existing conffiles when installing via install.sh by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/151
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.19.0...v0.19.1
+
 ## [0.19.0] - 2026-10-13
 
 ### What's Changed

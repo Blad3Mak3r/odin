@@ -1,6 +1,9 @@
 //! ARK: Survival Ascended's Podman lifecycle facts.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -11,8 +14,8 @@ use crate::paths::Paths;
 
 use super::lifecycle::ContainerGame;
 use super::{
-    ContainerSpec, CreateContainerRequest, Launch, Mount, Namespace, PodmanClient, bind, bind_ro,
-    write_runtime_spec, write_runtime_spec_with_install_dir,
+    ContainerSpec, ContainerState, CreateContainerRequest, Launch, Mount, Namespace, PodmanClient,
+    bind, bind_ro, write_runtime_spec, write_runtime_spec_with_install_dir,
 };
 
 const SHARED_INSTALL_CONTAINER: &str = "odin-ark-asa-install";
@@ -73,12 +76,115 @@ pub fn install_shared(paths: &Paths, mut logger: impl FnMut(&str)) -> Result<()>
     logger("creating shared ARK installer container");
     client.create_blocking(&spec)?;
     client.start_blocking(SHARED_INSTALL_CONTAINER)?;
-    let status = client.wait_blocking(SHARED_INSTALL_CONTAINER)?;
-    client.remove_blocking(SHARED_INSTALL_CONTAINER, false)?;
-    if status != 0 {
-        bail!("shared ARK installation container exited with status {status}");
-    }
+    let outcome = follow_install(&client, &mut logger);
+    // Force-remove so a failed or abandoned run never leaves the installer
+    // running; the original error, if any, is the one worth reporting.
+    let removed = client.remove_blocking(SHARED_INSTALL_CONTAINER, true);
+    outcome?;
+    removed?;
     logger("shared ARK installation completed");
+    Ok(())
+}
+
+/// How often the installer container's state is checked.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Consecutive failed state checks tolerated before giving up on Podman.
+const MAX_POLL_FAILURES: u32 = 5;
+/// How long the log stream may keep delivering lines after the container exits.
+const LOG_DRAIN: Duration = Duration::from_secs(5);
+/// Last installer lines repeated in the error when the installation fails.
+const FAILURE_TAIL_LINES: usize = 20;
+
+enum LogEvent {
+    Line(String),
+    Interrupted(String),
+}
+
+/// Forwards the started installer container's output to `logger` and returns
+/// once it has exited successfully.
+///
+/// No single request spans the install: the output comes from libpod's log
+/// stream and completion from short state checks, so a Podman restart or a
+/// dropped stream is reported or retried instead of hanging the job.
+fn follow_install(client: &PodmanClient, mut logger: impl FnMut(&str)) -> Result<()> {
+    let (events, lines) = mpsc::channel();
+    let follower = client.clone();
+    std::thread::spawn(move || {
+        let sender = events.clone();
+        let result = follower.follow_logs_blocking(SHARED_INSTALL_CONTAINER, |line| {
+            sender.send(LogEvent::Line(line.to_owned())).ok();
+        });
+        if let Err(error) = result {
+            events
+                .send(LogEvent::Interrupted(format!("{error:#}")))
+                .ok();
+        }
+    });
+
+    let mut tail = VecDeque::with_capacity(FAILURE_TAIL_LINES);
+    let mut forward = |event: LogEvent| match event {
+        LogEvent::Line(line) => {
+            logger(&line);
+            if tail.len() == FAILURE_TAIL_LINES {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        LogEvent::Interrupted(error) => {
+            logger(&format!("installer log stream interrupted: {error}"))
+        }
+    };
+
+    let mut streaming = true;
+    let mut failures = 0;
+    let mut next_poll = Instant::now();
+    loop {
+        if streaming {
+            match lines.recv_timeout(Duration::from_millis(500)) {
+                Ok(event) => forward(event),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => streaming = false,
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        if Instant::now() < next_poll {
+            continue;
+        }
+        next_poll = Instant::now() + POLL_INTERVAL;
+        match client.inspect_blocking(SHARED_INSTALL_CONTAINER) {
+            Ok(Some(ContainerState::Exited)) => break,
+            Ok(Some(_)) => failures = 0,
+            Ok(None) => bail!("the ARK installer container disappeared before it finished"),
+            Err(error) => {
+                failures += 1;
+                if failures >= MAX_POLL_FAILURES {
+                    return Err(error.context("lost contact with Podman during the ARK install"));
+                }
+            }
+        }
+    }
+
+    // Collect what the stream still has buffered; it ends by itself once the
+    // container is gone, but a stuck connection must not block the job.
+    let deadline = Instant::now() + LOG_DRAIN;
+    if streaming {
+        while let Ok(event) = lines.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            forward(event);
+        }
+    }
+
+    // The container has exited, so this returns immediately.
+    let status = client.wait_blocking(SHARED_INSTALL_CONTAINER)?;
+    if status != 0 {
+        let output = tail
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!("shared ARK installation container exited with status {status}:\n{output}");
+    }
     Ok(())
 }
 
@@ -231,6 +337,70 @@ impl ContainerGame for ArkSurvivalAscended {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Podman that always reports the installer as exited with `status`
+    /// and serves `logs` as a multiplexed stdout stream.
+    fn fake_installer(status: i64, logs: &[&str]) -> PodmanClient {
+        use std::io::{BufRead, BufReader, Write};
+        let socket = std::env::temp_dir().join(format!("odin-ark-{}.sock", uuid::Uuid::new_v4()));
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let mut stream = Vec::new();
+        for line in logs {
+            let payload = format!("{line}\n");
+            stream.extend([1, 0, 0, 0]);
+            stream.extend((payload.len() as u32).to_be_bytes());
+            stream.extend(payload.as_bytes());
+        }
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                let mut connection = connection.unwrap();
+                let mut request = String::new();
+                let mut reader = BufReader::new(connection.try_clone().unwrap());
+                reader.read_line(&mut request).unwrap();
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" {
+                        break;
+                    }
+                }
+                let body = if request.contains("/logs") {
+                    stream.clone()
+                } else if request.contains("/wait") {
+                    format!(r#"{{"StatusCode":{status}}}"#).into_bytes()
+                } else {
+                    br#"{"State":{"Running":false,"Status":"exited"}}"#.to_vec()
+                };
+                connection
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                connection.write_all(&body).unwrap();
+            }
+        });
+        PodmanClient::new(&socket).unwrap()
+    }
+
+    #[test]
+    fn install_forwards_container_output_and_succeeds_on_exit_zero() {
+        let client = fake_installer(0, &["Logging in", "Success! App installed"]);
+        let mut lines = Vec::new();
+        follow_install(&client, |line| lines.push(line.to_owned())).unwrap();
+        assert_eq!(lines, ["Logging in", "Success! App installed"]);
+    }
+
+    #[test]
+    fn install_failure_reports_the_exit_status_and_last_output() {
+        let client = fake_installer(8, &["Logging in", "ERROR! Failed to install app"]);
+        let error = follow_install(&client, |_| {}).unwrap_err().to_string();
+        assert!(error.contains("exited with status 8"), "{error}");
+        assert!(error.contains("ERROR! Failed to install app"), "{error}");
+    }
 
     #[test]
     fn reads_the_shared_steam_build_id() {

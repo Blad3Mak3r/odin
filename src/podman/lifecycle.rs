@@ -316,13 +316,14 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     let limits = resource_limits::load(db, &identity.id)?;
     let container = container_name(G::GAME, &identity.id);
     let image = config.image(game::driver(G::GAME).runtime_image());
+    let odin_binary = config.odin_binary()?;
     let spec = ContainerSpec::new_with_odin_binary(
         paths,
         &identity,
         &G::instance_dir(paths, &instance),
         G::extra_mounts(paths, db, &instance)?,
         image.clone(),
-        &config.odin_binary(),
+        &odin_binary,
         &limits,
     );
     match client.inspect_container(&container).await? {

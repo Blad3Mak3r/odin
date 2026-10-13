@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::game::RuntimeImage;
@@ -50,11 +50,48 @@ impl PodmanConfig {
         }
     }
 
-    pub fn odin_binary(&self) -> PathBuf {
-        self.odin_binary
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("/proc/self/exe"))
+    /// Host path of the `odin` binary that containers bind-mount. It is
+    /// resolved here, not left as `/proc/self/exe`: Podman resolves bind
+    /// sources in its own process, where that link points at Podman itself.
+    /// Fails early when the file cannot be executed, rather than letting the
+    /// container die at start with an opaque OCI error.
+    pub fn odin_binary(&self) -> Result<PathBuf> {
+        let path = match &self.odin_binary {
+            Some(path) => path.clone(),
+            None => {
+                let exe = std::env::current_exe().context("failed to locate the odin binary")?;
+                // After a self-update replaces the binary, the kernel reports
+                // the old, unlinked inode as "<path> (deleted)".
+                match exe.to_str().and_then(|p| p.strip_suffix(" (deleted)")) {
+                    Some(live) => PathBuf::from(live),
+                    None => exe,
+                }
+            }
+        };
+        validate_odin_binary(&path)?;
+        Ok(path)
     }
+}
+
+fn validate_odin_binary(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !path.is_absolute() {
+        bail!(
+            "odin_binary {} must be an absolute path on the Podman host",
+            path.display()
+        );
+    }
+    let meta = std::fs::metadata(path).with_context(|| {
+        format!(
+            "odin binary {} is not accessible; it is bind-mounted into every game container (set [podman].odin_binary)",
+            path.display()
+        )
+    })?;
+    if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
+        bail!("odin binary {} is not an executable file", path.display());
+    }
+    Ok(())
 }
 
 impl GlobalConfig {
@@ -104,5 +141,37 @@ mod tests {
             config.image(RuntimeImage::Proton),
             "example/proton@sha256:def"
         );
+    }
+
+    #[test]
+    fn odin_binary_defaults_to_the_running_executable() {
+        let resolved = podman_config().odin_binary().unwrap();
+        assert_eq!(resolved, std::env::current_exe().unwrap());
+        assert_ne!(resolved, Path::new("/proc/self/exe"));
+    }
+
+    #[test]
+    fn odin_binary_rejects_unusable_paths() {
+        let dir = std::env::temp_dir().join(format!("odin-bin-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("odin");
+        std::fs::write(&plain, b"").unwrap();
+
+        let mut config = podman_config();
+        for bad in [
+            dir.join("missing"),
+            dir.clone(),
+            plain.clone(),
+            "odin".into(),
+        ] {
+            config.odin_binary = Some(bad.clone());
+            assert!(config.odin_binary().is_err(), "{} accepted", bad.display());
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o755)).unwrap();
+        config.odin_binary = Some(plain.clone());
+        assert_eq!(config.odin_binary().unwrap(), plain);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

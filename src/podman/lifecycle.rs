@@ -325,10 +325,27 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
         &config.odin_binary(),
         &limits,
     );
-    match client.inspect(&container).await? {
-        Some(state) if state.is_running() => bail!(InstanceError::AlreadyRunning(name.to_string())),
-        Some(_) => {
-            client.update_limits(&container, &limits).await?;
+    match client.inspect_container(&container).await? {
+        Some(container_state) if container_state.state.is_running() => {
+            bail!(InstanceError::AlreadyRunning(name.to_string()))
+        }
+        Some(container_state) => {
+            client.ensure_image(&image).await?;
+            let local_image = client
+                .inspect_image(&image)
+                .await?
+                .context("runtime image disappeared after it was pulled")?;
+            if container_state
+                .image_id
+                .as_deref()
+                .is_some_and(|current| current != local_image.id)
+            {
+                client.remove(&container, false).await?;
+                client.create(&spec).await?;
+                wait_for_container(&client, &container).await?;
+            } else {
+                client.update_limits(&container, &limits).await?;
+            }
             client.start(&container).await?;
         }
         None => {

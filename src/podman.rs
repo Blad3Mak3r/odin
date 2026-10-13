@@ -60,6 +60,12 @@ pub struct PodmanImage {
     pub created: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct PodmanContainer {
+    pub state: ContainerState,
+    pub image_id: Option<String>,
+}
+
 impl PodmanClient {
     pub fn new(socket: &Path) -> Result<Self> {
         if !socket.is_absolute() {
@@ -225,6 +231,13 @@ impl PodmanClient {
     }
 
     pub async fn inspect(&self, name: &str) -> Result<Option<ContainerState>> {
+        Ok(self
+            .inspect_container(name)
+            .await?
+            .map(|container| container.state))
+    }
+
+    pub async fn inspect_container(&self, name: &str) -> Result<Option<PodmanContainer>> {
         let response = self
             .client
             .get(format!("{API_PREFIX}/containers/{name}/json"))
@@ -239,7 +252,10 @@ impl PodmanClient {
             .json()
             .await
             .context("failed to decode Podman inspect response")?;
-        Ok(Some(ContainerState::from_inspect(inspect)))
+        Ok(Some(PodmanContainer {
+            state: ContainerState::from_inspect(&inspect),
+            image_id: inspect.image,
+        }))
     }
 
     /// Synchronous status probe for legacy CLI paths and the telemetry worker,
@@ -257,7 +273,7 @@ impl PodmanClient {
         let inspect: InspectResponse = blocking_success(response)?
             .json()
             .context("failed to decode Podman inspect response")?;
-        Ok(Some(ContainerState::from_inspect(inspect)))
+        Ok(Some(ContainerState::from_inspect(&inspect)))
     }
 
     pub async fn create(&self, spec: &ContainerSpec) -> Result<()> {
@@ -466,7 +482,7 @@ impl ContainerState {
         }
     }
 
-    fn from_inspect(response: InspectResponse) -> Self {
+    fn from_inspect(response: &InspectResponse) -> Self {
         if response.state.running {
             return Self::Running;
         }
@@ -482,6 +498,8 @@ impl ContainerState {
 struct InspectResponse {
     #[serde(rename = "State")]
     state: InspectState,
+    #[serde(rename = "Image")]
+    image: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1436,20 +1454,22 @@ mod tests {
     #[test]
     fn inspect_state_maps_podman_running_and_exited_statuses() {
         assert_eq!(
-            ContainerState::from_inspect(InspectResponse {
+            ContainerState::from_inspect(&InspectResponse {
                 state: InspectState {
                     running: true,
                     status: Some("running".into())
                 },
+                image: None,
             }),
             ContainerState::Running
         );
         assert_eq!(
-            ContainerState::from_inspect(InspectResponse {
+            ContainerState::from_inspect(&InspectResponse {
                 state: InspectState {
                     running: false,
                     status: Some("exited".into())
                 },
+                image: None,
             }),
             ContainerState::Exited
         );

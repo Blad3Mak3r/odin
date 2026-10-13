@@ -193,8 +193,9 @@ pub struct SevenDaysWorldsView {
     pub worlds: Vec<String>,
 }
 
-/// Worlds the game ships with. Each container instance holds its own copy of
-/// the game, so the union over all of them is offered.
+/// Worlds the game ships with. Each isolated instance holds its own copy of
+/// the game and shared instances use the shared one, so the union over all of
+/// them is offered.
 pub async fn list_seven_days_worlds(
     State(state): State<AppState>,
 ) -> ApiResult<Json<SevenDaysWorldsView>> {
@@ -208,6 +209,9 @@ pub async fn list_seven_days_worlds(
                     .container_runtime_dir(GameId::SevenDaysToDie, &instance.identity.id)
                     .join(GameId::SevenDaysToDie.as_str())
             })
+            .chain(std::iter::once(
+                paths.shared_install_dir(GameId::SevenDaysToDie),
+            ))
             .filter_map(|install| std::fs::read_dir(install.join("Data/Worlds")).ok())
             .flatten()
             .filter_map(|entry| {

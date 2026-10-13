@@ -250,7 +250,7 @@ impl GameDriver for SevenDaysToDieDriver {
             mods: true,
             access_lists: false,
             readiness: true,
-            shared_install: false,
+            shared_install: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {

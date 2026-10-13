@@ -858,6 +858,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_install_routes_follow_the_games_capability() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-shared-install-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let app = build_router(AppState::new(paths.clone(), db.clone()));
+        let send = |method: &'static str, uri: &'static str, body: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(uri)
+                            .header("content-type", "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                (status, String::from_utf8_lossy(&bytes).to_string())
+            }
+        };
+
+        let (status, body) = send("GET", "/api/games/7d2d/install", "").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let status_view: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(status_view["installed"], false);
+        assert_eq!(status_view["running"], false);
+
+        let (status, body) = send("GET", "/api/games/valheim/install", "").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body.contains("Valheim does not support a shared install"),
+            "{body}"
+        );
+        let (status, body) = send(
+            "POST",
+            "/api/games/rust/instances",
+            r#"{"name":"wipe","install_mode":"shared"}"#,
+        )
+        .await;
+        assert!(!status.is_success(), "{body}");
+        assert!(
+            body.contains("Rust does not support a shared install"),
+            "{body}"
+        );
+
+        let (status, body) = send(
+            "POST",
+            "/api/games/7d2d/instances",
+            r#"{"name":"undead","install_mode":"shared"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(created["install_mode"], "shared");
+
+        // A shared instance is updated from the game's install card.
+        let id = created["id"].as_str().unwrap().to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/instances/{id}/runtime/update"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
     async fn valheim_instance_route_keeps_the_full_dashboard_view() {
         let dir = std::env::temp_dir().join(format!(
             "odin-router-valheim-status-test-{}-{}",

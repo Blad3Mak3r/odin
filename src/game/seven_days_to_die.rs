@@ -84,20 +84,26 @@ pub fn build_command_at(
 }
 
 /// Where the installed server's `serverconfig.xml` template lives for an
-/// instance: its private copy of the game once installed, otherwise a
-/// template placed in the host install directory.
+/// instance: its private copy of the game once installed, the shared
+/// installation for an instance that uses it (which has no private copy), and
+/// otherwise a template placed in the host install directory.
 pub fn template_path(paths: &Paths, identity: &GameInstanceIdentity) -> PathBuf {
     let private = paths
         .container_runtime_dir(GameId::SevenDaysToDie, &identity.id)
         .join(GameId::SevenDaysToDie.as_str())
         .join(TEMPLATE_FILE);
     if private.is_file() {
-        private
-    } else {
-        paths
-            .game_install_dir(GameId::SevenDaysToDie)
-            .join(TEMPLATE_FILE)
+        return private;
     }
+    let shared = paths
+        .shared_install_dir(GameId::SevenDaysToDie)
+        .join(TEMPLATE_FILE);
+    if shared.is_file() {
+        return shared;
+    }
+    paths
+        .game_install_dir(GameId::SevenDaysToDie)
+        .join(TEMPLATE_FILE)
 }
 
 /// Creates the native document from the template the installed server ships,

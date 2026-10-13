@@ -343,6 +343,15 @@ pub fn build_router(state: AppState) -> Router {
             get(games::shared_install_status).post(games::install_shared),
         )
         .route(
+            "/games/{game}/config/advanced",
+            get(config_files::list_shared_advanced_config)
+                .put(config_files::set_shared_advanced_config),
+        )
+        .route(
+            "/games/{game}/config/advanced/init",
+            post(config_files::initialize_shared_advanced_config),
+        )
+        .route(
             "/instances",
             get(instances::list_instances).post(instances::create_instance),
         )

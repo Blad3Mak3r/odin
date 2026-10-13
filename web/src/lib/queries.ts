@@ -428,6 +428,26 @@ export function useAdvancedConfig(id: string, enabled: boolean) {
   })
 }
 
+export function useSharedAdvancedConfig(game: GameId, enabled: boolean) {
+  return useQuery({ queryKey: ['games', game, 'advanced-config'], queryFn: () => api.get<AdvancedConfigView>(`/games/${game}/config/advanced`), enabled })
+}
+
+export function useUpdateSharedAdvancedConfig(game: GameId) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (changes: AdvancedConfigChange[]) => api.put<void>(`/games/${game}/config/advanced`, { changes }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] }),
+  })
+}
+
+export function useInitializeSharedAdvancedConfig(game: GameId) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>(`/games/${game}/config/advanced/init`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] }),
+  })
+}
+
 export function useSharedInstall(game: GameId, enabled: boolean) {
   return useQuery({
     queryKey: ['games', game, 'install'],

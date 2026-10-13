@@ -8,10 +8,11 @@ import { RouteTabs } from '@/components/RouteTabs'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
 import { GAME_DESCRIPTIONS } from '@/lib/games'
-import { useArkClusters, useCreateArkCluster, useDeleteArkCluster, useGames, useInstallShared, useManagedInstances, useSetArkClusterMembers, useSharedInstall } from '@/lib/queries'
+import { useArkClusters, useCreateArkCluster, useDeleteArkCluster, useGames, useInitializeSharedAdvancedConfig, useInstallShared, useManagedInstances, useSetArkClusterMembers, useSharedAdvancedConfig, useSharedInstall, useUpdateSharedAdvancedConfig } from '@/lib/queries'
 import { useState } from 'react'
 import type { GameView } from '@/lib/types'
 import { toast } from 'sonner'
@@ -27,6 +28,26 @@ function ArkSharedInstallCard() {
   if (install.isError) return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>Its status could not be loaded.</CardDescription></CardHeader></Card>
   const state = install.data
   return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>One ARK payload can be reused by shared instances. Stop every shared instance before installing or updating it.</CardDescription></CardHeader><CardContent className="flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">{state?.running ? 'Installing…' : state?.installed ? `Installed${state.build_id ? ` · Steam build ${state.build_id}` : ''}` : 'Not installed'}</p><Button type="button" disabled={state?.running || start.isPending} onClick={() => start.mutate(undefined, { onSuccess: () => toast.success('Shared ARK installation started'), onError: (error) => toast.error(error.message) })}>{state?.installed ? 'Update shared install' : 'Install shared files'}</Button></CardContent></Card>
+}
+
+function ArkSharedConfigCard() {
+  const config = useSharedAdvancedConfig('ark-asa', true)
+  const initialize = useInitializeSharedAdvancedConfig('ark-asa')
+  const update = useUpdateSharedAdvancedConfig('ark-asa')
+  const instances = useManagedInstances()
+  const [values, setValues] = useState<Record<string, string>>({})
+  const running = instances.data?.some((instance) => instance.game === 'ark-asa' && instance.install_mode === 'shared' && instance.running) ?? false
+  if (config.isLoading) return <Card><CardHeader><CardTitle>Shared configuration</CardTitle><CardDescription>Loading native ARK configuration…</CardDescription></CardHeader></Card>
+  if (config.isError) return <Card><CardHeader><CardTitle>Shared configuration</CardTitle><CardDescription>Configuration could not be loaded.</CardDescription></CardHeader></Card>
+  const files = config.data?.files ?? []
+  const save = () => {
+    const changes = Object.entries(values).map(([id, value]) => {
+      const [file, ...key] = id.split(':')
+      return { file, key: key.join(':'), value }
+    })
+    if (changes.length) update.mutate(changes, { onSuccess: () => { setValues({}); toast.success('Shared ARK configuration saved') }, onError: (error) => toast.error(error.message) })
+  }
+  return <Card><CardHeader><CardTitle>Shared configuration</CardTitle><CardDescription>These native ARK INI files apply to every shared-install server. Stop all shared servers before saving.</CardDescription></CardHeader><CardContent className="flex flex-col gap-5">{files.some((file) => !file.exists) && <Button className="w-fit" type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Shared configuration initialized'), onError: (error) => toast.error(error.message) })}>Initialize configuration files</Button>}{files.filter((file) => file.exists).map((file) => <div key={file.id} className="border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p></div><div className="grid gap-3 p-4 sm:grid-cols-2">{file.sections.flatMap((section) => section.entries).map((entry) => { const id = `${file.id}:${entry.key}`; return <div key={id} className="flex flex-col gap-1"><Label htmlFor={id}>{entry.key}</Label><Input id={id} type={entry.sensitive ? 'password' : 'text'} defaultValue={entry.value} placeholder={entry.sensitive && entry.configured ? '••••••••' : undefined} disabled={running || entry.managed} onChange={(event) => setValues((current) => ({ ...current, [id]: event.target.value }))} /></div> })}</div></div>)}<Button className="w-fit" type="button" disabled={running || update.isPending || Object.keys(values).length === 0} onClick={save}>Save shared configuration</Button></CardContent></Card>
 }
 
 function ArkClustersCard() {
@@ -112,7 +133,7 @@ export function GameDetailPage() {
           ...(hasGlobalMods(game) ? [{ label: 'Mods', to: `/games/${game.id}/mods` }] : []),
         ]}
       />
-      {activeTab === 'overview' && (game.id === 'ark-asa' ? <><ArkSharedInstallCard /><ArkClustersCard /></> : <RuntimeCard game={game} />)}
+      {activeTab === 'overview' && (game.id === 'ark-asa' ? <><ArkSharedInstallCard /><ArkSharedConfigCard /><ArkClustersCard /></> : <RuntimeCard game={game} />)}
       {activeTab === 'instances' && <GameInstances game={game} />}
       {activeTab === 'mods' && <ValheimModsTab path={nestedPath} />}
     </div>

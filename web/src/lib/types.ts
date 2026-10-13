@@ -21,7 +21,6 @@ export interface GameView {
   name: string
   steam_app_id: string
   capabilities: GameCapabilities
-  install_mode: 'isolated' | 'shared'
 }
 
 export interface SharedInstallView {
@@ -46,6 +45,7 @@ export interface ManagedInstanceView {
   running: boolean
   odin_version: string | null
   capabilities: GameCapabilities
+  install_mode: 'isolated' | 'shared'
   config: Record<string, unknown>
 }
 

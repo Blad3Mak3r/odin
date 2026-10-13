@@ -18,6 +18,47 @@ pub struct SetAdvancedConfigRequest {
     pub changes: Vec<crate::game::config_documents::AdvancedConfigChange>,
 }
 
+pub async fn list_shared_advanced_config(
+    State(state): State<AppState>,
+    Path(game): Path<crate::game::GameId>,
+) -> ApiResult<Json<AdvancedConfigView>> {
+    let paths = state.paths.clone();
+    let files =
+        run_blocking(move || crate::game::config_documents::list_shared(&paths, game)).await?;
+    Ok(Json(AdvancedConfigView { files }))
+}
+
+pub async fn set_shared_advanced_config(
+    State(state): State<AppState>,
+    Path(game): Path<crate::game::GameId>,
+    Json(request): Json<SetAdvancedConfigRequest>,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || {
+        ensure_shared_game_stopped(&paths, &db, game)?;
+        crate::game::config_documents::apply_shared(&paths, game, &request.changes)
+            .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn initialize_shared_advanced_config(
+    State(state): State<AppState>,
+    Path(game): Path<crate::game::GameId>,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || {
+        ensure_shared_game_stopped(&paths, &db, game)?;
+        crate::game::config_documents::initialize_shared(&paths, game)
+            .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 pub struct ApplySevenDaysTemplateRequest {
     pub keys: Vec<String>,
@@ -44,6 +85,7 @@ pub async fn list_advanced_config_by_id(
         }
         let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
             .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
+        ensure_not_shared_ark(&db, &instance)?;
         crate::game::config_documents::list(&paths, &instance)
     })
     .await?;
@@ -77,6 +119,7 @@ pub async fn set_advanced_config_by_id(
         }
         let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
             .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
+        ensure_not_shared_ark(&db, &instance)?;
         ensure_stopped(
             &paths,
             &db,
@@ -105,6 +148,7 @@ pub async fn initialize_advanced_config_by_id(
         }
         let instance = crate::db::game_instances::load_generic(&db, identity.game, &identity.name)?
             .ok_or_else(|| anyhow::anyhow!("game instance does not exist"))?;
+        ensure_not_shared_ark(&db, &instance)?;
         ensure_stopped(
             &paths,
             &db,
@@ -204,6 +248,48 @@ fn ensure_stopped(
     if crate::game::instances::is_running(paths, db, identity.game, &identity.name)? {
         return Err(anyhow::Error::new(crate::web::error::BadRequest(
             message.into(),
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_shared_game_stopped(
+    paths: &crate::paths::Paths,
+    db: &crate::db::Db,
+    game: crate::game::GameId,
+) -> anyhow::Result<()> {
+    if game != crate::game::GameId::ArkSurvivalAscended {
+        return Err(anyhow::Error::new(crate::web::error::BadRequest(
+            "this game has no shared configuration".into(),
+        )));
+    }
+    let running = crate::db::game_instances::list_generic(db, game)?
+        .into_iter()
+        .filter(|instance| {
+            crate::db::game_instances::install_mode(db, &instance.identity.id).ok()
+                == Some(crate::db::game_instances::InstallMode::Shared)
+        })
+        .any(|instance| {
+            crate::podman::dispatch::is_running(paths, db, game, instance.name()).unwrap_or(true)
+        });
+    if running {
+        return Err(anyhow::Error::new(crate::web::error::BadRequest(
+            "stop every shared ARK instance before changing shared configuration".into(),
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_not_shared_ark(
+    db: &crate::db::Db,
+    instance: &crate::db::game_instances::GenericGameInstance,
+) -> anyhow::Result<()> {
+    if instance.identity.game == crate::game::GameId::ArkSurvivalAscended
+        && crate::db::game_instances::install_mode(db, &instance.identity.id)?
+            == crate::db::game_instances::InstallMode::Shared
+    {
+        return Err(anyhow::Error::new(crate::web::error::BadRequest(
+            "shared ARK configuration is managed from the game page".into(),
         )));
     }
     Ok(())

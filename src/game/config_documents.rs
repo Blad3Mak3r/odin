@@ -344,16 +344,16 @@ fn instance_root(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
     paths.game_instance_dir(instance.identity.game, instance.name())
 }
 
-fn document_path(paths: &Paths, instance: &GenericGameInstance, spec: FileSpec) -> PathBuf {
-    instance_root(paths, instance).join(spec.path)
+fn shared_root(paths: &Paths, game: GameId) -> PathBuf {
+    paths.shared_install_dir(game).join("ShooterGame")
 }
 
-fn read_document(
-    paths: &Paths,
-    instance: &GenericGameInstance,
-    spec: FileSpec,
-) -> Result<Option<String>> {
-    let path = document_path(paths, instance, spec);
+fn document_path(root: &Path, spec: FileSpec) -> PathBuf {
+    root.join(spec.path)
+}
+
+fn read_document(root: &Path, spec: FileSpec) -> Result<Option<String>> {
+    let path = document_path(root, spec);
     if path.is_file() {
         fs::read_to_string(&path)
             .map(Some)
@@ -364,10 +364,25 @@ fn read_document(
 }
 
 pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<AdvancedConfigFile>> {
-    specs(instance.identity.game)
+    list_at(&instance_root(paths, instance), instance.identity.game)
+}
+
+/// Shared ARK installs own one native configuration directory. This is kept
+/// separate from the per-instance state directory so every shared instance
+/// sees precisely the same game-owned settings.
+pub fn list_shared(paths: &Paths, game: GameId) -> Result<Vec<AdvancedConfigFile>> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    list_at(&shared_root(paths, game), game)
+}
+
+fn list_at(root: &Path, game: GameId) -> Result<Vec<AdvancedConfigFile>> {
+    specs(game)
         .iter()
         .map(|spec| {
-            let contents = read_document(paths, instance, *spec)?;
+            let contents = read_document(root, *spec)?;
             let exists = contents.is_some();
             let sections = contents
                 .as_deref()
@@ -396,7 +411,10 @@ fn seven_days_baseline_path(paths: &Paths, instance: &GenericGameInstance) -> Pa
 }
 
 fn seven_days_config_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
-    document_path(paths, instance, specs(GameId::SevenDaysToDie)[0])
+    document_path(
+        &instance_root(paths, instance),
+        specs(GameId::SevenDaysToDie)[0],
+    )
 }
 
 /// Creates only missing native configuration documents. Existing operator
@@ -409,11 +427,11 @@ pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
         ),
         GameId::Palworld => copy_template_if_missing(
             &crate::game::palworld::template_path(paths, &instance.identity),
-            &document_path(paths, instance, specs(GameId::Palworld)[0]),
+            &document_path(&instance_root(paths, instance), specs(GameId::Palworld)[0]),
         ),
         GameId::ArkSurvivalAscended => {
             for spec in specs(GameId::ArkSurvivalAscended) {
-                let path = document_path(paths, instance, *spec);
+                let path = document_path(&instance_root(paths, instance), *spec);
                 if !path.exists() {
                     create_atomically(&path, "")?;
                 }
@@ -422,6 +440,21 @@ pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
         }
         GameId::Valheim | GameId::Rust => bail!("this game has no native configuration template"),
     }
+}
+
+pub fn initialize_shared(paths: &Paths, game: GameId) -> Result<()> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    let root = shared_root(paths, game);
+    for spec in specs(game) {
+        let path = document_path(&root, *spec);
+        if !path.exists() {
+            create_atomically(&path, "")?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn copy_template_if_missing(source: &Path, target: &Path) -> Result<()> {
@@ -597,6 +630,22 @@ pub fn apply(
     instance: &GenericGameInstance,
     changes: &[AdvancedConfigChange],
 ) -> Result<()> {
+    apply_at(
+        &instance_root(paths, instance),
+        instance.identity.game,
+        changes,
+    )
+}
+
+pub fn apply_shared(paths: &Paths, game: GameId, changes: &[AdvancedConfigChange]) -> Result<()> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    apply_at(&shared_root(paths, game), game, changes)
+}
+
+fn apply_at(root: &Path, game: GameId, changes: &[AdvancedConfigChange]) -> Result<()> {
     let mut per_file: HashMap<&str, Vec<&AdvancedConfigChange>> = HashMap::new();
     for change in changes {
         per_file
@@ -606,12 +655,12 @@ pub fn apply(
     }
     let mut writes = Vec::new();
     for (id, changes) in per_file {
-        let spec = specs(instance.identity.game)
+        let spec = specs(game)
             .iter()
             .find(|spec| spec.id == id)
             .context("configuration file is not declared for this game")?;
-        let path = document_path(paths, instance, *spec);
-        let original = read_document(paths, instance, *spec)?
+        let path = document_path(root, *spec);
+        let original = read_document(root, *spec)?
             .with_context(|| format!("{} has not been generated by the game", path.display()))?;
         let existing = parse(spec.format, &original)?;
         let keys: BTreeMap<_, _> = existing
@@ -990,7 +1039,7 @@ pub fn value(paths: &Paths, instance: &GenericGameInstance, key: &str) -> Result
     let Some(spec) = specs(instance.identity.game).first().copied() else {
         return Ok(None);
     };
-    let Some(contents) = read_document(paths, instance, spec)? else {
+    let Some(contents) = read_document(&instance_root(paths, instance), spec)? else {
         return Ok(None);
     };
     Ok(parse(spec.format, &contents)?
@@ -1019,7 +1068,8 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
     let Some(spec) = specs(instance.identity.game).first().copied() else {
         return Ok(());
     };
-    let Some(mut contents) = read_document(paths, instance, spec)? else {
+    let root = instance_root(paths, instance);
+    let Some(mut contents) = read_document(&root, spec)? else {
         return Ok(());
     };
     let values: Vec<(&str, String)> = match instance.identity.game {
@@ -1045,7 +1095,7 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
         }
     }
     if changed {
-        write_atomically(&document_path(paths, instance, spec), &contents)?;
+        write_atomically(&document_path(&root, spec), &contents)?;
     }
     Ok(())
 }
@@ -1057,8 +1107,9 @@ pub fn remove_legacy_control_panel(paths: &Paths, instance: &GenericGameInstance
         return Ok(());
     }
     let spec = specs(GameId::SevenDaysToDie)[0];
-    let path = document_path(paths, instance, spec);
-    let Some(contents) = read_document(paths, instance, spec)? else {
+    let root = instance_root(paths, instance);
+    let path = document_path(&root, spec);
+    let Some(contents) = read_document(&root, spec)? else {
         return Ok(());
     };
     let pattern = regex::Regex::new(
@@ -1623,7 +1674,10 @@ mod tests {
             ],
         )
         .unwrap();
-        let active = document_path(&paths, &instance, specs(GameId::Palworld)[0]);
+        let active = document_path(
+            &instance_root(&paths, &instance),
+            specs(GameId::Palworld)[0],
+        );
         let contents = fs::read_to_string(active).unwrap();
         assert!(contents.contains("PublicPort=9000"));
         assert!(contents.contains("RESTAPIPort=9001"));
@@ -1746,7 +1800,10 @@ mod tests {
                 auto_restart: false,
             },
         };
-        let path = document_path(&paths, &instance, specs(GameId::Palworld)[0]);
+        let path = document_path(
+            &instance_root(&paths, &instance),
+            specs(GameId::Palworld)[0],
+        );
         let contents = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(PublicPort=8211,RESTAPIPort=8212,ServerName=Odin)\n";
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, contents).unwrap();
@@ -1847,5 +1904,44 @@ mod tests {
         assert!(!repaired.contains("ControlPanelEnabled"));
         assert!(repaired.contains("WebDashboardEnabled"));
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn shared_ark_configuration_is_initialized_and_updated_outside_instance_state() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-shared-ark-config-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+
+        initialize_shared(&paths, GameId::ArkSurvivalAscended).unwrap();
+        apply_shared(
+            &paths,
+            GameId::ArkSurvivalAscended,
+            &[AdvancedConfigChange {
+                file: "game".into(),
+                key: "[/Script/ShooterGame.ShooterGameMode].XPMultiplier".into(),
+                value: "2.0".into(),
+                delete: false,
+            }],
+        )
+        .unwrap();
+
+        let config = paths
+            .shared_install_dir(GameId::ArkSurvivalAscended)
+            .join("ShooterGame/Saved/Config/WindowsServer/Game.ini");
+        assert!(
+            fs::read_to_string(config)
+                .unwrap()
+                .contains("XPMultiplier=2.0")
+        );
+        assert!(list_shared(&paths, GameId::ArkSurvivalAscended).unwrap()[1].exists);
+        assert!(
+            !paths
+                .game_instance_dir(GameId::ArkSurvivalAscended, "server")
+                .exists()
+        );
+        fs::remove_dir_all(paths.data_dir).ok();
     }
 }

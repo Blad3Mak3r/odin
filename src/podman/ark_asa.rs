@@ -139,20 +139,24 @@ impl ContainerGame for ArkSurvivalAscended {
     ) -> Result<()> {
         let shared =
             game_instances::install_mode(db, &identity.id)? == game_instances::InstallMode::Shared;
-        // Save data and native configuration always belong to one instance.
-        // In shared mode only the installed game files move to the common root.
+        // Saves are per instance. A shared install instead owns its native
+        // configuration so every server using it gets the same game settings.
         let root = Self::instance_dir(paths, instance);
         for directory in ["Saved", "Mods", "logs"] {
             std::fs::create_dir_all(root.join(directory))?;
         }
-        for file in [
-            "Saved/Config/WindowsServer/GameUserSettings.ini",
-            "Saved/Config/WindowsServer/Game.ini",
-        ] {
-            let path = root.join(file);
-            std::fs::create_dir_all(path.parent().context("ARK config path has no parent")?)?;
-            if !path.exists() {
-                std::fs::File::create(path)?;
+        if shared {
+            crate::game::config_documents::initialize_shared(paths, Self::GAME)?;
+        } else {
+            for file in [
+                "Saved/Config/WindowsServer/GameUserSettings.ini",
+                "Saved/Config/WindowsServer/Game.ini",
+            ] {
+                let path = root.join(file);
+                std::fs::create_dir_all(path.parent().context("ARK config path has no parent")?)?;
+                if !path.exists() {
+                    std::fs::File::create(path)?;
+                }
             }
         }
         std::fs::create_dir_all(paths.container_runtime_dir(Self::GAME, &identity.id))?;
@@ -209,6 +213,14 @@ impl ContainerGame for ArkSurvivalAscended {
                 )),
             ),
         ]);
+        if shared {
+            mounts.push(bind(
+                &paths
+                    .shared_install_dir(Self::GAME)
+                    .join("ShooterGame/Saved/Config"),
+                Path::new("/srv/odin/shared/ShooterGame/Saved/Config"),
+            ));
+        }
         Ok(mounts)
     }
 }

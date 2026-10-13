@@ -372,9 +372,10 @@ fn ensure_not_shared_ark(
         && crate::db::game_instances::install_mode(db, &instance.identity.id)?
             == crate::db::game_instances::InstallMode::Shared
     {
-        return Err(anyhow::Error::new(crate::web::error::BadRequest(
+        return Err(crate::instance::InstanceError::TransitionInProgress(
             "shared ARK configuration is managed from the game page".into(),
-        )));
+        )
+        .into());
     }
     Ok(())
 }

@@ -529,6 +529,7 @@ fn write_raw_at(root: &Path, game: GameId, file: &str, content: &str) -> Result<
         "configuration files may not exceed 1 MiB"
     );
     let spec = raw_spec(game, file)?;
+    validate_raw_document(spec.format, content)?;
     let updated = parse(spec.format, content)?;
     let path = document_path(root, spec);
     let current = read_document(root, spec)?.unwrap_or_default();
@@ -548,6 +549,28 @@ fn write_raw_at(root: &Path, game: GameId, file: &str, content: &str) -> Result<
         );
     }
     replace_or_create_atomically(&path, content)
+}
+
+fn validate_raw_document(format: Format, content: &str) -> Result<()> {
+    if !matches!(format, Format::Ini) {
+        return Ok(());
+    }
+    for (line_number, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') && line.len() > 2 {
+            continue;
+        }
+        anyhow::ensure!(
+            line.split_once('=')
+                .is_some_and(|(key, _)| !key.trim().is_empty()),
+            "invalid INI syntax on line {}",
+            line_number + 1
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn copy_template_if_missing(source: &Path, target: &Path) -> Result<()> {
@@ -2061,6 +2084,15 @@ mod tests {
                 GameId::ArkSurvivalAscended,
                 "game-user-settings",
                 "[SessionSettings]\nSessionName=Other\n[ServerSettings]\nRCONEnabled=True\n",
+            )
+            .is_err()
+        );
+        assert!(
+            write_raw_shared(
+                &paths,
+                GameId::ArkSurvivalAscended,
+                "game-user-settings",
+                "this is not an INI document\n",
             )
             .is_err()
         );

@@ -19,6 +19,7 @@ RUN apt-get update \
         libxdamage1 \
         libxfixes3 \
         libxrandr2 \
+        python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/odin/proton \
     && curl -fsSL "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_TAG}/${GE_PROTON_TAG}.tar.gz" \

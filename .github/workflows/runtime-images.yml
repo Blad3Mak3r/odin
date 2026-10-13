@@ -35,7 +35,7 @@ jobs:
       - name: Build Proton image
         run: docker build -f containers/odin-srv/proton.Dockerfile --build-arg BASE_IMAGE=odin-srv:base -t odin-srv:proton .
       - name: Smoke test Proton image
-        run: docker run --rm --entrypoint proton odin-srv:proton --version
+        run: docker run --rm --entrypoint /bin/sh odin-srv:proton -c 'python3 --version && test -x /usr/local/bin/proton && test -f /opt/odin/proton/version'
 
   base:
     if: github.event_name != 'pull_request'
@@ -94,4 +94,4 @@ jobs:
           cache-from: type=gha,scope=odin-srv-proton
           cache-to: type=gha,mode=max,scope=odin-srv-proton
       - name: Smoke test Proton image
-        run: docker run --rm --entrypoint proton "${IMAGE}:proton" --version
+        run: docker run --rm --entrypoint /bin/sh "${IMAGE}:proton" -c 'python3 --version && test -x /usr/local/bin/proton && test -f /opt/odin/proton/version'

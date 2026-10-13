@@ -349,6 +349,14 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/settings", get(settings::get_settings))
         .route(
+            "/settings/runtime-images",
+            get(settings::list_runtime_images),
+        )
+        .route(
+            "/settings/runtime-images/{role}/pull",
+            post(settings::pull_runtime_image),
+        )
+        .route(
             "/settings/instance-defaults",
             put(settings::set_instance_defaults),
         )

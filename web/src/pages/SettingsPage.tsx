@@ -10,11 +10,27 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
   useClearNexusApiKey,
+  usePullRuntimeImage,
+  useRuntimeImages,
   useSetInstanceDefaults,
   useSetNexusApiKey,
   useSettings,
 } from '@/lib/queries'
-import type { InstanceDefaults, PodmanSettingsView } from '@/lib/types'
+import type { InstanceDefaults, PodmanSettingsView, RuntimeImageView } from '@/lib/types'
+import { gameLabel } from '@/lib/games'
+
+function RuntimeImages() {
+  const images = useRuntimeImages()
+  const pull = usePullRuntimeImage()
+  if (images.isLoading) return <Skeleton className="h-36 w-full max-w-2xl" />
+  if (images.isError) return <QueryError error={images.error} />
+  if (!images.data?.length) return null
+  return <section className="max-w-2xl border"><div className="border-b px-4 py-3"><h2 className="text-sm font-medium">Runtime images</h2><p className="mt-1 text-xs text-muted-foreground">Images are pulled only when requested. Repair a stopped server to recreate it with a newly pulled image.</p></div><div className="divide-y">{images.data.map((image) => <RuntimeImageRow key={image.role} image={image} pulling={pull.isPending} onPull={() => pull.mutate(image.role, { onSuccess: () => toast.success(`${image.role} image pull started`), onError: (error) => toast.error(error.message) })} />)}</div></section>
+}
+
+function RuntimeImageRow({ image, pulling, onPull }: { image: RuntimeImageView; pulling: boolean; onPull: () => void }) {
+  return <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="font-medium">{image.role}</p><Badge variant={image.local_id ? 'secondary' : 'outline'}>{image.local_id ? 'available locally' : 'not pulled'}</Badge>{image.pinned && <Badge variant="outline">pinned</Badge>}</div><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{image.reference}</p><p className="mt-1 text-xs text-muted-foreground">Used by {image.games.map(gameLabel).join(', ')}{image.local_digest ? ` · ${image.local_digest}` : ''}</p></div><Button className="w-fit" variant="outline" disabled={pulling} onClick={onPull}>Pull image</Button></div>
+}
 
 function InstanceDefaultsForm({ defaults }: { defaults: InstanceDefaults }) {
   const saveDefaults = useSetInstanceDefaults()
@@ -144,6 +160,7 @@ export function SettingsPage() {
       ) : settings.data ? (
         <>
           <PodmanSettings podman={settings.data.podman} configFile={settings.data.config_file} />
+          <RuntimeImages />
           <InstanceDefaultsForm
             key={JSON.stringify(settings.data.instance_defaults)}
             defaults={settings.data.instance_defaults}

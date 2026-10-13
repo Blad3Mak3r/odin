@@ -69,3 +69,40 @@ impl GlobalConfig {
             .with_context(|| format!("failed to parse config file {}", config_file.display()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn podman_config() -> PodmanConfig {
+        PodmanConfig {
+            socket: PathBuf::from("/run/podman/podman.sock"),
+            runtime_image: Some("example/legacy:base".into()),
+            base_image: None,
+            proton_image: None,
+            odin_binary: None,
+        }
+    }
+
+    #[test]
+    fn runtime_images_use_defaults_and_the_legacy_base_alias() {
+        let config = podman_config();
+        assert_eq!(config.image(RuntimeImage::Base), "example/legacy:base");
+        assert_eq!(
+            config.image(RuntimeImage::Proton),
+            "ghcr.io/blad3mak3r/odin-srv:proton"
+        );
+    }
+
+    #[test]
+    fn explicit_images_take_precedence() {
+        let mut config = podman_config();
+        config.base_image = Some("example/base@sha256:abc".into());
+        config.proton_image = Some("example/proton@sha256:def".into());
+        assert_eq!(config.image(RuntimeImage::Base), "example/base@sha256:abc");
+        assert_eq!(
+            config.image(RuntimeImage::Proton),
+            "example/proton@sha256:def"
+        );
+    }
+}

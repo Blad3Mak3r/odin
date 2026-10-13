@@ -50,6 +50,16 @@ pub struct PodmanClient {
     socket: PathBuf,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct PodmanImage {
+    #[serde(rename = "Id")]
+    pub id: String,
+    #[serde(rename = "RepoDigests", default)]
+    pub repo_digests: Vec<String>,
+    #[serde(rename = "Created", default)]
+    pub created: i64,
+}
+
 impl PodmanClient {
     pub fn new(socket: &Path) -> Result<Self> {
         if !socket.is_absolute() {
@@ -111,6 +121,24 @@ impl PodmanClient {
         }
     }
 
+    pub async fn inspect_image(&self, image: &str) -> Result<Option<PodmanImage>> {
+        let response = self
+            .client
+            .get(format!("{API_PREFIX}/images/{image}/json"))
+            .send()
+            .await
+            .context("failed to inspect Podman image")?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        success(response)
+            .await?
+            .json()
+            .await
+            .map(Some)
+            .context("failed to decode Podman image inspection")
+    }
+
     pub async fn pull_image(&self, image: &str) -> Result<()> {
         let response = self
             .client
@@ -124,6 +152,23 @@ impl PodmanClient {
             .await?
             .json()
             .await
+            .context("failed to decode Podman image pull response")?;
+        if let Some(error) = pull.error {
+            bail!("Podman failed to pull image {image}: {error}");
+        }
+        Ok(())
+    }
+
+    pub fn pull_image_blocking(&self, image: &str) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .post(format!(
+                "{API_PREFIX}/images/pull?reference={image}&quiet=true"
+            ))
+            .send()
+            .context("failed to pull Podman runtime image")?;
+        let pull: PullImageResponse = blocking_success(response)?
+            .json()
             .context("failed to decode Podman image pull response")?;
         if let Some(error) = pull.error {
             bail!("Podman failed to pull image {image}: {error}");

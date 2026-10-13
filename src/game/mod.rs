@@ -73,10 +73,24 @@ pub struct GameCapabilities {
 }
 
 /// Runtime image required by a dedicated-server driver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RuntimeImage {
     Base,
     Proton,
+}
+
+impl RuntimeImage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Proton => "proton",
+        }
+    }
+
+    pub const fn all() -> [Self; 2] {
+        [Self::Base, Self::Proton]
+    }
 }
 
 /// Ports claimed by one default instance of a game. This belongs to the

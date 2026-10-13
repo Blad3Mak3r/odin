@@ -5,6 +5,8 @@ export function describeJobKind(kind: JobKindDescr): string {
   switch (kind.kind) {
     case 'runtime_update':
       return `Update ${gameLabel(kind.game)} / ${kind.instance} in its container`
+    case 'image_pull':
+      return `Pull ${kind.image} runtime image`
     case 'mod_add':
       return `Install mod ${kind.mod_id} on ${kind.instance}`
     case 'mod_update':

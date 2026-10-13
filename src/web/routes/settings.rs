@@ -1,14 +1,17 @@
 //! Global dashboard settings shared by every server instance.
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{GlobalConfig, PodmanConfig};
 use crate::db::settings;
+use crate::game::{GameId, RuntimeImage};
 use crate::podman::PodmanClient;
 use crate::web::error::{ApiResult, run_blocking};
+use crate::web::jobs::JobKindDescr;
+use crate::web::routes::mods::JobHandle;
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -33,6 +36,17 @@ pub struct PodmanStatusView {
     pub compatible: bool,
     pub version: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RuntimeImageView {
+    pub role: RuntimeImage,
+    pub reference: String,
+    pub pinned: bool,
+    pub games: Vec<GameId>,
+    pub local_id: Option<String>,
+    pub local_digest: Option<String>,
+    pub created: Option<i64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<SettingsView>> {
@@ -126,6 +140,57 @@ pub async fn set_instance_defaults(
     let saved = defaults.clone();
     run_blocking(move || settings::set_instance_defaults(&db, &defaults)).await?;
     Ok(Json(saved))
+}
+
+pub async fn list_runtime_images(
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<RuntimeImageView>>> {
+    let paths = state.paths.clone();
+    let config = run_blocking(move || Ok(GlobalConfig::load(&paths)?.podman)).await?;
+    let Some(config) = config else {
+        return Ok(Json(Vec::new()));
+    };
+    let client = PodmanClient::from_config(&config)?;
+    let mut images = Vec::with_capacity(RuntimeImage::all().len());
+    for role in RuntimeImage::all() {
+        let reference = config.image(role);
+        let local = client.inspect_image(&reference).await?;
+        images.push(RuntimeImageView {
+            role,
+            pinned: !reference.ends_with(&format!(":{}", role.as_str())),
+            games: crate::game::drivers()
+                .into_iter()
+                .filter(|game| game.runtime_image() == role)
+                .map(|game| game.id())
+                .collect(),
+            reference,
+            local_id: local.as_ref().map(|image| image.id.clone()),
+            local_digest: local
+                .as_ref()
+                .and_then(|image| image.repo_digests.first().cloned()),
+            created: local.map(|image| image.created),
+        });
+    }
+    Ok(Json(images))
+}
+
+pub async fn pull_runtime_image(
+    State(state): State<AppState>,
+    Path(role): Path<RuntimeImage>,
+) -> ApiResult<Json<JobHandle>> {
+    let paths = state.paths.clone();
+    let config = run_blocking(move || Ok(GlobalConfig::load(&paths)?.podman)).await?;
+    let config = config.ok_or_else(|| anyhow::anyhow!("Podman is not configured"))?;
+    let reference = config.image(role);
+    let id = state
+        .jobs
+        .spawn(JobKindDescr::ImagePull { image: role }, move |logger| {
+            logger.line(format!("Pulling {reference}"));
+            PodmanClient::from_config(&config)?.pull_image_blocking(&reference)?;
+            logger.line(format!("Pulled {reference}"));
+            Ok(())
+        });
+    Ok(Json(JobHandle { id }))
 }
 
 #[derive(Deserialize)]

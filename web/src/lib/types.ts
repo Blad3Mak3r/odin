@@ -279,6 +279,7 @@ export interface JobSummary {
 
 export type JobKindDescr =
   | { kind: 'runtime_update'; game: GameId; instance: string }
+  | { kind: 'image_pull'; image: RuntimeImageRole }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }
@@ -497,6 +498,18 @@ export interface SettingsView {
   instance_defaults: InstanceDefaults
   config_file: string
   podman: PodmanSettingsView
+}
+
+export type RuntimeImageRole = 'base' | 'proton'
+
+export interface RuntimeImageView {
+  role: RuntimeImageRole
+  reference: string
+  pinned: boolean
+  games: GameId[]
+  local_id: string | null
+  local_digest: string | null
+  created: number | null
 }
 
 export interface PodmanSettingsView {

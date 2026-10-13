@@ -39,6 +39,8 @@ import type {
   ResourceSample,
   RconCommandResponse,
   ResourceLimits,
+  RuntimeImageRole,
+  RuntimeImageView,
   SevenDaysTemplateReview,
   RustAccessListKind,
   RustConfigUpdateRequest,
@@ -982,6 +984,24 @@ export function useSettings(live = false) {
     queryKey: ['settings'],
     queryFn: () => api.get<SettingsView>('/settings'),
     refetchInterval: live ? 10_000 : false,
+  })
+}
+
+export function useRuntimeImages() {
+  return useQuery({
+    queryKey: ['settings', 'runtime-images'],
+    queryFn: () => api.get<RuntimeImageView[]>('/settings/runtime-images'),
+  })
+}
+
+export function usePullRuntimeImage() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (role: RuntimeImageRole) => api.post<JobHandle>(`/settings/runtime-images/${role}/pull`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'runtime-images'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
   })
 }
 

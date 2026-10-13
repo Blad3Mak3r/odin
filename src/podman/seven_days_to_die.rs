@@ -140,7 +140,12 @@ mod tests {
             .collect();
         assert_eq!(
             mounts,
-            ["/srv/odin/runtime", "/srv/odin/instance", "/run/odin"]
+            [
+                "/srv/odin/runtime",
+                "/srv/odin/instance",
+                "/run/odin",
+                "/usr/local/bin/odin"
+            ]
         );
 
         let spec: serde_json::Value = serde_json::from_slice(

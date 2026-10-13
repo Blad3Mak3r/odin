@@ -77,6 +77,8 @@ asset_url="$(printf '%s\n' "$release_json" \
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+# mktemp -d is 0700; apt's sandbox user (_apt) must be able to read the file.
+chmod 755 "$tmpdir"
 
 pkg_file="$tmpdir/$(basename "$asset_url")"
 log "downloading $(basename "$asset_url")..."
@@ -84,7 +86,13 @@ download_to "$pkg_file" "$asset_url"
 
 log "installing via $([ "$family" = "debian" ] && echo apt || echo dnf) (needs sudo)..."
 if [ "$family" = "debian" ]; then
-    $sudo apt-get install -y "$pkg_file"
+    # stdin is the script itself when piped from curl, so dpkg can't ask about
+    # a locally modified conffile (it aborts on EOF). Keep the operator's
+    # existing config.toml instead of prompting.
+    $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        -o Dpkg::Options::=--force-confdef \
+        -o Dpkg::Options::=--force-confold \
+        "$pkg_file"
 else
     if command -v dnf >/dev/null 2>&1; then
         $sudo dnf install -y "$pkg_file"

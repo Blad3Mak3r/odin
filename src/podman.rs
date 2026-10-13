@@ -764,7 +764,7 @@ impl ContainerSpec {
             instance_dir,
             extra_mounts,
             image,
-            Path::new("/proc/self/exe"),
+            Path::new("/usr/bin/odin"),
             limits,
         )
     }
@@ -1059,7 +1059,7 @@ mod tests {
                     "/run/odin",
                     paths.container_socket_dir(&identity.id).to_str().unwrap()
                 ),
-                ("/usr/local/bin/odin", "/proc/self/exe"),
+                ("/usr/local/bin/odin", "/usr/bin/odin"),
             ]
         );
         assert!(request.resource_limits.is_none());

@@ -3,6 +3,8 @@ export interface VersionView {
   latest_release_url: string | null
   update_available: boolean
   outdated_instances: string[]
+  system_update_supported: boolean
+  system_update_running: boolean
 }
 
 export type GameId = 'valheim' | 'rust' | 'palworld' | '7d2d'

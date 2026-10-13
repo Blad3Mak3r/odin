@@ -19,6 +19,7 @@ const MOD_UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024;
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .route("/version", get(version::get_version))
+        .route("/update", post(version::start_system_update))
         .route("/changelog", get(changelog::get_changelog))
         .route("/doctor", get(doctor::get_doctor))
         .route("/games", get(games::list_games))
@@ -406,8 +407,11 @@ mod tests {
     use super::*;
     use crate::db::Db;
     use crate::instance::Instance;
+    use crate::odin_update::SystemUpdate;
     use crate::paths::Paths;
     use std::io::{Cursor, Write};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     fn seven_days_mod_zip() -> Vec<u8> {
@@ -488,6 +492,86 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn system_update_route_starts_the_packaged_update_service() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-system-update-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let unit = dir.join("odin-update.service");
+        let marker = dir.join("systemctl-args");
+        let systemctl = dir.join("systemctl");
+        std::fs::write(&unit, "[Service]\n").unwrap();
+        std::fs::write(
+            &systemctl,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = is-active ]; then exit 1; fi\nprintf '%s\\n' \"$@\" > '{}'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let mut state = AppState::new(paths, db);
+        state.system_update = SystemUpdate::new(unit, systemctl);
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/update")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            std::fs::read_to_string(marker).unwrap(),
+            "start\n--no-block\nodin-update.service\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn system_update_route_rejects_an_unmanaged_installation() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-system-update-unsupported-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let mut state = AppState::new(paths, db);
+        state.system_update =
+            SystemUpdate::new(dir.join("odin-update.service"), PathBuf::from("false"));
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/update")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

@@ -1,7 +1,9 @@
-import { Sparkles, TriangleAlert, X } from 'lucide-react'
+import { Loader2, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
+import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
-import { useVersion } from '@/lib/queries'
+import { useSystemUpdate, useVersion } from '@/lib/queries'
 
 const DISMISSED_KEY = 'odin-update-dismissed-version'
 
@@ -27,11 +29,26 @@ function writeDismissedVersion(version: string) {
 /// until they are restarted.
 export function UpdateBanner() {
   const version = useVersion()
+  const systemUpdate = useSystemUpdate()
+  const { confirm, dialog } = useConfirmDialog()
   const [dismissed, setDismissed] = useState<string | null>(() => readDismissedVersion())
 
   const latest = version.data?.update_available ? version.data.latest_version : null
   const availableRelease = latest && latest !== dismissed ? latest : null
   const outdated = version.data?.outdated_instances ?? []
+  const canInstall = Boolean(availableRelease && version.data?.system_update_supported)
+  const updating = systemUpdate.isPending || Boolean(version.data?.system_update_running)
+  const startUpdate = async () => {
+    if (!(await confirm({
+      title: 'Update Odin?',
+      description: 'The dashboard will briefly reconnect while the latest Odin package is installed. Running game servers will stay online, but restart them afterward to use the new supervisor.',
+      confirmLabel: 'Update now',
+    }))) return
+    systemUpdate.mutate(undefined, {
+      onSuccess: () => toast.success('Odin update started. The dashboard will reconnect shortly.'),
+      onError: (error) => toast.error(error.message),
+    })
+  }
   if (!availableRelease && outdated.length === 0) {
     return null
   }
@@ -67,6 +84,12 @@ export function UpdateBanner() {
                 View release
               </a>
             )}
+            {canInstall && (
+              <Button variant="outline" size="sm" disabled={updating} onClick={startUpdate}>
+                {updating && <Loader2 className="size-4 animate-spin" />}
+                {updating ? 'Updating…' : 'Update now'}
+              </Button>
+            )}
           </span>
         )}
       </div>
@@ -83,6 +106,7 @@ export function UpdateBanner() {
           <X />
         </Button>
       )}
+      {dialog}
     </div>
   )
 }

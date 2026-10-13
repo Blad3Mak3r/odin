@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::StatusCode;
 use serde::Serialize;
 
 use crate::db::Db;
@@ -21,15 +22,24 @@ pub struct VersionView {
     pub latest_release_url: Option<String>,
     pub update_available: bool,
     pub outdated_instances: Vec<String>,
+    pub system_update_supported: bool,
+    pub system_update_running: bool,
+}
+
+#[derive(Serialize)]
+pub struct SystemUpdateStarted {
+    pub started: bool,
 }
 
 pub async fn get_version(State(state): State<AppState>) -> ApiResult<Json<VersionView>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let (status, outdated_instances) = run_blocking(move || {
+    let system_update = state.system_update.clone();
+    let (status, outdated_instances, system_update_status) = run_blocking(move || {
         let status = odin_update::check(&db)?;
         let outdated_instances = outdated_running_instances(&paths, &db)?;
-        Ok((status, outdated_instances))
+        let system_update_status = system_update.status()?;
+        Ok((status, outdated_instances, system_update_status))
     })
     .await?;
     Ok(Json(VersionView {
@@ -37,7 +47,20 @@ pub async fn get_version(State(state): State<AppState>) -> ApiResult<Json<Versio
         latest_release_url: status.latest_release_url,
         update_available: status.update_available,
         outdated_instances,
+        system_update_supported: system_update_status.supported,
+        system_update_running: system_update_status.running,
     }))
+}
+
+pub async fn start_system_update(
+    State(state): State<AppState>,
+) -> ApiResult<(StatusCode, Json<SystemUpdateStarted>)> {
+    let system_update = state.system_update.clone();
+    run_blocking(move || system_update.start()).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SystemUpdateStarted { started: true }),
+    ))
 }
 
 fn outdated_running_instances(paths: &Paths, db: &Db) -> anyhow::Result<Vec<String>> {

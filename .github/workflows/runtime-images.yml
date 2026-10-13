@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths: [containers/**, .github/workflows/runtime-images.yml]
+  pull_request:
+    paths: [containers/**, .github/workflows/runtime-images.yml]
   schedule:
     - cron: '17 4 * * 1'
   workflow_dispatch:
@@ -16,7 +18,27 @@ env:
   IMAGE: ghcr.io/blad3mak3r/odin-srv
 
 jobs:
+  # Pull requests only prove the images build and start; nothing is pushed.
+  # The docker driver lets the Proton build use the base image loaded locally.
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker
+      - name: Build base image
+        run: docker build -f containers/odin-srv/base.Dockerfile -t odin-srv:base .
+      - name: Smoke test base image
+        run: docker run --rm --entrypoint /bin/sh odin-srv:base -c 'test -x /usr/local/share/odin/steamcmd/steamcmd.sh && test -d /srv/odin/runtime && test -d /srv/odin/instance && test -d /run/odin'
+      - name: Build Proton image
+        run: docker build -f containers/odin-srv/proton.Dockerfile --build-arg BASE_IMAGE=odin-srv:base -t odin-srv:proton .
+      - name: Smoke test Proton image
+        run: docker run --rm --entrypoint proton odin-srv:proton --version
+
   base:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -46,6 +68,7 @@ jobs:
         run: docker run --rm --entrypoint /bin/sh "${IMAGE}:base" -c 'test -x /usr/local/share/odin/steamcmd/steamcmd.sh && test -d /srv/odin/runtime && test -d /srv/odin/instance && test -d /run/odin'
 
   proton:
+    if: github.event_name != 'pull_request'
     needs: base
     runs-on: ubuntu-latest
     steps:

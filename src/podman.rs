@@ -56,8 +56,25 @@ pub struct PodmanImage {
     pub id: String,
     #[serde(rename = "RepoDigests", default)]
     pub repo_digests: Vec<String>,
-    #[serde(rename = "Created", default)]
+    #[serde(rename = "Created", default, deserialize_with = "unix_seconds")]
     pub created: i64,
+}
+
+/// Podman reports an image's creation time as an RFC 3339 string (Libpod
+/// 5.x) or as Unix seconds (older and Docker-compatible endpoints).
+fn unix_seconds<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Created {
+        Seconds(i64),
+        Text(String),
+    }
+    match Created::deserialize(deserializer)? {
+        Created::Seconds(seconds) => Ok(seconds),
+        Created::Text(text) => chrono::DateTime::parse_from_rfc3339(&text)
+            .map(|time| time.timestamp())
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -932,6 +949,18 @@ mod tests {
     use chrono::Utc;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn image_created_accepts_rfc3339_and_unix_seconds() {
+        let text: PodmanImage =
+            serde_json::from_str(r#"{"Id":"a","Created":"2026-10-13T09:55:03.213444578Z"}"#)
+                .unwrap();
+        assert_eq!(text.created, 1_791_885_303);
+        let seconds: PodmanImage = serde_json::from_str(r#"{"Id":"a","Created":42}"#).unwrap();
+        assert_eq!(seconds.created, 42);
+        let missing: PodmanImage = serde_json::from_str(r#"{"Id":"a"}"#).unwrap();
+        assert_eq!(missing.created, 0);
+    }
 
     fn paths() -> Paths {
         let data_dir = std::env::temp_dir().join(format!("odin-podman-{}", uuid::Uuid::new_v4()));

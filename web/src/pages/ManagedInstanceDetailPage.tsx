@@ -2,6 +2,7 @@ import { RustAccessListsTab } from '@/components/instance/RustAccessListsTab'
 import { PalworldAdminTab } from '@/components/instance/PalworldAdminTab'
 import { RustRconTab } from '@/components/instance/RustRconTab'
 import { WipeMapCard } from '@/components/instance/WipeMapCard'
+import { SharedInstallMigrationCard } from '@/components/instance/SharedInstallMigrationCard'
 import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
 import { AccessListsTab } from '@/components/instance/AccessListsTab'
 import { ConfigTab } from '@/components/instance/ConfigTab'
@@ -378,6 +379,7 @@ export function ManagedInstanceDetailPage() {
             : genericConfig && (detail.game === 'ark-asa' || detail.game === 'palworld' || detail.game === '7d2d')
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} installMode={detail.install_mode} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
+          {detail.install_mode === 'isolated' && detail.capabilities.shared_install_migration && <SharedInstallMigrationCard instance={detail} />}
           <UptimeScheduleCard id={detail.id} />
           {detail.game === 'rust' && <WipeMapCard id={detail.id} name={detail.name} running={detail.running} />}
         </TabPanel>

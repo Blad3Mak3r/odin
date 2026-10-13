@@ -16,6 +16,7 @@ export interface GameCapabilities {
   access_lists: boolean
   readiness: boolean
   shared_install: boolean
+  shared_install_migration: boolean
 }
 
 export interface GameView {
@@ -24,6 +25,10 @@ export interface GameView {
   steam_app_id: string
   requires_proton: boolean
   capabilities: GameCapabilities
+}
+
+export interface MoveToSharedInstallResult {
+  adopted_private_files: boolean
 }
 
 export interface SharedInstallView {

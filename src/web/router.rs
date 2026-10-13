@@ -140,6 +140,10 @@ pub fn build_router(state: AppState) -> Router {
             post(games::update_runtime_by_id),
         )
         .route(
+            "/instances/{id}/shared-install",
+            post(games::move_to_shared_install_by_id),
+        )
+        .route(
             "/instances/{id}/valheim/players",
             get(players::get_instance_players_by_id),
         )
@@ -941,6 +945,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn moving_an_instance_to_the_shared_install_reports_what_happened_to_its_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-move-shared-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let game = crate::game::GameId::SevenDaysToDie;
+        let undead =
+            crate::db::game_instances::create_generic(&paths, &db, game, "undead").unwrap();
+        let ark = crate::db::game_instances::create_generic(
+            &paths,
+            &db,
+            crate::game::GameId::ArkSurvivalAscended,
+            "ark",
+        )
+        .unwrap();
+        let binary = paths
+            .container_runtime_dir(game, &undead.identity.id)
+            .join("7d2d")
+            .join(crate::game::driver(game).server_binary());
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"").unwrap();
+        let app = build_router(AppState::new(paths.clone(), db.clone()));
+        let post = |id: String, body: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!("/api/instances/{id}/shared-install"))
+                            .header("content-type", "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                (status, String::from_utf8_lossy(&bytes).to_string())
+            }
+        };
+
+        let (status, body) = post(ark.identity.id.clone(), "{}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+        let (status, body) = post(undead.identity.id.clone(), "{}").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let outcome: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(outcome["adopted_private_files"], true);
+        assert!(crate::podman::shared_install::is_installed(&paths, game));
+        assert!(crate::db::game_instances::is_shared_install(&db, &undead.identity.id).unwrap());
+
+        let (status, _) = post(undead.identity.id.clone(), "{}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

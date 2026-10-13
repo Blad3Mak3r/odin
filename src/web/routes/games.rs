@@ -926,6 +926,47 @@ pub async fn repair_runtime_by_id(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct MoveToSharedInstallRequest {
+    /// Also delete the instance's own copy of the game once it is on the
+    /// shared files. Off by default: nothing is deleted unless asked.
+    #[serde(default)]
+    pub delete_private_files: bool,
+}
+
+pub async fn move_to_shared_install_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<MoveToSharedInstallRequest>,
+) -> ApiResult<Json<shared_install::Migration>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    // Adopting the instance's files must not race the installer writing to
+    // the same directory.
+    if state.jobs.list().into_iter().any(|job| {
+        matches!(job.kind, JobKindDescr::SharedInstall { game } if game == identity.game)
+            && matches!(
+                job.status,
+                crate::web::jobs::JobStatus::Queued | crate::web::jobs::JobStatus::Running
+            )
+    }) {
+        return Err(
+            crate::instance::InstanceError::TransitionInProgress(format!(
+                "{} shared install",
+                game::driver(identity.game).display_name()
+            ))
+            .into(),
+        );
+    }
+    let delete_private_files = request.delete_private_files;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let migration = run_blocking(move || {
+        shared_install::migrate_to_shared(&paths, &db, &identity, delete_private_files)
+    })
+    .await?;
+    Ok(Json(migration))
+}
+
 pub async fn update_runtime_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,

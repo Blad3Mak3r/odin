@@ -43,6 +43,7 @@ import type {
   RuntimeImageRole,
   RuntimeImageView,
   RawAdvancedConfigFile,
+  MoveToSharedInstallResult,
   SharedInstallView,
   SevenDaysTemplateReview,
   RustAccessListKind,
@@ -520,6 +521,18 @@ export function useInstallShared(game: GameId) {
   return useMutation({
     mutationFn: () => api.post<JobHandle>(`/games/${game}/install`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'install'] }),
+  })
+}
+
+export function useMoveToSharedInstall() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, delete_private_files }: { id: string; delete_private_files: boolean }) =>
+      api.post<MoveToSharedInstallResult>(`/instances/${id}/shared-install`, { delete_private_files }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['games'] })
+    },
   })
 }
 

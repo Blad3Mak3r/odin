@@ -530,7 +530,7 @@ pub fn shared_install_instances(
 pub fn set_install_mode(db: &crate::db::Db, instance_id: &str, mode: InstallMode) -> Result<()> {
     db.conn().execute(
         "INSERT INTO game_instance_install (instance_id, install_mode) VALUES (?1, ?2)
-         ON CONFLICT(instance_id) DO NOTHING",
+         ON CONFLICT(instance_id) DO UPDATE SET install_mode = excluded.install_mode",
         params![instance_id, mode.as_str()],
     )?;
     Ok(())
@@ -1108,6 +1108,16 @@ mod tests {
         assert_eq!(listed[0].id, shared.identity.id);
         assert!(is_shared_install(&db, &shared.identity.id).unwrap());
         assert!(!is_shared_install(&db, &isolated.identity.id).unwrap());
+
+        // An existing instance can change mode; the new mode replaces the old.
+        set_install_mode(&db, &isolated.identity.id, InstallMode::Shared).unwrap();
+        assert!(is_shared_install(&db, &isolated.identity.id).unwrap());
+        assert_eq!(
+            shared_install_instances(&db, GameId::Palworld)
+                .unwrap()
+                .len(),
+            2
+        );
 
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

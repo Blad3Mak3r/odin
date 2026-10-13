@@ -70,6 +70,10 @@ pub struct GameCapabilities {
     pub access_lists: bool,
     pub readiness: bool,
     pub shared_install: bool,
+    /// An existing isolated instance can be moved onto the shared files
+    /// without losing settings. Not implied by `shared_install`: ARK's shared
+    /// configuration would hide an instance's own INI files.
+    pub shared_install_migration: bool,
 }
 
 /// Runtime image required by a dedicated-server driver.
@@ -151,6 +155,7 @@ impl GameDriver for ValheimDriver {
             access_lists: true,
             readiness: true,
             shared_install: false,
+            shared_install_migration: false,
         }
     }
 
@@ -184,6 +189,7 @@ impl GameDriver for RustDriver {
             access_lists: true,
             readiness: false,
             shared_install: false,
+            shared_install_migration: false,
         }
     }
 
@@ -219,6 +225,7 @@ impl GameDriver for PalworldDriver {
             access_lists: true,
             readiness: true,
             shared_install: false,
+            shared_install_migration: false,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -251,6 +258,7 @@ impl GameDriver for SevenDaysToDieDriver {
             access_lists: false,
             readiness: true,
             shared_install: true,
+            shared_install_migration: true,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -287,6 +295,7 @@ impl GameDriver for ArkSurvivalAscendedDriver {
             access_lists: false,
             readiness: true,
             shared_install: true,
+            shared_install_migration: false,
         }
     }
 

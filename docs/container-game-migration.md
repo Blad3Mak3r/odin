@@ -187,6 +187,18 @@ Game-neutral, nothing to add per game:
 - The dashboard shows the install card on the game's overview and the install
   mode selector in the create dialog from the capability alone.
 
+Moving an existing isolated instance onto the shared files
+(`POST /instances/{id}/shared-install`, `shared_install::migrate_to_shared`) is
+opt-in per game through `shared_install_migration`, because it must not change
+what the instance's settings mean. ARK does not opt in: its shared
+configuration would be mounted over the instance's own INI files. A game opts
+in once its per-instance state is entirely outside the install tree. The
+migration needs a stopped instance, removes only its container (a stopped
+container keeps its old mounts when started again), and either adopts the
+instance's own game files as the shared installation when none exists, which
+is a rename, or leaves them in place. They are deleted only when the request
+asks (`delete_private_files`).
+
 What the game provides in `src/podman/<game>.rs`:
 
 - `ensure_ready_to_start` calls `shared_install::ensure_ready`.

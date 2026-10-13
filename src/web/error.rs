@@ -62,6 +62,9 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         || err.downcast_ref::<RustAccessListError>().is_some()
         || err.downcast_ref::<BadRequest>().is_some()
         || err
+            .downcast_ref::<crate::podman::shared_install::MigrationRefused>()
+            .is_some()
+        || err
             .downcast_ref::<crate::db::game_instances::InvalidRustConfig>()
             .is_some()
         || err

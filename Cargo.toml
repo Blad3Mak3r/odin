@@ -24,9 +24,9 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "webpki-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 rusty-s3 = "0.10.2"
-zip = "8"
+zip = "9"
 flate2 = "1"
 tar = "0.4"
 tracing = "0.1"
@@ -43,10 +43,10 @@ mime_guess = "2"
 sysinfo = "0.39"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
-tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 async-stream = "0.3"
 regex = "1"
-rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono", "uuid", "fallible_uint"] }
 sha2 = "0.11"
 libc = "0.2"
 cap-std = "4"

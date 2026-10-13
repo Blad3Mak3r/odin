@@ -1083,6 +1083,14 @@ export function useRuntimeImages() {
   })
 }
 
+export function useCheckRuntimeImages() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>('/settings/runtime-images/check'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['settings', 'runtime-images'] }),
+  })
+}
+
 export function usePullRuntimeImage() {
   const queryClient = useQueryClient()
   return useMutation({

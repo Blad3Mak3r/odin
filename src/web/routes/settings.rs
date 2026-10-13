@@ -10,6 +10,7 @@ use crate::db::settings;
 use crate::game::{GameId, RuntimeImage};
 use crate::podman::PodmanClient;
 use crate::web::error::{ApiResult, run_blocking};
+use crate::web::image_monitor;
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
 use crate::web::state::AppState;
@@ -47,6 +48,9 @@ pub struct RuntimeImageView {
     pub local_id: Option<String>,
     pub local_digest: Option<String>,
     pub created: Option<i64>,
+    pub remote_digest: Option<String>,
+    pub last_checked: Option<i64>,
+    pub update_available: bool,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<SettingsView>> {
@@ -151,10 +155,21 @@ pub async fn list_runtime_images(
         return Ok(Json(Vec::new()));
     };
     let client = PodmanClient::from_config(&config)?;
+    let db = state.db.clone();
     let mut images = Vec::with_capacity(RuntimeImage::all().len());
     for role in RuntimeImage::all() {
         let reference = config.image(role);
         let local = client.inspect_image(&reference).await?;
+        let remote = {
+            let (db, reference) = (db.clone(), reference.clone());
+            run_blocking(move || image_monitor::cached(&db, &reference)).await?
+        };
+        let update_available = match (&local, &remote) {
+            (Some(local), Some(remote)) => {
+                image_monitor::update_available(&local.repo_digests, &remote.digest)
+            }
+            _ => false,
+        };
         images.push(RuntimeImageView {
             role,
             pinned: !reference.ends_with(&format!(":{}", role.as_str())),
@@ -169,9 +184,19 @@ pub async fn list_runtime_images(
                 .as_ref()
                 .and_then(|image| image.repo_digests.first().cloned()),
             created: local.map(|image| image.created),
+            last_checked: remote.as_ref().map(|remote| remote.checked_at.timestamp()),
+            remote_digest: remote.map(|remote| remote.digest),
+            update_available,
         });
     }
     Ok(Json(images))
+}
+
+/// Forces a registry check of the moving runtime-image tags.
+pub async fn check_runtime_images(State(state): State<AppState>) -> ApiResult<StatusCode> {
+    let (paths, db) = (state.paths.clone(), state.db.clone());
+    run_blocking(move || image_monitor::check(&paths, &db, true)).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn pull_runtime_image(

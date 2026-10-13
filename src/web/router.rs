@@ -385,6 +385,10 @@ pub fn build_router(state: AppState) -> Router {
             get(settings::list_runtime_images),
         )
         .route(
+            "/settings/runtime-images/check",
+            post(settings::check_runtime_images),
+        )
+        .route(
             "/settings/runtime-images/{role}/pull",
             post(settings::pull_runtime_image),
         )

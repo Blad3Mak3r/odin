@@ -528,6 +528,9 @@ export interface RuntimeImageView {
   local_id: string | null
   local_digest: string | null
   created: number | null
+  remote_digest: string | null
+  last_checked: number | null
+  update_available: boolean
 }
 
 export interface PodmanSettingsView {

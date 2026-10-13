@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
   useClearNexusApiKey,
+  useCheckRuntimeImages,
   usePullRuntimeImage,
   useRuntimeImages,
   useSetInstanceDefaults,
@@ -22,14 +23,15 @@ import { gameLabel } from '@/lib/games'
 function RuntimeImages() {
   const images = useRuntimeImages()
   const pull = usePullRuntimeImage()
+  const check = useCheckRuntimeImages()
   if (images.isLoading) return <Skeleton className="h-36 w-full max-w-2xl" />
   if (images.isError) return <QueryError error={images.error} />
   if (!images.data?.length) return null
-  return <section className="max-w-2xl border"><div className="border-b px-4 py-3"><h2 className="text-sm font-medium">Runtime images</h2><p className="mt-1 text-xs text-muted-foreground">Images are pulled only when requested. Stopped runtimes are recreated automatically after a pull; running servers are never interrupted.</p></div><div className="divide-y">{images.data.map((image) => <RuntimeImageRow key={image.role} image={image} pulling={pull.isPending} onPull={() => pull.mutate(image.role, { onSuccess: () => toast.success(`${image.role} image pull started`), onError: (error) => toast.error(error.message) })} />)}</div></section>
+  return <section className="max-w-2xl border"><div className="flex items-start justify-between gap-3 border-b px-4 py-3"><div><h2 className="text-sm font-medium">Runtime images</h2><p className="mt-1 text-xs text-muted-foreground">Images are pulled only when requested. Stopped runtimes are recreated automatically after a pull; running servers are never interrupted. Default tags are checked for updates every six hours.</p></div><Button className="shrink-0" variant="outline" disabled={check.isPending} onClick={() => check.mutate(undefined, { onError: (error) => toast.error(error.message) })}>Check for updates</Button></div><div className="divide-y">{images.data.map((image) => <RuntimeImageRow key={image.role} image={image} pulling={pull.isPending} onPull={() => pull.mutate(image.role, { onSuccess: () => toast.success(`${image.role} image pull started`), onError: (error) => toast.error(error.message) })} />)}</div></section>
 }
 
 function RuntimeImageRow({ image, pulling, onPull }: { image: RuntimeImageView; pulling: boolean; onPull: () => void }) {
-  return <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="font-medium">{image.role}</p><Badge variant={image.local_id ? 'secondary' : 'outline'}>{image.local_id ? 'available locally' : 'not pulled'}</Badge>{image.pinned && <Badge variant="outline">pinned</Badge>}</div><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{image.reference}</p><p className="mt-1 text-xs text-muted-foreground">Used by {image.games.map(gameLabel).join(', ')}{image.local_digest ? ` · ${image.local_digest}` : ''}</p></div><Button className="w-fit" variant="outline" disabled={pulling} onClick={onPull}>Pull image</Button></div>
+  return <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="font-medium">{image.role}</p><Badge variant={image.local_id ? 'secondary' : 'outline'}>{image.local_id ? 'available locally' : 'not pulled'}</Badge>{image.pinned && <Badge variant="outline">pinned</Badge>}{image.update_available && <Badge>update available</Badge>}</div><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{image.reference}</p><p className="mt-1 text-xs text-muted-foreground">Used by {image.games.map(gameLabel).join(', ')}{image.local_digest ? ` · ${image.local_digest}` : ''}</p>{image.last_checked && <p className="mt-1 text-xs text-muted-foreground">Last checked {new Date(image.last_checked * 1000).toLocaleString()}</p>}</div><Button className="w-fit" variant="outline" disabled={pulling} onClick={onPull}>Pull image</Button></div>
 }
 
 function InstanceDefaultsForm({ defaults }: { defaults: InstanceDefaults }) {

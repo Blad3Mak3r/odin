@@ -209,7 +209,7 @@ async fn bootstrap(spec: &RuntimeSpec) -> Result<()> {
     update_payload(spec).await
 }
 
-fn seed_steamcmd(destination: &Path) -> Result<()> {
+pub(crate) fn seed_steamcmd(destination: &Path) -> Result<()> {
     if destination.join("steamcmd.sh").is_file() {
         return Ok(());
     }

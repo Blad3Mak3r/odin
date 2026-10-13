@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 use crate::db::jobs as db_jobs;
-use crate::game::GameId;
+use crate::game::{GameId, RuntimeImage};
 
 pub type JobId = String;
 
@@ -36,6 +36,12 @@ pub enum JobKindDescr {
         #[serde(default = "valheim_game")]
         game: GameId,
         instance: String,
+    },
+    ImagePull {
+        image: RuntimeImage,
+    },
+    SharedInstall {
+        game: GameId,
     },
     ModAdd {
         instance: String,

@@ -43,15 +43,19 @@ pub trait ContainerGame {
     fn instance_dir(paths: &Paths, instance: &Self::Instance) -> PathBuf;
     /// Every port the server binds, for the conflict check before starting.
     fn ports(instance: &Self::Instance) -> Result<Vec<u16>>;
+    fn ensure_ready_to_start(_paths: &Paths, _db: &Db, _instance: &Self::Instance) -> Result<()> {
+        Ok(())
+    }
     /// Creates the host directories and writes the runtime spec. Safe to
     /// repeat: it runs before every start and repair.
     fn prepare_layout(
         paths: &Paths,
+        db: &Db,
         identity: &GameInstanceIdentity,
         instance: &Self::Instance,
     ) -> Result<()>;
     /// Mounts only this game needs, on top of the shared ones.
-    fn extra_mounts(paths: &Paths) -> Vec<Mount>;
+    fn extra_mounts(paths: &Paths, db: &Db, instance: &Self::Instance) -> Result<Vec<Mount>>;
 }
 
 /// Why a container is being stopped, which decides whether Odin remembers that
@@ -233,6 +237,7 @@ pub async fn repair<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Res
     let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
+    G::ensure_ready_to_start(paths, db, &instance)?;
     let config = config(paths, G::GAME)?;
     let client = PodmanClient::from_config(&config)?;
     client.ensure_supported().await?;
@@ -246,12 +251,12 @@ pub async fn repair<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Res
             )
         }
         Some(ContainerState::Created | ContainerState::Exited) => {
-            G::prepare_layout(paths, &identity, &instance)?;
+            G::prepare_layout(paths, db, &identity, &instance)?;
             clean_socket_dir(&paths.container_socket_dir(&identity.id))?;
             client.remove(&container, false).await?;
         }
         None => {
-            G::prepare_layout(paths, &identity, &instance)?;
+            G::prepare_layout(paths, db, &identity, &instance)?;
             clean_socket_dir(&paths.container_socket_dir(&identity.id))?;
         }
     }
@@ -260,7 +265,7 @@ pub async fn repair<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Res
 
 pub fn sync_spec<G: ContainerGame>(paths: &Paths, db: &Db, instance: &G::Instance) -> Result<()> {
     let identity = G::identity(db, instance)?;
-    G::prepare_layout(paths, &identity, instance)
+    G::prepare_layout(paths, db, &identity, instance)
 }
 
 pub fn is_running<G: ContainerGame>(
@@ -302,26 +307,41 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
     crate::game::ports::ensure_available(paths, db, G::GAME, name, G::ports(&instance)?)?;
-    G::prepare_layout(paths, &identity, &instance)?;
+    G::ensure_ready_to_start(paths, db, &instance)?;
+    G::prepare_layout(paths, db, &identity, &instance)?;
 
     let config = config(paths, G::GAME)?;
     let client = PodmanClient::from_config(&config)?;
     client.ensure_supported().await?;
     let limits = resource_limits::load(db, &identity.id)?;
     let container = container_name(G::GAME, &identity.id);
-    let image = config.runtime_image();
-    let spec = ContainerSpec::new(
+    let image = config.image(game::driver(G::GAME).runtime_image());
+    let spec = ContainerSpec::new_with_odin_binary(
         paths,
         &identity,
         &G::instance_dir(paths, &instance),
-        G::extra_mounts(paths),
+        G::extra_mounts(paths, db, &instance)?,
         image.clone(),
+        &config.odin_binary(),
         &limits,
     );
-    match client.inspect(&container).await? {
-        Some(state) if state.is_running() => bail!(InstanceError::AlreadyRunning(name.to_string())),
-        Some(_) => {
-            client.update_limits(&container, &limits).await?;
+    match client.inspect_container(&container).await? {
+        Some(container_state) if container_state.state.is_running() => {
+            bail!(InstanceError::AlreadyRunning(name.to_string()))
+        }
+        Some(container_state) => {
+            client.ensure_image(&image).await?;
+            let local_image = client
+                .inspect_image(&image)
+                .await?
+                .context("runtime image disappeared after it was pulled")?;
+            if image_changed(container_state.image_id.as_deref(), &local_image.id) {
+                client.remove(&container, false).await?;
+                client.create(&spec).await?;
+                wait_for_container(&client, &container).await?;
+            } else {
+                client.update_limits(&container, &limits).await?;
+            }
             client.start(&container).await?;
         }
         None => {
@@ -353,6 +373,10 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     }
     container_instances::set_desired_running(db, &identity.id, true)?;
     Ok(instance)
+}
+
+fn image_changed(container_image: Option<&str>, local_image: &str) -> bool {
+    container_image.is_some_and(|current| current != local_image)
 }
 
 async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {
@@ -754,5 +778,12 @@ mod tests {
 
         server.join().unwrap();
         std::fs::remove_file(socket).ok();
+    }
+
+    #[test]
+    fn stopped_container_is_recreated_only_when_its_image_changed() {
+        assert!(image_changed(Some("sha256:old"), "sha256:new"));
+        assert!(!image_changed(Some("sha256:same"), "sha256:same"));
+        assert!(!image_changed(None, "sha256:new"));
     }
 }

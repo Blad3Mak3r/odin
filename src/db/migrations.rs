@@ -60,7 +60,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         // 0021 replaces the parent identity table in order to widen its
         // SQLite CHECK constraint. SQLite only permits that operation with
         // foreign keys disabled before a transaction begins.
-        if version == 21 || version == 23 {
+        if version == 21 || version == 23 || version == 33 {
             conn.pragma_update(None, "foreign_keys", "OFF")?;
             let result = conn
                 .execute_batch(sql)
@@ -89,6 +89,7 @@ fn migration_version(file: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::OptionalExtension;
 
     #[test]
     fn fresh_db_ends_at_latest_version() {
@@ -419,6 +420,55 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn v33_adds_ark_without_changing_existing_instance_install_modes() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 33 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at)
+             VALUES ('pal', 'palworld', 'pal', '2026-01-01T00:00:00Z');
+             INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port)
+             VALUES ('pal', 8211, 27015, NULL);",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let game: String = conn
+            .query_row(
+                "SELECT game FROM game_instances WHERE id = 'pal'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(game, "palworld");
+        let mode: Option<String> = conn
+            .query_row(
+                "SELECT install_mode FROM game_instance_install WHERE instance_id = 'pal'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert!(mode.is_none());
+        conn.execute(
+            "INSERT INTO game_instances (id, game, name, created_at) VALUES ('ark', 'ark-asa', 'ark', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

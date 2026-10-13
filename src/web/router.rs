@@ -4,9 +4,9 @@ use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bepinex, bulk, changelog, config_files, doctor, events, games, instances, jobs, lists,
-    mods, nexus, palworld, players, resource_limits, resources, rust_access_lists, saves, settings,
-    seven_days_to_die, uptime_schedules, version, webhooks,
+    ark_clusters, backups, bepinex, bulk, changelog, config_files, doctor, events, games,
+    instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
+    rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -23,6 +23,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/changelog", get(changelog::get_changelog))
         .route("/doctor", get(doctor::get_doctor))
         .route("/games", get(games::list_games))
+        .route(
+            "/ark-clusters",
+            get(ark_clusters::list).post(ark_clusters::create),
+        )
+        .route("/ark-clusters/{cluster_id}", delete(ark_clusters::delete))
+        .route(
+            "/ark-clusters/{cluster_id}/members",
+            put(ark_clusters::set_members),
+        )
         .route("/games/7d2d/worlds", get(games::list_seven_days_worlds))
         .route(
             "/instances/bulk/games/{action}",
@@ -93,6 +102,11 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/instances/{id}/config/advanced/init",
             post(config_files::initialize_advanced_config_by_id),
+        )
+        .route(
+            "/instances/{id}/config/files/{file}",
+            get(config_files::get_raw_advanced_config_by_id)
+                .put(config_files::set_raw_advanced_config_by_id),
         )
         .route(
             "/instances/{id}/7d2d/config-template",
@@ -331,6 +345,24 @@ pub fn build_router(state: AppState) -> Router {
             get(games::list_instances).post(games::create_instance),
         )
         .route(
+            "/games/{game}/install",
+            get(games::shared_install_status).post(games::install_shared),
+        )
+        .route(
+            "/games/{game}/config/advanced",
+            get(config_files::list_shared_advanced_config)
+                .put(config_files::set_shared_advanced_config),
+        )
+        .route(
+            "/games/{game}/config/advanced/init",
+            post(config_files::initialize_shared_advanced_config),
+        )
+        .route(
+            "/games/{game}/config/files/{file}",
+            get(config_files::get_shared_raw_advanced_config)
+                .put(config_files::set_shared_raw_advanced_config),
+        )
+        .route(
             "/instances",
             get(instances::list_instances).post(instances::create_instance),
         )
@@ -349,6 +381,18 @@ pub fn build_router(state: AppState) -> Router {
             delete(mods::prune_mod_version),
         )
         .route("/settings", get(settings::get_settings))
+        .route(
+            "/settings/runtime-images",
+            get(settings::list_runtime_images),
+        )
+        .route(
+            "/settings/runtime-images/check",
+            post(settings::check_runtime_images),
+        )
+        .route(
+            "/settings/runtime-images/{role}/pull",
+            post(settings::pull_runtime_image),
+        )
         .route(
             "/settings/instance-defaults",
             put(settings::set_instance_defaults),

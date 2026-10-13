@@ -39,6 +39,7 @@ impl ContainerGame for SevenDaysToDie {
 
     fn prepare_layout(
         paths: &Paths,
+        _db: &Db,
         identity: &GameInstanceIdentity,
         instance: &GenericGameInstance,
     ) -> Result<()> {
@@ -60,8 +61,12 @@ impl ContainerGame for SevenDaysToDie {
         Ok(())
     }
 
-    fn extra_mounts(_paths: &Paths) -> Vec<Mount> {
-        Vec::new()
+    fn extra_mounts(
+        _paths: &Paths,
+        _db: &Db,
+        _instance: &GenericGameInstance,
+    ) -> Result<Vec<Mount>> {
+        Ok(Vec::new())
     }
 }
 
@@ -135,7 +140,12 @@ mod tests {
             .collect();
         assert_eq!(
             mounts,
-            ["/srv/odin/runtime", "/srv/odin/instance", "/run/odin"]
+            [
+                "/srv/odin/runtime",
+                "/srv/odin/instance",
+                "/run/odin",
+                "/usr/local/bin/odin"
+            ]
         );
 
         let spec: serde_json::Value = serde_json::from_slice(

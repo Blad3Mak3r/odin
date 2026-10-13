@@ -10,10 +10,11 @@ import { ModsTab } from '@/components/instance/ModsTab'
 import { SevenDaysModsTab } from '@/components/instance/SevenDaysModsTab'
 import { SevenDaysConsoleTab } from '@/components/instance/SevenDaysConsoleTab'
 import { SevenDaysPlayersTab } from '@/components/instance/SevenDaysPlayersTab'
+import { NativeConfigCodeEditor } from '@/components/instance/NativeConfigCodeEditor'
 import { type ReactNode, useEffect, useState } from 'react'
 import { BackupsTab } from '@/components/instance/BackupsTab'
 import { SaveFilesTab } from '@/components/instance/SaveFilesTab'
-import { Navigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ManagedInstanceHeader } from '@/components/instance/ManagedInstanceHeader'
 import { ManagedLogsTab } from '@/components/instance/ManagedLogsTab'
@@ -42,6 +43,8 @@ import {
   useInitializeAdvancedConfig,
   useSevenDaysTemplateReview,
   useUpdateAdvancedConfig,
+  useRawAdvancedConfig,
+  useUpdateRawAdvancedConfig,
 } from '@/lib/queries'
 import type { AdvancedConfigChange, GameId, GenericConfigUpdateRequest } from '@/lib/types'
 import { useLogSocket } from '@/hooks/useLogSocket'
@@ -52,7 +55,7 @@ function isConsoleError(line: string) {
 }
 
 function isGameId(value: string | undefined): value is GameId {
-  return value === 'valheim' || value === 'rust' || value === 'palworld' || value === '7d2d'
+  return value === 'ark-asa' || value === 'valheim' || value === 'rust' || value === 'palworld' || value === '7d2d'
 }
 
 type RustConfig = {
@@ -82,11 +85,18 @@ function asGenericConfig(config: Record<string, unknown>): GenericConfig | null 
   const queryPort = config.query_port
   const adminPort = config.admin_port
   if (typeof port !== 'number' || (typeof queryPort !== 'number' && queryPort !== null) || (typeof adminPort !== 'number' && adminPort !== null) || typeof config.auto_restart !== 'boolean') return null
+  const arkConfig = typeof config.map === 'string'
+    && typeof config.session_name === 'string'
+    && Array.isArray(config.mods)
+    && config.mods.every((mod) => typeof mod === 'number')
+    ? { map: config.map, session_name: config.session_name, mods: config.mods }
+    : {}
   return {
     port,
     query_port: queryPort,
     admin_port: adminPort,
     auto_restart: config.auto_restart,
+    ...arkConfig,
   }
 }
 
@@ -207,7 +217,7 @@ function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId
   if (config.isError) return <QueryError error={config.error} />
   const files = config.data?.files ?? []
   const missingFiles = files.filter((file) => !file.exists)
-  const canInitialize = game === '7d2d' || game === 'palworld'
+  const canInitialize = game === 'ark-asa' || game === '7d2d' || game === 'palworld'
   const normalizedSearch = search.trim().toLocaleLowerCase()
   const generatedFiles = files.filter((file) => file.exists)
   const visibleFiles = generatedFiles.map((file) => ({
@@ -245,17 +255,42 @@ function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId
     else next.add(entryId)
     return next
   })
-  return <div className="flex flex-col gap-4"><div><p className="text-sm text-muted-foreground">Settings come directly from native server files. Stop the server before saving.</p>{missingFiles.length > 0 && canInitialize ? <div className="mt-2 flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">Initialize missing files from the installed server template.</p><Button type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Configuration files initialized'), onError: (error) => toast.error(error.message) })}>Initialize config files</Button></div> : missingFiles.length > 0 && <p className="mt-2 text-sm text-muted-foreground">Missing: {missingFiles.map((file) => file.path).join(', ')}.</p>}</div>{generatedFiles.length > 0 && <Input aria-label="Search configuration keys" placeholder="Search configuration keys…" value={search} onChange={(event) => setSearch(event.target.value)} />}{visibleFiles.map((file) => <div key={file.id} className="rounded-xl border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="divide-y">{file.sections.map((section) => <details key={section.id} open={normalizedSearch.length > 0} className="group"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">{section.label}</summary><div className="grid gap-3 border-t px-4 py-4 sm:grid-cols-2">{section.entries.map((entry) => { const entryId = `${file.id}:${entry.key}`; const deleted = deletedEntries.has(entryId); return <div key={entry.key} className="flex flex-col gap-1"><Label className={deleted ? 'text-muted-foreground line-through' : undefined} htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.label}</Label><Input id={`advanced-${file.id}-${entry.key}`} type={entry.sensitive ? 'password' : 'text'} placeholder={entry.sensitive && entry.configured ? '••••••••' : entry.managed ? 'Managed by Odin' : undefined} value={values[entryId] ?? entry.value} disabled={running || entry.managed || deleted} onChange={(event) => setValues((current) => ({ ...current, [entryId]: event.target.value }))} />{file.allows_new_keys && !entry.managed && <Button className="w-fit" type="button" variant="outline" size="sm" disabled={running} onClick={() => toggleDeleted(entryId)}>{deleted ? 'Restore' : 'Delete'}</Button>}</div> })}</div></details>)}</div>{file.allows_new_keys && <div className="flex flex-col gap-3 border-t px-4 py-4"><div><p className="text-sm font-medium">Add configuration key</p><p className="text-xs text-muted-foreground">Use the Rust convar name and its value exactly as the server expects.</p></div>{newEntries.filter((entry) => entry.file === file.id).map((entry) => <div key={entry.id} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"><Input aria-label="New configuration key" placeholder="server.example" value={entry.key} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'key', event.target.value)} /><Input aria-label="New configuration value" placeholder="Value" value={entry.value} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'value', event.target.value)} /><Button type="button" variant="outline" disabled={running} onClick={() => setNewEntries((current) => current.filter((currentEntry) => currentEntry.id !== entry.id))}>Remove</Button></div>)}<Button className="w-fit" type="button" variant="outline" disabled={running} onClick={() => addEntry(file.id)}>Add key</Button></div>}</div>)}{generatedFiles.length > 0 && visibleFiles.length === 0 && <p className="text-sm text-muted-foreground">No configuration keys match “{search}”.</p>}{generatedFiles.length > 0 && <Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save configuration</Button>}</div>
+  return <div className="flex flex-col gap-4"><div><p className="text-sm text-muted-foreground">Settings come directly from native server files. Stop the server before saving.</p>{missingFiles.length > 0 && canInitialize ? <div className="mt-2 flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">Initialize missing files from the installed server template.</p><Button type="button" variant="outline" disabled={running || initialize.isPending} onClick={() => initialize.mutate(undefined, { onSuccess: () => toast.success('Configuration files initialized'), onError: (error) => toast.error(error.message) })}>Initialize config files</Button></div> : missingFiles.length > 0 && <p className="mt-2 text-sm text-muted-foreground">Missing: {missingFiles.map((file) => file.path).join(', ')}.</p>}</div>{generatedFiles.length > 0 && <Input aria-label="Search configuration keys" placeholder="Search configuration keys…" value={search} onChange={(event) => setSearch(event.target.value)} />}{visibleFiles.map((file) => <div key={file.id} className="rounded-xl border"><div className="border-b px-4 py-3"><p className="text-sm font-medium">{file.path}</p><p className="text-xs text-muted-foreground">{file.format}</p></div><div className="divide-y">{file.sections.map((section) => <details key={section.id} open={normalizedSearch.length > 0} className="group"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">{section.label}</summary><div className="grid gap-3 border-t px-4 py-4 sm:grid-cols-2">{section.entries.map((entry) => { const entryId = `${file.id}:${entry.key}`; const deleted = deletedEntries.has(entryId); return <div key={entry.key} className="flex flex-col gap-1"><Label className={deleted ? 'text-muted-foreground line-through' : undefined} htmlFor={`advanced-${file.id}-${entry.key}`}>{entry.label}</Label><Input id={`advanced-${file.id}-${entry.key}`} type={entry.sensitive ? 'password' : 'text'} placeholder={entry.sensitive && entry.configured ? '••••••••' : entry.managed ? 'Managed by Odin' : undefined} value={values[entryId] ?? entry.value} disabled={running || entry.managed || deleted} onChange={(event) => setValues((current) => ({ ...current, [entryId]: event.target.value }))} />{file.allows_new_keys && !entry.managed && <Button className="w-fit" type="button" variant="outline" size="sm" disabled={running} onClick={() => toggleDeleted(entryId)}>{deleted ? 'Restore' : 'Delete'}</Button>}</div> })}</div></details>)}</div>{file.allows_new_keys && <div className="flex flex-col gap-3 border-t px-4 py-4"><div><p className="text-sm font-medium">Add configuration key</p><p className="text-xs text-muted-foreground">Use the game key and its value exactly as the server expects.</p></div>{newEntries.filter((entry) => entry.file === file.id).map((entry) => <div key={entry.id} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"><Input aria-label="New configuration key" placeholder="server.example" value={entry.key} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'key', event.target.value)} /><Input aria-label="New configuration value" placeholder="Value" value={entry.value} disabled={running} onChange={(event) => updateNewEntry(entry.id, 'value', event.target.value)} /><Button type="button" variant="outline" disabled={running} onClick={() => setNewEntries((current) => current.filter((currentEntry) => currentEntry.id !== entry.id))}>Remove</Button></div>)}<Button className="w-fit" type="button" variant="outline" disabled={running} onClick={() => addEntry(file.id)}>Add key</Button></div>}<details className="border-t"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">Edit source</summary><div className="p-4"><InstanceConfigCodeFile id={id} file={file.id} running={running} /></div></details></div>)}{generatedFiles.length > 0 && visibleFiles.length === 0 && <p className="text-sm text-muted-foreground">No configuration keys match “{search}”.</p>}{generatedFiles.length > 0 && <Button className="w-fit" type="button" disabled={running || update.isPending} onClick={save}>Save configuration</Button>}</div>
 }
 
-function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'palworld' | '7d2d'>; config: GenericConfig; running: boolean }) {
+function InstanceConfigCodeFile({ id, file, running }: { id: string; file: string; running: boolean }) {
+  const source = useRawAdvancedConfig(id, file, true)
+  const save = useUpdateRawAdvancedConfig(id, file)
+  if (source.isLoading) return <p className="text-sm text-muted-foreground">Loading source…</p>
+  if (source.isError || !source.data) return <p className="text-sm text-destructive">Source could not be loaded.</p>
+  return <NativeConfigCodeEditor key={`${file}:${source.data.content}`} content={source.data.content} format={source.data.format} disabled={running} saving={save.isPending} onSave={(content) => save.mutate(content, { onSuccess: () => toast.success('Configuration source saved'), onError: (error) => toast.error(error.message) })} />
+}
+
+function GenericConfigForm({ id, game, config, running, installMode }: { id: string; game: Extract<GameId, 'ark-asa' | 'palworld' | '7d2d'>; config: GenericConfig; running: boolean; installMode: 'isolated' | 'shared' }) {
   const update = useUpdateGenericConfig()
   const [port, setPort] = useState(String(config.port))
   const [queryPort, setQueryPort] = useState(config.query_port === null ? '' : String(config.query_port))
   const [adminPort, setAdminPort] = useState(config.admin_port === null ? '' : String(config.admin_port))
   const [autoRestart, setAutoRestart] = useState(config.auto_restart)
-  const save = () => update.mutate({ id, request: { port: Number(port), query_port: queryPort ? Number(queryPort) : null, admin_port: adminPort ? Number(adminPort) : null, auto_restart: autoRestart } }, { onSuccess: () => toast.success('Odin runtime settings saved'), onError: (error) => toast.error(error.message) })
-  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : 'Local console port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form><AdvancedConfigSection id={id} game={game} running={running} />{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
+  const [map, setMap] = useState(config.map ?? 'TheIsland_WP')
+  const [sessionName, setSessionName] = useState(config.session_name ?? '')
+  const [mods, setMods] = useState((config.mods ?? []).join(', '))
+  const save = () => {
+    const request: GenericConfigUpdateRequest = { port: Number(port), query_port: queryPort ? Number(queryPort) : null, admin_port: adminPort ? Number(adminPort) : null, auto_restart: autoRestart }
+    if (game === 'ark-asa') {
+      const parsedMods = mods.trim() === '' ? [] : mods.split(',').map((mod) => Number(mod.trim()))
+      if (parsedMods.some((mod) => !Number.isSafeInteger(mod) || mod <= 0)) {
+        toast.error('Mod IDs must be positive whole numbers separated by commas')
+        return
+      }
+      request.map = map
+      request.session_name = sessionName
+      request.mods = parsedMods
+    }
+    update.mutate({ id, request }, { onSuccess: () => toast.success('Odin runtime settings saved'), onError: (error) => toast.error(error.message) })
+  }
+  const sharedArk = game === 'ark-asa' && installMode === 'shared'
+  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label="Game port" type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === 'ark-asa' ? 'RCON port' : 'Local console port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}{game === 'ark-asa' && <><ConfigInput id="ark-map" label="Map" value={map} disabled={running} onChange={setMap} /><ConfigInput id="ark-session-name" label="Session name" value={sessionName} disabled={running} onChange={setSessionName} /><ConfigInput id="ark-mods" label="Mods" placeholder="CurseForge IDs, comma-separated" value={mods} disabled={running} onChange={setMods} required={false} /></>}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form>{sharedArk ? <div className="border p-4 text-sm text-muted-foreground">Shared ARK native configuration is common to every shared instance. <Link className="text-foreground underline underline-offset-4" to="/games/ark-asa/config">Open shared configuration</Link>.</div> : <AdvancedConfigSection id={id} game={game} running={running} />}{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
 }
 
 function TabPanel({ active, className, children }: { active: boolean; className?: string; children: ReactNode }) {
@@ -286,7 +321,7 @@ export function ManagedInstanceDetailPage() {
     return <Navigate replace to={`/instance/${detail.id}${tabPath ? `/${tabPath}` : ''}`} />
   }
   const rustConfig = detail.game === 'rust' ? asRustConfig(detail.config) : null
-  const genericConfig = detail.game === 'palworld' || detail.game === '7d2d' ? asGenericConfig(detail.config) : null
+  const genericConfig = detail.game === 'ark-asa' || detail.game === 'palworld' || detail.game === '7d2d' ? asGenericConfig(detail.config) : null
   const tabs = [
     { id: 'logs', label: 'Logs' },
     ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
@@ -340,8 +375,8 @@ export function ManagedInstanceDetailPage() {
             ? <ConfigTab id={detail.id} />
             : rustConfig
             ? <div className="flex flex-col gap-6"><RustConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={rustConfig} running={detail.running} /><AdvancedConfigSection id={detail.id} game={detail.game} running={detail.running} /></div>
-            : genericConfig && (detail.game === 'palworld' || detail.game === '7d2d')
-              ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} />
+            : genericConfig && (detail.game === 'ark-asa' || detail.game === 'palworld' || detail.game === '7d2d')
+              ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} installMode={detail.install_mode} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
           <UptimeScheduleCard id={detail.id} />
           {detail.game === 'rust' && <WipeMapCard id={detail.id} name={detail.name} running={detail.running} />}

@@ -5,6 +5,7 @@
 
 mod backup_scheduler;
 mod error;
+mod image_monitor;
 pub mod jobs;
 mod log_tail;
 mod players;
@@ -52,6 +53,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     spawn_telemetry(state.clone());
     backup_scheduler::spawn(state.clone());
     uptime_scheduler::spawn(state.clone());
+    image_monitor::spawn(state.clone());
 
     let router = router::build_router(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)

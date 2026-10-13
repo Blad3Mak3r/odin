@@ -7,7 +7,7 @@ export interface VersionView {
   system_update_running: boolean
 }
 
-export type GameId = 'valheim' | 'rust' | 'palworld' | '7d2d'
+export type GameId = 'ark-asa' | 'valheim' | 'rust' | 'palworld' | '7d2d'
 
 export interface GameCapabilities {
   backups: boolean
@@ -15,6 +15,7 @@ export interface GameCapabilities {
   mods: boolean
   access_lists: boolean
   readiness: boolean
+  shared_install: boolean
 }
 
 export interface GameView {
@@ -22,6 +23,19 @@ export interface GameView {
   name: string
   steam_app_id: string
   capabilities: GameCapabilities
+}
+
+export interface SharedInstallView {
+  installed: boolean
+  build_id: string | null
+  running: boolean
+}
+
+export interface ArkCluster {
+  id: string
+  name: string
+  cluster_id: string
+  members: string[]
 }
 
 export interface ManagedInstanceView {
@@ -33,6 +47,7 @@ export interface ManagedInstanceView {
   running: boolean
   odin_version: string | null
   capabilities: GameCapabilities
+  install_mode: 'isolated' | 'shared'
   config: Record<string, unknown>
 }
 
@@ -70,6 +85,9 @@ export interface GenericConfigUpdateRequest {
   query_port: number | null
   admin_port: number | null
   auto_restart: boolean
+  map?: string
+  session_name?: string
+  mods?: number[]
 }
 
 export interface AdvancedConfigEntry {
@@ -98,6 +116,11 @@ export interface AdvancedConfigFile {
 
 export interface AdvancedConfigView {
   files: AdvancedConfigFile[]
+}
+
+export interface RawAdvancedConfigFile {
+  content: string
+  format: string
 }
 
 export interface AdvancedConfigChange {
@@ -276,6 +299,7 @@ export interface JobSummary {
 
 export type JobKindDescr =
   | { kind: 'runtime_update'; game: GameId; instance: string }
+  | { kind: 'image_pull'; image: RuntimeImageRole }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
   | { kind: 'mod_upload'; instance: string; name: string }
@@ -494,6 +518,21 @@ export interface SettingsView {
   instance_defaults: InstanceDefaults
   config_file: string
   podman: PodmanSettingsView
+}
+
+export type RuntimeImageRole = 'base' | 'proton'
+
+export interface RuntimeImageView {
+  role: RuntimeImageRole
+  reference: string
+  pinned: boolean
+  games: GameId[]
+  local_id: string | null
+  local_digest: string | null
+  created: number | null
+  remote_digest: string | null
+  last_checked: number | null
+  update_available: boolean
 }
 
 export interface PodmanSettingsView {

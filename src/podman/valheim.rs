@@ -38,6 +38,7 @@ impl ContainerGame for Valheim {
 
     fn prepare_layout(
         paths: &Paths,
+        _db: &Db,
         identity: &GameInstanceIdentity,
         instance: &Instance,
     ) -> Result<()> {
@@ -56,11 +57,11 @@ impl ContainerGame for Valheim {
         Ok(())
     }
 
-    fn extra_mounts(paths: &Paths) -> Vec<Mount> {
+    fn extra_mounts(paths: &Paths, _db: &Db, _instance: &Instance) -> Result<Vec<Mount>> {
         // Existing BepInEx plugin links point at this host-absolute store.
         // Mounting it at that exact path preserves those links without
         // rewriting an operator's mod state.
-        vec![bind(&paths.mods_dir(), &paths.mods_dir())]
+        Ok(vec![bind(&paths.mods_dir(), &paths.mods_dir())])
     }
 }
 
@@ -94,6 +95,9 @@ mod tests {
             podman: Some(crate::config::PodmanConfig {
                 socket,
                 runtime_image: None,
+                base_image: None,
+                proton_image: None,
+                odin_binary: None,
             }),
         };
         std::fs::write(

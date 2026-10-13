@@ -56,6 +56,19 @@ fn run() -> Result<()> {
             instance_id.clone(),
         );
     }
+    if matches!(cli.command, Command::InstallArkShared) {
+        let install_dir = std::env::var_os("ODIN_SHARED_INSTALL_DIR")
+            .context("shared installer requires ODIN_SHARED_INSTALL_DIR")?;
+        let steamcmd_dir = std::env::var_os("ODIN_SHARED_STEAMCMD_DIR")
+            .context("shared installer requires ODIN_SHARED_STEAMCMD_DIR")?;
+        let log_file = std::env::var_os("ODIN_SHARED_UPDATE_LOG")
+            .context("shared installer requires ODIN_SHARED_UPDATE_LOG")?;
+        return commands::run::install_ark_shared(
+            &std::path::PathBuf::from(install_dir),
+            &std::path::PathBuf::from(steamcmd_dir),
+            &std::path::PathBuf::from(log_file),
+        );
+    }
 
     let paths = Paths::resolve(None)?;
     let cfg = config::GlobalConfig::load(&paths)?;
@@ -138,5 +151,6 @@ fn run() -> Result<()> {
         }
         Command::Serve { bind, port } => commands::serve::run(&paths, &bind, port),
         Command::Run { .. } => unreachable!("handled before the host database is opened"),
+        Command::InstallArkShared => unreachable!("handled before the host database is opened"),
     }
 }

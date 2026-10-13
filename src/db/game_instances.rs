@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::validate_instance_name;
-use crate::game::{GameId, rust};
+use crate::game::{GameId, ark_asa, rust};
 use crate::paths::Paths;
 
 pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) -> Result<()> {
@@ -199,6 +199,22 @@ pub struct GenericGameInstance {
     pub config: GenericGameConfig,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallMode {
+    Isolated,
+    Shared,
+}
+
+impl InstallMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Isolated => "isolated",
+            Self::Shared => "shared",
+        }
+    }
+}
+
 impl GenericGameInstance {
     pub fn name(&self) -> &str {
         &self.identity.name
@@ -206,11 +222,20 @@ impl GenericGameInstance {
 }
 
 pub fn is_generic_game(game: GameId) -> bool {
-    matches!(game, GameId::Palworld | GameId::SevenDaysToDie)
+    matches!(
+        game,
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie
+    )
 }
 
 pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
     match game {
+        GameId::ArkSurvivalAscended => GenericGameConfig {
+            port: 7777,
+            query_port: Some(27015),
+            admin_port: Some(27020),
+            auto_restart: false,
+        },
         GameId::Palworld => GenericGameConfig {
             port: 8211,
             // Palworld's Steam server browser listener otherwise defaults to
@@ -307,6 +332,13 @@ pub fn create_generic(
         params![id, game.as_str(), name, created_at],
     )?;
     tx.execute("INSERT INTO generic_game_instance_configs (instance_id, port, query_port, admin_port, auto_restart) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, config.port, config.query_port, config.admin_port, config.auto_restart])?;
+    if game == GameId::ArkSurvivalAscended {
+        let options = ark_asa::ArkLaunchOptions::defaults(name);
+        tx.execute(
+            "INSERT INTO ark_launch_options (instance_id, map, session_name, mods, rcon_password) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, options.map, options.session_name, serde_json::to_string(&options.mods)?, uuid::Uuid::new_v4().to_string()],
+        )?;
+    }
     tx.commit()?;
     drop(conn);
     load_generic(db, game, name)?.context("failed to load newly-created game instance")
@@ -327,7 +359,11 @@ pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
             instance.config.rcon_port,
         ]);
     }
-    for game in [GameId::Palworld, GameId::SevenDaysToDie] {
+    for game in [
+        GameId::ArkSurvivalAscended,
+        GameId::Palworld,
+        GameId::SevenDaysToDie,
+    ] {
         for instance in list_generic(db, game)? {
             ports.extend(claimed_ports(game, &instance.config)?);
         }
@@ -436,6 +472,220 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
             "7 Days to Die console port is required".into(),
         ));
     }
+    if game == GameId::ArkSurvivalAscended
+        && (config.query_port.is_none() || config.admin_port.is_none())
+    {
+        bail!(InvalidGenericConfig(
+            "ARK query and RCON ports are required".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn install_mode(db: &crate::db::Db, instance_id: &str) -> Result<InstallMode> {
+    let mode = db
+        .conn()
+        .query_row(
+            "SELECT install_mode FROM game_instance_install WHERE instance_id = ?1",
+            params![instance_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    match mode.as_deref() {
+        None | Some("isolated") => Ok(InstallMode::Isolated),
+        Some("shared") => Ok(InstallMode::Shared),
+        Some(mode) => bail!("invalid install mode '{mode}'"),
+    }
+}
+
+pub fn set_install_mode(db: &crate::db::Db, instance_id: &str, mode: InstallMode) -> Result<()> {
+    db.conn().execute(
+        "INSERT INTO game_instance_install (instance_id, install_mode) VALUES (?1, ?2)
+         ON CONFLICT(instance_id) DO NOTHING",
+        params![instance_id, mode.as_str()],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ArkCluster {
+    pub id: String,
+    pub name: String,
+    pub cluster_id: String,
+    pub members: Vec<String>,
+}
+
+fn validate_ark_cluster_text(value: &str, field: &str) -> Result<()> {
+    anyhow::ensure!(
+        !value.is_empty()
+            && value.len() <= 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
+        "ARK cluster {field} must contain 1 to 64 ASCII letters, numbers, - or _"
+    );
+    Ok(())
+}
+
+pub fn list_ark_clusters(db: &crate::db::Db) -> Result<Vec<ArkCluster>> {
+    let connection = db.conn();
+    let mut statement =
+        connection.prepare("SELECT id, name, cluster_id FROM ark_clusters ORDER BY name")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (id, name, cluster_id) = row?;
+        let mut members = connection.prepare("SELECT instance_id FROM ark_cluster_members WHERE cluster_id = ?1 ORDER BY instance_id")?;
+        Ok(ArkCluster { members: members.query_map(params![id], |row| row.get(0))?.collect::<std::result::Result<_, _>>()?, id, name, cluster_id })
+    }).collect()
+}
+
+pub fn create_ark_cluster(db: &crate::db::Db, name: &str, cluster_id: &str) -> Result<ArkCluster> {
+    validate_ark_cluster_text(name, "name")?;
+    validate_ark_cluster_text(cluster_id, "ID")?;
+    let cluster = ArkCluster {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.into(),
+        cluster_id: cluster_id.into(),
+        members: Vec::new(),
+    };
+    db.conn().execute(
+        "INSERT INTO ark_clusters (id, name, cluster_id, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            cluster.id,
+            cluster.name,
+            cluster.cluster_id,
+            chrono::Utc::now()
+        ],
+    )?;
+    Ok(cluster)
+}
+
+pub fn set_ark_cluster_members(
+    db: &crate::db::Db,
+    cluster_id: &str,
+    members: &[String],
+) -> Result<()> {
+    let connection = db.conn();
+    let transaction = connection.unchecked_transaction()?;
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ark_clusters WHERE id = ?1)",
+        params![cluster_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(exists, "ARK cluster does not exist");
+    for member in members {
+        let game: String = transaction.query_row(
+            "SELECT game FROM game_instances WHERE id = ?1",
+            params![member],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            game == GameId::ArkSurvivalAscended.as_str(),
+            "only ARK instances can join a cluster"
+        );
+    }
+    transaction.execute(
+        "DELETE FROM ark_cluster_members WHERE cluster_id = ?1",
+        params![cluster_id],
+    )?;
+    for member in members {
+        transaction.execute(
+            "DELETE FROM ark_cluster_members WHERE instance_id = ?1",
+            params![member],
+        )?;
+        transaction.execute(
+            "INSERT INTO ark_cluster_members (instance_id, cluster_id) VALUES (?1, ?2)",
+            params![member, cluster_id],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn delete_ark_cluster(db: &crate::db::Db, cluster_id: &str) -> Result<()> {
+    db.conn().execute(
+        "DELETE FROM ark_clusters WHERE id = ?1",
+        params![cluster_id],
+    )?;
+    Ok(())
+}
+
+pub fn ark_cluster(db: &crate::db::Db, instance_id: &str) -> Result<Option<ArkCluster>> {
+    let cluster = db.conn().query_row(
+        "SELECT c.id, c.name, c.cluster_id FROM ark_clusters c JOIN ark_cluster_members m ON m.cluster_id = c.id WHERE m.instance_id = ?1",
+        params![instance_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+    ).optional()?;
+    cluster.map(|(id, name, cluster_id)| {
+        let connection = db.conn();
+        let mut statement = connection.prepare("SELECT instance_id FROM ark_cluster_members WHERE cluster_id = ?1 ORDER BY instance_id")?;
+        let members = statement.query_map(params![id], |row| row.get(0))?.collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(ArkCluster { id, name, cluster_id, members })
+    }).transpose()
+}
+
+pub fn ark_launch(
+    db: &crate::db::Db,
+    instance: &GenericGameInstance,
+) -> Result<ark_asa::ArkLaunch> {
+    anyhow::ensure!(
+        instance.identity.game == GameId::ArkSurvivalAscended,
+        "not an ARK instance"
+    );
+    let options = {
+        let connection = db.conn();
+        connection.query_row(
+            "SELECT map, session_name, mods, rcon_password FROM ark_launch_options WHERE instance_id = ?1",
+            params![instance.identity.id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+        ).optional()?
+    };
+    let (map, session_name, mods, rcon_password) =
+        options.context("ARK instance is missing launch options")?;
+    let cluster = ark_cluster(db, &instance.identity.id)?;
+    Ok(ark_asa::ArkLaunch {
+        name: instance.name().to_string(),
+        port: instance.config.port,
+        query_port: instance
+            .config
+            .query_port
+            .context("ARK query port is required")?,
+        rcon_port: instance
+            .config
+            .admin_port
+            .context("ARK RCON port is required")?,
+        rcon_password,
+        options: ark_asa::ArkLaunchOptions {
+            map,
+            session_name,
+            mods: serde_json::from_str(&mods)?,
+        },
+        cluster: cluster.map(|cluster| ark_asa::ArkClusterLaunch {
+            directory: format!("/srv/odin/clusters/{}", cluster.cluster_id),
+            cluster_id: cluster.cluster_id,
+        }),
+    })
+}
+
+pub fn update_ark_launch_options(
+    db: &crate::db::Db,
+    instance: &GenericGameInstance,
+    options: &ark_asa::ArkLaunchOptions,
+) -> Result<()> {
+    options.validate()?;
+    anyhow::ensure!(
+        instance.identity.game == GameId::ArkSurvivalAscended,
+        "not an ARK instance"
+    );
+    db.conn().execute(
+        "UPDATE ark_launch_options SET map = ?2, session_name = ?3, mods = ?4 WHERE instance_id = ?1",
+        params![instance.identity.id, options.map, options.session_name, serde_json::to_string(&options.mods)?],
+    )?;
     Ok(())
 }
 
@@ -810,6 +1060,67 @@ mod tests {
         assert_eq!(resolved.name, "rust-server");
         assert!(identity_by_id(&db, "missing").unwrap().is_none());
 
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn ark_cluster_membership_round_trips_and_derives_launch_data() {
+        let (paths, db) = temp_context("ark-cluster");
+        let instance = match crate::game::instances::create(
+            &paths,
+            &db,
+            GameId::ArkSurvivalAscended,
+            "island",
+        )
+        .unwrap()
+        {
+            crate::game::instances::GameInstance::Generic(instance) => instance,
+            _ => unreachable!(),
+        };
+        let cluster = create_ark_cluster(&db, "home", "home_cluster").unwrap();
+        set_ark_cluster_members(
+            &db,
+            &cluster.id,
+            std::slice::from_ref(&instance.identity.id),
+        )
+        .unwrap();
+
+        let loaded = ark_cluster(&db, &instance.identity.id).unwrap().unwrap();
+        let launch = ark_launch(&db, &instance).unwrap();
+
+        assert_eq!(loaded.cluster_id, "home_cluster");
+        assert_eq!(
+            launch.cluster.unwrap().directory,
+            "/srv/odin/clusters/home_cluster"
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn ark_instance_can_move_between_clusters() {
+        let (paths, db) = temp_context("ark-cluster-move");
+        let instance = match crate::game::instances::create(
+            &paths,
+            &db,
+            GameId::ArkSurvivalAscended,
+            "island",
+        )
+        .unwrap()
+        {
+            crate::game::instances::GameInstance::Generic(instance) => instance,
+            _ => unreachable!(),
+        };
+        let first = create_ark_cluster(&db, "first", "first_cluster").unwrap();
+        let second = create_ark_cluster(&db, "second", "second_cluster").unwrap();
+        set_ark_cluster_members(&db, &first.id, std::slice::from_ref(&instance.identity.id))
+            .unwrap();
+        set_ark_cluster_members(&db, &second.id, std::slice::from_ref(&instance.identity.id))
+            .unwrap();
+
+        assert_eq!(
+            ark_cluster(&db, &instance.identity.id).unwrap().unwrap().id,
+            second.id
+        );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

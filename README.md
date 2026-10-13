@@ -2,7 +2,7 @@
 
 **Odin** is a self-hosted web service for orchestrating dedicated game
 servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/),
-Rust, Palworld, and 7 Days to Die from one binary and one
+Rust, ARK: Survival Ascended, Palworld, and 7 Days to Die from one binary and one
 web dashboard. In Norse mythology, Odin is
 the All-Father who watches over the nine realms; this Odin watches over your
 game servers — installing and updating them, running and supervising named
@@ -42,7 +42,7 @@ Rust v1 otherwise focuses on core operation.
   inside it — no Python or terminal multiplexer, and no game libraries on the
   host.
 - **Multiple games and UUID-addressed instances.** Orchestrate Valheim, Rust,
-  Palworld, and 7 Days to Die side by side on one host.
+  ARK: Survival Ascended, Palworld, and 7 Days to Die side by side on one host.
   Each instance has a persistent UUID for dashboard navigation and API calls;
   names remain editable labels and may be reused by another game without
   sharing data or ports.
@@ -379,14 +379,15 @@ never changes a bookmark's target.
 Palworld's administrative REST API is called only on its loopback port by
 Odin; it is never proxied directly to the network.
 
-For games with a declared server configuration document (7 Days to Die and
-Palworld), the Configuration tab also has a collapsed
-**Advanced configuration** section. It reads only Odin-declared XML or
-Palworld settings files, separates settings Odin manages from settings supplied by the game,
-and lets an operator change existing unmanaged values while the instance is
-stopped. Odin validates the complete change set and writes it atomically; it
-does not discover arbitrary files, mod configuration, or permit adding and
-deleting keys.
+For games with a declared server configuration document (ARK: Survival Ascended,
+Rust, 7 Days to Die and Palworld), the Configuration tab also has an
+**Advanced configuration** section. It reads only Odin-declared game files,
+separates settings Odin manages from settings supplied by the game, and lets an
+operator edit unmanaged values while the instance is stopped. Each declared
+file also offers a syntax-coloured source editor; Odin validates the document,
+keeps managed keys unchanged, limits source files to 1 MiB, and writes
+atomically. It never discovers arbitrary paths or mod configuration. Supported
+formats can also add and delete unmanaged keys.
 
 Rust access lists manage owners, moderators, and bans while the server is
 stopped. Valheim adds Thunderstore mod management, BepInEx update checks,
@@ -436,7 +437,7 @@ your own `systemctl --user`/init setup.
 Every instance runs in an `odin-srv` Podman container. Each one owns its own
 persistent SteamCMD and game payload under
 `<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
-start (Rust's, 7 Days to Die's and Palworld's are several gigabytes, so that
+    start (Rust's, ARK's, 7 Days to Die's and Palworld's are several gigabytes, so that
 first start takes a while), and deleting an instance removes its runtime
 volume. With **auto restart** enabled,
 Odin restarts a container that stopped without an operator asking for it, including
@@ -455,14 +456,30 @@ is a link to it. Odin creates `PalWorldSettings.ini` from the server's shipped
 file. Files that earlier versions left in `runtime/` besides `Pal/Saved/` are
 unused and can be deleted.
 
+ARK: Survival Ascended runs through Proton. Instances can have private game
+files or reuse a shared installation; the dashboard's ARK page installs the
+shared payload and exposes its common native INI files under the game's
+Configuration tab. ARK clusters are local to one Odin host: create a cluster in
+that page, select stopped ARK instances as members, and Odin mounts one
+transfer directory for the cluster while passing the shared cluster ID to each
+member. Odin does not configure cross-host filesystems; use a separately
+managed shared filesystem only after testing it with ARK.
+
 Odin itself starts without Podman configured. To use these games, set the
 socket in **Settings** or in Odin's configuration file:
 
 ```toml
 [podman]
 socket = "/run/podman/podman.sock"
-# runtime_image = "ghcr.io/blad3mak3r/odin-srv:0.14.10"
+# base_image = "ghcr.io/blad3mak3r/odin-srv:base"
+# proton_image = "ghcr.io/blad3mak3r/odin-srv:proton"
+# runtime_image = "ghcr.io/blad3mak3r/odin-srv:base" # deprecated alias
+# odin_binary = "/usr/bin/odin"
 ```
+
+The Settings page can pull either runtime image. Pulling never interrupts a
+running server; stopped containers are recreated with the pulled image, and a
+stopped container whose local image changes is recreated on its next start.
 
 Enable the rootful Podman socket with `sudo systemctl enable --now
 podman.socket`. The dashboard checks connectivity and requires Podman 5.0.0

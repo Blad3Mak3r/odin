@@ -18,12 +18,14 @@ use crate::config::PodmanConfig;
 use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits::ResourceLimits;
 use crate::game::GameId;
+use crate::game::ark_asa::ArkLaunch;
 use crate::game::palworld::PalworldLaunch;
 use crate::game::rust::RustLaunch;
 use crate::game::seven_days_to_die::SevenDaysLaunch;
 use crate::instance::state::InstanceState;
 use crate::paths::Paths;
 
+pub mod ark_asa;
 pub mod dispatch;
 pub mod lifecycle;
 pub mod palworld;
@@ -46,6 +48,22 @@ const CPU_PERIOD: u64 = 100_000;
 pub struct PodmanClient {
     client: Client,
     socket: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PodmanImage {
+    #[serde(rename = "Id")]
+    pub id: String,
+    #[serde(rename = "RepoDigests", default)]
+    pub repo_digests: Vec<String>,
+    #[serde(rename = "Created", default)]
+    pub created: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PodmanContainer {
+    pub state: ContainerState,
+    pub image_id: Option<String>,
 }
 
 impl PodmanClient {
@@ -109,6 +127,24 @@ impl PodmanClient {
         }
     }
 
+    pub async fn inspect_image(&self, image: &str) -> Result<Option<PodmanImage>> {
+        let response = self
+            .client
+            .get(format!("{API_PREFIX}/images/{image}/json"))
+            .send()
+            .await
+            .context("failed to inspect Podman image")?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        success(response)
+            .await?
+            .json()
+            .await
+            .map(Some)
+            .context("failed to decode Podman image inspection")
+    }
+
     pub async fn pull_image(&self, image: &str) -> Result<()> {
         let response = self
             .client
@@ -122,6 +158,23 @@ impl PodmanClient {
             .await?
             .json()
             .await
+            .context("failed to decode Podman image pull response")?;
+        if let Some(error) = pull.error {
+            bail!("Podman failed to pull image {image}: {error}");
+        }
+        Ok(())
+    }
+
+    pub fn pull_image_blocking(&self, image: &str) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .post(format!(
+                "{API_PREFIX}/images/pull?reference={image}&quiet=true"
+            ))
+            .send()
+            .context("failed to pull Podman runtime image")?;
+        let pull: PullImageResponse = blocking_success(response)?
+            .json()
             .context("failed to decode Podman image pull response")?;
         if let Some(error) = pull.error {
             bail!("Podman failed to pull image {image}: {error}");
@@ -143,7 +196,48 @@ impl PodmanClient {
         Ok(())
     }
 
+    pub fn ensure_supported_blocking(&self) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .get("http://d/version")
+            .send()
+            .context("failed to contact Podman version API")?;
+        let version: PodmanVersion = blocking_success(response)?
+            .json()
+            .context("failed to decode Podman version response")?;
+        if version.is_supported() {
+            Ok(())
+        } else {
+            bail!(
+                "Podman {} is unsupported; Odin requires Podman 5.0.0 or newer",
+                version.version
+            )
+        }
+    }
+
+    pub fn ensure_image_blocking(&self, image: &str) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .get(format!("{API_PREFIX}/images/{image}/exists"))
+            .send()
+            .context("failed to contact Podman image API")?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        if response.status() != StatusCode::NOT_FOUND {
+            return Err(blocking_status_error(response));
+        }
+        self.pull_image_blocking(image)
+    }
+
     pub async fn inspect(&self, name: &str) -> Result<Option<ContainerState>> {
+        Ok(self
+            .inspect_container(name)
+            .await?
+            .map(|container| container.state))
+    }
+
+    pub async fn inspect_container(&self, name: &str) -> Result<Option<PodmanContainer>> {
         let response = self
             .client
             .get(format!("{API_PREFIX}/containers/{name}/json"))
@@ -158,7 +252,10 @@ impl PodmanClient {
             .json()
             .await
             .context("failed to decode Podman inspect response")?;
-        Ok(Some(ContainerState::from_inspect(inspect)))
+        Ok(Some(PodmanContainer {
+            state: ContainerState::from_inspect(&inspect),
+            image_id: inspect.image,
+        }))
     }
 
     /// Synchronous status probe for legacy CLI paths and the telemetry worker,
@@ -176,7 +273,7 @@ impl PodmanClient {
         let inspect: InspectResponse = blocking_success(response)?
             .json()
             .context("failed to decode Podman inspect response")?;
-        Ok(Some(ContainerState::from_inspect(inspect)))
+        Ok(Some(ContainerState::from_inspect(&inspect)))
     }
 
     pub async fn create(&self, spec: &ContainerSpec) -> Result<()> {
@@ -250,6 +347,49 @@ impl PodmanClient {
         Ok(())
     }
 
+    pub fn create_blocking(&self, spec: &ContainerSpec) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .post(format!("{API_PREFIX}/containers/create"))
+            .json(&spec.request)
+            .send()
+            .context("failed to create Podman container")?;
+        blocking_success(response)?
+            .bytes()
+            .context("failed to read Podman container create response")?;
+        Ok(())
+    }
+
+    pub fn start_blocking(&self, name: &str) -> Result<()> {
+        let response = self
+            .blocking_client()?
+            .post(format!("{API_PREFIX}/containers/{name}/start"))
+            .send()
+            .context("failed to start Podman container")?;
+        if response.status() == StatusCode::NOT_MODIFIED {
+            return Ok(());
+        }
+        blocking_success(response)?;
+        Ok(())
+    }
+
+    pub fn wait_blocking(&self, name: &str) -> Result<i64> {
+        #[derive(Deserialize)]
+        struct WaitResponse {
+            #[serde(rename = "StatusCode")]
+            status_code: i64,
+        }
+        let response = self
+            .blocking_client()?
+            .post(format!("{API_PREFIX}/containers/{name}/wait"))
+            .send()
+            .context("failed to wait for Podman container")?;
+        Ok(blocking_success(response)?
+            .json::<WaitResponse>()
+            .context("failed to decode Podman container wait response")?
+            .status_code)
+    }
+
     pub async fn update_limits(&self, name: &str, limits: &ResourceLimits) -> Result<()> {
         limits.validate()?;
         let request = LinuxResources::from(limits);
@@ -296,6 +436,12 @@ fn blocking_success(response: reqwest::blocking::Response) -> Result<reqwest::bl
     }
 }
 
+fn blocking_status_error(response: reqwest::blocking::Response) -> anyhow::Error {
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    anyhow::anyhow!("Podman API returned {status}: {body}")
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PodmanVersion {
     #[serde(rename = "Version")]
@@ -336,7 +482,7 @@ impl ContainerState {
         }
     }
 
-    fn from_inspect(response: InspectResponse) -> Self {
+    fn from_inspect(response: &InspectResponse) -> Self {
         if response.state.running {
             return Self::Running;
         }
@@ -352,6 +498,8 @@ impl ContainerState {
 struct InspectResponse {
     #[serde(rename = "State")]
     state: InspectState,
+    #[serde(rename = "Image")]
+    image: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -378,6 +526,8 @@ pub struct RuntimeSpec {
     pub install_dir: PathBuf,
     pub steamcmd_dir: PathBuf,
     pub update_log: PathBuf,
+    #[serde(default)]
+    pub shared_install: bool,
     #[serde(flatten)]
     pub launch: Launch,
 }
@@ -394,6 +544,8 @@ pub enum Launch {
     #[serde(rename = "7d2d")]
     SevenDaysToDie(SevenDaysLaunch),
     Palworld(PalworldLaunch),
+    #[serde(rename = "ark-asa")]
+    ArkSurvivalAscended(ArkLaunch),
 }
 
 impl Launch {
@@ -403,6 +555,7 @@ impl Launch {
             Self::Rust(_) => GameId::Rust,
             Self::SevenDaysToDie(_) => GameId::SevenDaysToDie,
             Self::Palworld(_) => GameId::Palworld,
+            Self::ArkSurvivalAscended(_) => GameId::ArkSurvivalAscended,
         }
     }
 
@@ -412,6 +565,7 @@ impl Launch {
             Self::Rust(launch) => &launch.name,
             Self::SevenDaysToDie(launch) => &launch.name,
             Self::Palworld(launch) => &launch.name,
+            Self::ArkSurvivalAscended(launch) => &launch.name,
         }
     }
 
@@ -458,6 +612,13 @@ impl Launch {
                 crate::game::palworld::prepare_runtime(&spec.install_dir, &spec.instance_dir)?;
                 crate::game::palworld::build_command_at(&spec.install_dir, console_log, launch)
             }
+            Self::ArkSurvivalAscended(launch) => crate::game::ark_asa::build_command_at(
+                &spec.install_dir,
+                console_log,
+                &spec.steamcmd_dir.join("proton-prefix"),
+                &spec.steamcmd_dir,
+                launch,
+            ),
         }
     }
 
@@ -500,6 +661,12 @@ impl Launch {
             }
             // Valheim saves on SIGINT.
             Self::Valheim { .. } => false,
+            Self::ArkSurvivalAscended(launch) => tokio::time::timeout(
+                CONSOLE_STOP_TIMEOUT,
+                crate::game::ark_asa::save_and_exit(launch.rcon_port, &launch.rcon_password),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok()),
         }
     }
 }
@@ -509,14 +676,17 @@ const CONSOLE_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 impl RuntimeSpec {
     pub const PROTOCOL_VERSION: u16 = 1;
 
-    fn new(instance_id: &str, launch: Launch) -> Self {
+    fn new(instance_id: &str, launch: Launch, install_dir: Option<PathBuf>) -> Self {
         Self {
             protocol_version: Self::PROTOCOL_VERSION,
             instance_id: instance_id.to_string(),
             instance_dir: PathBuf::from(format!("{CONTAINER_ROOT}/instance")),
-            install_dir: PathBuf::from(format!("{CONTAINER_ROOT}/runtime/{}", launch.game())),
+            install_dir: install_dir.unwrap_or_else(|| {
+                PathBuf::from(format!("{CONTAINER_ROOT}/runtime/{}", launch.game()))
+            }),
             steamcmd_dir: PathBuf::from(format!("{CONTAINER_ROOT}/runtime/steamcmd")),
             update_log: PathBuf::from(format!("{CONTAINER_ROOT}/instance/logs/update.log")),
+            shared_install: false,
             launch,
         }
     }
@@ -533,13 +703,24 @@ pub fn write_runtime_spec(
     identity: &GameInstanceIdentity,
     launch: Launch,
 ) -> Result<PathBuf> {
+    write_runtime_spec_with_install_dir(paths, identity, launch, None)
+}
+
+pub fn write_runtime_spec_with_install_dir(
+    paths: &Paths,
+    identity: &GameInstanceIdentity,
+    launch: Launch,
+    install_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
     let runtime_dir = paths.container_runtime_dir(identity.game, &identity.id);
     std::fs::create_dir_all(&runtime_dir)
         .with_context(|| format!("failed to create {}", runtime_dir.display()))?;
     let spec_path = runtime_spec_path(paths, identity.game, &identity.id);
     let temporary = spec_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let encoded = serde_json::to_vec_pretty(&RuntimeSpec::new(&identity.id, launch))
-        .context("failed to encode runtime specification")?;
+    let mut spec = RuntimeSpec::new(&identity.id, launch, install_dir.clone());
+    spec.shared_install = install_dir.is_some();
+    let encoded =
+        serde_json::to_vec_pretty(&spec).context("failed to encode runtime specification")?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -568,6 +749,7 @@ impl ContainerSpec {
     /// The container shape shared by every game: a private runtime volume, the
     /// instance directory and the control-socket directory, on the host
     /// network. `extra_mounts` carries anything only one game needs.
+    #[cfg(test)]
     pub fn new(
         paths: &Paths,
         identity: &GameInstanceIdentity,
@@ -576,12 +758,33 @@ impl ContainerSpec {
         image: String,
         limits: &ResourceLimits,
     ) -> Self {
+        Self::new_with_odin_binary(
+            paths,
+            identity,
+            instance_dir,
+            extra_mounts,
+            image,
+            Path::new("/proc/self/exe"),
+            limits,
+        )
+    }
+
+    pub fn new_with_odin_binary(
+        paths: &Paths,
+        identity: &GameInstanceIdentity,
+        instance_dir: &Path,
+        extra_mounts: Vec<Mount>,
+        image: String,
+        odin_binary: &Path,
+        limits: &ResourceLimits,
+    ) -> Self {
         let runtime_root = paths.container_runtime_dir(identity.game, &identity.id);
         let socket_root = paths.container_socket_dir(&identity.id);
         let mut mounts = vec![
             bind(&runtime_root, Path::new("/srv/odin/runtime")),
             bind(instance_dir, Path::new("/srv/odin/instance")),
             bind(&socket_root, Path::new("/run/odin")),
+            bind_ro(odin_binary, Path::new("/usr/local/bin/odin")),
         ];
         mounts.extend(extra_mounts);
         let user = format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
@@ -633,6 +836,16 @@ pub fn bind(host: &Path, container: &Path) -> Mount {
         kind: "bind".to_string(),
         source: host.display().to_string(),
         options: vec!["rw".to_string()],
+    }
+}
+
+/// Bind mount of `host` at `container`, read-only.
+pub fn bind_ro(host: &Path, container: &Path) -> Mount {
+    Mount {
+        destination: container.display().to_string(),
+        kind: "bind".to_string(),
+        source: host.display().to_string(),
+        options: vec!["ro".to_string()],
     }
 }
 
@@ -846,6 +1059,7 @@ mod tests {
                     "/run/odin",
                     paths.container_socket_dir(&identity.id).to_str().unwrap()
                 ),
+                ("/usr/local/bin/odin", "/proc/self/exe"),
             ]
         );
         assert!(request.resource_limits.is_none());
@@ -967,7 +1181,7 @@ mod tests {
     #[test]
     fn valheim_runtime_spec_keeps_its_instance_key_for_older_runtimes() {
         let state = crate::instance::state::InstanceState::new("one", 2456);
-        let spec = RuntimeSpec::new("id", Launch::Valheim { instance: state });
+        let spec = RuntimeSpec::new("id", Launch::Valheim { instance: state }, None);
 
         let json = serde_json::to_value(&spec).unwrap();
 
@@ -1240,20 +1454,22 @@ mod tests {
     #[test]
     fn inspect_state_maps_podman_running_and_exited_statuses() {
         assert_eq!(
-            ContainerState::from_inspect(InspectResponse {
+            ContainerState::from_inspect(&InspectResponse {
                 state: InspectState {
                     running: true,
                     status: Some("running".into())
                 },
+                image: None,
             }),
             ContainerState::Running
         );
         assert_eq!(
-            ContainerState::from_inspect(InspectResponse {
+            ContainerState::from_inspect(&InspectResponse {
                 state: InspectState {
                     running: false,
                     status: Some("exited".into())
                 },
+                image: None,
             }),
             ContainerState::Exited
         );

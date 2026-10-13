@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::game::RuntimeImage;
 use crate::paths::Paths;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -20,15 +21,39 @@ pub struct GlobalConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PodmanConfig {
     pub socket: PathBuf,
+    /// Deprecated alias for `base_image` retained for existing installations.
     #[serde(default)]
     pub runtime_image: Option<String>,
+    #[serde(default)]
+    pub base_image: Option<String>,
+    #[serde(default)]
+    pub proton_image: Option<String>,
+    #[serde(default)]
+    pub odin_binary: Option<PathBuf>,
 }
 
 impl PodmanConfig {
-    pub fn runtime_image(&self) -> String {
-        self.runtime_image
+    pub fn image(&self, runtime: RuntimeImage) -> String {
+        let base = || {
+            self.base_image
+                .as_ref()
+                .or(self.runtime_image.as_ref())
+                .cloned()
+                .unwrap_or_else(|| "ghcr.io/blad3mak3r/odin-srv:base".into())
+        };
+        match runtime {
+            RuntimeImage::Base => base(),
+            RuntimeImage::Proton => self
+                .proton_image
+                .clone()
+                .unwrap_or_else(|| "ghcr.io/blad3mak3r/odin-srv:proton".into()),
+        }
+    }
+
+    pub fn odin_binary(&self) -> PathBuf {
+        self.odin_binary
             .clone()
-            .unwrap_or_else(|| format!("ghcr.io/blad3mak3r/odin-srv:{}", env!("CARGO_PKG_VERSION")))
+            .unwrap_or_else(|| PathBuf::from("/proc/self/exe"))
     }
 }
 
@@ -42,5 +67,42 @@ impl GlobalConfig {
             .with_context(|| format!("failed to read config file {}", config_file.display()))?;
         toml::from_str(&raw)
             .with_context(|| format!("failed to parse config file {}", config_file.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn podman_config() -> PodmanConfig {
+        PodmanConfig {
+            socket: PathBuf::from("/run/podman/podman.sock"),
+            runtime_image: Some("example/legacy:base".into()),
+            base_image: None,
+            proton_image: None,
+            odin_binary: None,
+        }
+    }
+
+    #[test]
+    fn runtime_images_use_defaults_and_the_legacy_base_alias() {
+        let config = podman_config();
+        assert_eq!(config.image(RuntimeImage::Base), "example/legacy:base");
+        assert_eq!(
+            config.image(RuntimeImage::Proton),
+            "ghcr.io/blad3mak3r/odin-srv:proton"
+        );
+    }
+
+    #[test]
+    fn explicit_images_take_precedence() {
+        let mut config = podman_config();
+        config.base_image = Some("example/base@sha256:abc".into());
+        config.proton_image = Some("example/proton@sha256:def".into());
+        assert_eq!(config.image(RuntimeImage::Base), "example/base@sha256:abc");
+        assert_eq!(
+            config.image(RuntimeImage::Proton),
+            "example/proton@sha256:def"
+        );
     }
 }

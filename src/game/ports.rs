@@ -169,6 +169,9 @@ mod tests {
             podman: Some(crate::config::PodmanConfig {
                 socket,
                 runtime_image: None,
+                base_image: None,
+                proton_image: None,
+                odin_binary: None,
             }),
         };
         std::fs::write(

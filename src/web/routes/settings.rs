@@ -1,14 +1,18 @@
 //! Global dashboard settings shared by every server instance.
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{GlobalConfig, PodmanConfig};
 use crate::db::settings;
+use crate::game::{GameId, RuntimeImage};
 use crate::podman::PodmanClient;
 use crate::web::error::{ApiResult, run_blocking};
+use crate::web::image_monitor;
+use crate::web::jobs::JobKindDescr;
+use crate::web::routes::mods::JobHandle;
 use crate::web::state::AppState;
 
 #[derive(Serialize)]
@@ -33,6 +37,20 @@ pub struct PodmanStatusView {
     pub compatible: bool,
     pub version: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RuntimeImageView {
+    pub role: RuntimeImage,
+    pub reference: String,
+    pub pinned: bool,
+    pub games: Vec<GameId>,
+    pub local_id: Option<String>,
+    pub local_digest: Option<String>,
+    pub created: Option<i64>,
+    pub remote_digest: Option<String>,
+    pub last_checked: Option<i64>,
+    pub update_available: bool,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<SettingsView>> {
@@ -126,6 +144,126 @@ pub async fn set_instance_defaults(
     let saved = defaults.clone();
     run_blocking(move || settings::set_instance_defaults(&db, &defaults)).await?;
     Ok(Json(saved))
+}
+
+pub async fn list_runtime_images(
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<RuntimeImageView>>> {
+    let paths = state.paths.clone();
+    let config = run_blocking(move || Ok(GlobalConfig::load(&paths)?.podman)).await?;
+    let Some(config) = config else {
+        return Ok(Json(Vec::new()));
+    };
+    let client = PodmanClient::from_config(&config)?;
+    let db = state.db.clone();
+    let mut images = Vec::with_capacity(RuntimeImage::all().len());
+    for role in RuntimeImage::all() {
+        let reference = config.image(role);
+        let local = client.inspect_image(&reference).await?;
+        let remote = {
+            let (db, reference) = (db.clone(), reference.clone());
+            run_blocking(move || image_monitor::cached(&db, &reference)).await?
+        };
+        let update_available = match (&local, &remote) {
+            (Some(local), Some(remote)) => {
+                image_monitor::update_available(&local.repo_digests, &remote.digest)
+            }
+            _ => false,
+        };
+        images.push(RuntimeImageView {
+            role,
+            pinned: !reference.ends_with(&format!(":{}", role.as_str())),
+            games: crate::game::drivers()
+                .into_iter()
+                .filter(|game| game.runtime_image() == role)
+                .map(|game| game.id())
+                .collect(),
+            reference,
+            local_id: local.as_ref().map(|image| image.id.clone()),
+            local_digest: local
+                .as_ref()
+                .and_then(|image| image.repo_digests.first().cloned()),
+            created: local.map(|image| image.created),
+            last_checked: remote.as_ref().map(|remote| remote.checked_at.timestamp()),
+            remote_digest: remote.map(|remote| remote.digest),
+            update_available,
+        });
+    }
+    Ok(Json(images))
+}
+
+/// Forces a registry check of the moving runtime-image tags.
+pub async fn check_runtime_images(State(state): State<AppState>) -> ApiResult<StatusCode> {
+    let (paths, db) = (state.paths.clone(), state.db.clone());
+    run_blocking(move || image_monitor::check(&paths, &db, true)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn pull_runtime_image(
+    State(state): State<AppState>,
+    Path(role): Path<RuntimeImage>,
+) -> ApiResult<Json<JobHandle>> {
+    let paths = state.paths.clone();
+    let config = run_blocking(move || Ok(GlobalConfig::load(&paths)?.podman)).await?;
+    let config = config.ok_or_else(|| anyhow::anyhow!("Podman is not configured"))?;
+    let reference = config.image(role);
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let id = state
+        .jobs
+        .spawn(JobKindDescr::ImagePull { image: role }, move |logger| {
+            logger.line(format!("Pulling {reference}"));
+            PodmanClient::from_config(&config)?.pull_image_blocking(&reference)?;
+            logger.line(format!("Pulled {reference}"));
+            let recreated = remove_stopped_runtimes(&paths, &db, role)?;
+            if recreated > 0 {
+                logger.line(format!(
+                    "Marked {recreated} stopped runtime(s) for recreation"
+                ));
+            }
+            Ok(())
+        });
+    Ok(Json(JobHandle { id }))
+}
+
+/// A Podman container retains the image it was created from. Removing only
+/// stopped runtimes after a pull makes their next start use the new image
+/// without interrupting any running server.
+fn remove_stopped_runtimes(
+    paths: &crate::paths::Paths,
+    db: &crate::db::Db,
+    role: RuntimeImage,
+) -> anyhow::Result<usize> {
+    let mut removed = 0;
+    for game in crate::game::drivers()
+        .into_iter()
+        .filter(|game| game.runtime_image() == role)
+        .map(|game| game.id())
+    {
+        let names: Vec<String> = match game {
+            GameId::Valheim => crate::db::instances::list_all(db)?
+                .into_iter()
+                .map(|instance| instance.name)
+                .collect(),
+            GameId::Rust => crate::db::game_instances::list_rust(db)?
+                .into_iter()
+                .map(|instance| instance.name().to_owned())
+                .collect(),
+            GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+                crate::db::game_instances::list_generic(db, game)?
+                    .into_iter()
+                    .map(|instance| instance.name().to_owned())
+                    .collect()
+            }
+        };
+        for name in names {
+            if !crate::podman::dispatch::is_running(paths, db, game, &name)? {
+                crate::podman::dispatch::remove(paths, db, game, &name)?;
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 #[derive(Deserialize)]

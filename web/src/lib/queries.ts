@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { api } from './api-client'
 import type {
   ActivityEvent,
+  ArkCluster,
   AdvancedConfigChange,
   AdvancedConfigView,
   BackupEntry,
@@ -39,6 +40,10 @@ import type {
   ResourceSample,
   RconCommandResponse,
   ResourceLimits,
+  RuntimeImageRole,
+  RuntimeImageView,
+  RawAdvancedConfigFile,
+  SharedInstallView,
   SevenDaysTemplateReview,
   RustAccessListKind,
   RustConfigUpdateRequest,
@@ -320,8 +325,8 @@ export function useManagedResourceHistory(id: string, hours?: number, enabled = 
 export function useCreateManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name }: { game: GameId; name: string }) =>
-      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name }),
+    mutationFn: ({ game, name, install_mode, ark_launch }: { game: GameId; name: string; install_mode?: 'isolated' | 'shared'; ark_launch?: { map: string; session_name: string; mods: number[] } }) =>
+      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name, install_mode, ark_launch }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances'] }),
   })
 }
@@ -429,6 +434,92 @@ export function useAdvancedConfig(id: string, enabled: boolean) {
     queryKey: ['managed-instances', id, 'advanced-config'],
     queryFn: () => api.get<AdvancedConfigView>(`/instances/${id}/config/advanced`),
     enabled,
+  })
+}
+
+export function useSharedAdvancedConfig(game: GameId, enabled: boolean) {
+  return useQuery({ queryKey: ['games', game, 'advanced-config'], queryFn: () => api.get<AdvancedConfigView>(`/games/${game}/config/advanced`), enabled })
+}
+
+export function useUpdateSharedAdvancedConfig(game: GameId) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (changes: AdvancedConfigChange[]) => api.put<void>(`/games/${game}/config/advanced`, { changes }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] }),
+  })
+}
+
+export function useInitializeSharedAdvancedConfig(game: GameId) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>(`/games/${game}/config/advanced/init`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] }),
+  })
+}
+
+export function useSharedRawAdvancedConfig(game: GameId, file: string, enabled: boolean) {
+  return useQuery({ queryKey: ['games', game, 'advanced-config', file, 'code'], queryFn: () => api.get<RawAdvancedConfigFile>(`/games/${game}/config/files/${file}`), enabled })
+}
+
+export function useUpdateSharedRawAdvancedConfig(game: GameId, file: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (content: string) => api.put<void>(`/games/${game}/config/files/${file}`, { content }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] })
+      queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config', file, 'code'] })
+    },
+  })
+}
+
+export function useRawAdvancedConfig(id: string, file: string, enabled: boolean) {
+  return useQuery({ queryKey: ['managed-instances', id, 'advanced-config', file, 'code'], queryFn: () => api.get<RawAdvancedConfigFile>(`/instances/${id}/config/files/${file}`), enabled })
+}
+
+export function useUpdateRawAdvancedConfig(id: string, file: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (content: string) => api.put<void>(`/instances/${id}/config/files/${file}`, { content }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config'] })
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'advanced-config', file, 'code'] })
+    },
+  })
+}
+
+export function useSharedInstall(game: GameId, enabled: boolean) {
+  return useQuery({
+    queryKey: ['games', game, 'install'],
+    queryFn: () => api.get<SharedInstallView>(`/games/${game}/install`),
+    enabled,
+    refetchInterval: (query) => query.state.data?.running ? 2_000 : false,
+  })
+}
+
+export function useArkClusters() {
+  return useQuery({ queryKey: ['ark-clusters'], queryFn: () => api.get<ArkCluster[]>('/ark-clusters') })
+}
+
+export function useCreateArkCluster() {
+  const queryClient = useQueryClient()
+  return useMutation({ mutationFn: (input: { name: string; cluster_id: string }) => api.post<ArkCluster>('/ark-clusters', input), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ark-clusters'] }) })
+}
+
+export function useSetArkClusterMembers() {
+  const queryClient = useQueryClient()
+  return useMutation({ mutationFn: ({ id, members }: { id: string; members: string[] }) => api.put<void>(`/ark-clusters/${id}/members`, { members }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ark-clusters'] }) })
+}
+
+export function useDeleteArkCluster() {
+  const queryClient = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => api.delete<void>(`/ark-clusters/${id}`), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ark-clusters'] }) })
+}
+
+export function useInstallShared(game: GameId) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<JobHandle>(`/games/${game}/install`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'install'] }),
   })
 }
 
@@ -990,6 +1081,32 @@ export function useSettings(live = false) {
     queryKey: ['settings'],
     queryFn: () => api.get<SettingsView>('/settings'),
     refetchInterval: live ? 10_000 : false,
+  })
+}
+
+export function useRuntimeImages() {
+  return useQuery({
+    queryKey: ['settings', 'runtime-images'],
+    queryFn: () => api.get<RuntimeImageView[]>('/settings/runtime-images'),
+  })
+}
+
+export function useCheckRuntimeImages() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>('/settings/runtime-images/check'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['settings', 'runtime-images'] }),
+  })
+}
+
+export function usePullRuntimeImage() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (role: RuntimeImageRole) => api.post<JobHandle>(`/settings/runtime-images/${role}/pull`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'runtime-images'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    },
   })
 }
 

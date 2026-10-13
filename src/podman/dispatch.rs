@@ -26,12 +26,16 @@ use crate::paths::Paths;
 use crate::supervisor;
 
 use super::lifecycle::{self, ContainerGame, RuntimeHealth, StopReason};
-use super::{palworld, rust, seven_days_to_die, valheim};
+use super::{ark_asa, palworld, rust, seven_days_to_die, valheim};
 
 /// Runs `$body` with `$game_type` bound to the [`ContainerGame`] of `$game`.
 macro_rules! for_container_game {
     ($game:expr, $game_type:ident => $body:expr) => {
         match $game {
+            GameId::ArkSurvivalAscended => {
+                type $game_type = ark_asa::ArkSurvivalAscended;
+                $body
+            }
             GameId::Valheim => {
                 type $game_type = valheim::Valheim;
                 $body

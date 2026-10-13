@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+pub mod ark_asa;
 pub mod config_documents;
 pub mod instances;
 pub mod palworld;
@@ -19,6 +20,8 @@ pub const SEVEN_DAYS_TEMPLATE_BASELINE_FILE: &str = ".odin-serverconfig-template
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameId {
+    #[serde(rename = "ark-asa")]
+    ArkSurvivalAscended,
     Valheim,
     Rust,
     Palworld,
@@ -29,6 +32,7 @@ pub enum GameId {
 impl GameId {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ArkSurvivalAscended => "ark-asa",
             Self::Valheim => "valheim",
             Self::Rust => "rust",
             Self::Palworld => "palworld",
@@ -48,6 +52,7 @@ impl FromStr for GameId {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "ark-asa" => Ok(Self::ArkSurvivalAscended),
             "valheim" => Ok(Self::Valheim),
             "rust" => Ok(Self::Rust),
             "palworld" => Ok(Self::Palworld),
@@ -64,6 +69,28 @@ pub struct GameCapabilities {
     pub mods: bool,
     pub access_lists: bool,
     pub readiness: bool,
+    pub shared_install: bool,
+}
+
+/// Runtime image required by a dedicated-server driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeImage {
+    Base,
+    Proton,
+}
+
+impl RuntimeImage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Proton => "proton",
+        }
+    }
+
+    pub const fn all() -> [Self; 2] {
+        [Self::Base, Self::Proton]
+    }
 }
 
 /// Ports claimed by one default instance of a game. This belongs to the
@@ -83,6 +110,9 @@ pub trait GameDriver: Sync {
     fn server_binary(&self) -> &'static str;
     fn capabilities(&self) -> GameCapabilities;
     fn port_requirements(&self) -> GamePortRequirements;
+    fn runtime_image(&self) -> RuntimeImage {
+        RuntimeImage::Base
+    }
     /// How long a graceful shutdown may take before the server is killed.
     /// It must cover the world save the game performs on exit.
     fn stop_timeout_secs(&self) -> u64 {
@@ -91,6 +121,7 @@ pub trait GameDriver: Sync {
 }
 
 struct ValheimDriver;
+struct ArkSurvivalAscendedDriver;
 struct RustDriver;
 struct PalworldDriver;
 struct SevenDaysToDieDriver;
@@ -119,6 +150,7 @@ impl GameDriver for ValheimDriver {
             mods: true,
             access_lists: true,
             readiness: true,
+            shared_install: false,
         }
     }
 
@@ -151,6 +183,7 @@ impl GameDriver for RustDriver {
             mods: false,
             access_lists: true,
             readiness: false,
+            shared_install: false,
         }
     }
 
@@ -185,6 +218,7 @@ impl GameDriver for PalworldDriver {
             mods: false,
             access_lists: true,
             readiness: true,
+            shared_install: false,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -216,6 +250,7 @@ impl GameDriver for SevenDaysToDieDriver {
             mods: true,
             access_lists: false,
             readiness: true,
+            shared_install: false,
         }
     }
     fn port_requirements(&self) -> GamePortRequirements {
@@ -227,13 +262,56 @@ impl GameDriver for SevenDaysToDieDriver {
     }
 }
 
+impl GameDriver for ArkSurvivalAscendedDriver {
+    fn id(&self) -> GameId {
+        GameId::ArkSurvivalAscended
+    }
+
+    fn display_name(&self) -> &'static str {
+        "ARK: Survival Ascended"
+    }
+
+    fn steam_app_id(&self) -> &'static str {
+        "2430930"
+    }
+
+    fn server_binary(&self) -> &'static str {
+        "ShooterGame/Binaries/Win64/ArkAscendedServer.exe"
+    }
+
+    fn capabilities(&self) -> GameCapabilities {
+        GameCapabilities {
+            backups: true,
+            players: false,
+            mods: true,
+            access_lists: false,
+            readiness: true,
+            shared_install: true,
+        }
+    }
+
+    fn port_requirements(&self) -> GamePortRequirements {
+        GamePortRequirements { count: 3 }
+    }
+
+    fn runtime_image(&self) -> RuntimeImage {
+        RuntimeImage::Proton
+    }
+
+    fn stop_timeout_secs(&self) -> u64 {
+        180
+    }
+}
+
 static VALHEIM: ValheimDriver = ValheimDriver;
+static ARK_SURVIVAL_ASCENDED: ArkSurvivalAscendedDriver = ArkSurvivalAscendedDriver;
 static RUST: RustDriver = RustDriver;
 static PALWORLD: PalworldDriver = PalworldDriver;
 static SEVEN_DAYS_TO_DIE: SevenDaysToDieDriver = SevenDaysToDieDriver;
 
 pub fn driver(game: GameId) -> &'static dyn GameDriver {
     match game {
+        GameId::ArkSurvivalAscended => &ARK_SURVIVAL_ASCENDED,
         GameId::Valheim => &VALHEIM,
         GameId::Rust => &RUST,
         GameId::Palworld => &PALWORLD,
@@ -241,8 +319,14 @@ pub fn driver(game: GameId) -> &'static dyn GameDriver {
     }
 }
 
-pub fn drivers() -> [&'static dyn GameDriver; 4] {
-    [&VALHEIM, &RUST, &PALWORLD, &SEVEN_DAYS_TO_DIE]
+pub fn drivers() -> [&'static dyn GameDriver; 5] {
+    [
+        &VALHEIM,
+        &RUST,
+        &PALWORLD,
+        &SEVEN_DAYS_TO_DIE,
+        &ARK_SURVIVAL_ASCENDED,
+    ]
 }
 
 #[cfg(test)]

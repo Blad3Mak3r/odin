@@ -15,9 +15,11 @@ applies to every game. This guide only adds the container-specific part.
 
 ## 1. Mental model
 
-One image (`ghcr.io/blad3mak3r/odin-srv:<odin version>`, built from
-`containers/odin-srv/Dockerfile`) serves every game. It contains Debian, 32-bit
-libraries, a SteamCMD seed and the `odin` binary, but **no game payload**.
+The `ghcr.io/blad3mak3r/odin-srv:base` image serves native games, while
+`:proton` extends it for Windows-only servers. They are built from
+`containers/odin-srv/{base,proton}.Dockerfile`, contain Debian, their runtime
+dependencies and a SteamCMD seed, but **no game payload or Odin binary**. The
+host bind-mounts its current Odin binary into every game container.
 
 ```
 host                                          container (host network)
@@ -97,7 +99,8 @@ drivers.
    not valid snake_case (`7d2d`), add `#[serde(rename = "...")]`.
 4. **`src/podman/dispatch.rs`.** Add the `for_container_game!` arm; the match is
    exhaustive, so the compiler points at the other places that name every game.
-5. **Driver: `src/game/mod.rs`.** Register the driver, and set
+5. **Driver: `src/game/mod.rs`.** Register the driver, declare
+   `runtime_image()` when the game needs Proton, and set
    `stop_timeout_secs()` if the game needs more than 30 s to save (the ceiling
    used so far is 120 s).
 6. **Config documents: `src/game/config_documents.rs`.** Make `initialize`
@@ -106,8 +109,10 @@ drivers.
 7. **Liveness call sites.** Anything that asks "is this running?" must use
    `crate::game::instances::is_running(paths, db, game, name)`; it asks the
    container. There is no host pid to check.
-8. **Frontend.** Nothing to do unless the game has its own tabs; the runtime
-   health card, update button and SteamCMD log are game-neutral.
+8. **Frontend.** Add game-specific controls and native configuration routes
+   where the server contract needs them. The runtime health card, update button
+   and SteamCMD log are game-neutral, but shared-install games require their
+   game-scoped install and configuration controls.
 
 Things that look necessary but are **not**: DB migrations (`instance_runtime_state`
 is game-neutral), `containers/` changes (unless the server needs an apt

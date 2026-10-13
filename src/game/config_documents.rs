@@ -57,6 +57,12 @@ pub struct AdvancedConfigChange {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RawAdvancedConfigFile {
+    pub content: String,
+    pub format: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SevenDaysTemplateReview {
     pub instance_config_exists: bool,
     pub template_exists: bool,
@@ -85,6 +91,7 @@ enum Format {
     XmlProperties,
     PalworldOptions,
     RustCfg,
+    Ini,
 }
 
 #[derive(Clone, Copy)]
@@ -93,6 +100,7 @@ struct FileSpec {
     path: &'static str,
     format: Format,
     managed: &'static [&'static str],
+    allows_new_keys: bool,
 }
 
 const SEVEN_DAYS_MANAGED: &[&str] = &["ServerPort", "UserDataFolder", "TelnetPort"];
@@ -105,6 +113,12 @@ const RUST_MANAGED: &[&str] = &[
     "rcon.web",
     "server.identity",
 ];
+const ARK_GAME_USER_SETTINGS_MANAGED: &[&str] = &[
+    "[SessionSettings].SessionName",
+    "[ServerSettings].RCONEnabled",
+    "[ServerSettings].RCONPort",
+    "[ServerSettings].ServerAdminPassword",
+];
 
 fn specs(game: GameId) -> &'static [FileSpec] {
     match game {
@@ -113,13 +127,31 @@ fn specs(game: GameId) -> &'static [FileSpec] {
             path: "config/serverconfig.xml",
             format: Format::XmlProperties,
             managed: SEVEN_DAYS_MANAGED,
+            allows_new_keys: false,
         }],
         GameId::Palworld => &[FileSpec {
             id: "server",
             path: crate::game::palworld::CONFIG_FILE,
             format: Format::PalworldOptions,
             managed: PALWORLD_MANAGED,
+            allows_new_keys: false,
         }],
+        GameId::ArkSurvivalAscended => &[
+            FileSpec {
+                id: "game-user-settings",
+                path: "Saved/Config/WindowsServer/GameUserSettings.ini",
+                format: Format::Ini,
+                managed: ARK_GAME_USER_SETTINGS_MANAGED,
+                allows_new_keys: true,
+            },
+            FileSpec {
+                id: "game",
+                path: "Saved/Config/WindowsServer/Game.ini",
+                format: Format::Ini,
+                managed: &[],
+                allows_new_keys: true,
+            },
+        ],
         GameId::Valheim | GameId::Rust => &[],
     }
 }
@@ -318,16 +350,16 @@ fn instance_root(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
     paths.game_instance_dir(instance.identity.game, instance.name())
 }
 
-fn document_path(paths: &Paths, instance: &GenericGameInstance, spec: FileSpec) -> PathBuf {
-    instance_root(paths, instance).join(spec.path)
+fn shared_root(paths: &Paths, game: GameId) -> PathBuf {
+    paths.shared_install_dir(game).join("ShooterGame")
 }
 
-fn read_document(
-    paths: &Paths,
-    instance: &GenericGameInstance,
-    spec: FileSpec,
-) -> Result<Option<String>> {
-    let path = document_path(paths, instance, spec);
+fn document_path(root: &Path, spec: FileSpec) -> PathBuf {
+    root.join(spec.path)
+}
+
+fn read_document(root: &Path, spec: FileSpec) -> Result<Option<String>> {
+    let path = document_path(root, spec);
     if path.is_file() {
         fs::read_to_string(&path)
             .map(Some)
@@ -338,10 +370,25 @@ fn read_document(
 }
 
 pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<AdvancedConfigFile>> {
-    specs(instance.identity.game)
+    list_at(&instance_root(paths, instance), instance.identity.game)
+}
+
+/// Shared ARK installs own one native configuration directory. This is kept
+/// separate from the per-instance state directory so every shared instance
+/// sees precisely the same game-owned settings.
+pub fn list_shared(paths: &Paths, game: GameId) -> Result<Vec<AdvancedConfigFile>> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    list_at(&shared_root(paths, game), game)
+}
+
+fn list_at(root: &Path, game: GameId) -> Result<Vec<AdvancedConfigFile>> {
+    specs(game)
         .iter()
         .map(|spec| {
-            let contents = read_document(paths, instance, *spec)?;
+            let contents = read_document(root, *spec)?;
             let exists = contents.is_some();
             let sections = contents
                 .as_deref()
@@ -352,7 +399,7 @@ pub fn list(paths: &Paths, instance: &GenericGameInstance) -> Result<Vec<Advance
                 path: spec.path.into(),
                 format: format_name(spec.format),
                 exists,
-                allows_new_keys: false,
+                allows_new_keys: spec.allows_new_keys,
                 sections: sections.unwrap_or_default(),
             })
         })
@@ -370,7 +417,10 @@ fn seven_days_baseline_path(paths: &Paths, instance: &GenericGameInstance) -> Pa
 }
 
 fn seven_days_config_path(paths: &Paths, instance: &GenericGameInstance) -> PathBuf {
-    document_path(paths, instance, specs(GameId::SevenDaysToDie)[0])
+    document_path(
+        &instance_root(paths, instance),
+        specs(GameId::SevenDaysToDie)[0],
+    )
 }
 
 /// Creates only missing native configuration documents. Existing operator
@@ -383,10 +433,144 @@ pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
         ),
         GameId::Palworld => copy_template_if_missing(
             &crate::game::palworld::template_path(paths, &instance.identity),
-            &document_path(paths, instance, specs(GameId::Palworld)[0]),
+            &document_path(&instance_root(paths, instance), specs(GameId::Palworld)[0]),
         ),
+        GameId::ArkSurvivalAscended => {
+            for spec in specs(GameId::ArkSurvivalAscended) {
+                let path = document_path(&instance_root(paths, instance), *spec);
+                if !path.exists() {
+                    create_atomically(&path, "")?;
+                }
+            }
+            Ok(())
+        }
         GameId::Valheim | GameId::Rust => bail!("this game has no native configuration template"),
     }
+}
+
+pub fn initialize_shared(paths: &Paths, game: GameId) -> Result<()> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    let root = shared_root(paths, game);
+    for spec in specs(game) {
+        let path = document_path(&root, *spec);
+        if !path.exists() {
+            create_atomically(&path, "")?;
+        }
+    }
+    Ok(())
+}
+
+pub fn read_raw(
+    paths: &Paths,
+    instance: &GenericGameInstance,
+    file: &str,
+) -> Result<RawAdvancedConfigFile> {
+    read_raw_at(
+        &instance_root(paths, instance),
+        instance.identity.game,
+        file,
+    )
+}
+
+pub fn read_raw_shared(paths: &Paths, game: GameId, file: &str) -> Result<RawAdvancedConfigFile> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    read_raw_at(&shared_root(paths, game), game, file)
+}
+
+pub fn write_raw(
+    paths: &Paths,
+    instance: &GenericGameInstance,
+    file: &str,
+    content: &str,
+) -> Result<()> {
+    write_raw_at(
+        &instance_root(paths, instance),
+        instance.identity.game,
+        file,
+        content,
+    )
+}
+
+pub fn write_raw_shared(paths: &Paths, game: GameId, file: &str, content: &str) -> Result<()> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    write_raw_at(&shared_root(paths, game), game, file, content)
+}
+
+fn raw_spec(game: GameId, file: &str) -> Result<FileSpec> {
+    specs(game)
+        .iter()
+        .copied()
+        .find(|spec| spec.id == file)
+        .context("configuration file is not declared for this game")
+}
+
+fn read_raw_at(root: &Path, game: GameId, file: &str) -> Result<RawAdvancedConfigFile> {
+    let spec = raw_spec(game, file)?;
+    let content = read_document(root, spec)?.unwrap_or_default();
+    Ok(RawAdvancedConfigFile {
+        content,
+        format: format_name(spec.format),
+    })
+}
+
+fn write_raw_at(root: &Path, game: GameId, file: &str, content: &str) -> Result<()> {
+    const MAX_RAW_CONFIG_BYTES: usize = 1024 * 1024;
+    anyhow::ensure!(
+        content.len() <= MAX_RAW_CONFIG_BYTES,
+        "configuration files may not exceed 1 MiB"
+    );
+    let spec = raw_spec(game, file)?;
+    validate_raw_document(spec.format, content)?;
+    let updated = parse(spec.format, content)?;
+    let path = document_path(root, spec);
+    let current = read_document(root, spec)?.unwrap_or_default();
+    let existing = parse(spec.format, &current)?;
+    let values = |entries: Vec<ParsedEntry>| -> BTreeMap<String, String> {
+        entries
+            .into_iter()
+            .map(|entry| (entry.key, entry.value))
+            .collect()
+    };
+    let before = values(existing);
+    let after = values(updated);
+    for key in spec.managed {
+        anyhow::ensure!(
+            before.get(*key) == after.get(*key),
+            "{key} is managed by Odin"
+        );
+    }
+    replace_or_create_atomically(&path, content)
+}
+
+fn validate_raw_document(format: Format, content: &str) -> Result<()> {
+    if !matches!(format, Format::Ini) {
+        return Ok(());
+    }
+    for (line_number, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') && line.len() > 2 {
+            continue;
+        }
+        anyhow::ensure!(
+            line.split_once('=')
+                .is_some_and(|(key, _)| !key.trim().is_empty()),
+            "invalid INI syntax on line {}",
+            line_number + 1
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn copy_template_if_missing(source: &Path, target: &Path) -> Result<()> {
@@ -562,6 +746,22 @@ pub fn apply(
     instance: &GenericGameInstance,
     changes: &[AdvancedConfigChange],
 ) -> Result<()> {
+    apply_at(
+        &instance_root(paths, instance),
+        instance.identity.game,
+        changes,
+    )
+}
+
+pub fn apply_shared(paths: &Paths, game: GameId, changes: &[AdvancedConfigChange]) -> Result<()> {
+    anyhow::ensure!(
+        game == GameId::ArkSurvivalAscended,
+        "this game has no shared configuration"
+    );
+    apply_at(&shared_root(paths, game), game, changes)
+}
+
+fn apply_at(root: &Path, game: GameId, changes: &[AdvancedConfigChange]) -> Result<()> {
     let mut per_file: HashMap<&str, Vec<&AdvancedConfigChange>> = HashMap::new();
     for change in changes {
         per_file
@@ -571,12 +771,12 @@ pub fn apply(
     }
     let mut writes = Vec::new();
     for (id, changes) in per_file {
-        let spec = specs(instance.identity.game)
+        let spec = specs(game)
             .iter()
             .find(|spec| spec.id == id)
             .context("configuration file is not declared for this game")?;
-        let path = document_path(paths, instance, *spec);
-        let original = read_document(paths, instance, *spec)?
+        let path = document_path(root, *spec);
+        let original = read_document(root, *spec)?
             .with_context(|| format!("{} has not been generated by the game", path.display()))?;
         let existing = parse(spec.format, &original)?;
         let keys: BTreeMap<_, _> = existing
@@ -585,21 +785,29 @@ pub fn apply(
             .collect();
         let mut updated = original;
         for change in changes {
-            if change.delete {
+            if change.delete && !spec.allows_new_keys {
                 bail!("deleting advanced configuration keys is not supported for this game");
             }
             if spec.managed.contains(&change.key.as_str()) {
                 bail!("{} is managed by Odin", change.key);
             }
-            if !keys.contains_key(change.key.as_str()) {
+            if !keys.contains_key(change.key.as_str()) && !spec.allows_new_keys {
                 bail!("{} does not exist in {}", change.key, spec.id);
+            }
+            if change.delete {
+                updated = remove(spec.format, &updated, &change.key)?;
+                continue;
             }
             // A blank secret from the redacted dashboard means "keep the
             // current value", matching Odin's primary configuration forms.
             if is_sensitive_key(&change.key) && change.value.is_empty() {
                 continue;
             }
-            updated = set(spec.format, &updated, &change.key, &change.value)?;
+            updated = if keys.contains_key(change.key.as_str()) {
+                set(spec.format, &updated, &change.key, &change.value)?
+            } else {
+                append(spec.format, &updated, &change.key, &change.value)?
+            };
         }
         writes.push((path, updated));
     }
@@ -684,6 +892,7 @@ fn format_name(format: Format) -> &'static str {
         Format::XmlProperties => "xml-properties",
         Format::PalworldOptions => "unreal-ini",
         Format::RustCfg => "rust-cfg",
+        Format::Ini => "ini",
     }
 }
 
@@ -762,7 +971,34 @@ fn parse(format: Format, contents: &str) -> Result<Vec<ParsedEntry>> {
         }
         Format::PalworldOptions => parse_palworld(contents),
         Format::RustCfg => Ok(parse_rust_cfg(contents)),
+        Format::Ini => Ok(parse_ini(contents)),
     }
+}
+
+fn parse_ini(contents: &str) -> Vec<ParsedEntry> {
+    let mut section = "General";
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+                return None;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                section = &line[1..line.len() - 1];
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            Some(ParsedEntry {
+                key: format!("[{section}].{key}"),
+                label: key.into(),
+                section_id: section.into(),
+                section_label: section.into(),
+                value: value.trim().into(),
+            })
+        })
+        .collect()
 }
 
 fn parse_rust_cfg(contents: &str) -> Vec<ParsedEntry> {
@@ -919,7 +1155,7 @@ pub fn value(paths: &Paths, instance: &GenericGameInstance, key: &str) -> Result
     let Some(spec) = specs(instance.identity.game).first().copied() else {
         return Ok(None);
     };
-    let Some(contents) = read_document(paths, instance, spec)? else {
+    let Some(contents) = read_document(&instance_root(paths, instance), spec)? else {
         return Ok(None);
     };
     Ok(parse(spec.format, &contents)?
@@ -948,7 +1184,8 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
     let Some(spec) = specs(instance.identity.game).first().copied() else {
         return Ok(());
     };
-    let Some(mut contents) = read_document(paths, instance, spec)? else {
+    let root = instance_root(paths, instance);
+    let Some(mut contents) = read_document(&root, spec)? else {
         return Ok(());
     };
     let values: Vec<(&str, String)> = match instance.identity.game {
@@ -960,7 +1197,7 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
                 instance.config.admin_port.unwrap_or_default().to_string(),
             ),
         ],
-        GameId::Valheim | GameId::Rust => Vec::new(),
+        GameId::ArkSurvivalAscended | GameId::Valheim | GameId::Rust => Vec::new(),
     };
     let existing = parse(spec.format, &contents)?
         .into_iter()
@@ -974,7 +1211,7 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
         }
     }
     if changed {
-        write_atomically(&document_path(paths, instance, spec), &contents)?;
+        write_atomically(&document_path(&root, spec), &contents)?;
     }
     Ok(())
 }
@@ -986,8 +1223,9 @@ pub fn remove_legacy_control_panel(paths: &Paths, instance: &GenericGameInstance
         return Ok(());
     }
     let spec = specs(GameId::SevenDaysToDie)[0];
-    let path = document_path(paths, instance, spec);
-    let Some(contents) = read_document(paths, instance, spec)? else {
+    let root = instance_root(paths, instance);
+    let path = document_path(&root, spec);
+    let Some(contents) = read_document(&root, spec)? else {
         return Ok(());
     };
     let pattern = regex::Regex::new(
@@ -1006,6 +1244,91 @@ fn set(format: Format, contents: &str, key: &str, value: &str) -> Result<String>
         Format::XmlProperties => set_xml(contents, key, value),
         Format::PalworldOptions => set_palworld(contents, key, value),
         Format::RustCfg => set_rust_cfg(contents, key, value),
+        Format::Ini => set_ini(contents, key, value),
+    }
+}
+
+fn ini_key(key: &str) -> Result<(&str, &str)> {
+    let (section, key) = key
+        .strip_prefix('[')
+        .and_then(|key| key.split_once("]."))
+        .context("INI keys must use [Section].Key")?;
+    anyhow::ensure!(
+        !section.is_empty() && !key.is_empty(),
+        "INI keys must use [Section].Key"
+    );
+    Ok((section, key))
+}
+
+fn set_ini(contents: &str, full_key: &str, value: &str) -> Result<String> {
+    let (target_section, target_key) = ini_key(full_key)?;
+    let mut section = "General";
+    let mut found = false;
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section = &trimmed[1..trimmed.len() - 1];
+        }
+        if section == target_section
+            && let Some((key, _)) = trimmed.split_once('=')
+            && key.trim() == target_key
+            && !found
+        {
+            lines.push(format!("{target_key}={value}"));
+            found = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    anyhow::ensure!(found, "INI key {full_key} does not exist");
+    Ok(format!("{}\n", lines.join("\n")))
+}
+
+fn append(format: Format, contents: &str, key: &str, value: &str) -> Result<String> {
+    match format {
+        Format::Ini => {
+            let (section, key) = ini_key(key)?;
+            let separator = if contents.is_empty() || contents.ends_with('\n') {
+                ""
+            } else {
+                "\n"
+            };
+            Ok(format!("{contents}{separator}[{section}]\n{key}={value}\n"))
+        }
+        _ => bail!("adding keys is not supported for this configuration format"),
+    }
+}
+
+fn remove(format: Format, contents: &str, full_key: &str) -> Result<String> {
+    match format {
+        Format::Ini => {
+            let (target_section, target_key) = ini_key(full_key)?;
+            let mut section = "General";
+            let mut found = false;
+            let lines = contents
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                        section = &trimmed[1..trimmed.len() - 1];
+                    }
+                    let remove = section == target_section
+                        && trimmed
+                            .split_once('=')
+                            .is_some_and(|(key, _)| key.trim() == target_key);
+                    found |= remove;
+                    !remove
+                })
+                .collect::<Vec<_>>();
+            anyhow::ensure!(found, "INI key {full_key} does not exist");
+            Ok(if lines.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", lines.join("\n"))
+            })
+        }
+        _ => bail!("deleting keys is not supported for this configuration format"),
     }
 }
 
@@ -1467,7 +1790,10 @@ mod tests {
             ],
         )
         .unwrap();
-        let active = document_path(&paths, &instance, specs(GameId::Palworld)[0]);
+        let active = document_path(
+            &instance_root(&paths, &instance),
+            specs(GameId::Palworld)[0],
+        );
         let contents = fs::read_to_string(active).unwrap();
         assert!(contents.contains("PublicPort=9000"));
         assert!(contents.contains("RESTAPIPort=9001"));
@@ -1590,7 +1916,10 @@ mod tests {
                 auto_restart: false,
             },
         };
-        let path = document_path(&paths, &instance, specs(GameId::Palworld)[0]);
+        let path = document_path(
+            &instance_root(&paths, &instance),
+            specs(GameId::Palworld)[0],
+        );
         let contents = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(PublicPort=8211,RESTAPIPort=8212,ServerName=Odin)\n";
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, contents).unwrap();
@@ -1691,5 +2020,93 @@ mod tests {
         assert!(!repaired.contains("ControlPanelEnabled"));
         assert!(repaired.contains("WebDashboardEnabled"));
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn shared_ark_configuration_is_initialized_and_updated_outside_instance_state() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-shared-ark-config-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+
+        initialize_shared(&paths, GameId::ArkSurvivalAscended).unwrap();
+        apply_shared(
+            &paths,
+            GameId::ArkSurvivalAscended,
+            &[AdvancedConfigChange {
+                file: "game".into(),
+                key: "[/Script/ShooterGame.ShooterGameMode].XPMultiplier".into(),
+                value: "2.0".into(),
+                delete: false,
+            }],
+        )
+        .unwrap();
+
+        let config = paths
+            .shared_install_dir(GameId::ArkSurvivalAscended)
+            .join("ShooterGame/Saved/Config/WindowsServer/Game.ini");
+        assert!(
+            fs::read_to_string(config)
+                .unwrap()
+                .contains("XPMultiplier=2.0")
+        );
+        assert!(list_shared(&paths, GameId::ArkSurvivalAscended).unwrap()[1].exists);
+        assert!(
+            !paths
+                .game_instance_dir(GameId::ArkSurvivalAscended, "server")
+                .exists()
+        );
+        fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn raw_ark_editor_rejects_managed_key_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("odin-raw-ark-config-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        };
+        initialize_shared(&paths, GameId::ArkSurvivalAscended).unwrap();
+        let root = shared_root(&paths, GameId::ArkSurvivalAscended);
+        let config = document_path(&root, specs(GameId::ArkSurvivalAscended)[0]);
+        fs::write(
+            &config,
+            "[SessionSettings]\nSessionName=Odin\n[ServerSettings]\nRCONEnabled=True\n",
+        )
+        .unwrap();
+
+        assert!(
+            write_raw_shared(
+                &paths,
+                GameId::ArkSurvivalAscended,
+                "game-user-settings",
+                "[SessionSettings]\nSessionName=Other\n[ServerSettings]\nRCONEnabled=True\n",
+            )
+            .is_err()
+        );
+        assert!(
+            write_raw_shared(
+                &paths,
+                GameId::ArkSurvivalAscended,
+                "game-user-settings",
+                "this is not an INI document\n",
+            )
+            .is_err()
+        );
+        write_raw_shared(
+            &paths,
+            GameId::ArkSurvivalAscended,
+            "game-user-settings",
+            "[SessionSettings]\nSessionName=Odin\n[ServerSettings]\nRCONEnabled=True\nDifficultyOffset=1.0\n",
+        ).unwrap();
+        assert!(
+            fs::read_to_string(config)
+                .unwrap()
+                .contains("DifficultyOffset=1.0")
+        );
+        fs::remove_dir_all(paths.data_dir).ok();
     }
 }

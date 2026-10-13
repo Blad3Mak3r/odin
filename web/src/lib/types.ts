@@ -22,6 +22,7 @@ export interface GameView {
   id: GameId
   name: string
   steam_app_id: string
+  requires_proton: boolean
   capabilities: GameCapabilities
 }
 

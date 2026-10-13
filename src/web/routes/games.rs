@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::game_instances::{self, GameInstanceIdentity, GenericGameInstance, RustInstance};
-use crate::game::{self, GameId, instances as game_instances_ops, rust};
+use crate::game::{self, GameId, RuntimeImage, instances as game_instances_ops, rust};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
 use crate::podman::dispatch;
@@ -24,6 +24,7 @@ pub struct GameView {
     pub id: GameId,
     pub name: &'static str,
     pub steam_app_id: &'static str,
+    pub requires_proton: bool,
     pub capabilities: crate::game::GameCapabilities,
 }
 
@@ -108,6 +109,7 @@ pub async fn list_games() -> Json<Vec<GameView>> {
                 id: driver.id(),
                 name: driver.display_name(),
                 steam_app_id: driver.steam_app_id(),
+                requires_proton: driver.runtime_image() == RuntimeImage::Proton,
                 capabilities: driver.capabilities(),
             })
             .collect(),
@@ -1253,6 +1255,17 @@ pub(crate) fn generic_resource_snapshot(
 mod tests {
     use super::*;
     use crate::db::Db;
+
+    #[tokio::test]
+    async fn only_proton_games_report_requires_proton() {
+        let games = list_games().await.0;
+        let proton: Vec<_> = games
+            .iter()
+            .filter(|game| game.requires_proton)
+            .map(|game| game.id)
+            .collect();
+        assert_eq!(proton, [GameId::ArkSurvivalAscended]);
+    }
 
     #[test]
     fn rust_and_valheim_can_use_the_same_name() {

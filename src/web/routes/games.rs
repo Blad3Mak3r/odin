@@ -40,6 +40,7 @@ pub struct ManagedInstanceView {
     pub identity: GameInstanceIdentity,
     pub running: bool,
     pub odin_version: Option<String>,
+    pub restart_required: bool,
     pub capabilities: crate::game::GameCapabilities,
     pub install_mode: game_instances::InstallMode,
     pub config: Value,
@@ -225,25 +226,29 @@ pub async fn list_seven_days_worlds(
     Ok(Json(SevenDaysWorldsView { worlds }))
 }
 
+pub(crate) fn all_instance_views(
+    paths: &Paths,
+    db: &crate::db::Db,
+) -> anyhow::Result<Vec<ManagedInstanceView>> {
+    let mut views = valheim_views(paths, db)?;
+    views.extend(rust_views(paths, db)?);
+    for game in [
+        GameId::ArkSurvivalAscended,
+        GameId::Palworld,
+        GameId::SevenDaysToDie,
+    ] {
+        views.extend(generic_views(paths, db, game)?);
+    }
+    views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
+    Ok(views)
+}
+
 pub async fn list_all_instances(
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<ManagedInstanceView>>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let views = run_blocking(move || {
-        let mut views = valheim_views(&paths, &db)?;
-        views.extend(rust_views(&paths, &db)?);
-        for game in [
-            GameId::ArkSurvivalAscended,
-            GameId::Palworld,
-            GameId::SevenDaysToDie,
-        ] {
-            views.extend(generic_views(&paths, &db, game)?);
-        }
-        views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
-        Ok(views)
-    })
-    .await?;
+    let views = run_blocking(move || all_instance_views(&paths, &db)).await?;
     Ok(Json(views))
 }
 
@@ -1123,6 +1128,7 @@ fn valheim_view(
         identity,
         running: execution.container_running,
         odin_version: execution.odin_version,
+        restart_required: execution.restart_required,
         capabilities: game::driver(GameId::Valheim).capabilities(),
         install_mode: game_instances::InstallMode::Isolated,
         config: serde_json::json!({
@@ -1157,6 +1163,7 @@ fn rust_view(paths: &Paths, _db: &crate::db::Db, instance: RustInstance) -> Mana
         identity: instance.identity,
         running: execution.container_running,
         odin_version: execution.odin_version,
+        restart_required: execution.restart_required,
         capabilities: game::driver(GameId::Rust).capabilities(),
         install_mode: game_instances::InstallMode::Isolated,
         config: serde_json::json!({
@@ -1202,6 +1209,7 @@ fn generic_view(
     Ok(ManagedInstanceView {
         running: execution.container_running,
         odin_version: execution.odin_version,
+        restart_required: execution.restart_required,
         capabilities: game::driver(game).capabilities(),
         install_mode: game_instances::install_mode(db, &instance.identity.id)?,
         identity: instance.identity,

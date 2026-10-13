@@ -1,29 +1,29 @@
-use std::time::Duration;
-
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::instance;
+use crate::game::GameId;
 use crate::odin_update;
 use crate::paths::Paths;
-use crate::supervisor::client;
-use crate::supervisor::protocol::Response;
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::state::AppState;
-
-const SUPERVISOR_PING_TIMEOUT: Duration = Duration::from_millis(300);
 
 #[derive(Serialize)]
 pub struct VersionView {
     pub latest_version: Option<String>,
     pub latest_release_url: Option<String>,
     pub update_available: bool,
-    pub outdated_instances: Vec<String>,
+    pub outdated_instances: Vec<OutdatedInstance>,
     pub system_update_supported: bool,
     pub system_update_running: bool,
+}
+
+#[derive(Serialize)]
+pub struct OutdatedInstance {
+    pub game: GameId,
+    pub name: String,
 }
 
 #[derive(Serialize)]
@@ -63,63 +63,13 @@ pub async fn start_system_update(
     ))
 }
 
-fn outdated_running_instances(paths: &Paths, db: &Db) -> anyhow::Result<Vec<String>> {
-    let mut outdated = Vec::new();
-    for instance in instance::list_all(paths, db)? {
-        if !crate::podman::valheim::is_running(paths, db, &instance)? {
-            continue;
-        }
-
-        let identity = crate::db::game_instances::ensure_valheim_identity(
-            db,
-            &instance.state.name,
-            instance.state.created_at,
-        )?;
-        let Ok(Response::Pong {
-            protocol_version,
-            odin_version,
-            ..
-        }) = client::ping_socket_blocking(
-            &crate::podman::lifecycle::control_socket(paths, &identity),
-            SUPERVISOR_PING_TIMEOUT,
-        )
-        else {
-            continue;
-        };
-        if protocol_version < crate::supervisor::protocol::PROTOCOL_VERSION
-            || supervisor_is_outdated(odin_version.as_deref(), env!("CARGO_PKG_VERSION"))
-        {
-            outdated.push(instance.state.name);
-        }
-    }
-    Ok(outdated)
-}
-
-fn supervisor_is_outdated(supervisor_version: Option<&str>, current_version: &str) -> bool {
-    supervisor_version.is_none_or(|version| odin_update::is_newer(current_version, version))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_supervisor_version_is_outdated() {
-        assert!(supervisor_is_outdated(None, "0.8.0"));
-    }
-
-    #[test]
-    fn lower_supervisor_version_is_outdated() {
-        assert!(supervisor_is_outdated(Some("0.7.0"), "0.8.0"));
-    }
-
-    #[test]
-    fn current_supervisor_version_is_not_outdated() {
-        assert!(!supervisor_is_outdated(Some("0.8.0"), "0.8.0"));
-    }
-
-    #[test]
-    fn newer_supervisor_version_is_not_outdated() {
-        assert!(!supervisor_is_outdated(Some("0.9.0"), "0.8.0"));
-    }
+fn outdated_running_instances(paths: &Paths, db: &Db) -> anyhow::Result<Vec<OutdatedInstance>> {
+    Ok(super::games::all_instance_views(paths, db)?
+        .into_iter()
+        .filter(|view| view.restart_required)
+        .map(|view| OutdatedInstance {
+            game: view.identity.game,
+            name: view.identity.name,
+        })
+        .collect())
 }

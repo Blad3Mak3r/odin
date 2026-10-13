@@ -182,15 +182,63 @@ pub async fn pull_runtime_image(
     let config = run_blocking(move || Ok(GlobalConfig::load(&paths)?.podman)).await?;
     let config = config.ok_or_else(|| anyhow::anyhow!("Podman is not configured"))?;
     let reference = config.image(role);
+    let paths = state.paths.clone();
+    let db = state.db.clone();
     let id = state
         .jobs
         .spawn(JobKindDescr::ImagePull { image: role }, move |logger| {
             logger.line(format!("Pulling {reference}"));
             PodmanClient::from_config(&config)?.pull_image_blocking(&reference)?;
             logger.line(format!("Pulled {reference}"));
+            let recreated = remove_stopped_runtimes(&paths, &db, role)?;
+            if recreated > 0 {
+                logger.line(format!(
+                    "Marked {recreated} stopped runtime(s) for recreation"
+                ));
+            }
             Ok(())
         });
     Ok(Json(JobHandle { id }))
+}
+
+/// A Podman container retains the image it was created from. Removing only
+/// stopped runtimes after a pull makes their next start use the new image
+/// without interrupting any running server.
+fn remove_stopped_runtimes(
+    paths: &crate::paths::Paths,
+    db: &crate::db::Db,
+    role: RuntimeImage,
+) -> anyhow::Result<usize> {
+    let mut removed = 0;
+    for game in crate::game::drivers()
+        .into_iter()
+        .filter(|game| game.runtime_image() == role)
+        .map(|game| game.id())
+    {
+        let names: Vec<String> = match game {
+            GameId::Valheim => crate::db::instances::list_all(db)?
+                .into_iter()
+                .map(|instance| instance.name)
+                .collect(),
+            GameId::Rust => crate::db::game_instances::list_rust(db)?
+                .into_iter()
+                .map(|instance| instance.name().to_owned())
+                .collect(),
+            GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+                crate::db::game_instances::list_generic(db, game)?
+                    .into_iter()
+                    .map(|instance| instance.name().to_owned())
+                    .collect()
+            }
+        };
+        for name in names {
+            if !crate::podman::dispatch::is_running(paths, db, game, &name)? {
+                crate::podman::dispatch::remove(paths, db, game, &name)?;
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 #[derive(Deserialize)]

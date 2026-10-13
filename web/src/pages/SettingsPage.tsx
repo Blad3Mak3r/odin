@@ -25,7 +25,7 @@ function RuntimeImages() {
   if (images.isLoading) return <Skeleton className="h-36 w-full max-w-2xl" />
   if (images.isError) return <QueryError error={images.error} />
   if (!images.data?.length) return null
-  return <section className="max-w-2xl border"><div className="border-b px-4 py-3"><h2 className="text-sm font-medium">Runtime images</h2><p className="mt-1 text-xs text-muted-foreground">Images are pulled only when requested. Repair a stopped server to recreate it with a newly pulled image.</p></div><div className="divide-y">{images.data.map((image) => <RuntimeImageRow key={image.role} image={image} pulling={pull.isPending} onPull={() => pull.mutate(image.role, { onSuccess: () => toast.success(`${image.role} image pull started`), onError: (error) => toast.error(error.message) })} />)}</div></section>
+  return <section className="max-w-2xl border"><div className="border-b px-4 py-3"><h2 className="text-sm font-medium">Runtime images</h2><p className="mt-1 text-xs text-muted-foreground">Images are pulled only when requested. Stopped runtimes are recreated automatically after a pull; running servers are never interrupted.</p></div><div className="divide-y">{images.data.map((image) => <RuntimeImageRow key={image.role} image={image} pulling={pull.isPending} onPull={() => pull.mutate(image.role, { onSuccess: () => toast.success(`${image.role} image pull started`), onError: (error) => toast.error(error.message) })} />)}</div></section>
 }
 
 function RuntimeImageRow({ image, pulling, onPull }: { image: RuntimeImageView; pulling: boolean; onPull: () => void }) {

@@ -65,9 +65,10 @@ pub async fn set_members(
                 return Err(BadRequest("only ARK instances can join a cluster".into()).into());
             }
             if crate::podman::dispatch::is_running(&paths, &db, identity.game, &identity.name)? {
-                return Err(anyhow::anyhow!(
-                    "stop every affected ARK instance before changing cluster membership"
-                ));
+                return Err(crate::instance::InstanceError::AlreadyRunning(
+                    "stop every affected ARK instance before changing cluster membership".into(),
+                )
+                .into());
             }
         }
         game_instances::set_ark_cluster_members(&db, &cluster_id, &request.members)?;
@@ -96,10 +97,12 @@ pub async fn delete(
         for member in cluster.members {
             let identity = game_instances::identity_by_id(&db, &member)?
                 .ok_or_else(|| anyhow::anyhow!("instance does not exist"))?;
-            anyhow::ensure!(
-                !crate::podman::dispatch::is_running(&paths, &db, identity.game, &identity.name)?,
-                "stop every affected ARK instance before deleting a cluster"
-            );
+            if crate::podman::dispatch::is_running(&paths, &db, identity.game, &identity.name)? {
+                return Err(crate::instance::InstanceError::AlreadyRunning(
+                    "stop every affected ARK instance before deleting a cluster".into(),
+                )
+                .into());
+            }
             crate::podman::dispatch::remove(&paths, &db, identity.game, &identity.name)?;
         }
         game_instances::delete_ark_cluster(&db, &cluster_id)

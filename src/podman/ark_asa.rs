@@ -31,6 +31,7 @@ pub fn install_shared(paths: &Paths, mut logger: impl FnMut(&str)) -> Result<()>
         GameId::ArkSurvivalAscended.to_string(),
     );
     labels.insert("io.odin.job".into(), "install".into());
+    let odin_binary = config.odin_binary()?;
     let spec = ContainerSpec {
         request: CreateContainerRequest {
             name: SHARED_INSTALL_CONTAINER.into(),
@@ -56,7 +57,7 @@ pub fn install_shared(paths: &Paths, mut logger: impl FnMut(&str)) -> Result<()>
             mounts: vec![
                 bind(&shared, Path::new("/srv/odin/shared")),
                 bind(&steamcmd, Path::new("/srv/odin/steamcmd")),
-                bind_ro(&config.odin_binary(), Path::new("/usr/local/bin/odin")),
+                bind_ro(&odin_binary, Path::new("/usr/local/bin/odin")),
             ],
             netns: Namespace {
                 nsmode: "host".into(),

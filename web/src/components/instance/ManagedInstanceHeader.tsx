@@ -50,7 +50,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {instance.running ? (
+          {instance.running && instance.install_mode !== 'shared' ? (
             <Button
               size="sm"
               className="max-sm:h-11"

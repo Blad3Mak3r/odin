@@ -7,10 +7,12 @@ import { QueryError } from '@/components/QueryError'
 import { RouteTabs } from '@/components/RouteTabs'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
 import { GAME_DESCRIPTIONS } from '@/lib/games'
-import { useGames, useInstallShared, useManagedInstances, useSharedInstall } from '@/lib/queries'
+import { useArkClusters, useCreateArkCluster, useGames, useInstallShared, useManagedInstances, useSetArkClusterMembers, useSharedInstall } from '@/lib/queries'
+import { useState } from 'react'
 import type { GameView } from '@/lib/types'
 import { toast } from 'sonner'
 
@@ -25,6 +27,18 @@ function ArkSharedInstallCard() {
   if (install.isError) return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>Its status could not be loaded.</CardDescription></CardHeader></Card>
   const state = install.data
   return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>One ARK payload can be reused by shared instances. Stop every shared instance before installing or updating it.</CardDescription></CardHeader><CardContent className="flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">{state?.running ? 'Installing…' : state?.installed ? `Installed${state.build_id ? ` · Steam build ${state.build_id}` : ''}` : 'Not installed'}</p><Button type="button" disabled={state?.running || start.isPending} onClick={() => start.mutate(undefined, { onSuccess: () => toast.success('Shared ARK installation started'), onError: (error) => toast.error(error.message) })}>{state?.installed ? 'Update shared install' : 'Install shared files'}</Button></CardContent></Card>
+}
+
+function ArkClustersCard() {
+  const clusters = useArkClusters()
+  const instances = useManagedInstances()
+  const create = useCreateArkCluster()
+  const setMembers = useSetArkClusterMembers()
+  const [name, setName] = useState('')
+  const [clusterId, setClusterId] = useState('')
+  const arkInstances = instances.data?.filter((instance) => instance.game === 'ark-asa') ?? []
+  const submit = () => create.mutate({ name, cluster_id: clusterId }, { onSuccess: () => { setName(''); setClusterId(''); toast.success('ARK cluster created') }, onError: (error) => toast.error(error.message) })
+  return <Card><CardHeader><CardTitle>Clusters</CardTitle><CardDescription>Members share Cross-ARK transfer storage. Stop all affected servers before changing membership.</CardDescription></CardHeader><CardContent className="flex flex-col gap-4"><div className="grid gap-3 sm:grid-cols-3"><Input placeholder="Cluster name" value={name} onChange={(event) => setName(event.target.value)} /><Input placeholder="Cluster ID" value={clusterId} onChange={(event) => setClusterId(event.target.value)} /><Button type="button" disabled={!name || !clusterId || create.isPending} onClick={submit}>Create cluster</Button></div>{clusters.data?.map((cluster) => <div key={cluster.id} className="border p-4"><div className="flex items-baseline justify-between gap-4"><p className="font-medium">{cluster.name}</p><p className="text-xs text-muted-foreground">ID: {cluster.cluster_id}</p></div><div className="mt-3 grid gap-2">{arkInstances.map((instance) => <label key={instance.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cluster.members.includes(instance.id)} disabled={instance.running || setMembers.isPending} onChange={(event) => { const members = event.target.checked ? [...cluster.members, instance.id] : cluster.members.filter((id) => id !== instance.id); setMembers.mutate({ id: cluster.id, members }, { onError: (error) => toast.error(error.message) }) }} />{instance.name}{instance.running ? ' (running)' : ''}</label>)}</div></div>)}</CardContent></Card>
 }
 
 function GameInstances({ game }: { game: GameView }) {
@@ -97,7 +111,7 @@ export function GameDetailPage() {
           ...(hasGlobalMods(game) ? [{ label: 'Mods', to: `/games/${game.id}/mods` }] : []),
         ]}
       />
-      {activeTab === 'overview' && (game.id === 'ark-asa' ? <ArkSharedInstallCard /> : <RuntimeCard game={game} />)}
+      {activeTab === 'overview' && (game.id === 'ark-asa' ? <><ArkSharedInstallCard /><ArkClustersCard /></> : <RuntimeCard game={game} />)}
       {activeTab === 'instances' && <GameInstances game={game} />}
       {activeTab === 'mods' && <ValheimModsTab path={nestedPath} />}
     </div>

@@ -4,9 +4,9 @@ use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    backups, bepinex, bulk, changelog, config_files, doctor, events, games, instances, jobs, lists,
-    mods, nexus, palworld, players, resource_limits, resources, rust_access_lists, saves, settings,
-    seven_days_to_die, uptime_schedules, version, webhooks,
+    ark_clusters, backups, bepinex, bulk, changelog, config_files, doctor, events, games,
+    instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
+    rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -22,6 +22,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/changelog", get(changelog::get_changelog))
         .route("/doctor", get(doctor::get_doctor))
         .route("/games", get(games::list_games))
+        .route(
+            "/ark-clusters",
+            get(ark_clusters::list).post(ark_clusters::create),
+        )
+        .route("/ark-clusters/{cluster_id}", delete(ark_clusters::delete))
+        .route(
+            "/ark-clusters/{cluster_id}/members",
+            put(ark_clusters::set_members),
+        )
         .route("/games/7d2d/worlds", get(games::list_seven_days_worlds))
         .route(
             "/instances/bulk/games/{action}",

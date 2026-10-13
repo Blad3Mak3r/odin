@@ -1,3 +1,4 @@
+pub mod ark_clusters;
 pub mod backups;
 pub mod bepinex;
 pub mod bulk;

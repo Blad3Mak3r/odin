@@ -515,6 +515,103 @@ pub struct ArkCluster {
     pub members: Vec<String>,
 }
 
+fn validate_ark_cluster_text(value: &str, field: &str) -> Result<()> {
+    anyhow::ensure!(
+        !value.is_empty()
+            && value.len() <= 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
+        "ARK cluster {field} must contain 1 to 64 ASCII letters, numbers, - or _"
+    );
+    Ok(())
+}
+
+pub fn list_ark_clusters(db: &crate::db::Db) -> Result<Vec<ArkCluster>> {
+    let connection = db.conn();
+    let mut statement =
+        connection.prepare("SELECT id, name, cluster_id FROM ark_clusters ORDER BY name")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (id, name, cluster_id) = row?;
+        let mut members = connection.prepare("SELECT instance_id FROM ark_cluster_members WHERE cluster_id = ?1 ORDER BY instance_id")?;
+        Ok(ArkCluster { members: members.query_map(params![id], |row| row.get(0))?.collect::<std::result::Result<_, _>>()?, id, name, cluster_id })
+    }).collect()
+}
+
+pub fn create_ark_cluster(db: &crate::db::Db, name: &str, cluster_id: &str) -> Result<ArkCluster> {
+    validate_ark_cluster_text(name, "name")?;
+    validate_ark_cluster_text(cluster_id, "ID")?;
+    let cluster = ArkCluster {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.into(),
+        cluster_id: cluster_id.into(),
+        members: Vec::new(),
+    };
+    db.conn().execute(
+        "INSERT INTO ark_clusters (id, name, cluster_id, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            cluster.id,
+            cluster.name,
+            cluster.cluster_id,
+            chrono::Utc::now()
+        ],
+    )?;
+    Ok(cluster)
+}
+
+pub fn set_ark_cluster_members(
+    db: &crate::db::Db,
+    cluster_id: &str,
+    members: &[String],
+) -> Result<()> {
+    let connection = db.conn();
+    let transaction = connection.unchecked_transaction()?;
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ark_clusters WHERE id = ?1)",
+        params![cluster_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(exists, "ARK cluster does not exist");
+    for member in members {
+        let game: String = transaction.query_row(
+            "SELECT game FROM game_instances WHERE id = ?1",
+            params![member],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            game == GameId::ArkSurvivalAscended.as_str(),
+            "only ARK instances can join a cluster"
+        );
+    }
+    transaction.execute(
+        "DELETE FROM ark_cluster_members WHERE cluster_id = ?1",
+        params![cluster_id],
+    )?;
+    for member in members {
+        transaction.execute(
+            "INSERT INTO ark_cluster_members (instance_id, cluster_id) VALUES (?1, ?2)",
+            params![member, cluster_id],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn delete_ark_cluster(db: &crate::db::Db, cluster_id: &str) -> Result<()> {
+    db.conn().execute(
+        "DELETE FROM ark_clusters WHERE id = ?1",
+        params![cluster_id],
+    )?;
+    Ok(())
+}
+
 pub fn ark_cluster(db: &crate::db::Db, instance_id: &str) -> Result<Option<ArkCluster>> {
     let cluster = db.conn().query_row(
         "SELECT c.id, c.name, c.cluster_id FROM ark_clusters c JOIN ark_cluster_members m ON m.cluster_id = c.id WHERE m.instance_id = ?1",

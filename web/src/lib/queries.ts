@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { api } from './api-client'
 import type {
   ActivityEvent,
+  ArkCluster,
   AdvancedConfigChange,
   AdvancedConfigView,
   BackupEntry,
@@ -434,6 +435,20 @@ export function useSharedInstall(game: GameId, enabled: boolean) {
     enabled,
     refetchInterval: (query) => query.state.data?.running ? 2_000 : false,
   })
+}
+
+export function useArkClusters() {
+  return useQuery({ queryKey: ['ark-clusters'], queryFn: () => api.get<ArkCluster[]>('/ark-clusters') })
+}
+
+export function useCreateArkCluster() {
+  const queryClient = useQueryClient()
+  return useMutation({ mutationFn: (input: { name: string; cluster_id: string }) => api.post<ArkCluster>('/ark-clusters', input), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ark-clusters'] }) })
+}
+
+export function useSetArkClusterMembers() {
+  const queryClient = useQueryClient()
+  return useMutation({ mutationFn: ({ id, members }: { id: string; members: string[] }) => api.put<void>(`/ark-clusters/${id}/members`, { members }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ark-clusters'] }) })
 }
 
 export function useInstallShared(game: GameId) {

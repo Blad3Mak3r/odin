@@ -280,6 +280,7 @@ mod tests {
                 session_name: "Isla".into(),
                 mods: vec![123, 456],
             },
+            cluster: None,
         };
 
         let command = build_command_at(

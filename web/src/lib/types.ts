@@ -30,6 +30,13 @@ export interface SharedInstallView {
   running: boolean
 }
 
+export interface ArkCluster {
+  id: string
+  name: string
+  cluster_id: string
+  members: string[]
+}
+
 export interface ManagedInstanceView {
   tags: string[]
   id: string

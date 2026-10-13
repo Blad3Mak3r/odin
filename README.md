@@ -455,7 +455,10 @@ socket in **Settings** or in Odin's configuration file:
 ```toml
 [podman]
 socket = "/run/podman/podman.sock"
-# runtime_image = "ghcr.io/blad3mak3r/odin-srv:0.14.10"
+# base_image = "ghcr.io/blad3mak3r/odin-srv:base"
+# proton_image = "ghcr.io/blad3mak3r/odin-srv:proton"
+# runtime_image = "ghcr.io/blad3mak3r/odin-srv:base" # deprecated alias
+# odin_binary = "/usr/bin/odin"
 ```
 
 Enable the rootful Podman socket with `sudo systemctl enable --now

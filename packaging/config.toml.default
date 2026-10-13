@@ -7,5 +7,8 @@
 # The root service uses the rootful Podman socket by default.
 # [podman]
 # socket = "/run/podman/podman.sock"
-# Optional; defaults to ghcr.io/blad3mak3r/odin-srv:<odin version>.
-# runtime_image = "ghcr.io/blad3mak3r/odin-srv:0.14.10"
+# Optional image overrides. `runtime_image` remains a deprecated alias for
+# `base_image`; keep moving `:base`/`:proton` tags unless deliberately pinning.
+# base_image = "ghcr.io/blad3mak3r/odin-srv:base"
+# proton_image = "ghcr.io/blad3mak3r/odin-srv:proton"
+# odin_binary = "/usr/bin/odin"

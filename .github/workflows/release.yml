@@ -237,17 +237,6 @@ jobs:
           labels: |
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
 
-      - name: Extract runtime image metadata
-        id: runtime-metadata
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE_NAME }}-srv
-          tags: |
-            type=raw,value=${{ needs.release.outputs.version }}
-            type=raw,value=latest
-          labels: |
-            org.opencontainers.image.version=${{ needs.release.outputs.version }}
-
       - name: Build image for smoke tests
         uses: docker/build-push-action@v7
         with:
@@ -259,23 +248,6 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=odin-container
           cache-to: type=gha,mode=max,scope=odin-container
-
-      - name: Build runtime image for smoke tests
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: containers/odin-srv/Dockerfile
-          platforms: linux/amd64
-          load: true
-          tags: odin-srv:release-test
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha,scope=odin-srv-container
-          cache-to: type=gha,mode=max,scope=odin-srv-container
-
-      - name: Smoke test runtime image
-        env:
-          VERSION: ${{ needs.release.outputs.version }}
-        run: test "$(docker run --rm --entrypoint /usr/local/bin/odin odin-srv:release-test --version)" = "odin $VERSION"
 
       - name: Smoke test image
         env:
@@ -344,21 +316,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=odin-container
 
-      - name: Build and push runtime image
-        id: push-runtime
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: containers/odin-srv/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.runtime-metadata.outputs.tags }}
-          labels: ${{ steps.runtime-metadata.outputs.labels }}
-          cache-from: type=gha,scope=odin-srv-container
-
       - name: Summarize image
         run: |
           echo "Published $IMAGE_NAME:${{ needs.release.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Digest: ${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Published $IMAGE_NAME-srv:${{ needs.release.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Runtime digest: ${{ steps.push-runtime.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"

@@ -322,6 +322,37 @@ mod tests {
     }
 
     #[test]
+    fn proton_command_adds_cluster_arguments() {
+        let root = std::env::temp_dir().join(format!("odin-ark-cluster-{}", uuid::Uuid::new_v4()));
+        let install = root.join("install");
+        let binary = install.join("ShooterGame/Binaries/Win64/ArkAscendedServer.exe");
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, "").unwrap();
+        let log = root.join("console.log");
+        let launch = ArkLaunch {
+            name: "isla".into(),
+            port: 7777,
+            query_port: 27015,
+            rcon_port: 27020,
+            rcon_password: "secret".into(),
+            options: ArkLaunchOptions::defaults("isla"),
+            cluster: Some(ArkClusterLaunch {
+                cluster_id: "islands".into(),
+                directory: "/srv/odin/clusters/islands".into(),
+            }),
+        };
+        let command =
+            build_command_at(&install, &log, &root.join("prefix"), &root, &launch).unwrap();
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"-clusterid=islands".to_string()));
+        assert!(args.contains(&"-ClusterDirOverride=/srv/odin/clusters/islands".to_string()));
+    }
+
+    #[test]
     fn source_rcon_packet_has_the_expected_framing() {
         let mut packet = Vec::new();
         packet.extend_from_slice(&16_i32.to_le_bytes());

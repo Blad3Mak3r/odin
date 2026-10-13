@@ -58,8 +58,8 @@ pub async fn set_members(
             .into_iter()
             .chain(request.members.iter().cloned())
             .collect::<std::collections::BTreeSet<_>>();
-        for member in affected {
-            let identity = game_instances::identity_by_id(&db, &member)?
+        for member in &affected {
+            let identity = game_instances::identity_by_id(&db, member)?
                 .ok_or_else(|| anyhow::anyhow!("instance does not exist"))?;
             if identity.game != GameId::ArkSurvivalAscended {
                 return Err(BadRequest("only ARK instances can join a cluster".into()).into());
@@ -70,7 +70,13 @@ pub async fn set_members(
                 ));
             }
         }
-        game_instances::set_ark_cluster_members(&db, &cluster_id, &request.members)
+        game_instances::set_ark_cluster_members(&db, &cluster_id, &request.members)?;
+        for member in affected {
+            let identity = game_instances::identity_by_id(&db, &member)?
+                .ok_or_else(|| anyhow::anyhow!("instance does not exist"))?;
+            crate::podman::dispatch::remove(&paths, &db, identity.game, &identity.name)?;
+        }
+        Ok(())
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -80,7 +86,24 @@ pub async fn delete(
     State(state): State<AppState>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
     let db = state.db.clone();
-    run_blocking(move || game_instances::delete_ark_cluster(&db, &cluster_id)).await?;
+    run_blocking(move || {
+        let cluster = game_instances::list_ark_clusters(&db)?
+            .into_iter()
+            .find(|cluster| cluster.id == cluster_id)
+            .ok_or_else(|| anyhow::anyhow!("ARK cluster does not exist"))?;
+        for member in cluster.members {
+            let identity = game_instances::identity_by_id(&db, &member)?
+                .ok_or_else(|| anyhow::anyhow!("instance does not exist"))?;
+            anyhow::ensure!(
+                !crate::podman::dispatch::is_running(&paths, &db, identity.game, &identity.name)?,
+                "stop every affected ARK instance before deleting a cluster"
+            );
+            crate::podman::dispatch::remove(&paths, &db, identity.game, &identity.name)?;
+        }
+        game_instances::delete_ark_cluster(&db, &cluster_id)
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }

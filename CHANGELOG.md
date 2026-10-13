@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-10-13
+
+### What's Changed
+- feat: show Steam and Proton platform icons on game cards by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/157
+- fix: shared ARK install no longer times out and streams installer output by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/158
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.19.2...v0.19.3
+
 ## [0.19.2] - 2026-10-13
 
 ### What's Changed

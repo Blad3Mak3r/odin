@@ -507,6 +507,27 @@ pub fn set_install_mode(db: &crate::db::Db, instance_id: &str, mode: InstallMode
     Ok(())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ArkCluster {
+    pub id: String,
+    pub name: String,
+    pub cluster_id: String,
+    pub members: Vec<String>,
+}
+
+pub fn ark_cluster(db: &crate::db::Db, instance_id: &str) -> Result<Option<ArkCluster>> {
+    let cluster = db.conn().query_row(
+        "SELECT c.id, c.name, c.cluster_id FROM ark_clusters c JOIN ark_cluster_members m ON m.cluster_id = c.id WHERE m.instance_id = ?1",
+        params![instance_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+    ).optional()?;
+    cluster.map(|(id, name, cluster_id)| {
+        let connection = db.conn();
+        let mut statement = connection.prepare("SELECT instance_id FROM ark_cluster_members WHERE cluster_id = ?1 ORDER BY instance_id")?;
+        let members = statement.query_map(params![id], |row| row.get(0))?.collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(ArkCluster { id, name, cluster_id, members })
+    }).transpose()
+}
+
 pub fn ark_launch(
     db: &crate::db::Db,
     instance: &GenericGameInstance,
@@ -520,6 +541,7 @@ pub fn ark_launch(
         params![instance.identity.id],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
     ).optional()?.map(|(map, session_name, mods, rcon_password)| -> Result<ark_asa::ArkLaunch> {
+        let cluster = ark_cluster(db, &instance.identity.id)?;
         Ok(ark_asa::ArkLaunch {
             name: instance.name().to_string(),
             port: instance.config.port,
@@ -527,6 +549,10 @@ pub fn ark_launch(
             rcon_port: instance.config.admin_port.context("ARK RCON port is required")?,
             rcon_password,
             options: ark_asa::ArkLaunchOptions { map, session_name, mods: serde_json::from_str(&mods)? },
+            cluster: cluster.map(|cluster| ark_asa::ArkClusterLaunch {
+                directory: format!("/srv/odin/clusters/{}", cluster.cluster_id),
+                cluster_id: cluster.cluster_id,
+            }),
         })
     }).transpose()?.context("ARK instance is missing launch options")
 }

@@ -76,6 +76,14 @@ pub struct ArkLaunch {
     pub rcon_password: String,
     #[serde(flatten)]
     pub options: ArkLaunchOptions,
+    #[serde(default)]
+    pub cluster: Option<ArkClusterLaunch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArkClusterLaunch {
+    pub cluster_id: String,
+    pub directory: String,
 }
 
 impl ArkLaunch {
@@ -143,6 +151,10 @@ pub fn build_command_at(
                 .collect::<Vec<_>>()
                 .join(",")
         ));
+    }
+    if let Some(cluster) = &launch.cluster {
+        command.arg(format!("-clusterid={}", cluster.cluster_id));
+        command.arg(format!("-ClusterDirOverride={}", cluster.directory));
     }
     Ok(command)
 }

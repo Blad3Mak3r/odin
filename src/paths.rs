@@ -99,6 +99,14 @@ impl Paths {
             .join("shared")
     }
 
+    pub fn ark_cluster_dir(&self, cluster_id: &str) -> PathBuf {
+        self.data_dir
+            .join("games")
+            .join("ark-asa")
+            .join("clusters")
+            .join(cluster_id)
+    }
+
     pub fn servers_dir(&self) -> PathBuf {
         self.data_dir.join("servers")
     }

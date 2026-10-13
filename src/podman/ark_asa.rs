@@ -189,6 +189,14 @@ impl ContainerGame for ArkSurvivalAscended {
                 Path::new("/srv/odin/shared"),
             ));
         }
+        if let Some(cluster) = game_instances::ark_cluster(db, &instance.identity.id)? {
+            let host = paths.ark_cluster_dir(&cluster.cluster_id);
+            std::fs::create_dir_all(&host)?;
+            mounts.push(bind(
+                &host,
+                &PathBuf::from(format!("/srv/odin/clusters/{}", cluster.cluster_id)),
+            ));
+        }
         mounts.extend([
             bind(
                 &root.join("Saved"),

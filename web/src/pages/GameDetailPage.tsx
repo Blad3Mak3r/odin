@@ -126,7 +126,8 @@ export function GameDetailPage() {
   if (games.isLoading) return <Skeleton className="h-56" />
   if (!game) return <Navigate replace to="/games" />
   if (tab === 'overview' && nestedPath.length === 0) return <Navigate replace to={`/games/${game.id}`} />
-  if (!['overview', 'instances', 'mods'].includes(activeTab) || (nestedPath.length > 0 && activeTab !== 'mods') || (activeTab === 'mods' && !hasGlobalMods(game))) {
+  const hasSharedConfig = game.id === 'ark-asa'
+  if (!['overview', 'instances', 'mods', 'config'].includes(activeTab) || (nestedPath.length > 0 && activeTab !== 'mods') || (activeTab === 'mods' && !hasGlobalMods(game)) || (activeTab === 'config' && !hasSharedConfig)) {
     return <Navigate replace to={`/games/${game.id}`} />
   }
 
@@ -139,11 +140,13 @@ export function GameDetailPage() {
         tabs={[
           { label: 'Overview', to: `/games/${game.id}`, end: true },
           { label: 'Instances', to: `/games/${game.id}/instances` },
+          ...(hasSharedConfig ? [{ label: 'Configuration', to: `/games/${game.id}/config` }] : []),
           ...(hasGlobalMods(game) ? [{ label: 'Mods', to: `/games/${game.id}/mods` }] : []),
         ]}
       />
-      {activeTab === 'overview' && (game.id === 'ark-asa' ? <><ArkSharedInstallCard /><ArkSharedConfigCard /><ArkClustersCard /></> : <RuntimeCard game={game} />)}
+      {activeTab === 'overview' && (game.id === 'ark-asa' ? <><ArkSharedInstallCard /><ArkClustersCard /></> : <RuntimeCard game={game} />)}
       {activeTab === 'instances' && <GameInstances game={game} />}
+      {activeTab === 'config' && <ArkSharedConfigCard />}
       {activeTab === 'mods' && <ValheimModsTab path={nestedPath} />}
     </div>
   )

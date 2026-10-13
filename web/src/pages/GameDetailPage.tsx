@@ -56,7 +56,7 @@ function ArkSharedConfigCodeFile({ file, running }: { file: string; running: boo
   const save = useUpdateSharedRawAdvancedConfig('ark-asa', file)
   if (source.isLoading) return <p className="text-sm text-muted-foreground">Loading source…</p>
   if (source.isError || !source.data) return <p className="text-sm text-destructive">Source could not be loaded.</p>
-  return <NativeConfigCodeEditor content={source.data.content} format={source.data.format} disabled={running} saving={save.isPending} onSave={(content) => save.mutate(content, { onSuccess: () => toast.success('Configuration source saved'), onError: (error) => toast.error(error.message) })} />
+  return <NativeConfigCodeEditor key={`${file}:${source.data.content}`} content={source.data.content} format={source.data.format} disabled={running} saving={save.isPending} onSave={(content) => save.mutate(content, { onSuccess: () => toast.success('Configuration source saved'), onError: (error) => toast.error(error.message) })} />
 }
 
 function ArkClustersCard() {

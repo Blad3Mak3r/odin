@@ -263,7 +263,7 @@ function InstanceConfigCodeFile({ id, file, running }: { id: string; file: strin
   const save = useUpdateRawAdvancedConfig(id, file)
   if (source.isLoading) return <p className="text-sm text-muted-foreground">Loading source…</p>
   if (source.isError || !source.data) return <p className="text-sm text-destructive">Source could not be loaded.</p>
-  return <NativeConfigCodeEditor content={source.data.content} format={source.data.format} disabled={running} saving={save.isPending} onSave={(content) => save.mutate(content, { onSuccess: () => toast.success('Configuration source saved'), onError: (error) => toast.error(error.message) })} />
+  return <NativeConfigCodeEditor key={`${file}:${source.data.content}`} content={source.data.content} format={source.data.format} disabled={running} saving={save.isPending} onSave={(content) => save.mutate(content, { onSuccess: () => toast.success('Configuration source saved'), onError: (error) => toast.error(error.message) })} />
 }
 
 function GenericConfigForm({ id, game, config, running }: { id: string; game: Extract<GameId, 'ark-asa' | 'palworld' | '7d2d'>; config: GenericConfig; running: boolean }) {

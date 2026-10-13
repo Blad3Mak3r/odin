@@ -5,7 +5,7 @@ import { EditorView } from '@codemirror/view'
 import { githubDark, githubLight } from '@uiw/codemirror-theme-github'
 import CodeMirror from '@uiw/react-codemirror'
 import { useTheme } from 'next-themes'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 
 const PROPERTIES = StreamLanguage.define(properties)
@@ -24,7 +24,6 @@ export function NativeConfigCodeEditor({ content, format, disabled, saving, onSa
 }) {
   const { resolvedTheme } = useTheme()
   const [draft, setDraft] = useState(content)
-  useEffect(() => setDraft(content), [content])
   const extensions = useMemo(() => [language(format), EditorView.lineWrapping], [format])
   const dirty = draft !== content
   return <div className="flex flex-col gap-3"><div className="overflow-hidden border"><CodeMirror value={draft} height="60vh" theme={resolvedTheme === 'dark' ? githubDark : githubLight} extensions={extensions} editable={!disabled} onChange={setDraft} /></div><div className="flex items-center gap-3"><Button type="button" disabled={disabled || !dirty || saving} onClick={() => onSave(draft)}>Save code</Button>{dirty && <p className="text-xs text-muted-foreground">Unsaved changes are discarded when switching files.</p>}</div></div>

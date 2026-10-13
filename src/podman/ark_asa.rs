@@ -24,7 +24,9 @@ pub fn install_shared(paths: &Paths, mut logger: impl FnMut(&str)) -> Result<()>
     let client = PodmanClient::from_config(&config)?;
     let shared = paths.shared_install_dir(GameId::ArkSurvivalAscended);
     let steamcmd = shared.join(".odin-steamcmd");
-    std::fs::create_dir_all(&shared)?;
+    // Podman refuses to bind-mount a missing host path (statfs ENOENT).
+    std::fs::create_dir_all(&steamcmd)
+        .with_context(|| format!("create SteamCMD home {}", steamcmd.display()))?;
     let mut labels = std::collections::BTreeMap::new();
     labels.insert(
         "io.odin.game".into(),

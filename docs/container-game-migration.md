@@ -109,8 +109,10 @@ drivers.
 7. **Liveness call sites.** Anything that asks "is this running?" must use
    `crate::game::instances::is_running(paths, db, game, name)`; it asks the
    container. There is no host pid to check.
-8. **Frontend.** Nothing to do unless the game has its own tabs; the runtime
-   health card, update button and SteamCMD log are game-neutral.
+8. **Frontend.** Add game-specific controls and native configuration routes
+   where the server contract needs them. The runtime health card, update button
+   and SteamCMD log are game-neutral, but shared-install games require their
+   game-scoped install and configuration controls.
 
 Things that look necessary but are **not**: DB migrations (`instance_runtime_state`
 is game-neutral), `containers/` changes (unless the server needs an apt

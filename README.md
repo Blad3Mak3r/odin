@@ -380,13 +380,14 @@ Palworld's administrative REST API is called only on its loopback port by
 Odin; it is never proxied directly to the network.
 
 For games with a declared server configuration document (ARK: Survival Ascended,
-Rust, 7 Days to Die and Palworld), the Configuration tab also has a collapsed
-**Advanced configuration** section. It reads only Odin-declared XML or
-Palworld settings files, separates settings Odin manages from settings supplied by the game,
-and lets an operator change existing unmanaged values while the instance is
-stopped. Odin validates the complete change set and writes it atomically; it
-does not discover arbitrary files or mod configuration. Supported formats can
-also add and delete unmanaged keys.
+Rust, 7 Days to Die and Palworld), the Configuration tab also has an
+**Advanced configuration** section. It reads only Odin-declared game files,
+separates settings Odin manages from settings supplied by the game, and lets an
+operator edit unmanaged values while the instance is stopped. Each declared
+file also offers a syntax-coloured source editor; Odin validates the document,
+keeps managed keys unchanged, limits source files to 1 MiB, and writes
+atomically. It never discovers arbitrary paths or mod configuration. Supported
+formats can also add and delete unmanaged keys.
 
 Rust access lists manage owners, moderators, and bans while the server is
 stopped. Valheim adds Thunderstore mod management, BepInEx update checks,
@@ -451,7 +452,8 @@ unused and can be deleted.
 
 ARK: Survival Ascended runs through Proton. Instances can have private game
 files or reuse a shared installation; the dashboard's ARK page installs the
-shared payload. ARK clusters are local to one Odin host: create a cluster in
+shared payload and exposes its common native INI files under the game's
+Configuration tab. ARK clusters are local to one Odin host: create a cluster in
 that page, select stopped ARK instances as members, and Odin mounts one
 transfer directory for the cluster while passing the shared cluster ID to each
 member. Odin does not configure cross-host filesystems; use a separately
@@ -468,6 +470,10 @@ socket = "/run/podman/podman.sock"
 # runtime_image = "ghcr.io/blad3mak3r/odin-srv:base" # deprecated alias
 # odin_binary = "/usr/bin/odin"
 ```
+
+The Settings page can pull either runtime image. Pulling never interrupts a
+running server; stopped containers are recreated with the pulled image, and a
+stopped container whose local image changes is recreated on its next start.
 
 Enable the rootful Podman socket with `sudo systemctl enable --now
 podman.socket`. The dashboard checks connectivity and requires Podman 5.0.0

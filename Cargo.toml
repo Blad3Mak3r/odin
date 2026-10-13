@@ -46,7 +46,7 @@ futures-util = "0.3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 async-stream = "0.3"
 regex = "1"
-rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono", "uuid", "fallible_uint"] }
 sha2 = "0.11"
 libc = "0.2"
 cap-std = "4"

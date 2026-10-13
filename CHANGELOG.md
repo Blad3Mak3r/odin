@@ -4,6 +4,17 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-10-13
+
+### What's Changed
+- fix: create the SteamCMD home before the shared ARK install by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/152
+- fix: accept RFC 3339 image creation time from Podman by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/153
+- chore: update dependencies by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/154
+- refactor: replace recharts with TanStack Charts by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/155
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.19.1...v0.19.2
+
 ## [0.19.1] - 2026-10-13
 
 ### What's Changed

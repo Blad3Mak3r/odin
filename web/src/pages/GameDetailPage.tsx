@@ -5,15 +5,26 @@ import { CreateManagedInstanceDialog } from '@/components/instance/CreateManaged
 import { ManagedInstancesTable } from '@/components/instance/ManagedInstancesTable'
 import { QueryError } from '@/components/QueryError'
 import { RouteTabs } from '@/components/RouteTabs'
-import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ValheimModsTab } from '@/pages/GlobalModsPage'
 import { GAME_DESCRIPTIONS } from '@/lib/games'
-import { useGames, useManagedInstances } from '@/lib/queries'
+import { useGames, useInstallShared, useManagedInstances, useSharedInstall } from '@/lib/queries'
 import type { GameView } from '@/lib/types'
+import { toast } from 'sonner'
 
 function RuntimeCard({ game }: { game: GameView }) {
   return <Card><CardHeader><CardTitle>Per-instance runtime</CardTitle><CardDescription>{game.name} is installed and updated inside each running Podman runtime. Create an instance, start it, then use its Update action.</CardDescription></CardHeader></Card>
+}
+
+function ArkSharedInstallCard() {
+  const install = useSharedInstall('ark-asa', true)
+  const start = useInstallShared('ark-asa')
+  if (install.isLoading) return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>Checking the shared ARK payload…</CardDescription></CardHeader></Card>
+  if (install.isError) return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>Its status could not be loaded.</CardDescription></CardHeader></Card>
+  const state = install.data
+  return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>One ARK payload can be reused by shared instances. Stop every shared instance before installing or updating it.</CardDescription></CardHeader><CardContent className="flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">{state?.running ? 'Installing…' : state?.installed ? `Installed${state.build_id ? ` · Steam build ${state.build_id}` : ''}` : 'Not installed'}</p><Button type="button" disabled={state?.running || start.isPending} onClick={() => start.mutate(undefined, { onSuccess: () => toast.success('Shared ARK installation started'), onError: (error) => toast.error(error.message) })}>{state?.installed ? 'Update shared install' : 'Install shared files'}</Button></CardContent></Card>
 }
 
 function GameInstances({ game }: { game: GameView }) {
@@ -86,7 +97,7 @@ export function GameDetailPage() {
           ...(hasGlobalMods(game) ? [{ label: 'Mods', to: `/games/${game.id}/mods` }] : []),
         ]}
       />
-      {activeTab === 'overview' && <RuntimeCard game={game} />}
+      {activeTab === 'overview' && (game.id === 'ark-asa' ? <ArkSharedInstallCard /> : <RuntimeCard game={game} />)}
       {activeTab === 'instances' && <GameInstances game={game} />}
       {activeTab === 'mods' && <ValheimModsTab path={nestedPath} />}
     </div>

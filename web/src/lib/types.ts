@@ -24,6 +24,12 @@ export interface GameView {
   install_mode: 'isolated' | 'shared'
 }
 
+export interface SharedInstallView {
+  installed: boolean
+  build_id: string | null
+  running: boolean
+}
+
 export interface ManagedInstanceView {
   tags: string[]
   id: string

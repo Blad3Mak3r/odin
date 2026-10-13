@@ -41,6 +41,7 @@ import type {
   ResourceLimits,
   RuntimeImageRole,
   RuntimeImageView,
+  SharedInstallView,
   SevenDaysTemplateReview,
   RustAccessListKind,
   RustConfigUpdateRequest,
@@ -423,6 +424,23 @@ export function useAdvancedConfig(id: string, enabled: boolean) {
     queryKey: ['managed-instances', id, 'advanced-config'],
     queryFn: () => api.get<AdvancedConfigView>(`/instances/${id}/config/advanced`),
     enabled,
+  })
+}
+
+export function useSharedInstall(game: GameId, enabled: boolean) {
+  return useQuery({
+    queryKey: ['games', game, 'install'],
+    queryFn: () => api.get<SharedInstallView>(`/games/${game}/install`),
+    enabled,
+    refetchInterval: (query) => query.state.data?.running ? 2_000 : false,
+  })
+}
+
+export function useInstallShared(game: GameId) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<JobHandle>(`/games/${game}/install`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'install'] }),
   })
 }
 

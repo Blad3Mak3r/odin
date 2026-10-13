@@ -1,4 +1,5 @@
 import sevenDaysBanner from '@/assets/game-banners/7d2d.webp'
+import arkAsaBanner from '@/assets/game-banners/ark-asa.webp'
 import palworldBanner from '@/assets/game-banners/palworld.webp'
 import rustBanner from '@/assets/game-banners/rust.webp'
 import valheimBanner from '@/assets/game-banners/valheim.webp'
@@ -21,7 +22,7 @@ export const GAME_DESCRIPTIONS: Record<GameId, string> = {
 }
 
 export const GAME_BANNERS: Record<GameId, string> = {
-  'ark-asa': '',
+  'ark-asa': arkAsaBanner,
   valheim: valheimBanner,
   rust: rustBanner,
   palworld: palworldBanner,

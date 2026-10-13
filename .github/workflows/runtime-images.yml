@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
     paths: [containers/**, .github/workflows/runtime-images.yml]
-  pull_request:
-    paths: [containers/**, .github/workflows/runtime-images.yml]
   schedule:
     - cron: '17 4 * * 1'
   workflow_dispatch:
@@ -13,6 +11,9 @@ on:
 permissions:
   contents: read
   packages: write
+
+env:
+  IMAGE: ghcr.io/blad3mak3r/odin-srv
 
 jobs:
   base:
@@ -25,7 +26,7 @@ jobs:
       - id: metadata
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/odin-srv
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=base
             type=raw,value=base-${{ github.sha }}
@@ -36,15 +37,13 @@ jobs:
           context: .
           file: containers/odin-srv/base.Dockerfile
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
+          push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=odin-srv-base
           cache-to: type=gha,mode=max,scope=odin-srv-base
       - name: Smoke test base image
-        if: github.event_name == 'pull_request'
-        run: docker run --rm --entrypoint /bin/sh ghcr.io/${{ github.repository_owner }}/odin-srv:base -c 'test -x /usr/local/share/odin/steamcmd/steamcmd.sh && test -d /srv/odin/runtime && test -d /srv/odin/instance && test -d /run/odin'
+        run: docker run --rm --entrypoint /bin/sh "${IMAGE}:base" -c 'test -x /usr/local/share/odin/steamcmd/steamcmd.sh && test -d /srv/odin/runtime && test -d /srv/odin/instance && test -d /run/odin'
 
   proton:
     needs: base
@@ -55,7 +54,7 @@ jobs:
       - id: metadata
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/odin-srv
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=proton
             type=raw,value=proton-${{ github.sha }}
@@ -64,14 +63,12 @@ jobs:
         with:
           context: .
           file: containers/odin-srv/proton.Dockerfile
-          build-args: BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/odin-srv@${{ needs.base.outputs.digest }}
+          build-args: BASE_IMAGE=${{ env.IMAGE }}@${{ needs.base.outputs.digest }}
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
+          push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=odin-srv-proton
           cache-to: type=gha,mode=max,scope=odin-srv-proton
       - name: Smoke test Proton image
-        if: github.event_name == 'pull_request'
-        run: docker run --rm --entrypoint proton ghcr.io/${{ github.repository_owner }}/odin-srv:proton --version
+        run: docker run --rm --entrypoint proton "${IMAGE}:proton" --version

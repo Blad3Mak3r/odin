@@ -633,25 +633,39 @@ pub fn ark_launch(
         instance.identity.game == GameId::ArkSurvivalAscended,
         "not an ARK instance"
     );
-    db.conn().query_row(
-        "SELECT map, session_name, mods, rcon_password FROM ark_launch_options WHERE instance_id = ?1",
-        params![instance.identity.id],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
-    ).optional()?.map(|(map, session_name, mods, rcon_password)| -> Result<ark_asa::ArkLaunch> {
-        let cluster = ark_cluster(db, &instance.identity.id)?;
-        Ok(ark_asa::ArkLaunch {
-            name: instance.name().to_string(),
-            port: instance.config.port,
-            query_port: instance.config.query_port.context("ARK query port is required")?,
-            rcon_port: instance.config.admin_port.context("ARK RCON port is required")?,
-            rcon_password,
-            options: ark_asa::ArkLaunchOptions { map, session_name, mods: serde_json::from_str(&mods)? },
-            cluster: cluster.map(|cluster| ark_asa::ArkClusterLaunch {
-                directory: format!("/srv/odin/clusters/{}", cluster.cluster_id),
-                cluster_id: cluster.cluster_id,
-            }),
-        })
-    }).transpose()?.context("ARK instance is missing launch options")
+    let options = {
+        let connection = db.conn();
+        connection.query_row(
+            "SELECT map, session_name, mods, rcon_password FROM ark_launch_options WHERE instance_id = ?1",
+            params![instance.identity.id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+        ).optional()?
+    };
+    let (map, session_name, mods, rcon_password) =
+        options.context("ARK instance is missing launch options")?;
+    let cluster = ark_cluster(db, &instance.identity.id)?;
+    Ok(ark_asa::ArkLaunch {
+        name: instance.name().to_string(),
+        port: instance.config.port,
+        query_port: instance
+            .config
+            .query_port
+            .context("ARK query port is required")?,
+        rcon_port: instance
+            .config
+            .admin_port
+            .context("ARK RCON port is required")?,
+        rcon_password,
+        options: ark_asa::ArkLaunchOptions {
+            map,
+            session_name,
+            mods: serde_json::from_str(&mods)?,
+        },
+        cluster: cluster.map(|cluster| ark_asa::ArkClusterLaunch {
+            directory: format!("/srv/odin/clusters/{}", cluster.cluster_id),
+            cluster_id: cluster.cluster_id,
+        }),
+    })
 }
 
 pub fn update_ark_launch_options(
@@ -1042,6 +1056,39 @@ mod tests {
         assert_eq!(resolved.name, "rust-server");
         assert!(identity_by_id(&db, "missing").unwrap().is_none());
 
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn ark_cluster_membership_round_trips_and_derives_launch_data() {
+        let (paths, db) = temp_context("ark-cluster");
+        let instance = match crate::game::instances::create(
+            &paths,
+            &db,
+            GameId::ArkSurvivalAscended,
+            "island",
+        )
+        .unwrap()
+        {
+            crate::game::instances::GameInstance::Generic(instance) => instance,
+            _ => unreachable!(),
+        };
+        let cluster = create_ark_cluster(&db, "home", "home_cluster").unwrap();
+        set_ark_cluster_members(
+            &db,
+            &cluster.id,
+            std::slice::from_ref(&instance.identity.id),
+        )
+        .unwrap();
+
+        let loaded = ark_cluster(&db, &instance.identity.id).unwrap().unwrap();
+        let launch = ark_launch(&db, &instance).unwrap();
+
+        assert_eq!(loaded.cluster_id, "home_cluster");
+        assert_eq!(
+            launch.cluster.unwrap().directory,
+            "/srv/odin/clusters/home_cluster"
+        );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

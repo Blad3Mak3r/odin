@@ -3,6 +3,7 @@ import { GameBackdrop } from '@/components/GameBackdrop'
 import { GameIcon } from '@/components/GameIcon'
 import { CreateManagedInstanceDialog } from '@/components/instance/CreateManagedInstanceDialog'
 import { ManagedInstancesTable } from '@/components/instance/ManagedInstancesTable'
+import { GamePlatformBadges } from '@/components/PlatformIcons'
 import { QueryError } from '@/components/QueryError'
 import { RouteTabs } from '@/components/RouteTabs'
 import { Button } from '@/components/ui/button'
@@ -97,7 +98,12 @@ function GameHeader({ game, games }: { game: GameView; games: GameView[] }) {
       <div className="flex items-center gap-4 sm:gap-5">
         <GameIcon game={game.id} className="size-16 sm:size-20" />
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">{game.name}</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-semibold tracking-tight">{game.name}</h1>
+            <span className="flex items-center gap-2">
+              <GamePlatformBadges game={game} />
+            </span>
+          </div>
           <p className="mt-2 max-w-2xl text-sm text-foreground/80">{GAME_DESCRIPTIONS[game.id]}</p>
           {mine && (
             <p className="mt-1 text-sm tabular-nums text-foreground/80">

@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-10-14
+
+### What's Changed
+- fix: restore direct server output handling by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/169
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.3...v0.20.4
+
 ## [0.20.3] - 2026-10-14
 
 ### What's Changed

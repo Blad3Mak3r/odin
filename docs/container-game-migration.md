@@ -82,6 +82,9 @@ drivers.
    - `build_command_at(install_dir, [instance_dir,] console_log, &launch)`:
      the **single** definition of the full command (program, cwd, ordered
      arguments, stdout+stderr appended to `console_log`, `process_group(0)`).
+     The runtime replaces that redirection with pipes and writes `console.log`
+     itself (timestamped, cycled daily, see `src/console_log.rs`), so a game
+     that writes its own log file must be pointed at `/dev/stdout`.
      Return an error naming "not installed" when the binary is missing.
    - `prepare_runtime(install_dir, instance_dir)`: *container-side* work run
      before every launch (see §4). It must be idempotent.

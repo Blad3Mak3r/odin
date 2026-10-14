@@ -118,6 +118,10 @@ pub fn build_router(state: AppState) -> Router {
             post(config_files::adopt_seven_days_template_baseline_by_id),
         )
         .route("/instances/{id}/logs", get(games::get_logs_by_id))
+        .route(
+            "/instances/{id}/logs/files",
+            get(games::get_log_files_by_id),
+        )
         .route("/instances/{id}/logs/sse", get(sse::game_logs_sse_by_id))
         .route(
             "/instances/{id}/logs/update/sse",

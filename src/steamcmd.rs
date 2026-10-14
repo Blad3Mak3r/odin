@@ -258,7 +258,12 @@ impl SteamCmd {
         let stderr_thread = std::thread::spawn(move || stream_lines(stderr, &tx));
 
         for line in rx {
-            writeln!(log_file_handle, "{line}").ok();
+            writeln!(
+                log_file_handle,
+                "{}",
+                crate::console_log::stamp_line(chrono::Utc::now(), &line)
+            )
+            .ok();
             on_line(&line);
         }
 

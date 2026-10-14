@@ -281,6 +281,18 @@ export interface LogsView {
   lines: string[]
 }
 
+export interface LogFile {
+  /** `YYYY-MM-DD` (UTC). */
+  date: string
+  size: number
+  /** Today's still-growing log. */
+  current: boolean
+}
+
+export interface LogFilesView {
+  files: LogFile[]
+}
+
 export interface ModSearchResult {
   mod_id: string
   name: string

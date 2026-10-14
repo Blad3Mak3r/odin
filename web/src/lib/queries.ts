@@ -34,6 +34,7 @@ import type {
   JobSummary,
   ListKind,
   ListView,
+  LogFilesView,
   LogsView,
   ModSearchResult,
   PlayerInfo,
@@ -269,11 +270,22 @@ export function useManagedInstanceTransition(id: string, game: GameId, name: str
   })
 }
 
-export function useManagedInstanceLogs(id: string, lines = 200) {
+/** `date` selects an archived day (`YYYY-MM-DD`); omit it for today's log. */
+export function useManagedInstanceLogs(id: string, lines = 200, date?: string) {
   return useQuery({
-    queryKey: ['managed-instances', id, 'logs', lines],
-    queryFn: () => api.get<LogsView>(`/instances/${id}/logs?lines=${lines}`),
-    refetchInterval: 5_000,
+    queryKey: ['managed-instances', id, 'logs', lines, date ?? 'current'],
+    queryFn: () => api.get<LogsView>(`/instances/${id}/logs?lines=${lines}${date ? `&date=${date}` : ''}`),
+    // An archived day no longer changes.
+    refetchInterval: date ? false : 5_000,
+    enabled: Boolean(id),
+  })
+}
+
+export function useManagedInstanceLogFiles(id: string) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'log-files'],
+    queryFn: () => api.get<LogFilesView>(`/instances/${id}/logs/files`),
+    refetchInterval: 60_000,
     enabled: Boolean(id),
   })
 }

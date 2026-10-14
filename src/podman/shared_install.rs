@@ -190,6 +190,50 @@ fn adopt_private_files(paths: &Paths, game: GameId, private: &Path) -> Result<()
     })
 }
 
+/// The short-lived container that installs `game`'s shared files. It is as
+/// unprivileged as an instance's container: the same user, no capabilities.
+fn installer_spec(paths: &Paths, game: GameId, image: String, odin_binary: &Path) -> ContainerSpec {
+    let mut labels = std::collections::BTreeMap::new();
+    labels.insert("io.odin.game".into(), game.to_string());
+    labels.insert("io.odin.job".into(), "install".into());
+    let steamcmd = paths.shared_install_dir(game).join(".odin-steamcmd");
+    ContainerSpec {
+        request: CreateContainerRequest {
+            name: installer_container(game),
+            image,
+            entrypoint: vec!["/usr/local/bin/odin".into()],
+            command: vec!["install-shared".into(), "--game".into(), game.to_string()],
+            env: std::collections::BTreeMap::from([
+                ("ODIN_SHARED_INSTALL_DIR".into(), MOUNT_DIR.into()),
+                (
+                    "ODIN_SHARED_STEAMCMD_DIR".into(),
+                    "/srv/odin/steamcmd".into(),
+                ),
+                (
+                    "ODIN_SHARED_UPDATE_LOG".into(),
+                    format!("{MOUNT_DIR}/logs/update.log"),
+                ),
+                ("HOME".into(), "/srv/odin/steamcmd".into()),
+            ]),
+            labels,
+            user: format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
+                libc::getegid()
+            }),
+            cap_drop: vec!["ALL".into()],
+            no_new_privileges: true,
+            mounts: vec![
+                mount(paths, game),
+                bind(&steamcmd, Path::new("/srv/odin/steamcmd")),
+                bind_ro(odin_binary, Path::new("/usr/local/bin/odin")),
+            ],
+            netns: Namespace {
+                nsmode: "host".into(),
+            },
+            resource_limits: None,
+        },
+    }
+}
+
 /// Installs or updates the shared files of `game`, forwarding SteamCMD's
 /// output to `logger`. No instance of the game may be running from them.
 pub fn install(paths: &Paths, game: GameId, mut logger: impl FnMut(&str)) -> Result<()> {
@@ -213,44 +257,13 @@ pub fn install(paths: &Paths, game: GameId, mut logger: impl FnMut(&str)) -> Res
     // Podman refuses to bind-mount a missing host path (statfs ENOENT).
     std::fs::create_dir_all(&steamcmd)
         .with_context(|| format!("create SteamCMD home {}", steamcmd.display()))?;
-    let mut labels = std::collections::BTreeMap::new();
-    labels.insert("io.odin.game".into(), game.to_string());
-    labels.insert("io.odin.job".into(), "install".into());
-    let odin_binary = config.odin_binary()?;
     let container = installer_container(game);
-    let spec = ContainerSpec {
-        request: CreateContainerRequest {
-            name: container.clone(),
-            image: config.image(driver.runtime_image()),
-            entrypoint: vec!["/usr/local/bin/odin".into()],
-            command: vec!["install-shared".into(), "--game".into(), game.to_string()],
-            env: std::collections::BTreeMap::from([
-                ("ODIN_SHARED_INSTALL_DIR".into(), MOUNT_DIR.into()),
-                (
-                    "ODIN_SHARED_STEAMCMD_DIR".into(),
-                    "/srv/odin/steamcmd".into(),
-                ),
-                (
-                    "ODIN_SHARED_UPDATE_LOG".into(),
-                    format!("{MOUNT_DIR}/logs/update.log"),
-                ),
-                ("HOME".into(), "/srv/odin/steamcmd".into()),
-            ]),
-            labels,
-            user: format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
-                libc::getegid()
-            }),
-            mounts: vec![
-                mount(paths, game),
-                bind(&steamcmd, Path::new("/srv/odin/steamcmd")),
-                bind_ro(&odin_binary, Path::new("/usr/local/bin/odin")),
-            ],
-            netns: Namespace {
-                nsmode: "host".into(),
-            },
-            resource_limits: None,
-        },
-    };
+    let spec = installer_spec(
+        paths,
+        game,
+        config.image(driver.runtime_image()),
+        &config.odin_binary()?,
+    );
     client.ensure_supported_blocking()?;
     client.ensure_image_blocking(&spec.request.image)?;
     client.remove_blocking(&container, true)?;
@@ -457,6 +470,24 @@ mod tests {
             }
         });
         PodmanClient::new(&socket).unwrap()
+    }
+
+    #[test]
+    fn the_installer_container_is_as_unprivileged_as_an_instance() {
+        let paths = crate::podman::test_support::temp_paths("installer-spec");
+
+        let spec = installer_spec(
+            &paths,
+            GameId::Cs2,
+            "example/odin-srv:1".into(),
+            Path::new("/usr/bin/odin"),
+        );
+
+        let body = serde_json::to_value(&spec.request).unwrap();
+        assert_eq!(body["cap_drop"], serde_json::json!(["ALL"]));
+        assert_eq!(body["no_new_privileges"], true);
+        assert_eq!(body["name"], "odin-cs2-install");
+        std::fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]

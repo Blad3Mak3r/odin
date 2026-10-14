@@ -34,6 +34,10 @@ host                                          container (host network)
 - The spec is written by the host (`write_runtime_spec`) and contains only the
   typed launch settings Odin must pass to the process. It is not a second game
   configuration format.
+- Containers run as Odin's own user, with every capability dropped and
+  `no_new_privileges` set (`ContainerSpec::new`, and the shared installer's
+  `installer_spec`). A game server never needs more; if a new game seems to,
+  find out why before adding anything back.
 - Host networking means every game port is a host port and loopback services
   (REST, RCON, Telnet) stay reachable from the host at `127.0.0.1`.
 - Everything that identifies the container is derived from `GameId::as_str()`:

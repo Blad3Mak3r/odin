@@ -920,6 +920,8 @@ impl ContainerSpec {
                 ]),
                 labels,
                 user,
+                cap_drop: vec!["ALL".to_string()],
+                no_new_privileges: true,
                 mounts,
                 netns: Namespace {
                     nsmode: "host".to_string(),
@@ -970,6 +972,12 @@ pub struct CreateContainerRequest {
     pub env: std::collections::BTreeMap<String, String>,
     pub labels: std::collections::BTreeMap<String, String>,
     pub user: String,
+    /// Capabilities removed from the container's set. Game servers run as an
+    /// unprivileged user and never need any.
+    pub cap_drop: Vec<String>,
+    /// Stops a process from gaining privileges through setuid or file
+    /// capabilities.
+    pub no_new_privileges: bool,
     pub mounts: Vec<Mount>,
     pub netns: Namespace,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1196,6 +1204,11 @@ mod tests {
             request.labels.get("io.odin.game").map(String::as_str),
             Some("rust")
         );
+        // The names are Podman's SpecGenerator ones; libpod silently ignores
+        // any it does not know, so a typo here would drop the protection.
+        let body = serde_json::to_value(&request).unwrap();
+        assert_eq!(body["cap_drop"], serde_json::json!(["ALL"]));
+        assert_eq!(body["no_new_privileges"], true);
         assert_eq!(
             request
                 .mounts

@@ -434,7 +434,8 @@ your own `systemctl --user`/init setup.
 
 ### Podman runtime
 
-Every instance runs in an `odin-srv` Podman container. Each one owns its own
+Every instance runs in an `odin-srv` Podman container, as Odin's own user and
+with no Linux capabilities and `no_new_privileges` set. Each one owns its own
 persistent SteamCMD and game payload under
 `<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
     start (Rust's, ARK's, 7 Days to Die's and Palworld's are several gigabytes, so that

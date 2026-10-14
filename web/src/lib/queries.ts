@@ -232,7 +232,8 @@ export function useInstances() {
 export function useGames() {
   return useQuery({
     queryKey: ['games'],
-    queryFn: () => api.get<GameView[]>('/games'),
+    // The API lists games in driver order; every view shows them by name.
+    queryFn: async () => (await api.get<GameView[]>('/games')).sort((a, b) => a.name.localeCompare(b.name)),
     staleTime: Infinity,
   })
 }

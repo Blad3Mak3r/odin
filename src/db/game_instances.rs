@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::validate_instance_name;
-use crate::game::{GameId, ark_asa, rust};
+use crate::game::{GameId, ark_asa, cs2, rust};
 use crate::paths::Paths;
 
 pub(super) fn migrate_native_configuration(paths: &Paths, db: &crate::db::Db) -> Result<()> {
@@ -224,8 +224,16 @@ impl GenericGameInstance {
 pub fn is_generic_game(game: GameId) -> bool {
     matches!(
         game,
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2
     )
+}
+
+/// Every game that keeps its configuration in the generic tables.
+pub fn generic_games() -> impl Iterator<Item = GameId> {
+    crate::game::drivers()
+        .into_iter()
+        .map(|driver| driver.id())
+        .filter(|game| is_generic_game(*game))
 }
 
 pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
@@ -253,6 +261,14 @@ pub fn default_generic_config(game: GameId, _name: &str) -> GenericGameConfig {
             // allocation moves the complete group together for later
             // instances.
             admin_port: Some(26903),
+            auto_restart: false,
+        },
+        GameId::Cs2 => GenericGameConfig {
+            port: 27015,
+            // Source RCON shares the TCP game port, and the SourceTV port is
+            // derived from the game port, so neither is configurable.
+            query_port: None,
+            admin_port: None,
             auto_restart: false,
         },
         _ => unreachable!("only generic games have generic defaults"),
@@ -339,6 +355,13 @@ pub fn create_generic(
             params![id, options.map, options.session_name, serde_json::to_string(&options.mods)?, uuid::Uuid::new_v4().to_string()],
         )?;
     }
+    if game == GameId::Cs2 {
+        let options = cs2::Cs2LaunchOptions::defaults();
+        tx.execute(
+            "INSERT INTO cs2_launch_options (instance_id, map, game_mode, max_players, gslt, rcon_password) VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+            params![id, options.map, options.game_mode.as_str(), options.max_players, uuid::Uuid::new_v4().to_string()],
+        )?;
+    }
     tx.commit()?;
     drop(conn);
     load_generic(db, game, name)?.context("failed to load newly-created game instance")
@@ -359,11 +382,7 @@ pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
             instance.config.rcon_port,
         ]);
     }
-    for game in [
-        GameId::ArkSurvivalAscended,
-        GameId::Palworld,
-        GameId::SevenDaysToDie,
-    ] {
+    for game in generic_games() {
         for instance in list_generic(db, game)? {
             ports.extend(claimed_ports(game, &instance.config)?);
         }
@@ -374,6 +393,8 @@ pub fn configured_ports(db: &crate::db::Db) -> Result<HashSet<u16>> {
 pub fn claimed_ports(game: GameId, config: &GenericGameConfig) -> Result<Vec<u16>> {
     let mut ports = if game == GameId::SevenDaysToDie {
         crate::game::ports::block(game, config.port)?
+    } else if game == GameId::Cs2 {
+        vec![config.port, cs2::tv_port(config.port)?]
     } else {
         vec![config.port]
     };
@@ -471,6 +492,14 @@ pub fn validate_generic_config(game: GameId, config: &GenericGameConfig) -> Resu
         bail!(InvalidGenericConfig(
             "7 Days to Die console port is required".into(),
         ));
+    }
+    if game == GameId::Cs2 && (config.query_port.is_some() || config.admin_port.is_some()) {
+        bail!(InvalidGenericConfig(
+            "Counter-Strike 2 has no separate query or RCON port: both use the game port".into()
+        ));
+    }
+    if game == GameId::Cs2 {
+        cs2::tv_port(config.port).map_err(|error| InvalidGenericConfig(error.to_string()))?;
     }
     if game == GameId::ArkSurvivalAscended
         && (config.query_port.is_none() || config.admin_port.is_none())
@@ -714,6 +743,62 @@ pub fn update_ark_launch_options(
     db.conn().execute(
         "UPDATE ark_launch_options SET map = ?2, session_name = ?3, mods = ?4 WHERE instance_id = ?1",
         params![instance.identity.id, options.map, options.session_name, serde_json::to_string(&options.mods)?],
+    )?;
+    Ok(())
+}
+
+pub fn cs2_launch(db: &crate::db::Db, instance: &GenericGameInstance) -> Result<cs2::Cs2Launch> {
+    anyhow::ensure!(
+        instance.identity.game == GameId::Cs2,
+        "not a Counter-Strike 2 instance"
+    );
+    let row = {
+        let connection = db.conn();
+        connection
+            .query_row(
+                "SELECT map, game_mode, max_players, gslt, rcon_password FROM cs2_launch_options WHERE instance_id = ?1",
+                params![instance.identity.id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u8>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+    };
+    let (map, game_mode, max_players, gslt, rcon_password) =
+        row.context("Counter-Strike 2 instance is missing launch options")?;
+    Ok(cs2::Cs2Launch {
+        name: instance.name().to_string(),
+        port: instance.config.port,
+        tv_port: cs2::tv_port(instance.config.port)?,
+        rcon_password,
+        options: cs2::Cs2LaunchOptions {
+            map,
+            game_mode: cs2::Cs2GameMode::parse(&game_mode)?,
+            max_players,
+            gslt,
+        },
+    })
+}
+
+pub fn update_cs2_launch_options(
+    db: &crate::db::Db,
+    instance: &GenericGameInstance,
+    options: &cs2::Cs2LaunchOptions,
+) -> Result<()> {
+    options.validate()?;
+    anyhow::ensure!(
+        instance.identity.game == GameId::Cs2,
+        "not a Counter-Strike 2 instance"
+    );
+    db.conn().execute(
+        "UPDATE cs2_launch_options SET map = ?2, game_mode = ?3, max_players = ?4, gslt = ?5 WHERE instance_id = ?1",
+        params![instance.identity.id, options.map, options.game_mode.as_str(), options.max_players, options.gslt],
     )?;
     Ok(())
 }
@@ -1181,6 +1266,91 @@ mod tests {
             second.id
         );
         std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn cs2_instances_claim_the_game_and_derived_sourcetv_ports() {
+        let (paths, db) = temp_context("cs2-ports");
+        let first = create_generic(&paths, &db, GameId::Cs2, "dust").unwrap();
+        let second = create_generic(&paths, &db, GameId::Cs2, "mirage").unwrap();
+
+        assert_eq!(first.config.port, 27015);
+        assert_eq!(first.config.query_port, None);
+        assert_eq!(first.config.admin_port, None);
+        assert_eq!(
+            claimed_ports(GameId::Cs2, &first.config).unwrap(),
+            [27015, 27020]
+        );
+        // The next instance moves the whole group, so SourceTV never repeats.
+        assert_eq!(
+            claimed_ports(GameId::Cs2, &second.config).unwrap(),
+            [27025, 27030]
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn cs2_launch_options_start_with_defaults_and_are_editable() {
+        let (paths, db) = temp_context("cs2-launch");
+        let instance = create_generic(&paths, &db, GameId::Cs2, "dust").unwrap();
+
+        let launch = cs2_launch(&db, &instance).unwrap();
+        assert_eq!(launch.name, "dust");
+        assert_eq!(launch.port, 27015);
+        assert_eq!(launch.tv_port, 27020);
+        assert_eq!(launch.options, cs2::Cs2LaunchOptions::defaults());
+        assert!(!launch.rcon_password.is_empty());
+
+        let options = cs2::Cs2LaunchOptions {
+            map: "de_inferno".into(),
+            game_mode: cs2::Cs2GameMode::Wingman,
+            max_players: 8,
+            gslt: Some("ABCDEF0123456789".into()),
+        };
+        update_cs2_launch_options(&db, &instance, &options).unwrap();
+        let edited = cs2_launch(&db, &instance).unwrap();
+        assert_eq!(edited.options, options);
+        // Editing launch options never rotates the RCON password.
+        assert_eq!(edited.rcon_password, launch.rcon_password);
+        assert!(
+            update_cs2_launch_options(
+                &db,
+                &instance,
+                &cs2::Cs2LaunchOptions {
+                    map: "bad map".into(),
+                    ..options
+                }
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn cs2_has_no_separate_query_or_rcon_port() {
+        let config = GenericGameConfig {
+            port: 27015,
+            query_port: None,
+            admin_port: None,
+            auto_restart: false,
+        };
+        assert!(validate_generic_config(GameId::Cs2, &config).is_ok());
+        for config in [
+            GenericGameConfig {
+                query_port: Some(27016),
+                ..config.clone()
+            },
+            GenericGameConfig {
+                admin_port: Some(27017),
+                ..config.clone()
+            },
+            GenericGameConfig {
+                port: u16::MAX,
+                ..config
+            },
+        ] {
+            assert!(validate_generic_config(GameId::Cs2, &config).is_err());
+        }
     }
 
     #[test]

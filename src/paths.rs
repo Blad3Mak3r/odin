@@ -83,7 +83,8 @@ impl Paths {
             GameId::ArkSurvivalAscended
             | GameId::Rust
             | GameId::Palworld
-            | GameId::SevenDaysToDie => self
+            | GameId::SevenDaysToDie
+            | GameId::Cs2 => self
                 .data_dir
                 .join("games")
                 .join(game.as_str())

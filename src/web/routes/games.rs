@@ -54,6 +54,8 @@ pub struct CreateGameInstanceRequest {
     pub install_mode: Option<game_instances::InstallMode>,
     #[serde(default)]
     pub ark_launch: Option<crate::game::ark_asa::ArkLaunchOptions>,
+    #[serde(default)]
+    pub cs2_launch: Option<crate::game::cs2::Cs2LaunchOptions>,
 }
 
 #[derive(Deserialize)]
@@ -84,6 +86,13 @@ pub struct GenericConfigUpdateRequest {
     pub session_name: Option<String>,
     #[serde(default)]
     pub mods: Option<Vec<u64>>,
+    #[serde(default)]
+    pub game_mode: Option<crate::game::cs2::Cs2GameMode>,
+    #[serde(default)]
+    pub max_players: Option<u8>,
+    /// Counter-Strike 2 login token; an empty string removes it.
+    #[serde(default)]
+    pub gslt: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -240,11 +249,7 @@ pub(crate) fn all_instance_views(
 ) -> anyhow::Result<Vec<ManagedInstanceView>> {
     let mut views = valheim_views(paths, db)?;
     views.extend(rust_views(paths, db)?);
-    for game in [
-        GameId::ArkSurvivalAscended,
-        GameId::Palworld,
-        GameId::SevenDaysToDie,
-    ] {
+    for game in game_instances::generic_games() {
         views.extend(generic_views(paths, db, game)?);
     }
     views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
@@ -269,7 +274,7 @@ pub async fn list_instances(
     let views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
         GameId::Rust => rust_views(&paths, &db),
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
             generic_views(&paths, &db, game)
         }
     })
@@ -295,7 +300,13 @@ pub async fn create_instance(
         if request.ark_launch.is_some() && game != GameId::ArkSurvivalAscended {
             anyhow::bail!("launch options are only supported by ARK: Survival Ascended");
         }
+        if request.cs2_launch.is_some() && game != GameId::Cs2 {
+            anyhow::bail!("these launch options are only supported by Counter-Strike 2");
+        }
         if let Some(options) = request.ark_launch.as_ref() {
+            options.validate()?;
+        }
+        if let Some(options) = request.cs2_launch.as_ref() {
             options.validate()?;
         }
         let instance = game_instances_ops::create(&paths, &db, game, &request.name)?;
@@ -308,6 +319,11 @@ pub async fn create_instance(
             (request.ark_launch.as_ref(), &instance)
         {
             game_instances::update_ark_launch_options(&db, generic, options)?;
+        }
+        if let (Some(options), game_instances_ops::GameInstance::Generic(generic)) =
+            (request.cs2_launch.as_ref(), &instance)
+        {
+            game_instances::update_cs2_launch_options(&db, generic, options)?;
         }
         game_instance_view(&paths, &db, instance)
     })
@@ -417,9 +433,19 @@ async fn update_generic_config_for(
     let db = state.db.clone();
     let view = run_blocking(move || {
         if game != GameId::ArkSurvivalAscended
-            && (request.map.is_some() || request.session_name.is_some() || request.mods.is_some())
+            && (request.session_name.is_some() || request.mods.is_some())
         {
             anyhow::bail!("ARK launch options are only supported by ARK: Survival Ascended");
+        }
+        if game != GameId::Cs2
+            && (request.game_mode.is_some()
+                || request.max_players.is_some()
+                || request.gslt.is_some())
+        {
+            anyhow::bail!("these launch options are only supported by Counter-Strike 2");
+        }
+        if !matches!(game, GameId::ArkSurvivalAscended | GameId::Cs2) && request.map.is_some() {
+            anyhow::bail!("the start map is only configurable for ARK and Counter-Strike 2");
         }
         let config = game_instances::GenericGameConfig {
             port: request.port,
@@ -435,7 +461,7 @@ async fn update_generic_config_for(
             && (request.map.is_some() || request.session_name.is_some() || request.mods.is_some())
         {
             let mut options = game_instances::ark_launch(&db, &instance)?.options;
-            if let Some(map) = request.map {
+            if let Some(map) = request.map.clone() {
                 options.map = map;
             }
             if let Some(session_name) = request.session_name {
@@ -445,6 +471,27 @@ async fn update_generic_config_for(
                 options.mods = mods;
             }
             game_instances::update_ark_launch_options(&db, &instance, &options)?;
+        }
+        if game == GameId::Cs2
+            && (request.map.is_some()
+                || request.game_mode.is_some()
+                || request.max_players.is_some()
+                || request.gslt.is_some())
+        {
+            let mut options = game_instances::cs2_launch(&db, &instance)?.options;
+            if let Some(map) = request.map.clone() {
+                options.map = map;
+            }
+            if let Some(game_mode) = request.game_mode {
+                options.game_mode = game_mode;
+            }
+            if let Some(max_players) = request.max_players {
+                options.max_players = max_players;
+            }
+            if let Some(gslt) = request.gslt {
+                options.gslt = Some(gslt.trim().to_string()).filter(|token| !token.is_empty());
+            }
+            game_instances::update_cs2_launch_options(&db, &instance, &options)?;
         }
         crate::game::config_documents::sync_operational(&paths, &instance)?;
         generic_view(&paths, &db, instance)
@@ -468,7 +515,7 @@ pub async fn update_config_by_id(
                 .map_err(|error| BadRequest(format!("invalid Rust configuration: {error}")))?;
             update_rust_config_for(state, identity.name, request).await
         }
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
             let request = serde_json::from_value(request)
                 .map_err(|error| BadRequest(format!("invalid game configuration: {error}")))?;
             update_generic_config_for(state, identity.game, identity.name, request).await
@@ -1253,6 +1300,15 @@ fn generic_view(
         config["map"] = Value::String(launch.options.map);
         config["session_name"] = Value::String(launch.options.session_name);
         config["mods"] = serde_json::to_value(launch.options.mods)?;
+    }
+    if game == GameId::Cs2 {
+        let launch = game_instances::cs2_launch(db, &instance)?;
+        config["map"] = Value::String(launch.options.map);
+        config["game_mode"] = serde_json::to_value(launch.options.game_mode)?;
+        config["max_players"] = Value::from(launch.options.max_players);
+        config["tv_port"] = Value::from(launch.tv_port);
+        // The token itself never leaves the server.
+        config["has_gslt"] = Value::Bool(launch.options.gslt.is_some());
     }
     let execution = dispatch::execution(paths, &instance.identity);
     Ok(ManagedInstanceView {

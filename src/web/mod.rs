@@ -145,7 +145,7 @@ async fn stop_running_instances(state: &AppState) -> Result<()> {
             failures.push(format!("rust/{}: {error:#}", rust_instance.name()));
         }
     }
-    for game in [GameId::Palworld, GameId::SevenDaysToDie] {
+    for game in game_instances::generic_games() {
         for generic_instance in game_instances::list_generic(&state.db, game)? {
             if crate::game::instances::is_running(
                 &state.paths,
@@ -505,7 +505,7 @@ fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
         }
     }
 
-    for game in [GameId::Palworld, GameId::SevenDaysToDie] {
+    for game in game_instances::generic_games() {
         let Ok(generic_instances) = game_instances::list_generic(&state.db, game) else {
             continue;
         };
@@ -943,6 +943,43 @@ mod tests {
         crate::db::game_instances::create_generic(&state.paths, &db, GameId::Palworld, "pals")
             .unwrap();
         crate::db::game_instances::set_generic_auto_restart(&db, GameId::Palworld, "pals", true)
+            .unwrap();
+
+        assert!(
+            run_telemetry_tick(&state)
+                .crashed_generic_with_auto_restart
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_crashed_cs2_container_is_restarted_when_automatic_restart_is_on() {
+        let Some((state, db, root)) = container_state("crash-cs2") else {
+            return;
+        };
+        let instance =
+            crate::db::game_instances::create_generic(&state.paths, &db, GameId::Cs2, "dust")
+                .unwrap();
+        crate::db::game_instances::set_generic_auto_restart(&db, GameId::Cs2, "dust", true)
+            .unwrap();
+        crate::db::container_instances::set_desired_running(&db, &instance.identity.id, true)
+            .unwrap();
+
+        assert_eq!(
+            run_telemetry_tick(&state).crashed_generic_with_auto_restart,
+            [(GameId::Cs2, "dust".to_string())]
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_stopped_cs2_container_is_not_restarted_after_an_operator_stop() {
+        let Some((state, db, root)) = container_state("stop-cs2") else {
+            return;
+        };
+        crate::db::game_instances::create_generic(&state.paths, &db, GameId::Cs2, "dust").unwrap();
+        crate::db::game_instances::set_generic_auto_restart(&db, GameId::Cs2, "dust", true)
             .unwrap();
 
         assert!(

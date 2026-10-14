@@ -19,6 +19,7 @@ use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits::ResourceLimits;
 use crate::game::GameId;
 use crate::game::ark_asa::ArkLaunch;
+use crate::game::cs2::Cs2Launch;
 use crate::game::palworld::PalworldLaunch;
 use crate::game::rust::RustLaunch;
 use crate::game::seven_days_to_die::SevenDaysLaunch;
@@ -26,6 +27,7 @@ use crate::instance::state::InstanceState;
 use crate::paths::Paths;
 
 pub mod ark_asa;
+pub mod cs2;
 pub mod dispatch;
 pub mod lifecycle;
 pub mod palworld;
@@ -626,6 +628,7 @@ pub enum Launch {
     Palworld(PalworldLaunch),
     #[serde(rename = "ark-asa")]
     ArkSurvivalAscended(ArkLaunch),
+    Cs2(Cs2Launch),
 }
 
 impl Launch {
@@ -636,6 +639,7 @@ impl Launch {
             Self::SevenDaysToDie(_) => GameId::SevenDaysToDie,
             Self::Palworld(_) => GameId::Palworld,
             Self::ArkSurvivalAscended(_) => GameId::ArkSurvivalAscended,
+            Self::Cs2(_) => GameId::Cs2,
         }
     }
 
@@ -646,6 +650,7 @@ impl Launch {
             Self::SevenDaysToDie(launch) => &launch.name,
             Self::Palworld(launch) => &launch.name,
             Self::ArkSurvivalAscended(launch) => &launch.name,
+            Self::Cs2(launch) => &launch.name,
         }
     }
 
@@ -699,6 +704,15 @@ impl Launch {
                 &spec.steamcmd_dir,
                 launch,
             ),
+            Self::Cs2(launch) => {
+                crate::game::cs2::prepare_runtime(
+                    &spec.install_dir,
+                    &spec.instance_dir,
+                    &spec.steamcmd_dir,
+                    spec.shared_install,
+                )?;
+                crate::game::cs2::build_command_at(&spec.install_dir, console_log, launch)
+            }
         }
     }
 
@@ -744,6 +758,13 @@ impl Launch {
             Self::ArkSurvivalAscended(launch) => tokio::time::timeout(
                 CONSOLE_STOP_TIMEOUT,
                 crate::game::ark_asa::save_and_exit(launch.rcon_port, &launch.rcon_password),
+            )
+            .await
+            .is_ok_and(|result| result.is_ok()),
+            // CS2 keeps no world; `quit` just ends the process cleanly.
+            Self::Cs2(launch) => tokio::time::timeout(
+                CONSOLE_STOP_TIMEOUT,
+                crate::game::rcon::source::send(launch.port, &launch.rcon_password, &["quit"]),
             )
             .await
             .is_ok_and(|result| result.is_ok()),
@@ -1309,6 +1330,39 @@ mod tests {
         assert!(matches!(
             spec.launch,
             Launch::Palworld(launch) if launch.port == 8211 && launch.query_port == 27015
+        ));
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn runtime_spec_round_trips_the_cs2_launch_under_its_game_id() {
+        let paths = paths();
+        let identity = GameInstanceIdentity {
+            game: GameId::Cs2,
+            name: "dust".into(),
+            ..rust_identity()
+        };
+        let launch = crate::game::cs2::Cs2Launch {
+            name: "dust".into(),
+            port: 27015,
+            tv_port: 27020,
+            rcon_password: "secret".into(),
+            options: crate::game::cs2::Cs2LaunchOptions::defaults(),
+        };
+
+        let path = write_runtime_spec(&paths, &identity, Launch::Cs2(launch)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let spec: RuntimeSpec = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(json["game"], "cs2");
+        assert_eq!(spec.install_dir, PathBuf::from("/srv/odin/runtime/cs2"));
+        assert_eq!(spec.launch.game(), GameId::Cs2);
+        assert!(matches!(
+            spec.launch,
+            Launch::Cs2(launch) if launch.port == 27015
+                && launch.tv_port == 27020
+                && launch.options.map == "de_dust2"
         ));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

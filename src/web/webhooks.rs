@@ -142,6 +142,7 @@ fn game_name(game: crate::game::GameId) -> &'static str {
         crate::game::GameId::Rust => "Rust",
         crate::game::GameId::Palworld => "Palworld",
         crate::game::GameId::SevenDaysToDie => "7 Days to Die",
+        crate::game::GameId::Cs2 => "Counter-Strike 2",
     }
 }
 

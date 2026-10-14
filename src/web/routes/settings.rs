@@ -249,12 +249,13 @@ fn remove_stopped_runtimes(
                 .into_iter()
                 .map(|instance| instance.name().to_owned())
                 .collect(),
-            GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
-                crate::db::game_instances::list_generic(db, game)?
-                    .into_iter()
-                    .map(|instance| instance.name().to_owned())
-                    .collect()
-            }
+            GameId::ArkSurvivalAscended
+            | GameId::Palworld
+            | GameId::SevenDaysToDie
+            | GameId::Cs2 => crate::db::game_instances::list_generic(db, game)?
+                .into_iter()
+                .map(|instance| instance.name().to_owned())
+                .collect(),
         };
         for name in names {
             if !crate::podman::dispatch::is_running(paths, db, game, &name)? {

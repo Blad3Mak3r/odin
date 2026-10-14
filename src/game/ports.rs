@@ -84,7 +84,7 @@ pub fn ensure_available(
             }
         }
     }
-    for other_game in [GameId::Palworld, GameId::SevenDaysToDie] {
+    for other_game in crate::db::game_instances::generic_games() {
         for instance in crate::db::game_instances::list_generic(db, other_game)? {
             if game == other_game && instance.name() == name {
                 continue;
@@ -304,6 +304,58 @@ mod tests {
                 .to_string()
                 .contains("running palworld instance 'pals'")
         );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn a_running_cs2_container_reserves_its_game_and_sourcetv_ports() {
+        use crate::podman::test_support::{temp_paths, write_podman_config};
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
+        let paths = temp_paths("ports-cs2");
+        let socket = paths.data_dir.join("podman.sock");
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut String::new())
+                .unwrap();
+            let body = r#"{"State":{"Running":true,"Status":"running"}}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        });
+        write_podman_config(&paths, &socket);
+        let db = crate::db::Db::open(&paths).unwrap();
+        // Born containerized, with no host pid to fingerprint.
+        let dust = crate::game::instances::create(&paths, &db, GameId::Cs2, "dust")
+            .map(|created| match created {
+                crate::game::instances::GameInstance::Generic(instance) => instance,
+                _ => unreachable!("created a generic instance"),
+            })
+            .unwrap();
+
+        let error = ensure_available(
+            &paths,
+            &db,
+            GameId::Rust,
+            "rust-server",
+            [crate::game::cs2::tv_port(dust.config.port).unwrap()],
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("running cs2 instance 'dust'"));
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 }

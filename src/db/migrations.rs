@@ -60,7 +60,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         // 0021 replaces the parent identity table in order to widen its
         // SQLite CHECK constraint. SQLite only permits that operation with
         // foreign keys disabled before a transaction begins.
-        if version == 21 || version == 23 || version == 33 {
+        if version == 21 || version == 23 || version == 33 || version == 35 {
             conn.pragma_update(None, "foreign_keys", "OFF")?;
             let result = conn
                 .execute_batch(sql)
@@ -467,6 +467,59 @@ mod tests {
         conn.execute(
             "INSERT INTO game_instances (id, game, name, created_at) VALUES ('ark', 'ark-asa', 'ark', '2026-01-01T00:00:00Z')",
             [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn v35_adds_cs2_and_keeps_existing_instances_and_activity() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 35 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at)
+             VALUES ('ark', 'ark-asa', 'ark', '2026-01-01T00:00:00Z');
+             INSERT INTO game_instance_install (instance_id, install_mode) VALUES ('ark', 'shared');
+             INSERT INTO activity_events (id, at, instance, kind, instance_id, game)
+             VALUES ('event', '2026-01-01T00:00:00Z', 'ark', 'instance_created', 'ark', 'ark-asa');",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let mode: String = conn
+            .query_row(
+                "SELECT install_mode FROM game_instance_install WHERE instance_id = 'ark'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mode, "shared");
+        let game: String = conn
+            .query_row(
+                "SELECT game FROM activity_events WHERE id = 'event'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(game, "ark-asa");
+        conn.execute_batch(
+            "INSERT INTO game_instances (id, game, name, created_at)
+             VALUES ('cs', 'cs2', 'cs', '2026-01-01T00:00:00Z');
+             INSERT INTO activity_events (id, at, kind, instance_id, game)
+             VALUES ('cs-event', '2026-01-01T00:00:00Z', 'instance_created', 'cs', 'cs2');
+             INSERT INTO cs2_launch_options (instance_id, map, game_mode, max_players, gslt, rcon_password)
+             VALUES ('cs', 'de_dust2', 'competitive', 10, NULL, 'secret');",
         )
         .unwrap();
     }

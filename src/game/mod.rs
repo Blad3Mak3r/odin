@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod ark_asa;
 pub mod config_documents;
+pub mod cs2;
 pub mod instances;
 pub mod palworld;
 pub mod ports;
@@ -28,6 +29,7 @@ pub enum GameId {
     Palworld,
     #[serde(rename = "7d2d")]
     SevenDaysToDie,
+    Cs2,
 }
 
 impl GameId {
@@ -38,6 +40,7 @@ impl GameId {
             Self::Rust => "rust",
             Self::Palworld => "palworld",
             Self::SevenDaysToDie => "7d2d",
+            Self::Cs2 => "cs2",
         }
     }
 }
@@ -58,6 +61,7 @@ impl FromStr for GameId {
             "rust" => Ok(Self::Rust),
             "palworld" => Ok(Self::Palworld),
             "7d2d" => Ok(Self::SevenDaysToDie),
+            "cs2" => Ok(Self::Cs2),
             _ => Err(format!("unsupported game '{value}'")),
         }
     }
@@ -130,6 +134,7 @@ struct ArkSurvivalAscendedDriver;
 struct RustDriver;
 struct PalworldDriver;
 struct SevenDaysToDieDriver;
+struct Cs2Driver;
 
 impl GameDriver for ValheimDriver {
     fn id(&self) -> GameId {
@@ -313,11 +318,49 @@ impl GameDriver for ArkSurvivalAscendedDriver {
     }
 }
 
+impl GameDriver for Cs2Driver {
+    fn id(&self) -> GameId {
+        GameId::Cs2
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Counter-Strike 2"
+    }
+
+    fn steam_app_id(&self) -> &'static str {
+        "730"
+    }
+
+    fn server_binary(&self) -> &'static str {
+        cs2::SERVER_BINARY
+    }
+
+    fn capabilities(&self) -> GameCapabilities {
+        GameCapabilities {
+            // The server has no world: its state is `server.cfg` and logs.
+            backups: false,
+            players: false,
+            mods: false,
+            access_lists: false,
+            readiness: true,
+            shared_install: true,
+            shared_install_migration: false,
+        }
+    }
+
+    fn port_requirements(&self) -> GamePortRequirements {
+        // The game port (UDP and TCP, which also carries RCON) and the
+        // SourceTV port derived from it.
+        GamePortRequirements { count: 2 }
+    }
+}
+
 static VALHEIM: ValheimDriver = ValheimDriver;
 static ARK_SURVIVAL_ASCENDED: ArkSurvivalAscendedDriver = ArkSurvivalAscendedDriver;
 static RUST: RustDriver = RustDriver;
 static PALWORLD: PalworldDriver = PalworldDriver;
 static SEVEN_DAYS_TO_DIE: SevenDaysToDieDriver = SevenDaysToDieDriver;
+static CS2: Cs2Driver = Cs2Driver;
 
 pub fn driver(game: GameId) -> &'static dyn GameDriver {
     match game {
@@ -326,16 +369,18 @@ pub fn driver(game: GameId) -> &'static dyn GameDriver {
         GameId::Rust => &RUST,
         GameId::Palworld => &PALWORLD,
         GameId::SevenDaysToDie => &SEVEN_DAYS_TO_DIE,
+        GameId::Cs2 => &CS2,
     }
 }
 
-pub fn drivers() -> [&'static dyn GameDriver; 5] {
+pub fn drivers() -> [&'static dyn GameDriver; 6] {
     [
         &VALHEIM,
         &RUST,
         &PALWORLD,
         &SEVEN_DAYS_TO_DIE,
         &ARK_SURVIVAL_ASCENDED,
+        &CS2,
     ]
 }
 

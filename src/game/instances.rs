@@ -28,6 +28,8 @@ fn generic_save_dir(paths: &Paths, instance: &GenericGameInstance) -> std::path:
         GameId::ArkSurvivalAscended => root.join("Saved/SavedArks"),
         GameId::Palworld => root.join("runtime/Pal/Saved/SaveGames"),
         GameId::SevenDaysToDie => root.join("Saves"),
+        // No world: the server's state is its config and logs.
+        GameId::Cs2 => root.join("cfg"),
         GameId::Valheim | GameId::Rust => unreachable!(),
     }
 }
@@ -37,7 +39,7 @@ pub fn create(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameIn
     let instance = match game {
         GameId::Valheim => Instance::create(paths, db, name).map(GameInstance::Valheim),
         GameId::Rust => game_instances::create_rust(paths, db, name).map(GameInstance::Rust),
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
             game_instances::create_generic(paths, db, game, name).map(GameInstance::Generic)
         }
     }?;
@@ -75,7 +77,7 @@ pub fn load(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<GameInst
         GameId::Rust => game_instances::load_rust(db, name)?
             .map(GameInstance::Rust)
             .context("Rust instance does not exist"),
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
             game_instances::load_generic(db, game, name)?
                 .map(GameInstance::Generic)
                 .context("game instance does not exist")
@@ -152,7 +154,7 @@ pub fn delete(paths: &Paths, db: &Db, game: GameId, name: &str, keep_backups: bo
             dispatch::remove(paths, db, game, name)?;
             rust::delete(paths, db, &instance, keep_backups)
         }
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
             let _lock = lifecycle::LifecycleLock::acquire(paths, game, name)?;
             let instance = game_instances::load_generic(db, game, name)?
                 .context("game instance does not exist")?;

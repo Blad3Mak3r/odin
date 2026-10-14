@@ -21,7 +21,5 @@ RUN apt-get update \
         libxrandr2 \
         python3 \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/odin/proton \
     && curl -fsSL "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/${GE_PROTON_TAG}/${GE_PROTON_TAG}.tar.gz" \
-      | tar -xz -C /opt/odin/proton --strip-components=1 \
-    && ln -s /opt/odin/proton/proton /usr/local/bin/proton
+      | tar -xz -C /usr/local/bin --strip-components=1

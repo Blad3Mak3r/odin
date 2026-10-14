@@ -21,6 +21,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/version", get(version::get_version))
         .route("/update", post(version::start_system_update))
         .route("/changelog", get(changelog::get_changelog))
+        .route(
+            "/changelog/update-check",
+            get(changelog::get_update_check_status).post(changelog::check_for_updates),
+        )
         .route("/doctor", get(doctor::get_doctor))
         .route("/games", get(games::list_games))
         .route(

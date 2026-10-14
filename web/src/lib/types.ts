@@ -190,6 +190,14 @@ export interface ChangelogRelease {
   sections: ChangelogSection[]
 }
 
+export interface UpdateCheckView {
+  checked: boolean
+  latest_version: string | null
+  latest_release_url: string | null
+  update_available: boolean
+  cooldown_remaining_seconds: number
+}
+
 export interface CheckResult {
   label: string
   ok: boolean

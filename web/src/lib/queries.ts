@@ -12,6 +12,7 @@ import type {
   BepInExStatus,
   BulkBepInExResult,
   ChangelogRelease,
+  UpdateCheckView,
   CheckResult,
   ConfigFileEntry,
   ConfigFileView,
@@ -96,6 +97,22 @@ export function useChangelog() {
     queryKey: ['changelog'],
     queryFn: () => api.get<ChangelogRelease[]>('/changelog'),
     staleTime: Infinity,
+  })
+}
+
+export function useUpdateCheckStatus() {
+  return useQuery({
+    queryKey: ['changelog', 'update-check'],
+    queryFn: () => api.get<UpdateCheckView>('/changelog/update-check'),
+    refetchInterval: 1_000,
+  })
+}
+
+export function useCheckForUpdates() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<UpdateCheckView>('/changelog/update-check'),
+    onSuccess: (result) => queryClient.setQueryData(['changelog', 'update-check'], result),
   })
 }
 

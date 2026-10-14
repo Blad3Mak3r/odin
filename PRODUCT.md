@@ -23,8 +23,8 @@ updates supported servers through SteamCMD, runs each isolated named instance
 in its own Podman container, exposes each game's configuration, and provides
 backups plus the game-specific capabilities Odin supports.
 
-The currently compiled game drivers are Valheim, Rust, Palworld, and
-7 Days to Die. Odin is not a general-purpose
+The currently compiled game drivers are Valheim, Rust, Palworld,
+7 Days to Die, ARK: Survival Ascended, and Counter-Strike 2. Odin is not a general-purpose
 plugin host: supported games ship as compiled drivers with explicit launch,
 storage, and configuration contracts.
 

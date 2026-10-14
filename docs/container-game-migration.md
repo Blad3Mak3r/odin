@@ -1,8 +1,8 @@
 # Adding a game to the Podman runtime
 
 This guide is for agents and contributors adding a game that runs in an
-`odin-srv` Podman container. Every game does: Valheim, Rust, 7 Days to Die and
-Palworld are already there, and there is no host-process mode. Read the code of
+`odin-srv` Podman container. Every game does: Valheim, Rust, 7 Days to Die,
+Palworld, ARK: Survival Ascended and Counter-Strike 2 are already there, and there is no host-process mode. Read the code of
 the one closest to your game before starting:
 
 | If your game... | Copy |
@@ -114,8 +114,15 @@ drivers.
    and SteamCMD log are game-neutral, but shared-install games require their
    game-scoped install and configuration controls.
 
-Things that look necessary but are **not**: DB migrations (`instance_runtime_state`
-is game-neutral), `containers/` changes (unless the server needs an apt
+A new game **does** need a DB migration: `game_instances.game` and
+`activity_events.game` carry a `CHECK (game IN (...))` list, so the next
+`00NN_<game>.sql` rebuilds both tables with the new id (copy `0035_cs2.sql`) and
+its version joins the foreign-keys-off list in `src/db/migrations.rs`. A table
+for typed launch options (`cs2_launch_options`) is only needed when Odin must
+pass settings the game has no file for.
+
+Things that look necessary but are **not**: DB changes for instance runtime
+state (`instance_runtime_state` is game-neutral), `containers/` changes (unless the server needs an apt
 package the image lacks), `CHANGELOG.md` (written by release commits),
 `web/src` game-id branches, new CLI commands.
 
@@ -166,8 +173,8 @@ shown to need it (`SteamCmd::ensure_sdk64_client_at`).
 ## Shared installs
 
 A game can let its instances reuse one copy of the game files instead of each
-downloading a private one (ARK: Survival Ascended and 7 Days to Die do; the
-others do not yet). 7 Days to Die is the minimal example: its server writes
+downloading a private one (ARK: Survival Ascended, 7 Days to Die and
+Counter-Strike 2 do; the others do not yet). 7 Days to Die is the minimal example: its server writes
 everything under `-UserDataFolder`, so it needs the shared mount (read-only,
 checked by running it against a read-only install tree) and nothing else.
 The game-neutral part lives in `src/podman/shared_install.rs`; a game opts in

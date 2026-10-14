@@ -8,7 +8,8 @@ it.
 ## What this project is
 
 Odin is a single Rust binary that manages the full lifecycle of dedicated
-game servers on Linux (Valheim, Rust, Palworld, 7 Days to Die): running
+game servers on Linux (Valheim, Rust, Palworld, 7 Days to Die, ARK: Survival
+Ascended, Counter-Strike 2): running
 multiple independent named "instances", each in its own Podman container
 (see `src/podman/`), with the game installed and updated by SteamCMD inside
 that container, managing per-instance config and access lists, taking

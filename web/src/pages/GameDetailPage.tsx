@@ -23,13 +23,13 @@ function RuntimeCard({ game }: { game: GameView }) {
   return <Card><CardHeader><CardTitle>Per-instance runtime</CardTitle><CardDescription>{game.name} is installed and updated inside each running Podman runtime. Create an instance, start it, then use its Update action.</CardDescription></CardHeader></Card>
 }
 
-function ArkSharedInstallCard() {
-  const install = useSharedInstall('ark-asa', true)
-  const start = useInstallShared('ark-asa')
-  if (install.isLoading) return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>Checking the shared ARK payload…</CardDescription></CardHeader></Card>
+function SharedInstallCard({ game }: { game: GameView }) {
+  const install = useSharedInstall(game.id, true)
+  const start = useInstallShared(game.id)
+  if (install.isLoading) return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>Checking the shared {game.name} payload…</CardDescription></CardHeader></Card>
   if (install.isError) return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>Its status could not be loaded.</CardDescription></CardHeader></Card>
   const state = install.data
-  return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>One ARK payload can be reused by shared instances. Stop every shared instance before installing or updating it.</CardDescription></CardHeader><CardContent className="flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">{state?.running ? 'Installing…' : state?.installed ? `Installed${state.build_id ? ` · Steam build ${state.build_id}` : ''}` : 'Not installed'}</p><Button type="button" disabled={state?.running || start.isPending} onClick={() => start.mutate(undefined, { onSuccess: () => toast.success('Shared ARK installation started'), onError: (error) => toast.error(error.message) })}>{state?.installed ? 'Update shared install' : 'Install shared files'}</Button></CardContent></Card>
+  return <Card><CardHeader><CardTitle>Shared installation</CardTitle><CardDescription>One {game.name} payload can be reused by shared instances. Stop every shared instance before installing or updating it.</CardDescription></CardHeader><CardContent className="flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">{state?.running ? 'Installing…' : state?.installed ? `Installed${state.build_id ? ` · Steam build ${state.build_id}` : ''}` : 'Not installed'}</p><Button type="button" disabled={state?.running || start.isPending} onClick={() => start.mutate(undefined, { onSuccess: () => toast.success(`Shared ${game.name} installation started`), onError: (error) => toast.error(error.message) })}>{state?.installed ? 'Update shared install' : 'Install shared files'}</Button></CardContent></Card>
 }
 
 function ArkSharedConfigCard() {
@@ -150,7 +150,7 @@ export function GameDetailPage() {
           ...(hasGlobalMods(game) ? [{ label: 'Mods', to: `/games/${game.id}/mods` }] : []),
         ]}
       />
-      {activeTab === 'overview' && (game.id === 'ark-asa' ? <><ArkSharedInstallCard /><ArkClustersCard /></> : <RuntimeCard game={game} />)}
+      {activeTab === 'overview' && (game.capabilities.shared_install ? <><SharedInstallCard game={game} />{game.id === 'ark-asa' && <ArkClustersCard />}</> : <RuntimeCard game={game} />)}
       {activeTab === 'instances' && <GameInstances game={game} />}
       {activeTab === 'config' && <ArkSharedConfigCard />}
       {activeTab === 'mods' && <ValheimModsTab path={nestedPath} />}

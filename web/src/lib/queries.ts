@@ -21,6 +21,7 @@ import type {
   GameId,
   GameInstanceTransitions,
   GameView,
+  Cs2LaunchOptions,
   GenericConfigUpdateRequest,
   HostResources,
   InstanceResources,
@@ -43,6 +44,7 @@ import type {
   RuntimeImageRole,
   RuntimeImageView,
   RawAdvancedConfigFile,
+  MoveToSharedInstallResult,
   SharedInstallView,
   SevenDaysTemplateReview,
   RustAccessListKind,
@@ -325,8 +327,8 @@ export function useManagedResourceHistory(id: string, hours?: number, enabled = 
 export function useCreateManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name, install_mode, ark_launch }: { game: GameId; name: string; install_mode?: 'isolated' | 'shared'; ark_launch?: { map: string; session_name: string; mods: number[] } }) =>
-      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name, install_mode, ark_launch }),
+    mutationFn: ({ game, name, install_mode, ark_launch, cs2_launch }: { game: GameId; name: string; install_mode?: 'isolated' | 'shared'; ark_launch?: { map: string; session_name: string; mods: number[] }; cs2_launch?: Cs2LaunchOptions }) =>
+      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name, install_mode, ark_launch, cs2_launch }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances'] }),
   })
 }
@@ -520,6 +522,18 @@ export function useInstallShared(game: GameId) {
   return useMutation({
     mutationFn: () => api.post<JobHandle>(`/games/${game}/install`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'install'] }),
+  })
+}
+
+export function useMoveToSharedInstall() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, delete_private_files }: { id: string; delete_private_files: boolean }) =>
+      api.post<MoveToSharedInstallResult>(`/instances/${id}/shared-install`, { delete_private_files }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['games'] })
+    },
   })
 }
 

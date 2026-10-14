@@ -328,6 +328,7 @@ fn save_root(
             .game_instance_dir(game, name)
             .join("runtime/Pal/Saved/SaveGames")),
         GameId::SevenDaysToDie => Ok(paths.game_instance_dir(game, name).join("Saves")),
+        GameId::Cs2 => Err(BadRequest("Counter-Strike 2 has no save files".into()).into()),
     }
 }
 

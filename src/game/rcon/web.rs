@@ -1,4 +1,5 @@
-//! Rust WebRCON client used by the dashboard's per-instance console.
+//! WebRCON client (WebSocket, JSON) used by Rust and the dashboard's
+//! per-instance console.
 //!
 //! Rust Dedicated exposes its RCON endpoint as a WebSocket when launched with
 //! `+rcon.web 1`. Odin always enables that mode and only connects back to the
@@ -12,8 +13,6 @@ use serde::Deserialize;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::db::game_instances::RustInstance;
-
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_IDENTIFIER: u64 = 1;
@@ -26,20 +25,9 @@ struct RconResponse {
     message: String,
 }
 
-/// Runs one console command through the instance's loopback-only WebRCON
-/// connection and returns the matching server response. The caller has
-/// already established that the server is running.
-pub async fn execute(instance: &RustInstance, command: &str) -> Result<String> {
-    execute_at(
-        instance.config.rcon_port,
-        &instance.config.rcon_password,
-        command,
-    )
-    .await
-}
-
-/// Same exchange as [`execute`] for a caller that already knows the server is
-/// reachable, such as the container runtime that owns the Rust process.
+/// Runs one console command through the server's loopback-only WebRCON
+/// connection and returns the matching response. The caller has already
+/// established that the server is running.
 pub async fn execute_at(port: u16, password: &str, command: &str) -> Result<String> {
     let mut socket = connect(port, password).await?;
     send(&mut socket, command).await?;

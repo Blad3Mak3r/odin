@@ -500,13 +500,20 @@ pub async fn update_limits(paths: &Paths, db: &Db, game: GameId, instance_id: &s
     client.update_limits(&container, &limits).await
 }
 
-pub fn remove<G: ContainerGame>(paths: &Paths, db: &Db, instance: &G::Instance) -> Result<()> {
-    let identity = G::identity(db, instance)?;
+/// Removes only the container, so the next start creates it again with the
+/// mounts the instance has by then. The instance's files are untouched.
+pub fn remove_container(paths: &Paths, identity: &GameInstanceIdentity) -> Result<()> {
     // Without a configured socket Odin cannot have created a container.
     if let Some(config) = GlobalConfig::load(paths)?.podman {
         PodmanClient::from_config(&config)?
-            .remove_blocking(&container_name(G::GAME, &identity.id), true)?;
+            .remove_blocking(&container_name(identity.game, &identity.id), true)?;
     }
+    Ok(())
+}
+
+pub fn remove<G: ContainerGame>(paths: &Paths, db: &Db, instance: &G::Instance) -> Result<()> {
+    let identity = G::identity(db, instance)?;
+    remove_container(paths, &identity)?;
     // The private runtime volume (SteamCMD and the game payload) belongs to
     // this instance alone and would otherwise outlive it.
     for directory in [

@@ -1,8 +1,8 @@
 # Adding a game to the Podman runtime
 
 This guide is for agents and contributors adding a game that runs in an
-`odin-srv` Podman container. Every game does: Valheim, Rust, 7 Days to Die and
-Palworld are already there, and there is no host-process mode. Read the code of
+`odin-srv` Podman container. Every game does: Valheim, Rust, 7 Days to Die,
+Palworld, ARK: Survival Ascended and Counter-Strike 2 are already there, and there is no host-process mode. Read the code of
 the one closest to your game before starting:
 
 | If your game... | Copy |
@@ -34,6 +34,10 @@ host                                          container (host network)
 - The spec is written by the host (`write_runtime_spec`) and contains only the
   typed launch settings Odin must pass to the process. It is not a second game
   configuration format.
+- Containers run as Odin's own user, with every capability dropped and
+  `no_new_privileges` set (`ContainerSpec::new`, and the shared installer's
+  `installer_spec`). A game server never needs more; if a new game seems to,
+  find out why before adding anything back.
 - Host networking means every game port is a host port and loopback services
   (REST, RCON, Telnet) stay reachable from the host at `127.0.0.1`.
 - Everything that identifies the container is derived from `GameId::as_str()`:
@@ -114,8 +118,15 @@ drivers.
    and SteamCMD log are game-neutral, but shared-install games require their
    game-scoped install and configuration controls.
 
-Things that look necessary but are **not**: DB migrations (`instance_runtime_state`
-is game-neutral), `containers/` changes (unless the server needs an apt
+A new game **does** need a DB migration: `game_instances.game` and
+`activity_events.game` carry a `CHECK (game IN (...))` list, so the next
+`00NN_<game>.sql` rebuilds both tables with the new id (copy `0035_cs2.sql`) and
+its version joins the foreign-keys-off list in `src/db/migrations.rs`. A table
+for typed launch options (`cs2_launch_options`) is only needed when Odin must
+pass settings the game has no file for.
+
+Things that look necessary but are **not**: DB changes for instance runtime
+state (`instance_runtime_state` is game-neutral), `containers/` changes (unless the server needs an apt
 package the image lacks), `CHANGELOG.md` (written by release commits),
 `web/src` game-id branches, new CLI commands.
 
@@ -162,6 +173,55 @@ it rather than copying game settings into SQLite.
 runs with `HOME=/srv/odin/runtime`. Rust additionally maintains the link before
 every start because Steamworks needs it; only add that for a game that is
 shown to need it (`SteamCmd::ensure_sdk64_client_at`).
+
+## Shared installs
+
+A game can let its instances reuse one copy of the game files instead of each
+downloading a private one (ARK: Survival Ascended, 7 Days to Die and
+Counter-Strike 2 do; the others do not yet). 7 Days to Die is the minimal example: its server writes
+everything under `-UserDataFolder`, so it needs the shared mount (read-only,
+checked by running it against a read-only install tree) and nothing else.
+The game-neutral part lives in `src/podman/shared_install.rs`; a game opts in
+with `shared_install: true` in its driver capabilities and supplies only what is
+specific to it.
+
+Game-neutral, nothing to add per game:
+
+- `POST /games/{game}/install` runs the installer job, `GET` reports whether the
+  server binary exists and the Steam build id. The installer is a short-lived
+  `odin-<game>-install` container running `odin install-shared --game <id>` in
+  the driver's runtime image; it refuses to run while a shared instance of the
+  game is running.
+- The `install_mode` of a new instance is accepted for every game that declares
+  the capability, stored in `game_instance_install`, and an instance's own
+  update is refused when it is shared.
+- The dashboard shows the install card on the game's overview and the install
+  mode selector in the create dialog from the capability alone.
+
+Moving an existing isolated instance onto the shared files
+(`POST /instances/{id}/shared-install`, `shared_install::migrate_to_shared`) is
+opt-in per game through `shared_install_migration`, because it must not change
+what the instance's settings mean. ARK does not opt in: its shared
+configuration would be mounted over the instance's own INI files. A game opts
+in once its per-instance state is entirely outside the install tree. The
+migration needs a stopped instance, removes only its container (a stopped
+container keeps its old mounts when started again), and either adopts the
+instance's own game files as the shared installation when none exists, which
+is a rename, or leaves them in place. They are deleted only when the request
+asks (`delete_private_files`).
+
+What the game provides in `src/podman/<game>.rs`:
+
+- `ensure_ready_to_start` calls `shared_install::ensure_ready`.
+- `prepare_layout` writes the runtime spec with
+  `write_runtime_spec_with_install_dir(.., Some(shared_install::MOUNT_DIR))`
+  when `game_instances::is_shared_install`.
+- `extra_mounts` pushes `shared_install::mount` **first** and then mounts every
+  per-instance path the server writes inside the install tree (saves, mods,
+  identity directories) on top of it. A symlink created inside the install tree
+  cannot do this job: the tree is shared, so the link target would be too.
+  Create the mountpoints on the host before the first start; otherwise Podman
+  creates them inside the shared tree as root.
 
 ## 5. Existing data
 

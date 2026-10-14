@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented for every game (Valheim, Rust, ARK: Survival Ascended, 7 Days to Die and Palworld), which
+Implemented for every game (Valheim, Rust, ARK: Survival Ascended, 7 Days to Die, Palworld and Counter-Strike 2), which
 all run in Podman containers. `instance_runtime_state.desired_running` is set
 after a successful start and cleared before an operator stop; restarts and host
 shutdowns keep it (`StopReason`). The telemetry loop restarts an instance found

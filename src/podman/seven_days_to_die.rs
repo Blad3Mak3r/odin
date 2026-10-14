@@ -12,7 +12,8 @@ use crate::game::seven_days_to_die::SevenDaysLaunch;
 use crate::paths::Paths;
 
 use super::lifecycle::ContainerGame;
-use super::{Launch, Mount, write_runtime_spec};
+use super::shared_install;
+use super::{Launch, Mount, write_runtime_spec, write_runtime_spec_with_install_dir};
 
 pub(super) struct SevenDaysToDie;
 
@@ -37,9 +38,13 @@ impl ContainerGame for SevenDaysToDie {
         game_instances::claimed_ports(GameId::SevenDaysToDie, &instance.config)
     }
 
+    fn ensure_ready_to_start(paths: &Paths, db: &Db, instance: &GenericGameInstance) -> Result<()> {
+        shared_install::ensure_ready(paths, db, &instance.identity)
+    }
+
     fn prepare_layout(
         paths: &Paths,
-        _db: &Db,
+        db: &Db,
         identity: &GameInstanceIdentity,
         instance: &GenericGameInstance,
     ) -> Result<()> {
@@ -53,20 +58,31 @@ impl ContainerGame for SevenDaysToDie {
         // keys that already exist in it are brought in line.
         crate::game::config_documents::remove_legacy_control_panel(paths, instance)?;
         crate::game::config_documents::sync_operational(paths, instance)?;
-        write_runtime_spec(
-            paths,
-            identity,
-            Launch::SevenDaysToDie(SevenDaysLaunch::from(instance)),
-        )?;
+        let launch = Launch::SevenDaysToDie(SevenDaysLaunch::from(instance));
+        if game_instances::is_shared_install(db, &identity.id)? {
+            write_runtime_spec_with_install_dir(
+                paths,
+                identity,
+                launch,
+                Some(PathBuf::from(shared_install::MOUNT_DIR)),
+            )?;
+        } else {
+            write_runtime_spec(paths, identity, launch)?;
+        }
         Ok(())
     }
 
-    fn extra_mounts(
-        _paths: &Paths,
-        _db: &Db,
-        _instance: &GenericGameInstance,
-    ) -> Result<Vec<Mount>> {
-        Ok(Vec::new())
+    fn extra_mounts(paths: &Paths, db: &Db, instance: &GenericGameInstance) -> Result<Vec<Mount>> {
+        // The server keeps everything it writes in the instance directory
+        // (`-UserDataFolder`, `-configfile`, `-logfile`) and under its private
+        // `$HOME`, so the shared files need no per-instance submount and can
+        // be read-only. A run with a read-only install tree booted, saved and
+        // stopped cleanly, and left every file in it untouched.
+        if game_instances::is_shared_install(db, &instance.identity.id)? {
+            Ok(vec![shared_install::mount_read_only(paths, Self::GAME)])
+        } else {
+            Ok(Vec::new())
+        }
     }
 }
 
@@ -174,6 +190,127 @@ mod tests {
         for directory in ["Saves", "Mods", "logs"] {
             assert!(instance_dir.join(directory).is_dir());
         }
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    fn install_shared_files(paths: &Paths) {
+        let shared = paths.shared_install_dir(GameId::SevenDaysToDie);
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(
+            shared.join(crate::game::driver(GameId::SevenDaysToDie).server_binary()),
+            b"",
+        )
+        .unwrap();
+        std::fs::write(shared.join("serverconfig.xml"), OPERATOR_CONFIG).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_shared_instance_mounts_the_shared_files_and_runs_from_them() {
+        let paths = temp_paths("7d2d-shared-start");
+        let podman_socket = paths.data_dir.join("podman.sock");
+        let listener = match UnixListener::bind(&podman_socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        write_podman_config(&paths, &podman_socket);
+        let db = Db::open(&paths).unwrap();
+        let instance =
+            game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+        game_instances::set_install_mode(
+            &db,
+            &instance.identity.id,
+            game_instances::InstallMode::Shared,
+        )
+        .unwrap();
+        install_shared_files(&paths);
+        let podman = fake_podman(listener);
+        let runtime = fake_runtime(&control_socket(&paths, &instance));
+
+        dispatch::start(&paths, &db, GameId::SevenDaysToDie, "undead")
+            .await
+            .unwrap();
+
+        let requests = podman.join().unwrap();
+        runtime.join().unwrap();
+        let create = requests
+            .iter()
+            .find(|(line, _)| line.contains("/containers/create"))
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&create.1).unwrap();
+        let mounts: Vec<_> = body["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|mount| {
+                (
+                    mount["source"].as_str().unwrap(),
+                    mount["destination"].as_str().unwrap(),
+                    mount["options"][0].as_str().unwrap(),
+                )
+            })
+            .collect();
+        let shared = paths.shared_install_dir(GameId::SevenDaysToDie);
+        assert_eq!(
+            mounts.last().copied(),
+            Some((shared.to_str().unwrap(), "/srv/odin/shared", "ro"))
+        );
+        assert_eq!(mounts.len(), 5);
+
+        let spec: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(super::super::runtime_spec_path(
+                &paths,
+                GameId::SevenDaysToDie,
+                &instance.identity.id,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(spec["install_dir"], "/srv/odin/shared");
+        assert_eq!(spec["shared_install"], true);
+        assert_eq!(spec["game"], "7d2d");
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_shared_instance_cannot_start_before_the_files_are_installed() {
+        let paths = temp_paths("7d2d-shared-missing");
+        let db = Db::open(&paths).unwrap();
+        let instance =
+            game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+        game_instances::set_install_mode(
+            &db,
+            &instance.identity.id,
+            game_instances::InstallMode::Shared,
+        )
+        .unwrap();
+
+        let error = dispatch::start(&paths, &db, GameId::SevenDaysToDie, "undead")
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            error,
+            "Install the game files from Games › 7 Days to Die before starting a shared instance"
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn the_shared_template_seeds_a_shared_instance_that_has_no_private_copy() {
+        let paths = temp_paths("7d2d-shared-template");
+        let db = Db::open(&paths).unwrap();
+        let instance =
+            game_instances::create_generic(&paths, &db, GameId::SevenDaysToDie, "undead").unwrap();
+        install_shared_files(&paths);
+
+        assert_eq!(
+            crate::game::seven_days_to_die::template_path(&paths, &instance.identity),
+            paths
+                .shared_install_dir(GameId::SevenDaysToDie)
+                .join("serverconfig.xml")
+        );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

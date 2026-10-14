@@ -2,7 +2,7 @@
 
 **Odin** is a self-hosted web service for orchestrating dedicated game
 servers on Linux. It currently supports [Valheim](https://www.valheimgame.com/),
-Rust, ARK: Survival Ascended, Palworld, and 7 Days to Die from one binary and one
+Rust, ARK: Survival Ascended, Palworld, 7 Days to Die, and Counter-Strike 2 from one binary and one
 web dashboard. In Norse mythology, Odin is
 the All-Father who watches over the nine realms; this Odin watches over your
 game servers — installing and updating them, running and supervising named
@@ -42,7 +42,7 @@ Rust v1 otherwise focuses on core operation.
   inside it — no Python or terminal multiplexer, and no game libraries on the
   host.
 - **Multiple games and UUID-addressed instances.** Orchestrate Valheim, Rust,
-  ARK: Survival Ascended, Palworld, and 7 Days to Die side by side on one host.
+  ARK: Survival Ascended, Palworld, 7 Days to Die, and Counter-Strike 2 side by side on one host.
   Each instance has a persistent UUID for dashboard navigation and API calls;
   names remain editable labels and may be reused by another game without
   sharing data or ports.
@@ -434,7 +434,8 @@ your own `systemctl --user`/init setup.
 
 ### Podman runtime
 
-Every instance runs in an `odin-srv` Podman container. Each one owns its own
+Every instance runs in an `odin-srv` Podman container, as Odin's own user and
+with no Linux capabilities and `no_new_privileges` set. Each one owns its own
 persistent SteamCMD and game payload under
 `<data>/runtimes/<game>/<uuid>/`, downloaded inside the container on its first
     start (Rust's, ARK's, 7 Days to Die's and Palworld's are several gigabytes, so that
@@ -447,7 +448,8 @@ backups stay in the instance directory.
 Rust is stopped through its RCON `quit`, 7 Days to Die through its console's
 `shutdown` and Palworld through its REST API's `shutdown`, so all of them save
 the world before exiting; if that interface is disabled or unreachable Odin
-signals the server instead.
+signals the server instead. Counter-Strike 2 has no world to save; it is
+stopped through its Source RCON `quit`, with the same fallback.
 
 Palworld keeps its saves and `PalWorldSettings.ini` in the instance directory
 under `runtime/Pal/Saved/`; inside the container the game's own `Pal/Saved`
@@ -456,10 +458,26 @@ is a link to it. Odin creates `PalWorldSettings.ini` from the server's shipped
 file. Files that earlier versions left in `runtime/` besides `Pal/Saved/` are
 unused and can be deleted.
 
-ARK: Survival Ascended runs through Proton. Instances can have private game
-files or reuse a shared installation; the dashboard's ARK page installs the
-shared payload and exposes its common native INI files under the game's
-Configuration tab. ARK clusters are local to one Odin host: create a cluster in
+Counter-Strike 2 is a native Linux server (Steam app 730, tens of gigabytes, so
+the shared installation pays off quickly). Odin passes only the game port
+(UDP and TCP; Source RCON shares the TCP port), the start map, the game mode,
+the player limit, an optional Game Server Login Token and a generated RCON
+password; everything else is in the instance's `cfg/server.cfg`, which starts
+from the file the game ships and is never replaced. SourceTV's port is derived
+from the game port (+5) and reserved with it, and an instance's `server.cfg`
+is linked (own files) or mounted (shared files) over the game's own. The
+server binds to all addresses (`-ip 0.0.0.0`): without it Counter-Strike 2
+listens for RCON only on the address its hostname resolves to. Without a login
+token the server runs but is not listed publicly.
+
+7 Days to Die, ARK: Survival Ascended and Counter-Strike 2 instances can have private game
+files or reuse a shared installation; the game's page in the dashboard installs
+and updates the shared payload, and all shared instances must be stopped while
+it does. A stopped 7 Days to Die instance with its own game files can be moved
+onto the shared installation from its Configuration tab: its saves, settings
+and mods stay where they are, its game files become the shared installation if
+there is none yet, and they are deleted only if you ask. ARK: Survival Ascended runs through Proton and exposes its common
+native INI files under the game's Configuration tab. ARK clusters are local to one Odin host: create a cluster in
 that page, select stopped ARK instances as members, and Odin mounts one
 transfer directory for the cluster while passing the shared cluster ID to each
 member. Odin does not configure cross-host filesystems; use a separately
@@ -540,6 +558,10 @@ In both modes, the data dir is resolved in this order:
       config/serverconfig.xml    # instance-local server configuration
       Mods/<mod-name>/ModInfo.xml # instance-local uploaded 7D2D mods
       Saves/                      # isolated 7D2D saves
+  games/cs2/
+    instances/<name>/
+      cfg/server.cfg             # the instance's own server.cfg
+      logs/console.log
   cache/thunderstore-index.json  # cached Thunderstore package index (1 hour TTL)
 ```
 

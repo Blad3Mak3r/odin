@@ -7,7 +7,7 @@ export interface VersionView {
   system_update_running: boolean
 }
 
-export type GameId = 'ark-asa' | 'valheim' | 'rust' | 'palworld' | '7d2d'
+export type GameId = 'ark-asa' | 'valheim' | 'rust' | 'palworld' | '7d2d' | 'cs2'
 
 export interface GameCapabilities {
   backups: boolean
@@ -16,6 +16,7 @@ export interface GameCapabilities {
   access_lists: boolean
   readiness: boolean
   shared_install: boolean
+  shared_install_migration: boolean
 }
 
 export interface GameView {
@@ -24,6 +25,10 @@ export interface GameView {
   steam_app_id: string
   requires_proton: boolean
   capabilities: GameCapabilities
+}
+
+export interface MoveToSharedInstallResult {
+  adopted_private_files: boolean
 }
 
 export interface SharedInstallView {
@@ -90,6 +95,18 @@ export interface GenericConfigUpdateRequest {
   map?: string
   session_name?: string
   mods?: number[]
+  game_mode?: Cs2GameMode
+  max_players?: number
+  gslt?: string
+}
+
+export type Cs2GameMode = 'casual' | 'competitive' | 'wingman' | 'deathmatch'
+
+export interface Cs2LaunchOptions {
+  map: string
+  game_mode: Cs2GameMode
+  max_players: number
+  gslt?: string
 }
 
 export interface AdvancedConfigEntry {

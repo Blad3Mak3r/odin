@@ -12,12 +12,12 @@ pub fn run_container(spec_path: &std::path::Path, instance_id: String) -> Result
     result
 }
 
-pub fn install_ark_shared(
+pub fn install_shared(
+    game: crate::game::GameId,
     install_dir: &std::path::Path,
     steamcmd_dir: &std::path::Path,
     log_file: &std::path::Path,
 ) -> Result<()> {
-    let game = crate::game::GameId::ArkSurvivalAscended;
     // Use the SteamCMD shipped in the image instead of downloading it again.
     crate::podman::runtime::seed_steamcmd(steamcmd_dir)?;
     let expected = install_dir.join(crate::game::driver(game).server_binary());

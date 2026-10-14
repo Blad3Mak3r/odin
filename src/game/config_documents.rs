@@ -91,6 +91,8 @@ enum Format {
     XmlProperties,
     PalworldOptions,
     RustCfg,
+    /// Source engine `cvar value` lines, as Counter-Strike 2's `server.cfg`.
+    SourceCfg,
     Ini,
 }
 
@@ -113,6 +115,9 @@ const RUST_MANAGED: &[&str] = &[
     "rcon.web",
     "server.identity",
 ];
+/// Passed on the command line, where a later `server.cfg` could override
+/// them: a different RCON password would break Odin's graceful stop.
+const CS2_MANAGED: &[&str] = &["rcon_password", "tv_port", "sv_setsteamaccount"];
 const ARK_GAME_USER_SETTINGS_MANAGED: &[&str] = &[
     "[SessionSettings].SessionName",
     "[ServerSettings].RCONEnabled",
@@ -152,6 +157,13 @@ fn specs(game: GameId) -> &'static [FileSpec] {
                 allows_new_keys: true,
             },
         ],
+        GameId::Cs2 => &[FileSpec {
+            id: "server",
+            path: crate::game::cs2::CONFIG_PATH,
+            format: Format::SourceCfg,
+            managed: CS2_MANAGED,
+            allows_new_keys: false,
+        }],
         GameId::Valheim | GameId::Rust => &[],
     }
 }
@@ -443,6 +455,16 @@ pub fn initialize(paths: &Paths, instance: &GenericGameInstance) -> Result<()> {
                 }
             }
             Ok(())
+        }
+        GameId::Cs2 => {
+            let target = document_path(&instance_root(paths, instance), specs(GameId::Cs2)[0]);
+            match crate::game::cs2::template_path(paths, &instance.identity) {
+                Some(template) => copy_template_if_missing(&template, &target),
+                // The server ships no document to start from: an empty one
+                // is the honest starting point for the operator.
+                None if !target.exists() => create_atomically(&target, ""),
+                None => Ok(()),
+            }
         }
         GameId::Valheim | GameId::Rust => bail!("this game has no native configuration template"),
     }
@@ -892,6 +914,7 @@ fn format_name(format: Format) -> &'static str {
         Format::XmlProperties => "xml-properties",
         Format::PalworldOptions => "unreal-ini",
         Format::RustCfg => "rust-cfg",
+        Format::SourceCfg => "source-cfg",
         Format::Ini => "ini",
     }
 }
@@ -970,7 +993,7 @@ fn parse(format: Format, contents: &str) -> Result<Vec<ParsedEntry>> {
                 .collect())
         }
         Format::PalworldOptions => parse_palworld(contents),
-        Format::RustCfg => Ok(parse_rust_cfg(contents)),
+        Format::RustCfg | Format::SourceCfg => Ok(parse_rust_cfg(contents)),
         Format::Ini => Ok(parse_ini(contents)),
     }
 }
@@ -1197,7 +1220,7 @@ pub fn sync_operational(paths: &Paths, instance: &GenericGameInstance) -> Result
                 instance.config.admin_port.unwrap_or_default().to_string(),
             ),
         ],
-        GameId::ArkSurvivalAscended | GameId::Valheim | GameId::Rust => Vec::new(),
+        GameId::ArkSurvivalAscended | GameId::Cs2 | GameId::Valheim | GameId::Rust => Vec::new(),
     };
     let existing = parse(spec.format, &contents)?
         .into_iter()
@@ -1243,7 +1266,7 @@ fn set(format: Format, contents: &str, key: &str, value: &str) -> Result<String>
     match format {
         Format::XmlProperties => set_xml(contents, key, value),
         Format::PalworldOptions => set_palworld(contents, key, value),
-        Format::RustCfg => set_rust_cfg(contents, key, value),
+        Format::RustCfg | Format::SourceCfg => set_rust_cfg(contents, key, value),
         Format::Ini => set_ini(contents, key, value),
     }
 }
@@ -1353,7 +1376,7 @@ fn set_rust_cfg(contents: &str, key: &str, value: &str) -> Result<String> {
         .collect::<Vec<_>>()
         .join("\n");
     if !found {
-        bail!("Rust convar {key} does not exist");
+        bail!("convar {key} does not exist");
     }
     Ok(if contents.ends_with('\n') {
         format!("{output}\n")
@@ -1748,6 +1771,82 @@ mod tests {
             "[/Script/Pal.PalGameWorldSettings] / OptionSettings"
         );
         assert_eq!(sections[0].entries[0].label, "ServerName");
+    }
+
+    fn cs2_paths(label: &str) -> Paths {
+        let directory =
+            std::env::temp_dir().join(format!("odin-cs2-config-{label}-{}", uuid::Uuid::new_v4()));
+        Paths {
+            data_dir: directory.clone(),
+            config_dir: directory,
+        }
+    }
+
+    fn change(key: &str, value: &str) -> AdvancedConfigChange {
+        AdvancedConfigChange {
+            file: "server".into(),
+            key: key.into(),
+            value: value.into(),
+            delete: false,
+        }
+    }
+
+    #[test]
+    fn cs2_starts_its_document_from_the_file_the_shared_install_ships() {
+        let paths = cs2_paths("template");
+        let shipped = paths
+            .shared_install_dir(GameId::Cs2)
+            .join(crate::game::cs2::CONFIG_FILE);
+        fs::create_dir_all(shipped.parent().unwrap()).unwrap();
+        fs::write(&shipped, "// Defaults in server_default.cfg").unwrap();
+        let instance = generic_instance(GameId::Cs2);
+
+        initialize(&paths, &instance).unwrap();
+        let document = instance_root(&paths, &instance).join(crate::game::cs2::CONFIG_PATH);
+        assert_eq!(
+            fs::read_to_string(&document).unwrap(),
+            "// Defaults in server_default.cfg"
+        );
+
+        // A later initialization never replaces an operator's edits.
+        fs::write(&document, "hostname \"Mine\"\n").unwrap();
+        initialize(&paths, &instance).unwrap();
+        assert_eq!(
+            fs::read_to_string(&document).unwrap(),
+            "hostname \"Mine\"\n"
+        );
+        fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn cs2_without_a_shipped_document_starts_from_an_empty_one() {
+        let paths = cs2_paths("empty");
+        let instance = generic_instance(GameId::Cs2);
+
+        initialize(&paths, &instance).unwrap();
+
+        let document = instance_root(&paths, &instance).join(crate::game::cs2::CONFIG_PATH);
+        assert_eq!(fs::read_to_string(document).unwrap(), "");
+        fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn cs2_edits_only_existing_cvars_and_never_the_ones_odin_passes() {
+        let paths = cs2_paths("edit");
+        let instance = generic_instance(GameId::Cs2);
+        let document = instance_root(&paths, &instance).join(crate::game::cs2::CONFIG_PATH);
+        fs::create_dir_all(document.parent().unwrap()).unwrap();
+        fs::write(&document, "hostname \"Old\"\nrcon_password hunter2\n").unwrap();
+
+        apply(&paths, &instance, &[change("hostname", "\"New\"")]).unwrap();
+        assert_eq!(
+            fs::read_to_string(&document).unwrap(),
+            "hostname \"New\"\nrcon_password hunter2\n"
+        );
+        // A different RCON password would break Odin's graceful stop.
+        assert!(apply(&paths, &instance, &[change("rcon_password", "x")]).is_err());
+        assert!(apply(&paths, &instance, &[change("sv_cheats", "1")]).is_err());
+        fs::remove_dir_all(paths.data_dir).ok();
     }
 
     #[test]

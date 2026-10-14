@@ -12,7 +12,7 @@ use crate::db::game_instances::{self, GameInstanceIdentity, GenericGameInstance,
 use crate::game::{self, GameId, RuntimeImage, instances as game_instances_ops, rust};
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
-use crate::podman::dispatch;
+use crate::podman::{dispatch, shared_install};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
@@ -54,6 +54,8 @@ pub struct CreateGameInstanceRequest {
     pub install_mode: Option<game_instances::InstallMode>,
     #[serde(default)]
     pub ark_launch: Option<crate::game::ark_asa::ArkLaunchOptions>,
+    #[serde(default)]
+    pub cs2_launch: Option<crate::game::cs2::Cs2LaunchOptions>,
 }
 
 #[derive(Deserialize)]
@@ -84,6 +86,13 @@ pub struct GenericConfigUpdateRequest {
     pub session_name: Option<String>,
     #[serde(default)]
     pub mods: Option<Vec<u64>>,
+    #[serde(default)]
+    pub game_mode: Option<crate::game::cs2::Cs2GameMode>,
+    #[serde(default)]
+    pub max_players: Option<u8>,
+    /// Counter-Strike 2 login token; an empty string removes it.
+    #[serde(default)]
+    pub gslt: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -116,18 +125,23 @@ pub async fn list_games() -> Json<Vec<GameView>> {
     )
 }
 
+fn ensure_shared_install_supported(game: GameId) -> Result<(), BadRequest> {
+    if game::driver(game).capabilities().shared_install {
+        Ok(())
+    } else {
+        Err(BadRequest(format!(
+            "{} does not support a shared install",
+            game::driver(game).display_name()
+        )))
+    }
+}
+
 pub async fn shared_install_status(
     State(state): State<AppState>,
     Path(game): Path<GameId>,
 ) -> ApiResult<Json<SharedInstallView>> {
-    if game != GameId::ArkSurvivalAscended {
-        return Err(BadRequest("this game does not use a shared install".into()).into());
-    }
-    let installed = state
-        .paths
-        .shared_install_dir(game)
-        .join(game::driver(game).server_binary())
-        .is_file();
+    ensure_shared_install_supported(game)?;
+    let installed = shared_install::is_installed(&state.paths, game);
     let running = state.jobs.list().into_iter().any(|job| {
         matches!(job.kind, JobKindDescr::SharedInstall { game: job_game } if job_game == game)
             && matches!(
@@ -137,7 +151,7 @@ pub async fn shared_install_status(
     });
     Ok(Json(SharedInstallView {
         installed,
-        build_id: crate::podman::ark_asa::shared_install_build_id(&state.paths),
+        build_id: shared_install::build_id(&state.paths, game),
         running,
     }))
 }
@@ -146,9 +160,7 @@ pub async fn install_shared(
     State(state): State<AppState>,
     Path(game): Path<GameId>,
 ) -> ApiResult<Json<JobHandle>> {
-    if game != GameId::ArkSurvivalAscended {
-        return Err(BadRequest("this game does not use a shared install".into()).into());
-    }
+    ensure_shared_install_supported(game)?;
     if state.jobs.list().into_iter().any(|job| {
         matches!(job.kind, JobKindDescr::SharedInstall { game: job_game } if job_game == game)
             && matches!(
@@ -156,32 +168,31 @@ pub async fn install_shared(
                 crate::web::jobs::JobStatus::Queued | crate::web::jobs::JobStatus::Running
             )
     }) {
-        return Err(crate::instance::InstanceError::TransitionInProgress(
-            "ARK shared install".into(),
-        )
-        .into());
+        return Err(
+            crate::instance::InstanceError::TransitionInProgress(format!(
+                "{} shared install",
+                game::driver(game).display_name()
+            ))
+            .into(),
+        );
     }
     let paths = state.paths.clone();
     let db = state.db.clone();
     let id = state
         .jobs
         .spawn(JobKindDescr::SharedInstall { game }, move |logger| {
-            let instances = game_instances::list_generic(&db, game)?;
-            if instances
+            if game_instances::shared_install_instances(&db, game)?
                 .into_iter()
-                .filter(|instance| {
-                    game_instances::install_mode(&db, &instance.identity.id).ok()
-                        == Some(game_instances::InstallMode::Shared)
-                })
                 .any(|instance| {
-                    dispatch::is_running(&paths, &db, game, instance.name()).unwrap_or(true)
+                    dispatch::is_running(&paths, &db, game, &instance.name).unwrap_or(true)
                 })
             {
-                anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(
-                    "a shared ARK instance".into()
-                ));
+                anyhow::bail!(crate::instance::InstanceError::AlreadyRunning(format!(
+                    "a shared {} instance",
+                    game::driver(game).display_name()
+                )));
             }
-            crate::podman::ark_asa::install_shared(&paths, |line| logger.line(line))
+            shared_install::install(&paths, game, |line| logger.line(line))
         });
     Ok(Json(JobHandle { id }))
 }
@@ -191,8 +202,9 @@ pub struct SevenDaysWorldsView {
     pub worlds: Vec<String>,
 }
 
-/// Worlds the game ships with. Each container instance holds its own copy of
-/// the game, so the union over all of them is offered.
+/// Worlds the game ships with. Each isolated instance holds its own copy of
+/// the game and shared instances use the shared one, so the union over all of
+/// them is offered.
 pub async fn list_seven_days_worlds(
     State(state): State<AppState>,
 ) -> ApiResult<Json<SevenDaysWorldsView>> {
@@ -206,6 +218,9 @@ pub async fn list_seven_days_worlds(
                     .container_runtime_dir(GameId::SevenDaysToDie, &instance.identity.id)
                     .join(GameId::SevenDaysToDie.as_str())
             })
+            .chain(std::iter::once(
+                paths.shared_install_dir(GameId::SevenDaysToDie),
+            ))
             .filter_map(|install| std::fs::read_dir(install.join("Data/Worlds")).ok())
             .flatten()
             .filter_map(|entry| {
@@ -234,11 +249,7 @@ pub(crate) fn all_instance_views(
 ) -> anyhow::Result<Vec<ManagedInstanceView>> {
     let mut views = valheim_views(paths, db)?;
     views.extend(rust_views(paths, db)?);
-    for game in [
-        GameId::ArkSurvivalAscended,
-        GameId::Palworld,
-        GameId::SevenDaysToDie,
-    ] {
+    for game in game_instances::generic_games() {
         views.extend(generic_views(paths, db, game)?);
     }
     views.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
@@ -263,7 +274,7 @@ pub async fn list_instances(
     let views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
         GameId::Rust => rust_views(&paths, &db),
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
             generic_views(&paths, &db, game)
         }
     })
@@ -281,28 +292,38 @@ pub async fn create_instance(
     let name = request.name.clone();
     let view = run_blocking(move || {
         if request.install_mode.is_some() && !game::driver(game).capabilities().shared_install {
-            anyhow::bail!("only ARK: Survival Ascended supports an install mode");
+            anyhow::bail!(
+                "{} does not support a shared install",
+                game::driver(game).display_name()
+            );
         }
         if request.ark_launch.is_some() && game != GameId::ArkSurvivalAscended {
             anyhow::bail!("launch options are only supported by ARK: Survival Ascended");
         }
+        if request.cs2_launch.is_some() && game != GameId::Cs2 {
+            anyhow::bail!("these launch options are only supported by Counter-Strike 2");
+        }
         if let Some(options) = request.ark_launch.as_ref() {
             options.validate()?;
         }
+        if let Some(options) = request.cs2_launch.as_ref() {
+            options.validate()?;
+        }
         let instance = game_instances_ops::create(&paths, &db, game, &request.name)?;
-        if let game_instances_ops::GameInstance::Generic(generic) = &instance
-            && generic.identity.game == GameId::ArkSurvivalAscended
+        if let (Some(mode), game_instances_ops::GameInstance::Generic(generic)) =
+            (request.install_mode, &instance)
         {
-            game_instances::set_install_mode(
-                &db,
-                &generic.identity.id,
-                request
-                    .install_mode
-                    .unwrap_or(game_instances::InstallMode::Isolated),
-            )?;
-            if let Some(options) = request.ark_launch.as_ref() {
-                game_instances::update_ark_launch_options(&db, generic, options)?;
-            }
+            game_instances::set_install_mode(&db, &generic.identity.id, mode)?;
+        }
+        if let (Some(options), game_instances_ops::GameInstance::Generic(generic)) =
+            (request.ark_launch.as_ref(), &instance)
+        {
+            game_instances::update_ark_launch_options(&db, generic, options)?;
+        }
+        if let (Some(options), game_instances_ops::GameInstance::Generic(generic)) =
+            (request.cs2_launch.as_ref(), &instance)
+        {
+            game_instances::update_cs2_launch_options(&db, generic, options)?;
         }
         game_instance_view(&paths, &db, instance)
     })
@@ -412,9 +433,19 @@ async fn update_generic_config_for(
     let db = state.db.clone();
     let view = run_blocking(move || {
         if game != GameId::ArkSurvivalAscended
-            && (request.map.is_some() || request.session_name.is_some() || request.mods.is_some())
+            && (request.session_name.is_some() || request.mods.is_some())
         {
             anyhow::bail!("ARK launch options are only supported by ARK: Survival Ascended");
+        }
+        if game != GameId::Cs2
+            && (request.game_mode.is_some()
+                || request.max_players.is_some()
+                || request.gslt.is_some())
+        {
+            anyhow::bail!("these launch options are only supported by Counter-Strike 2");
+        }
+        if !matches!(game, GameId::ArkSurvivalAscended | GameId::Cs2) && request.map.is_some() {
+            anyhow::bail!("the start map is only configurable for ARK and Counter-Strike 2");
         }
         let config = game_instances::GenericGameConfig {
             port: request.port,
@@ -430,7 +461,7 @@ async fn update_generic_config_for(
             && (request.map.is_some() || request.session_name.is_some() || request.mods.is_some())
         {
             let mut options = game_instances::ark_launch(&db, &instance)?.options;
-            if let Some(map) = request.map {
+            if let Some(map) = request.map.clone() {
                 options.map = map;
             }
             if let Some(session_name) = request.session_name {
@@ -440,6 +471,27 @@ async fn update_generic_config_for(
                 options.mods = mods;
             }
             game_instances::update_ark_launch_options(&db, &instance, &options)?;
+        }
+        if game == GameId::Cs2
+            && (request.map.is_some()
+                || request.game_mode.is_some()
+                || request.max_players.is_some()
+                || request.gslt.is_some())
+        {
+            let mut options = game_instances::cs2_launch(&db, &instance)?.options;
+            if let Some(map) = request.map.clone() {
+                options.map = map;
+            }
+            if let Some(game_mode) = request.game_mode {
+                options.game_mode = game_mode;
+            }
+            if let Some(max_players) = request.max_players {
+                options.max_players = max_players;
+            }
+            if let Some(gslt) = request.gslt {
+                options.gslt = Some(gslt.trim().to_string()).filter(|token| !token.is_empty());
+            }
+            game_instances::update_cs2_launch_options(&db, &instance, &options)?;
         }
         crate::game::config_documents::sync_operational(&paths, &instance)?;
         generic_view(&paths, &db, instance)
@@ -463,7 +515,7 @@ pub async fn update_config_by_id(
                 .map_err(|error| BadRequest(format!("invalid Rust configuration: {error}")))?;
             update_rust_config_for(state, identity.name, request).await
         }
-        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie => {
+        GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
             let request = serde_json::from_value(request)
                 .map_err(|error| BadRequest(format!("invalid game configuration: {error}")))?;
             update_generic_config_for(state, identity.game, identity.name, request).await
@@ -507,7 +559,12 @@ async fn execute_rust_rcon_for(
         game_instances::load_rust(&db, &name_for_load)?.context("Rust instance does not exist")
     })
     .await?;
-    let output = rust::rcon::execute(&instance, &command).await?;
+    let output = game::rcon::web::execute_at(
+        instance.config.rcon_port,
+        &instance.config.rcon_password,
+        &command,
+    )
+    .await?;
     Ok(Json(RconCommandResponse { output }))
 }
 
@@ -921,19 +978,56 @@ pub async fn repair_runtime_by_id(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct MoveToSharedInstallRequest {
+    /// Also delete the instance's own copy of the game once it is on the
+    /// shared files. Off by default: nothing is deleted unless asked.
+    #[serde(default)]
+    pub delete_private_files: bool,
+}
+
+pub async fn move_to_shared_install_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<MoveToSharedInstallRequest>,
+) -> ApiResult<Json<shared_install::Migration>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    // Adopting the instance's files must not race the installer writing to
+    // the same directory.
+    if state.jobs.list().into_iter().any(|job| {
+        matches!(job.kind, JobKindDescr::SharedInstall { game } if game == identity.game)
+            && matches!(
+                job.status,
+                crate::web::jobs::JobStatus::Queued | crate::web::jobs::JobStatus::Running
+            )
+    }) {
+        return Err(
+            crate::instance::InstanceError::TransitionInProgress(format!(
+                "{} shared install",
+                game::driver(identity.game).display_name()
+            ))
+            .into(),
+        );
+    }
+    let delete_private_files = request.delete_private_files;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let migration = run_blocking(move || {
+        shared_install::migrate_to_shared(&paths, &db, &identity, delete_private_files)
+    })
+    .await?;
+    Ok(Json(migration))
+}
+
 pub async fn update_runtime_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<JobHandle>> {
     let identity = resolve_instance_id(&state, &id).await?;
-    if identity.game == GameId::ArkSurvivalAscended
-        && game_instances::install_mode(&state.db, &identity.id)?
-            == game_instances::InstallMode::Shared
+    if game::driver(identity.game).capabilities().shared_install
+        && game_instances::is_shared_install(&state.db, &identity.id)?
     {
-        return Err(BadRequest(
-            "shared ARK installs are updated from Games › ARK: Survival Ascended".into(),
-        )
-        .into());
+        return Err(BadRequest(shared_install::update_elsewhere_message(identity.game)).into());
     }
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -1206,6 +1300,15 @@ fn generic_view(
         config["map"] = Value::String(launch.options.map);
         config["session_name"] = Value::String(launch.options.session_name);
         config["mods"] = serde_json::to_value(launch.options.mods)?;
+    }
+    if game == GameId::Cs2 {
+        let launch = game_instances::cs2_launch(db, &instance)?;
+        config["map"] = Value::String(launch.options.map);
+        config["game_mode"] = serde_json::to_value(launch.options.game_mode)?;
+        config["max_players"] = Value::from(launch.options.max_players);
+        config["tv_port"] = Value::from(launch.tv_port);
+        // The token itself never leaves the server.
+        config["has_gslt"] = Value::Bool(launch.options.gslt.is_some());
     }
     let execution = dispatch::execution(paths, &instance.identity);
     Ok(ManagedInstanceView {

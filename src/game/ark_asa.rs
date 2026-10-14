@@ -5,21 +5,11 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::time::timeout;
 
 pub const DEFAULT_MAP: &str = "TheIsland_WP";
-const RCON_TIMEOUT: Duration = Duration::from_secs(5);
-const RCON_AUTH: i32 = 3;
-const RCON_AUTH_RESPONSE: i32 = 2;
-const RCON_COMMAND: i32 = 2;
-const REQUEST_ID: i32 = 1;
-const MAX_RCON_PACKET_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArkLaunchOptions {
@@ -159,70 +149,9 @@ pub fn build_command_at(
     Ok(command)
 }
 
-/// Asks ASA to save before it exits. Source RCON runs on the host network, so
-/// this deliberately connects only to the loopback listener Odin launched.
+/// Asks ASA to save before it exits.
 pub async fn save_and_exit(rcon_port: u16, password: &str) -> Result<()> {
-    let mut stream = timeout(RCON_TIMEOUT, TcpStream::connect(("127.0.0.1", rcon_port)))
-        .await
-        .context("timed out connecting to ARK RCON")?
-        .context("failed to connect to ARK RCON")?;
-    write_rcon_packet(&mut stream, REQUEST_ID, RCON_AUTH, password).await?;
-    let (id, packet_type, _) = read_rcon_packet(&mut stream).await?;
-    anyhow::ensure!(
-        id == REQUEST_ID && packet_type == RCON_AUTH_RESPONSE,
-        "ARK RCON authentication failed"
-    );
-    write_rcon_packet(&mut stream, REQUEST_ID, RCON_COMMAND, "SaveWorld").await?;
-    write_rcon_packet(&mut stream, REQUEST_ID, RCON_COMMAND, "DoExit").await
-}
-
-async fn write_rcon_packet(
-    stream: &mut TcpStream,
-    id: i32,
-    packet_type: i32,
-    body: &str,
-) -> Result<()> {
-    let size = 8usize
-        .checked_add(body.len())
-        .and_then(|value| value.checked_add(2))
-        .context("ARK RCON request is too large")?;
-    let size = i32::try_from(size).context("ARK RCON request is too large")?;
-    timeout(RCON_TIMEOUT, async {
-        stream.write_i32_le(size).await?;
-        stream.write_i32_le(id).await?;
-        stream.write_i32_le(packet_type).await?;
-        stream.write_all(body.as_bytes()).await?;
-        stream.write_all(&[0, 0]).await?;
-        stream.flush().await
-    })
-    .await
-    .context("timed out writing ARK RCON request")?
-    .context("failed to write ARK RCON request")?;
-    Ok(())
-}
-
-async fn read_rcon_packet(stream: &mut TcpStream) -> Result<(i32, i32, String)> {
-    let packet = timeout(RCON_TIMEOUT, async {
-        let size = stream.read_i32_le().await?;
-        anyhow::ensure!(
-            size >= 10 && usize::try_from(size).unwrap_or_default() <= MAX_RCON_PACKET_SIZE,
-            "ARK RCON sent an invalid packet size"
-        );
-        let mut payload = vec![0; usize::try_from(size).expect("validated positive packet size")];
-        stream.read_exact(&mut payload).await?;
-        Ok::<_, anyhow::Error>(payload)
-    })
-    .await
-    .context("timed out reading ARK RCON response")??;
-    let id = i32::from_le_bytes(packet[0..4].try_into().expect("packet includes id"));
-    let packet_type = i32::from_le_bytes(packet[4..8].try_into().expect("packet includes type"));
-    anyhow::ensure!(
-        packet[packet.len() - 2..] == [0, 0],
-        "ARK RCON response is missing its terminator"
-    );
-    let body = String::from_utf8(packet[8..packet.len() - 2].to_vec())
-        .context("ARK RCON response is not UTF-8")?;
-    Ok((id, packet_type, body))
+    crate::game::rcon::source::send(rcon_port, password, &["SaveWorld", "DoExit"]).await
 }
 
 #[cfg(test)]
@@ -350,17 +279,5 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(args.contains(&"-clusterid=islands".to_string()));
         assert!(args.contains(&"-ClusterDirOverride=/srv/odin/clusters/islands".to_string()));
-    }
-
-    #[test]
-    fn source_rcon_packet_has_the_expected_framing() {
-        let mut packet = Vec::new();
-        packet.extend_from_slice(&16_i32.to_le_bytes());
-        packet.extend_from_slice(&REQUEST_ID.to_le_bytes());
-        packet.extend_from_slice(&RCON_COMMAND.to_le_bytes());
-        packet.extend_from_slice(b"save");
-        packet.extend_from_slice(&[0, 0]);
-        assert_eq!(packet.len(), 18);
-        assert_eq!(&packet[12..], b"save\0\0");
     }
 }

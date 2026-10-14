@@ -198,7 +198,7 @@ async fn bootstrap(spec: &RuntimeSpec) -> Result<()> {
     if spec.shared_install {
         anyhow::ensure!(
             server_file(spec).is_file(),
-            "Install the game files from Games › ARK: Survival Ascended before starting a shared instance"
+            super::shared_install::not_installed_message(spec.launch.game())
         );
         return Ok(());
     }
@@ -244,7 +244,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
 async fn update_payload(spec: &RuntimeSpec) -> Result<()> {
     anyhow::ensure!(
         !spec.shared_install,
-        "shared installs are updated from Games › ARK: Survival Ascended"
+        super::shared_install::update_elsewhere_message(spec.launch.game())
     );
     let steamcmd = spec.steamcmd_dir.clone();
     let install = spec.install_dir.clone();
@@ -783,6 +783,106 @@ chmod +x "$d/valheim_server.x86_64""#,
         stop_child(&mut child, pid, started_at, Duration::from_secs(10), &spec)
             .await
             .unwrap();
+    }
+
+    fn cs2_spec(port: u16) -> RuntimeSpec {
+        spec_for(Launch::Cs2(crate::game::cs2::Cs2Launch {
+            name: "dust".into(),
+            port,
+            tv_port: port.wrapping_add(5),
+            rcon_password: "secret".into(),
+            options: crate::game::cs2::Cs2LaunchOptions::defaults(),
+        }))
+    }
+
+    /// Reads one Source RCON request the way a server would.
+    fn read_source_request(stream: &mut std::net::TcpStream) -> (i32, String) {
+        use std::io::Read;
+
+        let mut size = [0; 4];
+        stream.read_exact(&mut size).unwrap();
+        let mut payload = vec![0; i32::from_le_bytes(size) as usize];
+        stream.read_exact(&mut payload).unwrap();
+        let packet_type = i32::from_le_bytes(payload[4..8].try_into().unwrap());
+        let body = String::from_utf8(payload[8..payload.len() - 2].to_vec()).unwrap();
+        (packet_type, body)
+    }
+
+    #[tokio::test]
+    async fn cs2_stop_sends_quit_over_source_rcon_instead_of_signalling() {
+        use std::io::Write;
+
+        let flag = std::env::temp_dir().join(format!("odin-sigint-{}", uuid::Uuid::new_v4()));
+        let (mut child, pid, started_at) = spawn_shell(&format!(
+            "trap 'touch {}' INT; trap 'exit 0' TERM; while :; do sleep 0.1; done",
+            flag.display()
+        ));
+        let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind a loopback listener: {error}"),
+        };
+        let port = listener.local_addr().unwrap().port();
+        // A fake CS2 console: accepts the password, records the command and
+        // ends the "server".
+        let console = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let auth = read_source_request(&mut stream);
+            let mut response = Vec::new();
+            response.extend_from_slice(&10_i32.to_le_bytes());
+            response.extend_from_slice(&1_i32.to_le_bytes());
+            response.extend_from_slice(&2_i32.to_le_bytes());
+            response.extend_from_slice(&[0, 0]);
+            stream.write_all(&response).unwrap();
+            let command = read_source_request(&mut stream);
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            (auth, command)
+        });
+
+        stop_child(
+            &mut child,
+            pid,
+            started_at,
+            Duration::from_secs(10),
+            &cs2_spec(port),
+        )
+        .await
+        .unwrap();
+
+        let (auth, command) = console.join().unwrap();
+        assert_eq!(auth, (3, "secret".to_string()));
+        assert_eq!(command, (2, "quit".to_string()));
+        assert!(
+            !flag.exists(),
+            "SIGINT must not be sent when quit was delivered"
+        );
+    }
+
+    #[tokio::test]
+    async fn cs2_stop_falls_back_to_sigint_when_the_console_is_unreachable() {
+        let port = {
+            let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+                Ok(listener) => listener,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+                Err(error) => panic!("failed to bind a loopback listener: {error}"),
+            };
+            listener.local_addr().unwrap().port()
+        };
+        let (mut child, pid, started_at) =
+            spawn_shell("trap 'exit 0' INT; while :; do sleep 0.1; done");
+
+        let begun = std::time::Instant::now();
+        stop_child(
+            &mut child,
+            pid,
+            started_at,
+            Duration::from_secs(10),
+            &cs2_spec(port),
+        )
+        .await
+        .unwrap();
+
+        assert!(begun.elapsed() < Duration::from_secs(8));
     }
 
     #[tokio::test]

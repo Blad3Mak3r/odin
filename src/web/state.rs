@@ -24,6 +24,7 @@ pub struct AppState {
     pub world_saves: WorldSaveRegistry,
     pub log_tail: LogTailRegistry,
     pub system_update: SystemUpdate,
+    pub update_check_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -42,6 +43,7 @@ impl AppState {
             world_saves: WorldSaveRegistry::new(),
             log_tail: LogTailRegistry::new(),
             system_update: SystemUpdate::packaged(),
+            update_check_lock: Arc::new(Mutex::new(())),
         }
     }
 }

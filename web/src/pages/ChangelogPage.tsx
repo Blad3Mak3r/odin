@@ -3,12 +3,17 @@ import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useChangelog } from '@/lib/queries'
+import { Button } from '@/components/ui/button'
+import { useChangelog, useCheckForUpdates, useUpdateCheckStatus } from '@/lib/queries'
 
 const currentVersion = import.meta.env.VITE_ODIN_VERSION
 
 export function ChangelogPage() {
   const changelog = useChangelog()
+  const updateStatus = useUpdateCheckStatus()
+  const checkForUpdates = useCheckForUpdates()
+  const remaining = updateStatus.data?.cooldown_remaining_seconds ?? 0
+  const cooldownLabel = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`
 
   return (
     <div className="flex max-w-[70ch] flex-col gap-8">
@@ -16,6 +21,39 @@ export function ChangelogPage() {
         title="Changelog"
         description="A record of the features, improvements, and fixes included in each Odin release."
       />
+
+      <div className="flex flex-col items-start gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={checkForUpdates.isPending || remaining > 0 || updateStatus.isLoading}
+          onClick={() => checkForUpdates.mutate()}
+        >
+          {checkForUpdates.isPending
+            ? 'Searching for updates…'
+            : remaining > 0
+              ? `Search again in ${cooldownLabel}`
+              : 'Search for updates'}
+        </Button>
+        {checkForUpdates.data?.checked && (
+          <p className="text-sm text-muted-foreground" role="status">
+            {checkForUpdates.data.update_available && checkForUpdates.data.latest_version
+              ? <>Odin {checkForUpdates.data.latest_version} is available.{' '}
+                  {checkForUpdates.data.latest_release_url && (
+                    <a className="underline underline-offset-4" href={checkForUpdates.data.latest_release_url} target="_blank" rel="noreferrer">
+                      View release
+                    </a>
+                  )}
+                </>
+              : 'Odin is up to date.'}
+          </p>
+        )}
+        {checkForUpdates.isError && (
+          <p className="text-sm text-destructive" role="alert">
+            {checkForUpdates.error.message}
+          </p>
+        )}
+      </div>
 
       {changelog.isError && <QueryError error={changelog.error} />}
 

@@ -1,7 +1,21 @@
-use axum::Json;
+use std::time::Duration;
+
+use axum::{Json, extract::State};
+use chrono::Utc;
 use serde::Serialize;
 
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
+const UPDATE_CHECK_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+const UPDATE_CHECK_KEY: &str = "changelog_update_check";
+
+#[derive(Debug, Serialize)]
+pub struct UpdateCheckView {
+    pub checked: bool,
+    pub latest_version: Option<String>,
+    pub latest_release_url: Option<String>,
+    pub update_available: bool,
+    pub cooldown_remaining_seconds: u64,
+}
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct ChangelogSection {
@@ -18,6 +32,68 @@ pub struct ChangelogRelease {
 
 pub async fn get_changelog() -> Json<Vec<ChangelogRelease>> {
     Json(parse_changelog(CHANGELOG))
+}
+
+pub async fn get_update_check_status(
+    State(state): State<crate::web::state::AppState>,
+) -> crate::web::error::ApiResult<Json<UpdateCheckView>> {
+    let db = state.db.clone();
+    let remaining = crate::web::error::run_blocking(move || cooldown_remaining(&db)).await?;
+    Ok(Json(UpdateCheckView {
+        checked: false,
+        latest_version: None,
+        latest_release_url: None,
+        update_available: false,
+        cooldown_remaining_seconds: remaining,
+    }))
+}
+
+pub async fn check_for_updates(
+    State(state): State<crate::web::state::AppState>,
+) -> crate::web::error::ApiResult<Json<UpdateCheckView>> {
+    let db = state.db.clone();
+    let lock = state.update_check_lock.clone();
+    let result = crate::web::error::run_blocking(move || {
+        let _guard = lock.lock().expect("update check lock poisoned");
+        let remaining = cooldown_remaining(&db)?;
+        if remaining > 0 {
+            return Ok(UpdateCheckView {
+                checked: false,
+                latest_version: None,
+                latest_release_url: None,
+                update_available: false,
+                cooldown_remaining_seconds: remaining,
+            });
+        }
+
+        // Persist before the network request so failures and process restarts
+        // cannot bypass the shared cooldown.
+        crate::db::cache::set(&db, UPDATE_CHECK_KEY, "started")?;
+        let status = crate::odin_update::check_latest(&db)?;
+        Ok(UpdateCheckView {
+            checked: true,
+            latest_version: status.latest_version,
+            latest_release_url: status.latest_release_url,
+            update_available: status.update_available,
+            cooldown_remaining_seconds: UPDATE_CHECK_COOLDOWN.as_secs(),
+        })
+    })
+    .await?;
+    Ok(Json(result))
+}
+
+fn cooldown_remaining(db: &crate::db::Db) -> anyhow::Result<u64> {
+    let Some(entry) = crate::db::cache::get(db, UPDATE_CHECK_KEY)? else {
+        return Ok(0);
+    };
+    let elapsed = Utc::now()
+        .signed_duration_since(entry.fetched_at)
+        .to_std()
+        .unwrap_or_default();
+    Ok(UPDATE_CHECK_COOLDOWN
+        .saturating_sub(elapsed)
+        .as_secs_f64()
+        .ceil() as u64)
 }
 
 fn parse_changelog(input: &str) -> Vec<ChangelogRelease> {

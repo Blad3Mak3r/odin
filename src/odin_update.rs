@@ -110,8 +110,17 @@ struct GithubRelease {
 /// `LATEST_RELEASE_CACHE_TTL`) so repeated dashboard polls don't hit the
 /// GitHub API every time.
 pub fn check(db: &Db) -> Result<UpdateStatus> {
+    check_with_cache(db, true)
+}
+
+/// Checks GitHub directly, ignoring the normal six-hour release cache.
+pub fn check_latest(db: &Db) -> Result<UpdateStatus> {
+    check_with_cache(db, false)
+}
+
+fn check_with_cache(db: &Db, use_cache: bool) -> Result<UpdateStatus> {
     let current_version = env!("CARGO_PKG_VERSION");
-    let release = latest_release(db)?;
+    let release = latest_release(db, use_cache)?;
 
     let update_available = release
         .as_ref()
@@ -130,8 +139,9 @@ pub fn check(db: &Db) -> Result<UpdateStatus> {
 /// yet — a 404 from GitHub is expected until the first tag is published,
 /// not a failure — and that "no releases" result is cached too, so an
 /// unreleased build doesn't hit the GitHub API on every poll either.
-fn latest_release(db: &Db) -> Result<Option<GithubRelease>> {
-    if let Some(entry) = crate::db::cache::get(db, LATEST_RELEASE_CACHE_KEY)?
+fn latest_release(db: &Db, use_cache: bool) -> Result<Option<GithubRelease>> {
+    if use_cache
+        && let Some(entry) = crate::db::cache::get(db, LATEST_RELEASE_CACHE_KEY)?
         && let Ok(age) = (chrono::Utc::now() - entry.fetched_at).to_std()
         && age < LATEST_RELEASE_CACHE_TTL
         && let Ok(cached) = serde_json::from_str::<Option<GithubRelease>>(&entry.value)

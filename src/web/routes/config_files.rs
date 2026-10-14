@@ -49,21 +49,6 @@ pub async fn set_shared_advanced_config(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn initialize_shared_advanced_config(
-    State(state): State<AppState>,
-    Path(game): Path<crate::game::GameId>,
-) -> ApiResult<StatusCode> {
-    let paths = state.paths.clone();
-    let db = state.db.clone();
-    run_blocking(move || {
-        ensure_shared_game_stopped(&paths, &db, game)?;
-        crate::game::config_documents::initialize_shared(&paths, game)
-            .map_err(|error| anyhow::Error::new(crate::web::error::BadRequest(error.to_string())))
-    })
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 pub async fn get_shared_raw_advanced_config(
     State(state): State<AppState>,
     Path((game, file)): Path<(crate::game::GameId, String)>,

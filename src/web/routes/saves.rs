@@ -66,50 +66,26 @@ pub async fn list_save_files(
     let db = state.db.clone();
     run_blocking(move || {
         let root = save_root(&paths, &db, game, &name)?;
-        let relative = relative_dir(&path)?;
-        if !root.is_dir() && relative.as_os_str().is_empty() {
-            return Ok(Vec::new());
-        }
-        let dir = open_dir(&root, &relative, &path)?;
-        let mut entries = Vec::new();
-        for entry in dir.entries()? {
-            let entry = entry?;
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-            if file_name.starts_with(UPLOAD_TMP_PREFIX) {
-                continue;
-            }
-            let metadata = entry.metadata()?;
-            let kind = if metadata.is_dir() {
-                SaveEntryKind::Dir
-            } else if metadata.is_file() {
-                SaveEntryKind::File
-            } else {
-                // Symlinks and special files are never exposed.
-                continue;
-            };
-            entries.push(SaveFileEntry {
-                path: relative
-                    .join(&file_name)
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-                name: file_name,
-                kind,
-                size_bytes: metadata.len(),
-                modified_at: metadata
-                    .modified()
-                    .ok()
-                    .map(|time| DateTime::<Utc>::from(time.into_std())),
-            });
-        }
-        entries.sort_by(|left, right| {
-            matches!(right.kind, SaveEntryKind::Dir)
-                .cmp(&matches!(left.kind, SaveEntryKind::Dir))
-                .then_with(|| left.name.cmp(&right.name))
-        });
-        Ok(entries)
+        list_entries(&root, &path)
     })
     .await
     .map(Json)
+}
+
+pub async fn list_ark_cluster_files(
+    State(state): State<AppState>,
+    Path(cluster_id): Path<String>,
+    Query(DirQuery { path }): Query<DirQuery>,
+) -> ApiResult<Json<Vec<SaveFileEntry>>> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    Ok(Json(
+        run_blocking(move || {
+            let (root, _) = ark_cluster_root(&paths, &db, &cluster_id)?;
+            list_entries(&root, &path)
+        })
+        .await?,
+    ))
 }
 
 pub async fn list_save_files_by_id(
@@ -129,7 +105,7 @@ pub async fn upload_save_files(
     State(state): State<AppState>,
     Path((game, name)): Path<(GameId, String)>,
     Query(DirQuery { path }): Query<DirQuery>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> ApiResult<StatusCode> {
     let paths = state.paths.clone();
     let db = state.db.clone();
@@ -144,40 +120,7 @@ pub async fn upload_save_files(
     })
     .await?;
 
-    let mut uploaded = 0_usize;
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| BadRequest(format!("invalid upload: {e}")))?
-    {
-        let Some(file_name) = field.file_name().map(str::to_owned) else {
-            continue;
-        };
-        let target = upload_file_name(&file_name)?;
-        if dir
-            .symlink_metadata(&target)
-            .is_ok_and(|metadata| metadata.is_dir())
-        {
-            return Err(BadRequest(format!("'{target}' is a folder")).into());
-        }
-        let staged = StagedUpload::new(&dir);
-        let mut out = tokio::fs::File::from_std(dir.create(&staged.name)?.into_std());
-        while let Some(chunk) = field
-            .chunk()
-            .await
-            .map_err(|e| BadRequest(format!("invalid upload: {e}")))?
-        {
-            out.write_all(&chunk).await?;
-        }
-        out.flush().await?;
-        drop(out);
-        dir.rename(&staged.name, &dir, &target)?;
-        uploaded += 1;
-    }
-    if uploaded == 0 {
-        return Err(BadRequest("no file was uploaded".to_string()).into());
-    }
-    Ok(StatusCode::NO_CONTENT)
+    receive_uploads(dir, multipart).await
 }
 
 pub async fn upload_save_files_by_id(
@@ -188,6 +131,26 @@ pub async fn upload_save_files_by_id(
 ) -> ApiResult<StatusCode> {
     let (game, name) = resolve_identity(&state, id).await?;
     upload_save_files(State(state), Path((game, name)), query, multipart).await
+}
+
+pub async fn upload_ark_cluster_files(
+    State(state): State<AppState>,
+    Path(cluster_id): Path<String>,
+    Query(DirQuery { path }): Query<DirQuery>,
+    multipart: Multipart,
+) -> ApiResult<StatusCode> {
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let (_locks, dir) = run_blocking(move || {
+        let (root, members) = ark_cluster_root(&paths, &db, &cluster_id)?;
+        let locks = ensure_ark_cluster_stopped(&paths, &db, &members)?;
+        let relative = relative_dir(&path)?;
+        std::fs::create_dir_all(&root)?;
+        let dir = open_dir(&root, &relative, &path)?;
+        Ok((locks, Arc::new(dir)))
+    })
+    .await?;
+    receive_uploads(dir, multipart).await
 }
 
 /// Deletes a file, or a folder with everything inside it. The save root
@@ -224,6 +187,22 @@ pub async fn delete_save_file_by_id(
 ) -> ApiResult<StatusCode> {
     let (game, name) = resolve_identity(&state, id).await?;
     delete_save_file(State(state), Path((game, name, requested))).await
+}
+
+pub async fn delete_ark_cluster_file(
+    State(state): State<AppState>,
+    Path((cluster_id, requested)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let relative = safe_relative_path(&requested)?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    run_blocking(move || {
+        let (root, members) = ark_cluster_root(&paths, &db, &cluster_id)?;
+        let _locks = ensure_ark_cluster_stopped(&paths, &db, &members)?;
+        delete_at_root(&root, &relative, &requested)
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn download_save_file(
@@ -295,6 +274,22 @@ pub async fn download_save_file_by_id(
     download_save_file(State(state), Path((game, name, requested))).await
 }
 
+pub async fn download_ark_cluster_file(
+    State(state): State<AppState>,
+    Path((cluster_id, requested)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    let relative = safe_relative_path(&requested)?;
+    let paths = state.paths.clone();
+    let db = state.db.clone();
+    let requested_for_error = requested.clone();
+    let file_path = run_blocking(move || {
+        let (root, _) = ark_cluster_root(&paths, &db, &cluster_id)?;
+        resolve_download(&root, &relative, &requested_for_error)
+    })
+    .await?;
+    Ok(response_for_download(file_path, &requested).await?)
+}
+
 async fn resolve_identity(state: &AppState, id: String) -> ApiResult<(GameId, String)> {
     let db = state.db.clone();
     run_blocking(move || {
@@ -330,6 +325,203 @@ fn save_root(
         GameId::SevenDaysToDie => Ok(paths.game_instance_dir(game, name).join("Saves")),
         GameId::Cs2 => Err(BadRequest("Counter-Strike 2 has no save files".into()).into()),
     }
+}
+
+fn ark_cluster_root(
+    paths: &crate::paths::Paths,
+    db: &crate::db::Db,
+    cluster_id: &str,
+) -> anyhow::Result<(PathBuf, Vec<String>)> {
+    let cluster = crate::db::game_instances::list_ark_clusters(db)?
+        .into_iter()
+        .find(|cluster| cluster.id == cluster_id)
+        .ok_or_else(|| anyhow::anyhow!("ARK cluster does not exist"))?;
+    Ok((paths.ark_cluster_dir(&cluster.cluster_id), cluster.members))
+}
+
+fn ensure_ark_cluster_stopped(
+    paths: &crate::paths::Paths,
+    db: &crate::db::Db,
+    members: &[String],
+) -> anyhow::Result<crate::instance::lifecycle::LifecycleLocks> {
+    let identities = members
+        .iter()
+        .map(|member| {
+            crate::db::game_instances::identity_by_id(db, member)?
+                .ok_or_else(|| anyhow::anyhow!("ARK cluster member does not exist"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let names = identities
+        .iter()
+        .map(|identity| identity.name.as_str())
+        .collect::<Vec<_>>();
+    let locks = crate::instance::lifecycle::LifecycleLocks::acquire(
+        paths,
+        GameId::ArkSurvivalAscended,
+        &names,
+    )?;
+    for identity in identities {
+        if crate::podman::dispatch::is_running(
+            paths,
+            db,
+            GameId::ArkSurvivalAscended,
+            &identity.name,
+        )? {
+            return Err(BadRequest(
+                "stop every member of the ARK cluster before changing its files".into(),
+            )
+            .into());
+        }
+    }
+    Ok(locks)
+}
+
+fn list_entries(root: &FsPath, requested: &str) -> anyhow::Result<Vec<SaveFileEntry>> {
+    let relative = relative_dir(requested)?;
+    if !root.is_dir() && relative.as_os_str().is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = open_dir(root, &relative, requested)?;
+    let mut entries = Vec::new();
+    for entry in dir.entries()? {
+        let entry = entry?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with(UPLOAD_TMP_PREFIX) {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        let kind = if metadata.is_dir() {
+            SaveEntryKind::Dir
+        } else if metadata.is_file() {
+            SaveEntryKind::File
+        } else {
+            // Symlinks and special files are never exposed.
+            continue;
+        };
+        entries.push(SaveFileEntry {
+            path: relative
+                .join(&file_name)
+                .to_string_lossy()
+                .replace('\\', "/"),
+            name: file_name,
+            kind,
+            size_bytes: metadata.len(),
+            modified_at: metadata
+                .modified()
+                .ok()
+                .map(|time| DateTime::<Utc>::from(time.into_std())),
+        });
+    }
+    entries.sort_by(|left, right| {
+        matches!(right.kind, SaveEntryKind::Dir)
+            .cmp(&matches!(left.kind, SaveEntryKind::Dir))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(entries)
+}
+
+async fn receive_uploads(dir: Arc<Dir>, mut multipart: Multipart) -> ApiResult<StatusCode> {
+    let mut uploaded = 0_usize;
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| BadRequest(format!("invalid upload: {error}")))?
+    {
+        let Some(file_name) = field.file_name().map(str::to_owned) else {
+            continue;
+        };
+        let target = upload_file_name(&file_name)?;
+        if dir
+            .symlink_metadata(&target)
+            .is_ok_and(|metadata| metadata.is_dir())
+        {
+            return Err(BadRequest(format!("'{target}' is a folder")).into());
+        }
+        let staged = StagedUpload::new(&dir);
+        let mut out = tokio::fs::File::from_std(dir.create(&staged.name)?.into_std());
+        while let Some(chunk) = field
+            .chunk()
+            .await
+            .map_err(|error| BadRequest(format!("invalid upload: {error}")))?
+        {
+            out.write_all(&chunk).await?;
+        }
+        out.flush().await?;
+        drop(out);
+        dir.rename(&staged.name, &dir, &target)?;
+        uploaded += 1;
+    }
+    if uploaded == 0 {
+        return Err(BadRequest("no file was uploaded".to_string()).into());
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn delete_at_root(root: &FsPath, relative: &FsPath, requested: &str) -> anyhow::Result<()> {
+    let dir = open_dir(root, FsPath::new(""), "")?;
+    let metadata = dir
+        .symlink_metadata(relative)
+        .map_err(|error| io_error(error, requested))?;
+    // A symlink is removed as a link; it is never followed.
+    if metadata.is_dir() {
+        dir.remove_dir_all(relative)
+    } else {
+        dir.remove_file(relative)
+    }
+    .map_err(|error| io_error(error, requested))?;
+    Ok(())
+}
+
+fn resolve_download(root: &FsPath, relative: &FsPath, requested: &str) -> anyhow::Result<PathBuf> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| SaveFileError::NotFound(requested.to_string()))?;
+    let candidate = root.join(relative);
+    let canonical_file = candidate
+        .canonicalize()
+        .map_err(|_| SaveFileError::NotFound(requested.to_string()))?;
+    if !canonical_file.starts_with(&canonical_root) || !canonical_file.is_file() {
+        return Err(SaveFileError::InvalidPath.into());
+    }
+    Ok(canonical_file)
+}
+
+async fn response_for_download(file_path: PathBuf, requested: &str) -> anyhow::Result<Response> {
+    let mut file = tokio::fs::File::open(&file_path)
+        .await
+        .map_err(|_| SaveFileError::NotFound(requested.to_string()))?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|_| SaveFileError::NotFound(requested.to_string()))?;
+    let stream = async_stream::stream! {
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            match file.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(read) => yield Ok::<Vec<u8>, std::io::Error>(buffer[..read].to_vec()),
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    };
+    let filename = file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("save-file")
+        .replace(['"', '\\'], "_");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, metadata.len())
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from_stream(stream))
+        .map_err(Into::into)
 }
 
 /// Takes the lifecycle lock (so the server cannot start mid-change) and
@@ -487,6 +679,31 @@ mod tests {
         }
     }
 
+    fn ark_cluster_fixture() -> Fixture {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-ark-cluster-files-test-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let paths = Paths {
+            data_dir: dir.join("data"),
+            config_dir: dir.join("config"),
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let cluster =
+            crate::db::game_instances::create_ark_cluster(&db, "Cluster-files", "cluster_files")
+                .unwrap();
+        let root = paths.ark_cluster_dir(&cluster.cluster_id);
+        Fixture {
+            router: crate::web::router::build_router(AppState::new(paths.clone(), db.clone())),
+            id: cluster.id,
+            root,
+            outside: dir.join("outside"),
+            paths,
+            db,
+        }
+    }
+
     async fn send(fixture: &Fixture, request: Request<Body>) -> (StatusCode, String) {
         let response = fixture.router.clone().oneshot(request).await.unwrap();
         let status = response.status();
@@ -519,6 +736,39 @@ mod tests {
             .uri(format!("/api/instances/{}/saves{query}", fixture.id))
             .header("content-type", "multipart/form-data; boundary=B")
             .body(Body::from(body))
+            .unwrap()
+    }
+
+    fn get_cluster(fixture: &Fixture, query: &str) -> Request<Body> {
+        Request::builder()
+            .uri(format!("/api/ark-clusters/{}/files{query}", fixture.id))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn upload_cluster(
+        fixture: &Fixture,
+        query: &str,
+        file_name: &str,
+        content: &str,
+    ) -> Request<Body> {
+        let body = format!(
+            "--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n{content}\r\n--B--\r\n"
+        );
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/ark-clusters/{}/files{query}", fixture.id))
+            .header("content-type", "multipart/form-data; boundary=B")
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    fn delete_cluster(fixture: &Fixture, path: &str) -> Request<Body> {
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/ark-clusters/{}/files/{path}", fixture.id))
+            .body(Body::empty())
             .unwrap()
     }
 
@@ -657,6 +907,110 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (status, _) = send(&fixture, delete(&fixture, "..%2Foutside")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn ark_cluster_files_can_be_browsed_uploaded_downloaded_and_deleted() {
+        let fixture = ark_cluster_fixture();
+        let (status, _) = send(
+            &fixture,
+            upload_cluster(&fixture, "", "transfer.arkprofile", "data"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        let (status, body) = send(&fixture, get_cluster(&fixture, "")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("transfer.arkprofile"));
+
+        let request = Request::builder()
+            .uri(format!(
+                "/api/ark-clusters/{}/files/transfer.arkprofile",
+                fixture.id
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = fixture.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            "data"
+        );
+
+        let (status, _) = send(&fixture, delete_cluster(&fixture, "transfer.arkprofile")).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(!fixture.root.join("transfer.arkprofile").exists());
+    }
+
+    #[tokio::test]
+    async fn ark_cluster_file_routes_reject_paths_outside_cluster_storage() {
+        let fixture = ark_cluster_fixture();
+        std::fs::create_dir_all(&fixture.outside).unwrap();
+        std::fs::write(fixture.outside.join("secret.txt"), "secret").unwrap();
+        std::fs::create_dir_all(&fixture.root).unwrap();
+        std::os::unix::fs::symlink(&fixture.outside, fixture.root.join("link")).unwrap();
+
+        for query in ["?path=..%2Foutside", "?path=link"] {
+            let (status, _) = send(&fixture, get_cluster(&fixture, query)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        }
+        for (query, file_name) in [("", "../escape.txt"), ("?path=link", "x.txt")] {
+            let (status, _) = send(&fixture, upload_cluster(&fixture, query, file_name, "x")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{query} {file_name}");
+        }
+        let (status, _) = send(&fixture, delete_cluster(&fixture, "link/secret.txt")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            std::fs::read_to_string(fixture.outside.join("secret.txt")).unwrap(),
+            "secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn cluster_uploads_and_deletes_are_refused_while_any_member_runs() {
+        let fixture = ark_cluster_fixture();
+        let instance = crate::db::game_instances::create_generic(
+            &fixture.paths,
+            &fixture.db,
+            GameId::ArkSurvivalAscended,
+            "ark-cluster-running",
+        )
+        .unwrap();
+        crate::db::game_instances::set_install_mode(
+            &fixture.db,
+            &instance.identity.id,
+            crate::db::game_instances::InstallMode::Shared,
+        )
+        .unwrap();
+        crate::db::game_instances::set_ark_cluster_members(
+            &fixture.db,
+            &fixture.id,
+            std::slice::from_ref(&instance.identity.id),
+        )
+        .unwrap();
+        std::fs::create_dir_all(&fixture.root).unwrap();
+        std::fs::write(fixture.root.join("keep.arkprofile"), "keep").unwrap();
+        if !crate::podman::test_support::podman_reporting_running(
+            &fixture.paths,
+            &[&instance.identity.id],
+        ) {
+            return;
+        }
+
+        let (status, body) = send(
+            &fixture,
+            upload_cluster(&fixture, "", "new.arkprofile", "new"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("stop every member of the ARK cluster"));
+        let (status, body) = send(&fixture, delete_cluster(&fixture, "keep.arkprofile")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("stop every member of the ARK cluster"));
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.join("keep.arkprofile")).unwrap(),
+            "keep"
+        );
     }
 
     #[tokio::test]

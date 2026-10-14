@@ -36,6 +36,14 @@ pub fn build_router(state: AppState) -> Router {
             "/ark-clusters/{cluster_id}/members",
             put(ark_clusters::set_members),
         )
+        .route(
+            "/ark-clusters/{cluster_id}/files",
+            get(saves::list_ark_cluster_files).post(saves::upload_ark_cluster_files),
+        )
+        .route(
+            "/ark-clusters/{cluster_id}/files/{*path}",
+            get(saves::download_ark_cluster_file).delete(saves::delete_ark_cluster_file),
+        )
         .route("/games/7d2d/worlds", get(games::list_seven_days_worlds))
         .route(
             "/instances/bulk/games/{action}",
@@ -364,10 +372,6 @@ pub fn build_router(state: AppState) -> Router {
             "/games/{game}/config/advanced",
             get(config_files::list_shared_advanced_config)
                 .put(config_files::set_shared_advanced_config),
-        )
-        .route(
-            "/games/{game}/config/advanced/init",
-            post(config_files::initialize_shared_advanced_config),
         )
         .route(
             "/games/{game}/config/files/{file}",

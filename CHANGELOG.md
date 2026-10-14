@@ -4,6 +4,17 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-14
+
+### What's Changed
+- Make the shared install game-neutral and support it for 7 Days to Die by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/159
+- Group the RCON clients under game::rcon by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/160
+- Add Counter-Strike 2 by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/163
+- Drop every capability from game containers by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/164
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.19.4...v0.20.0
+
 ## [0.19.4] - 2026-10-14
 
 ### What's Changed

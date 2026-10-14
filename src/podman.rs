@@ -700,7 +700,6 @@ impl Launch {
             Self::ArkSurvivalAscended(launch) => crate::game::ark_asa::build_command_at(
                 &spec.install_dir,
                 console_log,
-                &spec.steamcmd_dir.join("proton-prefix"),
                 &spec.steamcmd_dir,
                 launch,
             ),

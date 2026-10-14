@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-14
+
+### What's Changed
+- fix: install GE-Proton in /usr/local/bin so the launcher finds its tree by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/165
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.0...v0.20.1
+
 ## [0.20.0] - 2026-10-14
 
 ### What's Changed

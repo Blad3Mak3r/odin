@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.6] - 2026-10-14
+
+### What's Changed
+- fix: ARK config ownership and shared save files by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/172
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.5...v0.20.6
+
 ## [0.20.5] - 2026-10-14
 
 ### What's Changed

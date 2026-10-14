@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-10-14
+
+### What's Changed
+- fix: provide the Proton prefix from the proton image by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/167
+- feat: cycle instance console logs by date and redesign the log viewer by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/168
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.2...v0.20.3
+
 ## [0.20.2] - 2026-10-14
 
 ### What's Changed

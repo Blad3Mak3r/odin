@@ -1,6 +1,6 @@
 import sevenDaysBanner from '@/assets/game-banners/7d2d.webp'
 import arkAsaBanner from '@/assets/game-banners/ark-asa.webp'
-import cs2Banner from '@/assets/game-banners/cs2.svg'
+import cs2Banner from '@/assets/game-banners/cs2.webp'
 import palworldBanner from '@/assets/game-banners/palworld.webp'
 import rustBanner from '@/assets/game-banners/rust.webp'
 import valheimBanner from '@/assets/game-banners/valheim.webp'

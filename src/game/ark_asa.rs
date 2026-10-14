@@ -90,7 +90,6 @@ impl ArkLaunch {
 pub fn build_command_at(
     install_dir: &Path,
     console_log: &Path,
-    wine_prefix: &Path,
     steam_client_install: &Path,
     launch: &ArkLaunch,
 ) -> Result<tokio::process::Command> {
@@ -115,7 +114,6 @@ pub fn build_command_at(
     let mut command = tokio::process::Command::new("proton");
     command
         .current_dir(cwd)
-        .env("STEAM_COMPAT_DATA_PATH", wine_prefix)
         .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", steam_client_install)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout))
@@ -212,14 +210,7 @@ mod tests {
             cluster: None,
         };
 
-        let command = build_command_at(
-            &install,
-            &log,
-            &steamcmd.join("proton-prefix"),
-            &steamcmd,
-            &launch,
-        )
-        .unwrap();
+        let command = build_command_at(&install, &log, &steamcmd, &launch).unwrap();
         let command = command.as_std();
         assert_eq!(command.get_program(), "proton");
         assert_eq!(command.get_current_dir(), binary.parent());
@@ -238,14 +229,11 @@ mod tests {
                 "-mods=123,456",
             ]
         );
-        assert_eq!(
+        // The image provides STEAM_COMPAT_DATA_PATH and its directory.
+        assert!(
             command
                 .get_envs()
-                .find_map(
-                    |(name, value)| (name == "STEAM_COMPAT_DATA_PATH").then_some(value.unwrap())
-                )
-                .unwrap(),
-            steamcmd.join("proton-prefix").as_os_str()
+                .all(|(name, _)| name != "STEAM_COMPAT_DATA_PATH")
         );
         std::fs::remove_dir_all(root).ok();
     }
@@ -270,8 +258,7 @@ mod tests {
                 directory: "/srv/odin/clusters/islands".into(),
             }),
         };
-        let command =
-            build_command_at(&install, &log, &root.join("prefix"), &root, &launch).unwrap();
+        let command = build_command_at(&install, &log, &root, &launch).unwrap();
         let args = command
             .as_std()
             .get_args()

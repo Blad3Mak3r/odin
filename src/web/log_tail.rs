@@ -3,9 +3,10 @@
 //! subscriber (live log-viewer WebSockets, the player-connection tracker),
 //! instead of each subscriber polling the file on its own.
 //!
-//! `console.log` is never rotated or truncated, so unlike `web::jobs`'
-//! `JobRegistry` this deliberately keeps no in-memory history of lines —
-//! that would just move the same unbounded growth from disk into RAM. The
+//! `console.log` holds only the current day (the runtime archives it at
+//! midnight, see `console_log`), but a day can still be large, so unlike
+//! `web::jobs`' `JobRegistry` this deliberately keeps no in-memory history of
+//! lines — that would just move the growth from disk into RAM. The
 //! file itself (via `commands::logs::read_tail`) stays the source of truth
 //! for a subscriber's initial backlog; the broadcast channel only ever
 //! carries lines appended from the moment of subscription onward.

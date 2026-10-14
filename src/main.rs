@@ -4,6 +4,7 @@ mod backup_storage;
 mod cli;
 mod commands;
 mod config;
+mod console_log;
 mod db;
 mod doctor;
 mod game;

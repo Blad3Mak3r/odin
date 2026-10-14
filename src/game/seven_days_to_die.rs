@@ -71,7 +71,9 @@ pub fn build_command_at(
         ))
         .arg(format!("-UserDataFolder={}", instance_dir.display()))
         .arg(format!("-ServerPort={}", launch.port))
-        .arg(format!("-logfile={}", console_log.display()))
+        // Unity writes this log itself; pointing it at stdout sends it
+        // through the runtime, which stamps and cycles `console.log`.
+        .arg("-logfile=/dev/stdout")
         .arg("-quit")
         .arg("-batchmode")
         .arg("-nographics");
@@ -572,7 +574,7 @@ mod tests {
                 ),
                 format!("-UserDataFolder={}", instance.display()),
                 "-ServerPort=26900".to_string(),
-                format!("-logfile={}", log.display()),
+                "-logfile=/dev/stdout".to_string(),
                 "-quit".to_string(),
                 "-batchmode".to_string(),
                 "-nographics".to_string(),

@@ -1,15 +1,18 @@
 //! `odin run` implementation used inside an `odin-srv` container.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
-use tokio::io::BufReader;
+use tokio::io::{AsyncBufReadExt as _, AsyncRead, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::console_log::{self, ConsoleLog};
 use crate::game;
 use crate::instance::process;
 use crate::paths::{self, Paths};
@@ -260,12 +263,67 @@ async fn update_payload(spec: &RuntimeSpec) -> Result<()> {
 
 async fn spawn_child(spec: &RuntimeSpec) -> Result<tokio::process::Child> {
     let logs = paths::instance_logs_dir(&spec.instance_dir);
-    std::fs::create_dir_all(&logs)?;
-    let console_log = logs.join("console.log");
-    let mut command = spec.launch.server_command(spec, &console_log)?;
-    command
+    let log = ConsoleLog::open(&logs, Utc::now()).context("failed to open the console log")?;
+    let mut command = spec
+        .launch
+        .server_command(spec, &logs.join(console_log::CURRENT))?;
+    // The runtime, not the game, writes `console.log`: it stamps every line
+    // and cycles the file by date. Drivers only choose the program, so their
+    // file redirection is replaced with pipes here.
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
         .spawn()
-        .context("failed to spawn game server process")
+        .context("failed to spawn game server process")?;
+    capture_output(&mut child, log);
+    Ok(child)
+}
+
+/// Pumps the child's stdout and stderr into `log` until both close.
+fn capture_output(child: &mut tokio::process::Child, log: ConsoleLog) {
+    let (lines, received) = std::sync::mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        tokio::spawn(forward_lines(stdout, lines.clone()));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(forward_lines(stderr, lines));
+    }
+    std::thread::spawn(move || write_console_log(log, received));
+}
+
+/// Reads `source` line by line, stamping each with the time it was read.
+async fn forward_lines(
+    source: impl AsyncRead + Unpin,
+    lines: std::sync::mpsc::Sender<(chrono::DateTime<Utc>, String)>,
+) {
+    let mut reader = BufReader::new(source);
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        if !matches!(reader.read_until(b'\n', &mut buffer).await, Ok(read) if read > 0) {
+            return;
+        }
+        let line = String::from_utf8_lossy(&buffer);
+        let line = line.trim_end_matches(['\r', '\n']);
+        if !line.is_empty() && lines.send((Utc::now(), line.to_string())).is_err() {
+            return;
+        }
+    }
+}
+
+fn write_console_log(
+    mut log: ConsoleLog,
+    lines: std::sync::mpsc::Receiver<(chrono::DateTime<Utc>, String)>,
+) {
+    loop {
+        let result = match lines.recv_timeout(log.until_next_day(Utc::now())) {
+            Ok((at, line)) => log.write_line(at, &line),
+            Err(RecvTimeoutError::Timeout) => log.roll(Utc::now()),
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, "failed to write the console log");
+        }
+    }
 }
 
 async fn stop_child(
@@ -408,6 +466,42 @@ mod tests {
             matches!(response, Response::Stats { cpu_percent, memory_bytes } if cpu_percent > 0.0 && memory_bytes > 0),
             "expected nonzero CPU and memory, got {response:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn child_output_is_stamped_into_console_log() {
+        let dir = std::env::temp_dir().join(format!("odin-capture-{}", uuid::Uuid::new_v4()));
+        let log = ConsoleLog::open(&dir, Utc::now()).unwrap();
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "echo out; echo err >&2; echo; printf 'tail'"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        capture_output(&mut child, log);
+        child.wait().await.unwrap();
+
+        let mut lines = Vec::new();
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let text = std::fs::read_to_string(dir.join(console_log::CURRENT)).unwrap();
+            lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+            if lines.len() == 3 {
+                break;
+            }
+        }
+        let mut messages: Vec<_> = lines
+            .iter()
+            .map(|line| line.split_once(' ').unwrap().1)
+            .collect();
+        messages.sort_unstable();
+        assert_eq!(messages, ["err", "out", "tail"]);
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.len() > 24 && line.as_bytes()[10] == b'T')
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     use std::os::unix::fs::PermissionsExt;

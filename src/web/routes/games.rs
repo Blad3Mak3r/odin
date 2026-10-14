@@ -881,20 +881,46 @@ async fn get_logs_for(
     let db = state.db.clone();
     let lines = run_blocking(move || {
         load_view(&paths, &db, game, &name)?;
-        let log_file = crate::paths::instance_logs_dir(&paths.game_instance_dir(game, &name))
-            .join("console.log");
-        let lines = if log_file.is_file() {
-            crate::commands::logs::read_tail(&log_file, query.lines)?
+        let logs_dir = crate::paths::instance_logs_dir(&paths.game_instance_dir(game, &name));
+        let log_file = match query.date {
+            Some(date) => crate::console_log::path_for_day(&logs_dir, date),
+            None => Some(logs_dir.join(crate::console_log::CURRENT)),
+        };
+        let lines = match log_file {
+            Some(file) if file.is_file() => crate::commands::logs::read_tail(&file, query.lines)?
                 .lines()
                 .map(str::to_string)
-                .collect()
-        } else {
-            Vec::new()
+                .collect(),
+            _ => Vec::new(),
         };
         Ok(lines)
     })
     .await?;
     Ok(Json(crate::web::routes::instances::LogsView { lines }))
+}
+
+/// The days that have a console log, newest first, for the dashboard's date
+/// picker.
+pub async fn get_log_files_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::web::routes::instances::LogFilesView>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    let logs_dir = crate::paths::instance_logs_dir(
+        &state.paths.game_instance_dir(identity.game, &identity.name),
+    );
+    let files = run_blocking(move || {
+        Ok(crate::console_log::list_days(&logs_dir)
+            .into_iter()
+            .map(|day| crate::web::routes::instances::LogFileView {
+                date: day.date.to_string(),
+                size: day.size,
+                current: day.current,
+            })
+            .collect())
+    })
+    .await?;
+    Ok(Json(crate::web::routes::instances::LogFilesView { files }))
 }
 
 pub async fn start_instance_by_id(

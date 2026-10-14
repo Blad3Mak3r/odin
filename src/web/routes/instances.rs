@@ -326,6 +326,9 @@ where
 pub struct LogsQuery {
     #[serde(default = "default_log_lines")]
     pub lines: usize,
+    /// An archived day (`YYYY-MM-DD`); today's `console.log` when absent.
+    #[serde(default)]
+    pub date: Option<chrono::NaiveDate>,
 }
 
 fn default_log_lines() -> usize {
@@ -426,4 +429,16 @@ mod tests {
 #[derive(Serialize)]
 pub struct LogsView {
     pub lines: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct LogFileView {
+    pub date: String,
+    pub size: u64,
+    pub current: bool,
+}
+
+#[derive(Serialize)]
+pub struct LogFilesView {
+    pub files: Vec<LogFileView>,
 }

@@ -38,6 +38,15 @@ pub(crate) fn write_podman_config(paths: &Paths, socket: &std::path::Path) {
 pub(crate) fn fake_podman(
     listener: UnixListener,
 ) -> std::thread::JoinHandle<Vec<(String, String)>> {
+    fake_podman_with_stopped_container(listener, false)
+}
+
+/// A minimal Podman API that can optionally expose a stopped container before
+/// accepting a replacement container.
+pub(crate) fn fake_podman_with_stopped_container(
+    listener: UnixListener,
+    initially_stopped: bool,
+) -> std::thread::JoinHandle<Vec<(String, String)>> {
     std::thread::spawn(move || {
         let mut requests = Vec::new();
         let mut created = false;
@@ -73,6 +82,8 @@ pub(crate) fn fake_podman(
                     "200 OK",
                     r#"{"State":{"Running":false,"Status":"created"}}"#,
                 )
+            } else if line.contains("/json") && initially_stopped {
+                ("200 OK", r#"{"State":{"Running":false,"Status":"exited"}}"#)
             } else if line.contains("/json") {
                 ("404 Not Found", r#"{"cause":"no such container"}"#)
             } else {

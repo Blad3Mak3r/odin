@@ -72,7 +72,10 @@ mod tests {
     use crate::db::container_instances;
     use crate::podman::dispatch;
     use crate::podman::lifecycle::StopReason;
-    use crate::podman::test_support::{fake_podman, fake_runtime, temp_paths, write_podman_config};
+    use crate::podman::test_support::{
+        fake_podman, fake_podman_with_stopped_container, fake_runtime, temp_paths,
+        write_podman_config,
+    };
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 
@@ -147,6 +150,45 @@ mod tests {
         assert!(document.contains("server.hostname \"Mine\""));
         assert!(document.contains(&format!("server.port {}", instance.config.port)));
         assert!(!document.contains("rcon.port"));
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn start_recreates_a_stopped_rust_container() {
+        let paths = temp_paths("rust-recreate");
+        let podman_socket = paths.data_dir.join("podman.sock");
+        let listener = match UnixListener::bind(&podman_socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        write_podman_config(&paths, &podman_socket);
+        let db = Db::open(&paths).unwrap();
+        let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        let podman = fake_podman_with_stopped_container(listener, true);
+        let runtime = fake_runtime(
+            &paths
+                .container_socket_dir(&instance.identity.id)
+                .join(format!("rust-{}.control.sock", instance.name())),
+        );
+
+        dispatch::start(&paths, &db, GameId::Rust, "rusty")
+            .await
+            .unwrap();
+
+        let requests = podman.join().unwrap();
+        runtime.join().unwrap();
+        assert!(requests.iter().any(|(line, _)| {
+            line.starts_with(&format!(
+                "DELETE /v5.0.0/libpod/containers/odin-rust-{}",
+                instance.identity.id
+            ))
+        }));
+        assert!(
+            requests
+                .iter()
+                .any(|(line, _)| line.contains("/containers/create"))
+        );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

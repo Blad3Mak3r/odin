@@ -190,8 +190,8 @@ fn adopt_private_files(paths: &Paths, game: GameId, private: &Path) -> Result<()
     })
 }
 
-/// The short-lived container that installs `game`'s shared files. It is as
-/// unprivileged as an instance's container: the same user, no capabilities.
+/// The short-lived container that installs `game`'s shared files uses the
+/// same service-user identity as an instance's container.
 fn installer_spec(paths: &Paths, game: GameId, image: String, odin_binary: &Path) -> ContainerSpec {
     let mut labels = std::collections::BTreeMap::new();
     labels.insert("io.odin.game".into(), game.to_string());
@@ -219,8 +219,6 @@ fn installer_spec(paths: &Paths, game: GameId, image: String, odin_binary: &Path
             user: format!("{}:{}", unsafe { libc::geteuid() }, unsafe {
                 libc::getegid()
             }),
-            cap_drop: vec!["ALL".into()],
-            no_new_privileges: true,
             mounts: vec![
                 mount(paths, game),
                 bind(&steamcmd, Path::new("/srv/odin/steamcmd")),
@@ -473,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn the_installer_container_is_as_unprivileged_as_an_instance() {
+    fn installer_container_uses_the_same_privilege_policy_as_an_instance() {
         let paths = crate::podman::test_support::temp_paths("installer-spec");
 
         let spec = installer_spec(
@@ -484,8 +482,8 @@ mod tests {
         );
 
         let body = serde_json::to_value(&spec.request).unwrap();
-        assert_eq!(body["cap_drop"], serde_json::json!(["ALL"]));
-        assert_eq!(body["no_new_privileges"], true);
+        assert!(body.get("cap_drop").is_none());
+        assert!(body.get("no_new_privileges").is_none());
         assert_eq!(body["name"], "odin-cs2-install");
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

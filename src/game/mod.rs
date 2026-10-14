@@ -11,6 +11,7 @@ pub mod config_documents;
 pub mod instances;
 pub mod palworld;
 pub mod ports;
+pub mod rcon;
 pub mod rust;
 pub mod seven_days_to_die;
 pub mod valheim;

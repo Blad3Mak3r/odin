@@ -512,7 +512,12 @@ async fn execute_rust_rcon_for(
         game_instances::load_rust(&db, &name_for_load)?.context("Rust instance does not exist")
     })
     .await?;
-    let output = rust::rcon::execute(&instance, &command).await?;
+    let output = game::rcon::web::execute_at(
+        instance.config.rcon_port,
+        &instance.config.rcon_password,
+        &command,
+    )
+    .await?;
     Ok(Json(RconCommandResponse { output }))
 }
 

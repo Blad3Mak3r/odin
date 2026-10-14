@@ -711,7 +711,7 @@ impl Launch {
             // saves first.
             Self::Rust(launch) => tokio::time::timeout(
                 CONSOLE_STOP_TIMEOUT,
-                crate::game::rust::rcon::quit(launch.rcon_port, &launch.rcon_password),
+                crate::game::rcon::web::quit(launch.rcon_port, &launch.rcon_password),
             )
             .await
             .is_ok_and(|result| result.is_ok()),

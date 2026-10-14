@@ -8,17 +8,22 @@ import { buttonVariants } from '@/components/ui/button-variants'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { useDeleteSaveFile, useSaveFiles, useUploadSaveFiles } from '@/lib/queries'
+import { saveFileDownloadUrl, useDeleteSaveFile, useSaveFiles, useUploadSaveFiles } from '@/lib/queries'
+import type { SaveFileSource } from '@/lib/queries'
 import { cn, formatBytes, formatRelativeTime } from '@/lib/utils'
 
 // Collapsed table borders don't follow sticky cells, so the header rule is drawn inside the cell.
 const stickyHead = 'sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--border)]'
 
 export function SaveFilesTab({ id, running }: { id: string; running: boolean }) {
+  return <SaveFilesBrowser source={{ kind: 'instance', id }} running={running} />
+}
+
+export function SaveFilesBrowser({ source, running }: { source: SaveFileSource; running: boolean }) {
   // The folder being browsed is local UI state: the tab's URL stays `/saves`.
   const [path, setPath] = useState<string[]>([])
   const folder = path.join('/')
-  const files = useSaveFiles(id, folder)
+  const files = useSaveFiles(source, folder)
   const upload = useUploadSaveFiles()
   const remove = useDeleteSaveFile()
   const fileInput = useRef<HTMLInputElement>(null)
@@ -37,7 +42,7 @@ export function SaveFilesTab({ id, running }: { id: string; running: boolean }) 
       if (!confirmed) return
     }
     upload.mutate(
-      { id, path: folder, files: selected },
+      { source, path: folder, files: selected },
       {
         onSuccess: () => toast.success(`Uploaded ${selected.length} file${selected.length === 1 ? '' : 's'}`),
         onError: (error) => toast.error(error.message),
@@ -55,7 +60,7 @@ export function SaveFilesTab({ id, running }: { id: string; running: boolean }) 
       confirmLabel: 'Delete',
     })
     if (!confirmed) return
-    remove.mutate({ id, path: entry.path }, { onError: (error) => toast.error(error.message) })
+    remove.mutate({ source, path: entry.path }, { onError: (error) => toast.error(error.message) })
   }
 
   return (
@@ -150,7 +155,7 @@ export function SaveFilesTab({ id, running }: { id: string; running: boolean }) 
                         {isDir ? null : (
                           <a
                             className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }))}
-                            href={`/api/instances/${encodeURIComponent(id)}/saves/${entry.path.split('/').map(encodeURIComponent).join('/')}`}
+                            href={saveFileDownloadUrl(source, entry.path)}
                             download
                             aria-label={`Download ${entry.name}`}
                           >
@@ -177,7 +182,7 @@ export function SaveFilesTab({ id, running }: { id: string; running: boolean }) 
       </div>
 
       {running ? (
-        <p className="text-xs text-muted-foreground">Uploading and deleting are disabled while the server is running — stop it first.</p>
+        <p className="text-xs text-muted-foreground">Uploading and deleting are disabled while {source.kind === 'ark-cluster' ? 'a cluster member server is running' : 'the server is running'} — stop it first.</p>
       ) : null}
     </div>
   )

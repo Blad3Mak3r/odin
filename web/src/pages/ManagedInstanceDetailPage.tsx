@@ -24,6 +24,7 @@ import { ResourceLimitsTab } from '@/components/instance/ResourceLimitsTab'
 import { RuntimeHealthCard } from '@/components/instance/RuntimeHealthCard'
 import { LiveLogOutput } from '@/components/instance/LiveLogOutput'
 import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -231,7 +232,7 @@ function AdvancedConfigSection({ id, game, running }: { id: string; game: GameId
   if (config.isError) return <QueryError error={config.error} />
   const files = config.data?.files ?? []
   const missingFiles = files.filter((file) => !file.exists)
-  const canInitialize = game === 'ark-asa' || game === '7d2d' || game === 'palworld' || game === 'cs2'
+  const canInitialize = game === '7d2d' || game === 'palworld' || game === 'cs2'
   const normalizedSearch = search.trim().toLocaleLowerCase()
   const generatedFiles = files.filter((file) => file.exists)
   const visibleFiles = generatedFiles.map((file) => ({
@@ -423,7 +424,9 @@ export function ManagedInstanceDetailPage() {
           <TabPanel active={tab === 'mods'}><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabPanel>
         )}
         {detail.game === '7d2d' && tab === 'mods' && <TabPanel active={tab === 'mods'}><SevenDaysModsTab id={detail.id} running={detail.running} /></TabPanel>}
-        <TabPanel active={tab === 'saves'}><SaveFilesTab id={detail.id} running={detail.running} /></TabPanel>
+        {detail.game === 'ark-asa' && detail.install_mode === 'shared'
+          ? <TabPanel active={tab === 'saves'}><Card><CardHeader><CardTitle>Shared ARK save files</CardTitle><CardDescription>Browse this instance’s world files and cluster transfer files from the ARK game page.</CardDescription></CardHeader><CardContent><Link className={buttonVariants({ variant: 'outline' })} to="/games/ark-asa/saves">Open ARK Save files</Link></CardContent></Card></TabPanel>
+          : <TabPanel active={tab === 'saves'}><SaveFilesTab id={detail.id} running={detail.running} /></TabPanel>}
         <TabPanel active={tab === 'resources'}><ManagedResourcesTab id={detail.id} running={detail.running} /></TabPanel>
         <TabPanel active={tab === 'limits'}><ResourceLimitsTab id={detail.id} /></TabPanel>
         {detail.game === 'valheim' && <TabPanel active={tab === 'players'}><PlayersTab id={detail.id} running={detail.running} /></TabPanel>}

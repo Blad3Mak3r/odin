@@ -47,26 +47,18 @@ impl ContainerGame for ArkSurvivalAscended {
         instance: &GenericGameInstance,
     ) -> Result<()> {
         let shared = game_instances::is_shared_install(db, &identity.id)?;
-        // Saves are per instance. A shared install instead owns its native
-        // configuration so every server using it gets the same game settings.
+        // Saves remain per instance. Shared installs own one configuration
+        // directory; ARK itself creates the INI files inside it.
         let root = Self::instance_dir(paths, instance);
         for directory in ["Saved", "Mods", "logs"] {
             std::fs::create_dir_all(root.join(directory))?;
         }
-        if shared {
-            crate::game::config_documents::initialize_shared(paths, Self::GAME)?;
+        let config_root = if shared {
+            paths.shared_install_dir(Self::GAME).join("ShooterGame")
         } else {
-            for file in [
-                "Saved/Config/WindowsServer/GameUserSettings.ini",
-                "Saved/Config/WindowsServer/Game.ini",
-            ] {
-                let path = root.join(file);
-                std::fs::create_dir_all(path.parent().context("ARK config path has no parent")?)?;
-                if !path.exists() {
-                    std::fs::File::create(path)?;
-                }
-            }
-        }
+            root.clone()
+        };
+        crate::game::config_documents::cleanup_empty_ark_config(&config_root)?;
         std::fs::create_dir_all(paths.container_runtime_dir(Self::GAME, &identity.id))?;
         std::fs::create_dir_all(paths.container_socket_dir(&identity.id))?;
         let launch = Launch::ArkSurvivalAscended(game_instances::ark_launch(db, instance)?);
@@ -118,13 +110,81 @@ impl ContainerGame for ArkSurvivalAscended {
             ),
         ]);
         if shared {
+            let shared_config = paths
+                .shared_install_dir(Self::GAME)
+                .join("ShooterGame/Saved/Config");
+            std::fs::create_dir_all(&shared_config)?;
             mounts.push(bind(
-                &paths
-                    .shared_install_dir(Self::GAME)
-                    .join("ShooterGame/Saved/Config"),
+                &shared_config,
                 &Path::new(shared_install::MOUNT_DIR).join("ShooterGame/Saved/Config"),
             ));
         }
         Ok(mounts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::game_instances::{InstallMode, create_generic, set_install_mode};
+
+    fn fixture(label: &str) -> (Paths, Db, GenericGameInstance, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("odin-ark-layout-{label}-{}", uuid::Uuid::new_v4()));
+        let paths = Paths {
+            data_dir: dir.join("data"),
+            config_dir: dir.join("config"),
+        };
+        let db = Db::open(&paths).unwrap();
+        let instance =
+            create_generic(&paths, &db, GameId::ArkSurvivalAscended, "layout-test").unwrap();
+        (paths, db, instance, dir)
+    }
+
+    #[test]
+    fn shared_layout_leaves_ini_creation_to_ark_and_cleans_only_empty_files() {
+        let (paths, db, instance, dir) = fixture("shared");
+        set_install_mode(&db, &instance.identity.id, InstallMode::Shared).unwrap();
+        let config = paths
+            .shared_install_dir(GameId::ArkSurvivalAscended)
+            .join("ShooterGame/Saved/Config/WindowsServer");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("GameUserSettings.ini"), "").unwrap();
+        std::fs::write(config.join("Game.ini"), "[ServerSettings]\nFoo=bar\n").unwrap();
+
+        crate::game::config_documents::cleanup_empty_ark_config(
+            &paths
+                .shared_install_dir(GameId::ArkSurvivalAscended)
+                .join("ShooterGame"),
+        )
+        .unwrap();
+        ArkSurvivalAscended::extra_mounts(&paths, &db, &instance).unwrap();
+
+        assert!(!config.join("GameUserSettings.ini").exists());
+        assert_eq!(
+            std::fs::read_to_string(config.join("Game.ini")).unwrap(),
+            "[ServerSettings]\nFoo=bar\n"
+        );
+        assert!(config.is_dir());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn isolated_layout_does_not_create_ark_ini_files() {
+        let (paths, _db, instance, dir) = fixture("isolated");
+        let config = paths
+            .game_instance_dir(GameId::ArkSurvivalAscended, instance.name())
+            .join("Saved/Config/WindowsServer");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("Game.ini"), "").unwrap();
+
+        crate::game::config_documents::cleanup_empty_ark_config(
+            &paths.game_instance_dir(GameId::ArkSurvivalAscended, instance.name()),
+        )
+        .unwrap();
+
+        assert!(!config.join("Game.ini").exists());
+        assert!(!config.join("GameUserSettings.ini").exists());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

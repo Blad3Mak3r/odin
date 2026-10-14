@@ -637,6 +637,13 @@ pub fn set_ark_cluster_members(
         |row| row.get(0),
     )?;
     anyhow::ensure!(exists, "ARK cluster does not exist");
+    let existing_members = {
+        let mut statement = transaction
+            .prepare("SELECT instance_id FROM ark_cluster_members WHERE cluster_id = ?1")?;
+        statement
+            .query_map(params![cluster_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<HashSet<_>>>()?
+    };
     for member in members {
         let game: String = transaction.query_row(
             "SELECT game FROM game_instances WHERE id = ?1",
@@ -647,6 +654,19 @@ pub fn set_ark_cluster_members(
             game == GameId::ArkSurvivalAscended.as_str(),
             "only ARK instances can join a cluster"
         );
+        let mode: Option<String> = transaction
+            .query_row(
+                "SELECT install_mode FROM game_instance_install WHERE instance_id = ?1",
+                params![member],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if !existing_members.contains(member) {
+            anyhow::ensure!(
+                mode.as_deref() == Some("shared"),
+                "only shared-install ARK instances can join a cluster"
+            );
+        }
     }
     transaction.execute(
         "DELETE FROM ark_cluster_members WHERE cluster_id = ?1",
@@ -1222,6 +1242,7 @@ mod tests {
             _ => unreachable!(),
         };
         let cluster = create_ark_cluster(&db, "home", "home_cluster").unwrap();
+        set_install_mode(&db, &instance.identity.id, InstallMode::Shared).unwrap();
         set_ark_cluster_members(
             &db,
             &cluster.id,
@@ -1256,6 +1277,7 @@ mod tests {
         };
         let first = create_ark_cluster(&db, "first", "first_cluster").unwrap();
         let second = create_ark_cluster(&db, "second", "second_cluster").unwrap();
+        set_install_mode(&db, &instance.identity.id, InstallMode::Shared).unwrap();
         set_ark_cluster_members(&db, &first.id, std::slice::from_ref(&instance.identity.id))
             .unwrap();
         set_ark_cluster_members(&db, &second.id, std::slice::from_ref(&instance.identity.id))
@@ -1265,6 +1287,49 @@ mod tests {
             ark_cluster(&db, &instance.identity.id).unwrap().unwrap().id,
             second.id
         );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[test]
+    fn isolated_ark_instances_cannot_join_clusters_but_legacy_membership_can_be_removed() {
+        let (paths, db) = temp_context("ark-cluster-isolated");
+        let instance = match crate::game::instances::create(
+            &paths,
+            &db,
+            GameId::ArkSurvivalAscended,
+            "island",
+        )
+        .unwrap()
+        {
+            crate::game::instances::GameInstance::Generic(instance) => instance,
+            _ => unreachable!(),
+        };
+        let cluster = create_ark_cluster(&db, "home", "home_cluster").unwrap();
+        assert!(
+            set_ark_cluster_members(
+                &db,
+                &cluster.id,
+                std::slice::from_ref(&instance.identity.id)
+            )
+            .is_err()
+        );
+
+        db.conn()
+            .execute(
+                "INSERT INTO ark_cluster_members (cluster_id, instance_id) VALUES (?1, ?2)",
+                rusqlite::params![cluster.id, instance.identity.id],
+            )
+            .unwrap();
+        // Existing isolated memberships are accepted while retained, so the
+        // dashboard can remove them explicitly without deleting cluster data.
+        set_ark_cluster_members(
+            &db,
+            &cluster.id,
+            std::slice::from_ref(&instance.identity.id),
+        )
+        .unwrap();
+        set_ark_cluster_members(&db, &cluster.id, &[]).unwrap();
+        assert!(ark_cluster(&db, &instance.identity.id).unwrap().is_none());
         std::fs::remove_dir_all(paths.data_dir).ok();
     }
 

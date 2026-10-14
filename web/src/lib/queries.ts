@@ -184,14 +184,25 @@ export function usePlayerHistory(id: string) {
   })
 }
 
-const savesPath = (id: string, path = '') =>
-  `/instances/${id}/saves${path ? `/${path.split('/').map(encodeURIComponent).join('/')}` : ''}`
+export type SaveFileSource =
+  | { kind: 'instance'; id: string }
+  | { kind: 'ark-cluster'; id: string }
 
-/** Lists one folder of the instance's saves; `path` is empty for the root. */
-export function useSaveFiles(id: string, path: string) {
+const savesPath = (source: SaveFileSource, path = '') => {
+  const root = source.kind === 'instance'
+    ? `/instances/${encodeURIComponent(source.id)}/saves`
+    : `/ark-clusters/${encodeURIComponent(source.id)}/files`
+  return `${root}${path ? `/${path.split('/').map(encodeURIComponent).join('/')}` : ''}`
+}
+
+export const saveFileDownloadUrl = (source: SaveFileSource, path: string) =>
+  `/api${savesPath(source, path)}`
+
+/** Lists one folder of a save source; `path` is empty for the root. */
+export function useSaveFiles(source: SaveFileSource, path: string) {
   return useQuery({
-    queryKey: ['save-files', id, path],
-    queryFn: () => api.get<SaveFileEntry[]>(`${savesPath(id)}?path=${encodeURIComponent(path)}`),
+    queryKey: ['save-files', source.kind, source.id, path],
+    queryFn: () => api.get<SaveFileEntry[]>(`${savesPath(source)}?path=${encodeURIComponent(path)}`),
     // A missing folder is a 404 the user fixes by navigating up, so don't retry it.
     retry: false,
     // Keep the previous folder on screen while the next one loads so the page height doesn't collapse.
@@ -202,20 +213,20 @@ export function useSaveFiles(id: string, path: string) {
 export function useUploadSaveFiles() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, path, files }: { id: string; path: string; files: File[] }) => {
+    mutationFn: ({ source, path, files }: { source: SaveFileSource; path: string; files: File[] }) => {
       const formData = new FormData()
       for (const file of files) formData.append('file', file)
-      return api.upload<void>(`${savesPath(id)}?path=${encodeURIComponent(path)}`, formData)
+      return api.upload<void>(`${savesPath(source)}?path=${encodeURIComponent(path)}`, formData)
     },
-    onSuccess: (_data, { id }) => queryClient.invalidateQueries({ queryKey: ['save-files', id] }),
+    onSuccess: (_data, { source }) => queryClient.invalidateQueries({ queryKey: ['save-files', source.kind, source.id] }),
   })
 }
 
 export function useDeleteSaveFile() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, path }: { id: string; path: string }) => api.delete<void>(savesPath(id, path)),
-    onSuccess: (_data, { id }) => queryClient.invalidateQueries({ queryKey: ['save-files', id] }),
+    mutationFn: ({ source, path }: { source: SaveFileSource; path: string }) => api.delete<void>(savesPath(source, path)),
+    onSuccess: (_data, { source }) => queryClient.invalidateQueries({ queryKey: ['save-files', source.kind, source.id] }),
   })
 }
 
@@ -477,14 +488,6 @@ export function useUpdateSharedAdvancedConfig(game: GameId) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (changes: AdvancedConfigChange[]) => api.put<void>(`/games/${game}/config/advanced`, { changes }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] }),
-  })
-}
-
-export function useInitializeSharedAdvancedConfig(game: GameId) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => api.post<void>(`/games/${game}/config/advanced/init`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['games', game, 'advanced-config'] }),
   })
 }

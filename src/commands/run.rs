@@ -28,5 +28,50 @@ pub fn install_shared(
         expected,
         // The container's stdout is streamed to the dashboard job log.
         |line| println!("{line}"),
-    )
+    )?;
+    if game == crate::game::GameId::ArkSurvivalAscended {
+        crate::game::ark_asa::prepare_runtime(install_dir)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn shared_ark_install_sanitizes_the_depot_after_steamcmd_verifies_it() {
+        let root =
+            std::env::temp_dir().join(format!("odin-shared-ark-install-{}", uuid::Uuid::new_v4()));
+        let install = root.join("shared");
+        let steamcmd = root.join("steamcmd");
+        let script = steamcmd.join("steamcmd.sh");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in \"+force_install_dir \"*) dir=\"${arg#+force_install_dir }\" ;; esac; done\nmkdir -p \"$dir/ShooterGame/Binaries/Win64\"\ntouch \"$dir/ShooterGame/Binaries/Win64/ArkAscendedServer.exe\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let dll = install.join("ShooterGame/Binaries/Win64/steamclient64.dll");
+        std::fs::create_dir_all(dll.parent().unwrap()).unwrap();
+        std::fs::write(&dll, "depot copy").unwrap();
+
+        install_shared(
+            crate::game::GameId::ArkSurvivalAscended,
+            &install,
+            &steamcmd,
+            &root.join("logs/update.log"),
+        )
+        .unwrap();
+
+        assert!(
+            install
+                .join("ShooterGame/Binaries/Win64/ArkAscendedServer.exe")
+                .is_file()
+        );
+        assert!(!dll.exists());
+        std::fs::remove_dir_all(root).ok();
+    }
 }

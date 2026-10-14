@@ -21,6 +21,7 @@ import type {
   GameId,
   GameInstanceTransitions,
   GameView,
+  Cs2LaunchOptions,
   GenericConfigUpdateRequest,
   HostResources,
   InstanceResources,
@@ -326,8 +327,8 @@ export function useManagedResourceHistory(id: string, hours?: number, enabled = 
 export function useCreateManagedInstance() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ game, name, install_mode, ark_launch }: { game: GameId; name: string; install_mode?: 'isolated' | 'shared'; ark_launch?: { map: string; session_name: string; mods: number[] } }) =>
-      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name, install_mode, ark_launch }),
+    mutationFn: ({ game, name, install_mode, ark_launch, cs2_launch }: { game: GameId; name: string; install_mode?: 'isolated' | 'shared'; ark_launch?: { map: string; session_name: string; mods: number[] }; cs2_launch?: Cs2LaunchOptions }) =>
+      api.post<ManagedInstanceView>(`/games/${game}/instances`, { name, install_mode, ark_launch, cs2_launch }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['managed-instances'] }),
   })
 }

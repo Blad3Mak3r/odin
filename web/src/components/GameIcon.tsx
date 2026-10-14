@@ -2,6 +2,7 @@ import type { ComponentPropsWithoutRef } from 'react'
 import { Gamepad2 } from 'lucide-react'
 import sevenDaysIcon from '@/assets/games/7d2d.webp'
 import arkAsaIcon from '@/assets/games/ark-asa.webp'
+import cs2Icon from '@/assets/games/cs2.svg'
 import palworldIcon from '@/assets/games/palworld.webp'
 import rustIcon from '@/assets/games/rust.webp'
 import valheimIcon from '@/assets/games/valheim.webp'
@@ -14,6 +15,7 @@ const GAME_ICON_SOURCES: Record<GameId, string> = {
   rust: rustIcon,
   palworld: palworldIcon,
   '7d2d': sevenDaysIcon,
+  cs2: cs2Icon,
 }
 
 export function GameIcon({

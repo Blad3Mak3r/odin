@@ -9,7 +9,7 @@ import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { gameLabel } from '@/lib/games'
 import { useCreateManagedInstance } from '@/lib/queries'
-import type { GameId, GameView } from '@/lib/types'
+import type { Cs2GameMode, GameId, GameView } from '@/lib/types'
 
 export function CreateManagedInstanceDialog({ games, defaultGame, variant }: { games: GameView[]; defaultGame?: GameId; variant?: 'default' | 'outline' }) {
   const [open, setOpen] = useState(false)
@@ -19,11 +19,16 @@ export function CreateManagedInstanceDialog({ games, defaultGame, variant }: { g
   const [map, setMap] = useState('TheIsland_WP')
   const [sessionName, setSessionName] = useState('')
   const [mods, setMods] = useState('')
+  const [cs2Map, setCs2Map] = useState('de_dust2')
+  const [cs2Mode, setCs2Mode] = useState<Cs2GameMode>('competitive')
+  const [cs2MaxPlayers, setCs2MaxPlayers] = useState('10')
+  const [cs2Gslt, setCs2Gslt] = useState('')
   const create = useCreateManagedInstance()
   const selectedGame = games.some(({ id }) => id === game) ? game : (games[0]?.id ?? null)
   const isArk = selectedGame === 'ark-asa'
+  const isCs2 = selectedGame === 'cs2'
   const supportsSharedInstall = games.find(({ id }) => id === selectedGame)?.capabilities.shared_install ?? false
-  const submit = () => selectedGame && create.mutate({ game: selectedGame, name, ...(supportsSharedInstall ? { install_mode: installMode } : {}), ...(isArk ? { ark_launch: { map, session_name: sessionName || name, mods: mods.split(',').map((id) => Number(id.trim())).filter((id) => Number.isSafeInteger(id) && id > 0) } } : {}) }, {
+  const submit = () => selectedGame && create.mutate({ game: selectedGame, name, ...(supportsSharedInstall ? { install_mode: installMode } : {}), ...(isArk ? { ark_launch: { map, session_name: sessionName || name, mods: mods.split(',').map((id) => Number(id.trim())).filter((id) => Number.isSafeInteger(id) && id > 0) } } : {}), ...(isCs2 ? { cs2_launch: { map: cs2Map, game_mode: cs2Mode, max_players: Number(cs2MaxPlayers), ...(cs2Gslt.trim() ? { gslt: cs2Gslt.trim() } : {}) } } : {}) }, {
     onSuccess: () => {
       setOpen(false)
       setName('')
@@ -66,7 +71,7 @@ export function CreateManagedInstanceDialog({ games, defaultGame, variant }: { g
               </Select.Portal>
             </Select.Root>
           </Field>
-          {supportsSharedInstall && <Field><FieldLabel htmlFor="install-mode">Install mode</FieldLabel><select id="install-mode" className="h-9 border bg-background px-3 text-sm" value={installMode} onChange={(event) => setInstallMode(event.target.value as 'isolated' | 'shared')}><option value="isolated">Isolated</option><option value="shared">Shared</option></select></Field>}{isArk && <><Field><FieldLabel htmlFor="ark-map">Map</FieldLabel><Input id="ark-map" value={map} onChange={(event) => setMap(event.target.value)} /></Field><Field><FieldLabel htmlFor="ark-session-name">Session name</FieldLabel><Input id="ark-session-name" placeholder={name || 'my-server'} value={sessionName} onChange={(event) => setSessionName(event.target.value)} /></Field><Field><FieldLabel htmlFor="ark-mods">Mods</FieldLabel><Input id="ark-mods" placeholder="CurseForge IDs, comma-separated" value={mods} onChange={(event) => setMods(event.target.value)} /></Field></>}
+          {supportsSharedInstall && <Field><FieldLabel htmlFor="install-mode">Install mode</FieldLabel><select id="install-mode" className="h-9 border bg-background px-3 text-sm" value={installMode} onChange={(event) => setInstallMode(event.target.value as 'isolated' | 'shared')}><option value="isolated">Isolated</option><option value="shared">Shared</option></select></Field>}{isArk && <><Field><FieldLabel htmlFor="ark-map">Map</FieldLabel><Input id="ark-map" value={map} onChange={(event) => setMap(event.target.value)} /></Field><Field><FieldLabel htmlFor="ark-session-name">Session name</FieldLabel><Input id="ark-session-name" placeholder={name || 'my-server'} value={sessionName} onChange={(event) => setSessionName(event.target.value)} /></Field><Field><FieldLabel htmlFor="ark-mods">Mods</FieldLabel><Input id="ark-mods" placeholder="CurseForge IDs, comma-separated" value={mods} onChange={(event) => setMods(event.target.value)} /></Field></>}{isCs2 && <><Field><FieldLabel htmlFor="cs2-map">Start map</FieldLabel><Input id="cs2-map" value={cs2Map} onChange={(event) => setCs2Map(event.target.value)} /></Field><Field><FieldLabel htmlFor="cs2-mode">Game mode</FieldLabel><select id="cs2-mode" className="h-9 border bg-background px-3 text-sm" value={cs2Mode} onChange={(event) => setCs2Mode(event.target.value as Cs2GameMode)}><option value="casual">Casual</option><option value="competitive">Competitive</option><option value="wingman">Wingman</option><option value="deathmatch">Deathmatch</option></select></Field><Field><FieldLabel htmlFor="cs2-max-players">Max players</FieldLabel><Input id="cs2-max-players" type="number" min={1} max={64} value={cs2MaxPlayers} onChange={(event) => setCs2MaxPlayers(event.target.value)} /></Field><Field><FieldLabel htmlFor="cs2-gslt">Game server login token</FieldLabel><Input id="cs2-gslt" type="password" placeholder="Optional; needed to be listed publicly" value={cs2Gslt} onChange={(event) => setCs2Gslt(event.target.value)} /></Field></>}
           <Field>
             <FieldLabel htmlFor="managed-instance-name">Name</FieldLabel>
             <Input id="managed-instance-name" placeholder="my-server" value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && name && selectedGame && submit()} />

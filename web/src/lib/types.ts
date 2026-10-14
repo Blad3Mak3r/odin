@@ -7,7 +7,7 @@ export interface VersionView {
   system_update_running: boolean
 }
 
-export type GameId = 'ark-asa' | 'valheim' | 'rust' | 'palworld' | '7d2d'
+export type GameId = 'ark-asa' | 'valheim' | 'rust' | 'palworld' | '7d2d' | 'cs2'
 
 export interface GameCapabilities {
   backups: boolean
@@ -95,6 +95,18 @@ export interface GenericConfigUpdateRequest {
   map?: string
   session_name?: string
   mods?: number[]
+  game_mode?: Cs2GameMode
+  max_players?: number
+  gslt?: string
+}
+
+export type Cs2GameMode = 'casual' | 'competitive' | 'wingman' | 'deathmatch'
+
+export interface Cs2LaunchOptions {
+  map: string
+  game_mode: Cs2GameMode
+  max_players: number
+  gslt?: string
 }
 
 export interface AdvancedConfigEntry {

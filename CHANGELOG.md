@@ -4,6 +4,15 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.5] - 2026-10-14
+
+### What's Changed
+- Add cooldown update check to changelog by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/170
+- hotfix: restore game container capabilities by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/171
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.4...v0.20.5
+
 ## [0.20.4] - 2026-10-14
 
 ### What's Changed

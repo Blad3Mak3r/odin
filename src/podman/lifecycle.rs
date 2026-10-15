@@ -17,7 +17,7 @@ use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_limits;
 use crate::game::{self, GameId};
 use crate::instance::InstanceError;
-use crate::instance::lifecycle::LifecycleLock;
+use crate::instance::lifecycle::{LifecycleLock, SharedInstallLock};
 use crate::paths::Paths;
 use crate::supervisor;
 
@@ -306,6 +306,13 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
+    let _shared_install_lock = if G::GAME == GameId::ArkSurvivalAscended
+        && crate::db::game_instances::is_shared_install(db, &identity.id)?
+    {
+        Some(SharedInstallLock::acquire(paths, G::GAME)?)
+    } else {
+        None
+    };
     crate::game::ports::ensure_available(paths, db, G::GAME, name, G::ports(&instance)?)?;
     G::ensure_ready_to_start(paths, db, &instance)?;
     G::prepare_layout(paths, db, &identity, &instance)?;
@@ -355,10 +362,12 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     .with_context(|| {
         format!("container {container} started but its Odin runtime did not respond")
     })?;
-    match response {
+    let runtime_ready = match response {
         crate::supervisor::protocol::Response::Pong {
-            protocol_version, ..
-        } if protocol_version >= crate::supervisor::protocol::PROTOCOL_VERSION => {}
+            protocol_version,
+            ready,
+            ..
+        } if protocol_version >= crate::supervisor::protocol::PROTOCOL_VERSION => ready,
         crate::supervisor::protocol::Response::Pong {
             protocol_version, ..
         } => bail!(
@@ -366,9 +375,49 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
             crate::supervisor::protocol::PROTOCOL_VERSION
         ),
         other => bail!("runtime image returned an unexpected startup response: {other:?}"),
+    };
+    if G::GAME == GameId::ArkSurvivalAscended && !runtime_ready {
+        wait_for_ark_ready(&client, &container, &control_socket(paths, &identity)).await?;
     }
     container_instances::set_desired_running(db, &identity.id, true)?;
     Ok(instance)
+}
+
+async fn wait_for_ark_ready(
+    client: &PodmanClient,
+    container: &str,
+    control_socket: &Path,
+) -> Result<()> {
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        match supervisor::client::ping_socket(control_socket).await {
+            Ok(crate::supervisor::protocol::Response::Pong { ready: true, .. }) => return Ok(()),
+            Ok(crate::supervisor::protocol::Response::Pong { ready: false, .. }) => {}
+            Ok(crate::supervisor::protocol::Response::Error { message, .. }) => {
+                bail!("ARK: Survival Ascended runtime failed before becoming ready: {message}")
+            }
+            Ok(response) => {
+                bail!("unexpected response while waiting for ARK readiness: {response:?}")
+            }
+            Err(error) => {
+                if matches!(
+                    client.inspect(container).await?,
+                    Some(ContainerState::Exited)
+                ) {
+                    bail!(
+                        "ARK: Survival Ascended container exited before RCON became ready: {error}"
+                    );
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "ARK: Survival Ascended did not become ready within {} seconds; inspect the instance console and Proton logs",
+                START_TIMEOUT.as_secs()
+            );
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
 }
 
 async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {

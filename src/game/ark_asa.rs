@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MAP: &str = "TheIsland_WP";
+const STEAM_CLIENT_DLL: &str = "ShooterGame/Binaries/Win64/steamclient64.dll";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArkLaunchOptions {
@@ -87,6 +88,23 @@ impl ArkLaunch {
     }
 }
 
+/// Removes the Steam client DLL shipped in some ASA depots. Other Linux
+/// server images remove it before Proton starts; leaving it beside the game
+/// executable can prevent the dedicated server from reaching its own startup.
+///
+/// Shared installations call this only from their serialized installer job,
+/// never from an instance that may share the files with a running server.
+pub fn prepare_runtime(install_dir: &Path) -> Result<()> {
+    let steam_client = install_dir.join(STEAM_CLIENT_DLL);
+    match fs::remove_file(&steam_client) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to remove {}", steam_client.display()))
+        }
+    }
+}
+
 pub fn build_command_at(
     install_dir: &Path,
     console_log: &Path,
@@ -115,6 +133,11 @@ pub fn build_command_at(
     command
         .current_dir(cwd)
         .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", steam_client_install)
+        .env("PROTON_LOG", "1")
+        .env(
+            "PROTON_LOG_DIR",
+            console_log.parent().unwrap_or_else(|| Path::new(".")),
+        )
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout))
         .stderr(std::process::Stdio::from(stderr))
@@ -235,6 +258,20 @@ mod tests {
                 .get_envs()
                 .all(|(name, _)| name != "STEAM_COMPAT_DATA_PATH")
         );
+        let env = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(env.get("PROTON_LOG").and_then(Option::as_deref), Some("1"));
+        assert_eq!(
+            env.get("PROTON_LOG_DIR").and_then(Option::as_deref),
+            log.parent().map(|path| path.to_str().unwrap())
+        );
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -266,5 +303,29 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(args.contains(&"-clusterid=islands".to_string()));
         assert!(args.contains(&"-ClusterDirOverride=/srv/odin/clusters/islands".to_string()));
+    }
+
+    #[test]
+    fn prepare_runtime_removes_only_the_depot_steam_client_dll_idempotently() {
+        let root = std::env::temp_dir().join(format!("odin-ark-prepare-{}", uuid::Uuid::new_v4()));
+        let dll = root.join(STEAM_CLIENT_DLL);
+        let saved = root.join("ShooterGame/Saved");
+        let ini = saved.join("Config/WindowsServer/GameUserSettings.ini");
+        fs::create_dir_all(dll.parent().unwrap()).unwrap();
+        fs::create_dir_all(ini.parent().unwrap()).unwrap();
+        fs::write(&dll, "depot copy").unwrap();
+        fs::write(&ini, "operator settings").unwrap();
+        fs::write(saved.join("world.sav"), "operator save").unwrap();
+
+        prepare_runtime(&root).unwrap();
+        prepare_runtime(&root).unwrap();
+
+        assert!(!dll.exists());
+        assert_eq!(fs::read_to_string(&ini).unwrap(), "operator settings");
+        assert_eq!(
+            fs::read_to_string(saved.join("world.sav")).unwrap(),
+            "operator save"
+        );
+        fs::remove_dir_all(root).ok();
     }
 }

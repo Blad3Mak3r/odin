@@ -1,8 +1,9 @@
 //! `odin run` implementation used inside an `odin-srv` container.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
@@ -19,12 +20,15 @@ use crate::supervisor::protocol::{
 };
 use crate::supervisor::stats::{StatsHandle, refresh_stats_periodically};
 
-use super::RuntimeSpec;
+use super::{Launch, RuntimeSpec};
 
 enum Action {
     Stop(u64),
     Update(oneshot::Sender<Result<()>>),
 }
+
+const ARK_READINESS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const READINESS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 pub async fn run(spec_path: &Path, expected_instance_id: &str) -> Result<()> {
     let spec: RuntimeSpec = serde_json::from_slice(
@@ -100,8 +104,8 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                 _ = sigterm.recv() => return Ok(()),
                 Ok((stream, _)) = control.accept() => {
                     tokio::spawn(handle_control(
-                        stream, runtime_pid, runtime_started_at, runtime_started, false,
-                        actions_tx.clone(), stats.clone(),
+                        stream, runtime_pid, runtime_started_at, runtime_started,
+                        Arc::new(AtomicBool::new(false)), actions_tx.clone(), stats.clone(),
                     ));
                 }
                 Some(action) = actions_rx.recv() => match action {
@@ -120,6 +124,13 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
         .with_context(|| format!("{} child has no PID", label(&spec)))?;
     let mut started_at = Utc::now();
     let mut pid_started_at = process::start_time_of(pid)?;
+    let ready = Arc::new(AtomicBool::new(
+        spec.launch.game() != game::GameId::ArkSurvivalAscended,
+    ));
+    let mut readiness_deadline = Instant::now() + ARK_READINESS_TIMEOUT;
+    let mut readiness_poll = tokio::time::interval(READINESS_POLL_INTERVAL);
+    readiness_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    readiness_poll.tick().await;
     let mut stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
 
     loop {
@@ -127,6 +138,14 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
             status = child.wait() => {
                 let status = status
                     .with_context(|| format!("failed to wait for {} child", label(&spec)))?;
+                if !ready.load(Ordering::Relaxed) {
+                    let message = format!(
+                        "ARK: Survival Ascended exited before RCON became ready (status {status}); see the Proton log at {}",
+                        paths::instance_logs_dir(&spec.instance_dir).join("steam-2430930.log").display()
+                    );
+                    append_runtime_log(&spec, &message)?;
+                    bail!(message);
+                }
                 if !status.success() {
                     bail!("{} exited with {status}", label(&spec));
                 }
@@ -142,9 +161,22 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
             }
             Ok((stream, _)) = control.accept() => {
                 tokio::spawn(handle_control(
-                    stream, pid, pid_started_at, started_at, true,
-                    actions_tx.clone(), stats.clone(),
+                    stream, pid, pid_started_at, started_at,
+                    ready.clone(), actions_tx.clone(), stats.clone(),
                 ));
+            }
+            _ = readiness_poll.tick(), if !ready.load(Ordering::Relaxed) => {
+                if ark_rcon_ready(&spec).await {
+                    ready.store(true, Ordering::Relaxed);
+                } else if Instant::now() >= readiness_deadline {
+                    let message = format!(
+                        "ARK: Survival Ascended did not authenticate RCON within {} seconds; the runtime never became ready. Inspect console.log and {}",
+                        ARK_READINESS_TIMEOUT.as_secs(),
+                        paths::instance_logs_dir(&spec.instance_dir).join("steam-2430930.log").display()
+                    );
+                    append_runtime_log(&spec, &message)?;
+                    bail!(message);
+                }
             }
             Some(action) = actions_rx.recv() => match action {
                 Action::Stop(timeout) => {
@@ -164,6 +196,11 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                             .with_context(|| format!("restarted {} child has no PID", label(&spec)))?;
                         pid_started_at = process::start_time_of(pid)?;
                         started_at = Utc::now();
+                        ready.store(
+                            spec.launch.game() != game::GameId::ArkSurvivalAscended,
+                            Ordering::Relaxed,
+                        );
+                        readiness_deadline = Instant::now() + ARK_READINESS_TIMEOUT;
                         // The old sampler still tracks the dead pid.
                         stats_refresher.abort();
                         *stats.lock().expect("stats lock poisoned") = None;
@@ -270,6 +307,32 @@ async fn spawn_child(spec: &RuntimeSpec) -> Result<tokio::process::Child> {
     Ok(child)
 }
 
+async fn ark_rcon_ready(spec: &RuntimeSpec) -> bool {
+    let Launch::ArkSurvivalAscended(launch) = &spec.launch else {
+        return true;
+    };
+    crate::game::rcon::source::send(launch.rcon_port, &launch.rcon_password, &[])
+        .await
+        .is_ok()
+}
+
+fn append_runtime_log(spec: &RuntimeSpec, message: &str) -> Result<()> {
+    use std::io::Write;
+
+    let logs = paths::instance_logs_dir(&spec.instance_dir);
+    std::fs::create_dir_all(&logs)?;
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs.join(crate::console_log::CURRENT))?;
+    writeln!(
+        log,
+        "{}",
+        crate::console_log::stamp_line(Utc::now(), message)
+    )?;
+    Ok(())
+}
+
 async fn stop_child(
     child: &mut tokio::process::Child,
     pid: u32,
@@ -301,7 +364,7 @@ async fn handle_control(
     pid: u32,
     pid_started_at: i64,
     started_at: chrono::DateTime<Utc>,
-    ready: bool,
+    ready: Arc<AtomicBool>,
     actions: mpsc::Sender<Action>,
     stats: StatsHandle,
 ) {
@@ -314,7 +377,7 @@ async fn handle_control(
             started_at,
             protocol_version: PROTOCOL_VERSION,
             odin_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            ready,
+            ready: ready.load(Ordering::Relaxed),
         },
         Ok(Some(Request::Stop { timeout_secs })) => {
             let _ = actions.send(Action::Stop(timeout_secs)).await;
@@ -366,6 +429,76 @@ mod tests {
     use crate::game::rust;
     use crate::podman::Launch;
     use crate::supervisor::stats::STATS_REFRESH_INTERVAL;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn ark_spec(rcon_port: u16) -> RuntimeSpec {
+        spec_for(Launch::ArkSurvivalAscended(
+            crate::game::ark_asa::ArkLaunch {
+                name: "ark-test".into(),
+                port: 7777,
+                query_port: 27015,
+                rcon_port,
+                rcon_password: "secret".into(),
+                options: crate::game::ark_asa::ArkLaunchOptions::defaults("ark-test"),
+                cluster: None,
+            },
+        ))
+    }
+
+    #[tokio::test]
+    async fn ark_runtime_is_ready_only_after_rcon_authentication() {
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind a loopback listener: {error}"),
+        };
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let size = stream.read_i32_le().await.unwrap() as usize;
+            let mut packet = vec![0; size];
+            stream.read_exact(&mut packet).await.unwrap();
+            assert_eq!(i32::from_le_bytes(packet[0..4].try_into().unwrap()), 1);
+            assert_eq!(i32::from_le_bytes(packet[4..8].try_into().unwrap()), 3);
+            assert_eq!(&packet[8..packet.len() - 2], b"secret");
+
+            stream.write_i32_le(10).await.unwrap();
+            stream.write_i32_le(1).await.unwrap();
+            stream.write_i32_le(2).await.unwrap();
+            stream.write_all(&[0, 0]).await.unwrap();
+        });
+
+        assert!(ark_rcon_ready(&ark_spec(port)).await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ark_runtime_is_not_ready_when_rcon_is_unavailable() {
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind a loopback listener: {error}"),
+        };
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        assert!(!ark_rcon_ready(&ark_spec(port)).await);
+    }
+
+    #[test]
+    fn ark_startup_failure_diagnostic_is_appended_to_instance_console_log() {
+        let root =
+            std::env::temp_dir().join(format!("odin-ark-diagnostic-{}", uuid::Uuid::new_v4()));
+        let mut spec = ark_spec(27020);
+        spec.instance_dir = root.clone();
+
+        append_runtime_log(&spec, "RCON did not become ready").unwrap();
+
+        let log =
+            std::fs::read_to_string(paths::instance_logs_dir(&root).join("console.log")).unwrap();
+        assert!(log.contains("RCON did not become ready"));
+        std::fs::remove_dir_all(root).ok();
+    }
 
     async fn stats_response(stats: StatsHandle, pid: u32) -> Response {
         let (client, server) = UnixStream::pair().unwrap();
@@ -375,7 +508,7 @@ mod tests {
             pid,
             0,
             Utc::now(),
-            true,
+            Arc::new(AtomicBool::new(true)),
             actions,
             stats,
         ));
@@ -896,7 +1029,7 @@ chmod +x "$d/valheim_server.x86_64""#,
             7,
             11,
             Utc::now(),
-            false,
+            Arc::new(AtomicBool::new(false)),
             actions,
             Arc::new(Mutex::new(None)),
         ));

@@ -18,6 +18,51 @@ pub(crate) struct LifecycleLock {
     _file: File,
 }
 
+/// Serializes an install or update of a game's shared files with starts of
+/// instances that use those files.
+#[derive(Debug)]
+pub(crate) struct SharedInstallLock {
+    _file: File,
+}
+
+impl SharedInstallLock {
+    pub(crate) fn acquire(paths: &Paths, game: GameId) -> Result<Self> {
+        let lock_dir = paths.data_dir.join("locks/shared-install");
+        std::fs::create_dir_all(&lock_dir)
+            .with_context(|| format!("failed to create {}", lock_dir.display()))?;
+        let path = lock_dir.join(shared_install_lock_filename(paths, game));
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("failed to open shared install lock {}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(TryLockError::WouldBlock) => bail!(InstanceError::TransitionInProgress(format!(
+                "{} shared install",
+                game.as_str()
+            ))),
+            Err(TryLockError::Error(error)) => Err(error)
+                .with_context(|| format!("failed to lock shared install file {}", path.display())),
+        }
+    }
+}
+
+fn shared_install_lock_filename(paths: &Paths, game: GameId) -> String {
+    let mut digest = Sha256::new();
+    digest.update(paths.data_dir.to_string_lossy().as_bytes());
+    digest.update([0]);
+    digest.update(game.as_str());
+    let mut filename = String::with_capacity(64 + ".shared-install.lock".len());
+    for byte in digest.finalize() {
+        write!(filename, "{byte:02x}").expect("writing a lock filename to String cannot fail");
+    }
+    filename.push_str(".shared-install.lock");
+    filename
+}
+
 impl LifecycleLock {
     pub(crate) fn acquire(paths: &Paths, game: GameId, name: &str) -> Result<Self> {
         validate_instance_name(name).map_err(InstanceError::InvalidName)?;
@@ -177,6 +222,16 @@ mod tests {
         LifecycleLock::acquire(&paths, GameId::Valheim, "bravo").unwrap();
         drop(first);
         LifecycleLock::acquire(&paths, GameId::Valheim, "alpha").unwrap();
+    }
+
+    #[test]
+    fn shared_install_lock_is_exclusive_per_game_and_released_on_drop() {
+        let paths = temp_paths("shared-install-lock");
+        let first = SharedInstallLock::acquire(&paths, GameId::ArkSurvivalAscended).unwrap();
+        assert!(SharedInstallLock::acquire(&paths, GameId::ArkSurvivalAscended).is_err());
+        SharedInstallLock::acquire(&paths, GameId::Rust).unwrap();
+        drop(first);
+        SharedInstallLock::acquire(&paths, GameId::ArkSurvivalAscended).unwrap();
     }
 
     #[test]

@@ -693,12 +693,17 @@ impl Launch {
                 crate::game::palworld::prepare_runtime(&spec.install_dir, &spec.instance_dir)?;
                 crate::game::palworld::build_command_at(&spec.install_dir, console_log, launch)
             }
-            Self::ArkSurvivalAscended(launch) => crate::game::ark_asa::build_command_at(
-                &spec.install_dir,
-                console_log,
-                &spec.steamcmd_dir,
-                launch,
-            ),
+            Self::ArkSurvivalAscended(launch) => {
+                if !spec.shared_install {
+                    crate::game::ark_asa::prepare_runtime(&spec.install_dir)?;
+                }
+                crate::game::ark_asa::build_command_at(
+                    &spec.install_dir,
+                    console_log,
+                    &spec.steamcmd_dir,
+                    launch,
+                )
+            }
             Self::Cs2(launch) => {
                 crate::game::cs2::prepare_runtime(
                     &spec.install_dir,

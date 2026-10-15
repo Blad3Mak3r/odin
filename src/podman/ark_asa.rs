@@ -187,4 +187,65 @@ mod tests {
         assert!(!config.join("GameUserSettings.ini").exists());
         std::fs::remove_dir_all(dir).ok();
     }
+
+    #[test]
+    fn isolated_instance_mounts_its_own_saved_tree_without_replacing_native_files() {
+        let (paths, db, instance, dir) = fixture("isolated-persistence");
+        let saved = paths
+            .game_instance_dir(GameId::ArkSurvivalAscended, instance.name())
+            .join("Saved");
+        let ini = saved.join("Config/WindowsServer/GameUserSettings.ini");
+        std::fs::create_dir_all(ini.parent().unwrap()).unwrap();
+        std::fs::write(&ini, "operator config").unwrap();
+        std::fs::write(saved.join("world.ark"), "operator save").unwrap();
+
+        let mounts = ArkSurvivalAscended::extra_mounts(&paths, &db, &instance).unwrap();
+
+        assert!(mounts.iter().any(|mount| {
+            mount.destination == "/srv/odin/runtime/ark-asa/ShooterGame/Saved"
+                && mount.source == saved.to_string_lossy()
+        }));
+        assert_eq!(std::fs::read_to_string(ini).unwrap(), "operator config");
+        assert_eq!(
+            std::fs::read_to_string(saved.join("world.ark")).unwrap(),
+            "operator save"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn shared_instance_keeps_saved_per_instance_and_mounts_shared_config() {
+        let (paths, db, instance, dir) = fixture("shared-persistence");
+        set_install_mode(&db, &instance.identity.id, InstallMode::Shared).unwrap();
+        let saved = paths
+            .game_instance_dir(GameId::ArkSurvivalAscended, instance.name())
+            .join("Saved");
+        let shared_config = paths
+            .shared_install_dir(GameId::ArkSurvivalAscended)
+            .join("ShooterGame/Saved/Config");
+        std::fs::create_dir_all(&saved).unwrap();
+        std::fs::create_dir_all(&shared_config).unwrap();
+        std::fs::write(saved.join("world.ark"), "instance save").unwrap();
+        std::fs::write(shared_config.join("operator.ini"), "shared config").unwrap();
+
+        let mounts = ArkSurvivalAscended::extra_mounts(&paths, &db, &instance).unwrap();
+
+        assert!(mounts.iter().any(|mount| {
+            mount.destination == "/srv/odin/shared/ShooterGame/Saved"
+                && mount.source == saved.to_string_lossy()
+        }));
+        assert!(mounts.iter().any(|mount| {
+            mount.destination == "/srv/odin/shared/ShooterGame/Saved/Config"
+                && mount.source == shared_config.to_string_lossy()
+        }));
+        assert_eq!(
+            std::fs::read_to_string(saved.join("world.ark")).unwrap(),
+            "instance save"
+        );
+        assert_eq!(
+            std::fs::read_to_string(shared_config.join("operator.ini")).unwrap(),
+            "shared config"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

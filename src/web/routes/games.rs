@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::db::game_instances::{self, GameInstanceIdentity, GenericGameInstance, RustInstance};
 use crate::game::{self, GameId, RuntimeImage, instances as game_instances_ops, rust};
+use crate::instance::lifecycle::SharedInstallLock;
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
 use crate::podman::{dispatch, shared_install};
@@ -181,6 +182,7 @@ pub async fn install_shared(
     let id = state
         .jobs
         .spawn(JobKindDescr::SharedInstall { game }, move |logger| {
+            let _shared_install_lock = SharedInstallLock::acquire(&paths, game)?;
             if game_instances::shared_install_instances(&db, game)?
                 .into_iter()
                 .any(|instance| {

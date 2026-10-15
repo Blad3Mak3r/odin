@@ -42,6 +42,20 @@ and the templates shipped by the installed server. Match the documented
 server version. Community reports may help diagnose a compatibility gap, but
 must not replace an official source for the normal contract.
 
+Before choosing `isolated`, `shared`, or both for a game, map where that
+server stores and reads its mutable data: configuration files, saves/worlds,
+and logs. Include paths derived from the install directory, working directory,
+`HOME`/XDG directories, and launch arguments. Establish whether each path can
+be redirected or mounted per instance, and whether two instances can use
+different configurations without writing to the same files. Shared mode is
+appropriate only when every per-instance mutable path is separated from the
+shared game files and the server supports the intended per-instance
+configuration. If configuration or runtime data must overlap and cannot be
+separated safely, use isolated mode. If the evidence does not establish this,
+do not enable shared mode yet. Record the sources and the resulting mode
+decision in the PR. The required investigation and checklist are in
+[docs/container-game-migration.md](docs/container-game-migration.md#2-step-0-establish-the-contract-from-primary-sources).
+
 - Keep in SQLite only Odin metadata and settings that Odin must pass directly
   to the process (for example, documented listener ports and RCON transport
   arguments). Keep game settings in the game's native configuration files.
@@ -73,11 +87,11 @@ must not replace an official source for the normal contract.
 Every game runs in an `odin-srv` Podman container; there is no host-process
 mode. Before adding another game, or changing the container lifecycle, read
 [docs/container-game-migration.md](docs/container-game-migration.md): it
-covers the container model, the per-file checklist, the recurring design
-problems (data relative to the install tree, native-document seeding, graceful
-stop), the traps earlier games hit, and the tests a new game must add. It
-complements the policy above and `src/podman/dispatch.rs`; it does not replace
-them.
+covers the container model, requires a data-ownership and installation-mode
+decision before implementation, and lists the per-file checklist, recurring
+design problems (data relative to the install tree, native-document seeding,
+graceful stop), earlier traps, and required tests. It complements the policy
+above and `src/podman/dispatch.rs`; it does not replace them.
 
 ## Agent workflow and engineering principles
 

@@ -51,7 +51,44 @@ host                                          container (host network)
 
 ## 2. Step 0: establish the contract from primary sources
 
-Before writing code, verify (and cite in the PR description):
+Before selecting `isolated`, `shared`, or both—and before writing code—map
+where the server reads and writes its configuration and runtime data. Do not
+infer these locations from the executable's directory or from another game's
+layout. Verify the behavior for the server version being added, using the
+publisher's dedicated-server documentation, the official server image or
+launch script when available, and the files/templates in an installed server.
+
+Record the evidence for each category:
+
+| Data | What to establish |
+|---|---|
+| Configuration | Native filenames and paths; how the server chooses them; whether command-line arguments, working directory, or environment can redirect them; whether different instances can use different values. |
+| Saves and worlds | Actual save/world paths; whether paths are relative to the install, identity, `HOME`/XDG, or a configured data directory; whether a server option can redirect them. |
+| Logs | Which logs the server creates, their paths and rotation/ownership; whether output can be directed to stdout/stderr or to a per-instance directory. |
+| Other mutable state | Mods, caches, clusters, generated files, lock files, and anything else written while the server runs or updates. Identify whether it is global or instance-owned. |
+
+For each path, note when it is created, which process writes it (SteamCMD,
+launcher, or server), and whether two servers can safely write to it at once.
+Check whether an install-tree-relative path can be separated with a per-instance
+mount or symlink, and whether that separation preserves server behavior. Cite
+the source and version beside the finding; community reports can help explain
+a failure but cannot establish the normal contract.
+
+Use that investigation to make and record the install-mode decision in the PR:
+
+- **Shared is supported** only when every mutable per-instance path can be
+  kept separate from the common game files, and each instance can use its own
+  configuration without sharing or overwriting another instance's files.
+  Confirm the shared game tree is safe to reuse while servers run, or serialize
+  updates and starts so SteamCMD cannot change files used by active servers.
+- **Isolated is required** when configuration or runtime data must differ by
+  instance but the server offers no reliable way to redirect or separate that
+  data, or when concurrent processes would write shared state unsafely.
+- **Both modes are supported** only when both layouts have explicit path
+  ownership, lifecycle behavior, and tests. If the sources do not settle the
+  question, do not enable shared mode until the behavior is verified.
+
+Before writing code, also verify (and cite in the PR description):
 
 1. The publisher's dedicated-server documentation: Steam app id, launch
    executable, **documented** arguments, ports, config file path and format.

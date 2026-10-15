@@ -1,19 +1,21 @@
-# Adding a game to the Podman runtime
+# Implementing game-server support in Odin
 
-This guide is for agents and contributors adding a game that runs in an
-`odin-srv` Podman container. Every game does: Valheim, Rust, 7 Days to Die,
-Palworld, ARK: Survival Ascended and Counter-Strike 2 are already there, and there is no host-process mode. Read the code of
-the one closest to your game before starting:
+This guide covers adding a game and adding capabilities to supported games.
+All managed game servers already run in the existing `odin-srv` Podman
+runtime. There is no host-process mode and no per-game migration into Podman
+to design. Extend the existing runtime and dashboard from end to end. Before
+starting, read the code for the closest existing game and identify the
+game-neutral behavior that can be reused:
 
 | If your game... | Copy |
 |---|---|
 | is a *generic* game (`GenericGameInstance`, native config document, no typed Odin settings) | `src/podman/seven_days_to_die.rs`, `src/podman/palworld.rs` and their `src/game/<game>.rs` |
 | has typed Odin settings in SQLite (`RustInstance`, Valheim's `InstanceState`) | `src/podman/rust.rs` / `src/podman/valheim.rs` |
 
-Read [AGENTS.md](../AGENTS.md) first: its *Game server configuration policy*
-applies to every game. This guide only adds the container-specific part.
+Read [AGENTS.md](../AGENTS.md) first: its game configuration, generic-design,
+and repository policies apply throughout this guide.
 
-## 1. Mental model
+## 1. Runtime and repository model
 
 The `ghcr.io/blad3mak3r/odin-srv:base` image serves native games, while
 `:proton` extends it for Windows-only servers. They are built from
@@ -49,9 +51,59 @@ host                                          container (host network)
   log view are **already game-neutral**. A new game gets them by
   being registered, not by new code.
 
-## 2. Step 0: establish the contract from primary sources
+For a capability request, first search for existing behavior and its current
+callers (`rg` across `src/game`, `src/podman`, `src/web`, and `web/src`). Check
+whether the behavior already belongs to a shared service, driver contract,
+route, editor, or dashboard component. Extend that implementation when the
+semantics are common; do not begin with a one-game copy of an existing
+game-neutral feature.
 
-Before writing code, verify (and cite in the PR description):
+## 2. Step 0: investigate the server and decide its data ownership
+
+Before selecting `isolated`, `shared`, or both—and before writing code—map
+where the server reads and writes its configuration and runtime data. Do not
+infer these locations from the executable's directory or from another game's
+layout. Verify the behavior for the server version being added, using the
+publisher's dedicated-server documentation, the official server image or
+launch script when available, and the files/templates in an installed server.
+
+Record the evidence for each category:
+
+| Data | What to establish |
+|---|---|
+| Configuration | Native filenames and paths; how the server chooses them; whether a documented command-line argument selects a config file or directory and which documents it redirects; whether working directory or environment affects the paths; whether different instances can use different values. Distinguish a config-path argument from a general data-directory argument. |
+| Saves and worlds | Actual save/world paths; whether paths are relative to the install, identity, `HOME`/XDG, or a configured data directory; whether a server option can redirect them. |
+| Logs | Which logs the server creates, their paths and rotation/ownership; whether output can be directed to stdout/stderr or to a per-instance directory. |
+| Other mutable state | Mods, caches, clusters, generated files, lock files, and anything else written while the server runs or updates. Identify whether it is global or instance-owned. |
+
+For each path, note when it is created, which process writes it (SteamCMD,
+launcher, or server), and whether two servers can safely write to it at once.
+Check whether an install-tree-relative path can be separated with a per-instance
+mount or symlink, and whether that separation preserves server behavior. Cite
+the source and version beside the finding; community reports can help explain
+a failure but cannot establish the normal contract.
+
+Use that investigation to make and record the install-mode decision in the PR:
+
+- **Shared is supported** only when every mutable per-instance path can be
+  kept separate from the common game files, and each instance can use its own
+  configuration without sharing or overwriting another instance's files.
+  Verify whether a documented launch argument selects the config file or
+  directory, and whether it redirects every native document that may differ
+  between instances. If not, verify that mounting each instance's file or
+  directory at the server's fixed config path provides the same isolation.
+  Do not treat an argument such as `-UserDataFolder` as config redirection
+  unless the server documentation or installed templates establish that link.
+  Confirm the shared game tree is safe to reuse while servers run, or serialize
+  updates and starts so SteamCMD cannot change files used by active servers.
+- **Isolated is required** when configuration or runtime data must differ by
+  instance but the server offers no reliable way to redirect or separate that
+  data, or when concurrent processes would write shared state unsafely.
+- **Both modes are supported** only when both layouts have explicit path
+  ownership, lifecycle behavior, and tests. If the sources do not settle the
+  question, do not enable shared mode until the behavior is verified.
+
+Before writing code, also verify (and cite in the PR description):
 
 1. The publisher's dedicated-server documentation: Steam app id, launch
    executable, **documented** arguments, ports, config file path and format.
@@ -70,6 +122,66 @@ Then classify every setting:
 
 If the game has no native document, represent its documented launch arguments
 as typed, validated fields and omit new optional ones by default.
+
+### Questions to settle before implementation
+
+Answer these from the game contract and Odin's current code before designing
+the change:
+
+- What operator-visible behavior is needed, and what should its default be?
+- Which server versions, operating systems, maps, or modes must be supported?
+- Which settings belong in native game files, and which documented values
+  must Odin pass as launch arguments?
+- Does a documented launch argument select the config file or directory? Does
+  it redirect every native config document that needs per-instance values, or
+  only saves and other user data? If there is no suitable argument, can
+  per-instance mounts at the server's fixed config paths isolate those files?
+  For example, check what 7 Days to Die's `-UserDataFolder` actually controls;
+  do not infer config behavior from the option name.
+- Must two instances be able to use different values? Which native files and
+  mutable paths belong to each instance?
+- Can the server create or redirect those files through documented settings,
+  environment, working directory, or mounts?
+- Does the requested behavior already exist for another game or in a
+  game-neutral service, route, component, or protocol client?
+- Does the feature require a database change, an API route, dashboard controls,
+  background job, readiness check, graceful-stop behavior, or documentation?
+- If an existing instance's paths or settings change, how are its files and
+  operator edits preserved across upgrade and restart?
+
+Ask the user when an operator-facing choice, compatibility target, or expected
+behavior remains ambiguous after inspecting the code and primary sources. Do
+not ask the user to supply server facts that can be established from the
+publisher, installed server, or official runtime files.
+
+### Prefer a game-neutral implementation when behavior is shared
+
+Before adding a game-specific API, database field, lifecycle path, or UI
+control, compare the requested behavior with existing games and identify its
+natural owner in Odin. When semantics are shared, implement the feature once
+in the game-neutral layer and let each game provide only the data that differs
+(for example, native paths, ports, or protocol operations). This is the default
+for capabilities that apply across games or are likely to be reused; a feature
+should not be unique to the first game that requested it.
+
+Keep genuinely different game protocols and file semantics in that game's
+driver or adapter. Do not hide meaningful differences behind a false common
+contract, and do not build a speculative framework when there is no current
+shared behavior. Extend an existing abstraction before introducing a parallel
+one.
+
+### Implementation sequence
+
+1. Inspect the closest drivers and existing game-neutral paths before editing.
+2. Verify the server/version contract and record data paths and ownership.
+3. Decide `isolated`, `shared`, or both using the evidence above.
+4. Settle user-facing behavior and choose the generic/game-specific boundary.
+5. Implement the driver and connect the behavior through lifecycle, API,
+   dashboard, storage, and documentation as applicable.
+6. Add tests at the shared layer and the game adapter boundary; verify against
+   the installed server in Podman when the change affects runtime behavior.
+7. In the PR, summarize the contract, mode decision, reuse boundary, checks,
+   and any validation that could not be run.
 
 ## 3. Code checklist
 
@@ -201,17 +313,11 @@ Game-neutral, nothing to add per game:
 - The dashboard shows the install card on the game's overview and the install
   mode selector in the create dialog from the capability alone.
 
-Moving an existing isolated instance onto the shared files
-(`POST /instances/{id}/shared-install`, `shared_install::migrate_to_shared`) is
-opt-in per game through `shared_install_migration`, because it must not change
-what the instance's settings mean. ARK does not opt in: its shared
-configuration would be mounted over the instance's own INI files. A game opts
-in once its per-instance state is entirely outside the install tree. The
-migration needs a stopped instance, removes only its container (a stopped
-container keeps its old mounts when started again), and either adopts the
-instance's own game files as the shared installation when none exists, which
-is a rename, or leaves them in place. They are deleted only when the request
-asks (`delete_private_files`).
+The optional `shared_install_migration` capability concerns changing an
+existing Odin instance between install modes. It is separate from running a
+game in Podman. Only opt in when the existing instance's settings keep their
+meaning and all per-instance data remains independent; otherwise leave the
+capability disabled.
 
 What the game provides in `src/podman/<game>.rs`:
 
@@ -226,7 +332,7 @@ What the game provides in `src/podman/<game>.rs`:
   Create the mountpoints on the host before the first start; otherwise Podman
   creates them inside the shared tree as root.
 
-## 5. Existing data
+## 5. Preserving existing instances
 
 When a game's layout changes, existing instances keep working:
 
@@ -283,7 +389,7 @@ Assert the complete behaviour, not fragments. Reuse `src/podman/test_support.rs`
 ## 8. Verification and PR
 
 - Targeted first: `cargo test <game>`, `cargo test podman::`,
-  `cargo test dispatch`. A migration crosses subsystems, so finish with
+  `cargo test dispatch`. A change that crosses subsystems should finish with
   `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and a full
   `cargo test` (or `make check`).
 - Manual run only with the recipe in AGENTS.md (`sudo env ODIN_DATA_DIR=<scratch>

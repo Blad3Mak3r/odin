@@ -42,6 +42,24 @@ and the templates shipped by the installed server. Match the documented
 server version. Community reports may help diagnose a compatibility gap, but
 must not replace an official source for the normal contract.
 
+Before choosing `isolated`, `shared`, or both for a game, map where that
+server stores and reads its mutable data: configuration files, saves/worlds,
+and logs. Include paths derived from the install directory, working directory,
+`HOME`/XDG directories, and launch arguments. Establish whether each path can
+be redirected or mounted per instance. In particular, verify whether a
+documented launch argument selects the configuration file or directory, and
+whether it redirects every native configuration document that must differ
+between instances. Do not assume a general data-directory argument also
+redirects configuration. If there is no such argument, verify whether a
+per-instance mount at the server's fixed config path provides equivalent
+isolation. Shared mode is appropriate only when every per-instance mutable
+path is separated from the shared game files and each instance can use its
+intended configuration. If configuration or runtime data must overlap and
+cannot be separated safely, use isolated mode. If the evidence does not
+establish this, do not enable shared mode yet. Record the sources and the
+resulting mode decision in the PR. The required investigation and checklist are in
+[docs/game-server-implementation.md](docs/game-server-implementation.md).
+
 - Keep in SQLite only Odin metadata and settings that Odin must pass directly
   to the process (for example, documented listener ports and RCON transport
   arguments). Keep game settings in the game's native configuration files.
@@ -68,16 +86,16 @@ must not replace an official source for the normal contract.
   initialization behavior, and migration precedence. Cite the official
   sources used to establish the contract in the pull request description.
 
-## Adding a game to the Podman runtime
+## Implementing game-server support
 
-Every game runs in an `odin-srv` Podman container; there is no host-process
-mode. Before adding another game, or changing the container lifecycle, read
-[docs/container-game-migration.md](docs/container-game-migration.md): it
-covers the container model, the per-file checklist, the recurring design
-problems (data relative to the install tree, native-document seeding, graceful
-stop), the traps earlier games hit, and the tests a new game must add. It
-complements the policy above and `src/podman/dispatch.rs`; it does not replace
-them.
+Every managed game already runs in the `odin-srv` Podman runtime. There is no
+host-process mode or per-game migration into Podman. Before adding a game or a
+game-server capability, read
+[docs/game-server-implementation.md](docs/game-server-implementation.md): it
+walks through investigation, installation-mode decisions, generic versus
+game-specific design, implementation across the existing runtime, and
+validation. It complements the policy above and `src/podman/dispatch.rs`; it
+does not replace them.
 
 ## Agent workflow and engineering principles
 
@@ -89,6 +107,12 @@ them.
   duplicate logic or create parallel implementations of an existing concept.
   Extract an abstraction only when it removes genuine repeated complexity and
   leaves the call sites easier to understand.
+- For a new game-server capability, first look for the same behavior across
+  existing games and prefer implementing it in the game-neutral API, service,
+  runtime, or UI component, with small game-specific adapters where needed.
+  Do not make a capability game-specific just because one game requested it
+  first. Keep genuinely different protocols and storage contracts in the game
+  driver, and avoid speculative abstractions without a current second use.
 - Use the available specialist skills when they match the task:
   - `ponytail` for repository-aware implementation workflows and task
     execution.

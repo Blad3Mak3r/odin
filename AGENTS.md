@@ -46,14 +46,18 @@ Before choosing `isolated`, `shared`, or both for a game, map where that
 server stores and reads its mutable data: configuration files, saves/worlds,
 and logs. Include paths derived from the install directory, working directory,
 `HOME`/XDG directories, and launch arguments. Establish whether each path can
-be redirected or mounted per instance, and whether two instances can use
-different configurations without writing to the same files. Shared mode is
-appropriate only when every per-instance mutable path is separated from the
-shared game files and the server supports the intended per-instance
-configuration. If configuration or runtime data must overlap and cannot be
-separated safely, use isolated mode. If the evidence does not establish this,
-do not enable shared mode yet. Record the sources and the resulting mode
-decision in the PR. The required investigation and checklist are in
+be redirected or mounted per instance. In particular, verify whether a
+documented launch argument selects the configuration file or directory, and
+whether it redirects every native configuration document that must differ
+between instances. Do not assume a general data-directory argument also
+redirects configuration. If there is no such argument, verify whether a
+per-instance mount at the server's fixed config path provides equivalent
+isolation. Shared mode is appropriate only when every per-instance mutable
+path is separated from the shared game files and each instance can use its
+intended configuration. If configuration or runtime data must overlap and
+cannot be separated safely, use isolated mode. If the evidence does not
+establish this, do not enable shared mode yet. Record the sources and the
+resulting mode decision in the PR. The required investigation and checklist are in
 [docs/game-server-implementation.md](docs/game-server-implementation.md).
 
 - Keep in SQLite only Odin metadata and settings that Odin must pass directly

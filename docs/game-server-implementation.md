@@ -71,7 +71,7 @@ Record the evidence for each category:
 
 | Data | What to establish |
 |---|---|
-| Configuration | Native filenames and paths; how the server chooses them; whether command-line arguments, working directory, or environment can redirect them; whether different instances can use different values. |
+| Configuration | Native filenames and paths; how the server chooses them; whether a documented command-line argument selects a config file or directory and which documents it redirects; whether working directory or environment affects the paths; whether different instances can use different values. Distinguish a config-path argument from a general data-directory argument. |
 | Saves and worlds | Actual save/world paths; whether paths are relative to the install, identity, `HOME`/XDG, or a configured data directory; whether a server option can redirect them. |
 | Logs | Which logs the server creates, their paths and rotation/ownership; whether output can be directed to stdout/stderr or to a per-instance directory. |
 | Other mutable state | Mods, caches, clusters, generated files, lock files, and anything else written while the server runs or updates. Identify whether it is global or instance-owned. |
@@ -88,6 +88,12 @@ Use that investigation to make and record the install-mode decision in the PR:
 - **Shared is supported** only when every mutable per-instance path can be
   kept separate from the common game files, and each instance can use its own
   configuration without sharing or overwriting another instance's files.
+  Verify whether a documented launch argument selects the config file or
+  directory, and whether it redirects every native document that may differ
+  between instances. If not, verify that mounting each instance's file or
+  directory at the server's fixed config path provides the same isolation.
+  Do not treat an argument such as `-UserDataFolder` as config redirection
+  unless the server documentation or installed templates establish that link.
   Confirm the shared game tree is safe to reuse while servers run, or serialize
   updates and starts so SteamCMD cannot change files used by active servers.
 - **Isolated is required** when configuration or runtime data must differ by
@@ -126,6 +132,12 @@ the change:
 - Which server versions, operating systems, maps, or modes must be supported?
 - Which settings belong in native game files, and which documented values
   must Odin pass as launch arguments?
+- Does a documented launch argument select the config file or directory? Does
+  it redirect every native config document that needs per-instance values, or
+  only saves and other user data? If there is no suitable argument, can
+  per-instance mounts at the server's fixed config paths isolate those files?
+  For example, check what 7 Days to Die's `-UserDataFolder` actually controls;
+  do not infer config behavior from the option name.
 - Must two instances be able to use different values? Which native files and
   mutable paths belong to each instance?
 - Can the server create or redirect those files through documented settings,

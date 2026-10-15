@@ -13,9 +13,8 @@
 //! 4. Override `stop_timeout_secs` in the game's driver if it needs longer
 //!    than 30 seconds to save.
 //!
-//! No other host-side code enumerates container games. The full migration
-//! checklist, with the traps each earlier game hit, is
-//! `docs/container-game-migration.md`.
+//! No other host-side code enumerates container games. The full game-server
+//! implementation guide is `docs/game-server-implementation.md`.
 
 use anyhow::Result;
 

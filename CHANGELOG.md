@@ -4,6 +4,16 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.7] - 2026-10-17
+
+### What's Changed
+- fix: repair ARK Survival Ascended startup by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/173
+- docs: require server data ownership analysis by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/174
+- feat: CurseForge mod picker for ARK: Survival Ascended by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/175
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.6...v0.20.7
+
 ## [0.20.6] - 2026-10-14
 
 ### What's Changed

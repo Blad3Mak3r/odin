@@ -378,4 +378,45 @@ mod tests {
         assert!(response.data.popular[0].authors.is_empty());
         assert!(response.data.recently_updated.is_empty());
     }
+
+    /// Hits the real API: `CURSE_FORGE_API_KEY=… cargo test curseforge::tests::live -- --ignored`.
+    #[test]
+    #[ignore = "needs CURSE_FORGE_API_KEY and network access"]
+    fn live_api_round_trip() {
+        let key = std::env::var(crate::config::CURSEFORGE_API_KEY_ENV).expect("key in env");
+
+        let page = search(&key, "structures", 0).unwrap();
+        assert!(page.total > 0 && !page.mods.is_empty());
+        assert!(page.mods.iter().all(|m| m.game_id == ASA_GAME_ID));
+
+        let by_slug = lookup(&key, &ModReference::Slug("cybers-structures".into())).unwrap();
+        assert_eq!(by_slug.id, 940975);
+        let by_id = lookup(&key, &ModReference::Id(by_slug.id)).unwrap();
+        assert_eq!(by_id.name, by_slug.name);
+
+        let bulk = fetch_mods(&key, &[940975, 929420]).unwrap();
+        assert_eq!(
+            bulk.iter().map(|m| m.id).collect::<Vec<_>>(),
+            [940975, 929420]
+        );
+
+        let featured = featured(&key).unwrap();
+        assert!(!featured.popular.is_empty());
+
+        let missing = lookup(&key, &ModReference::Slug("no-such-mod-odin-test".into()));
+        assert!(matches!(
+            missing.unwrap_err().downcast_ref::<CurseForgeError>(),
+            Some(CurseForgeError::NotFound(_))
+        ));
+        let wrong_game = lookup(&key, &ModReference::Id(238222)); // JEI (Minecraft)
+        assert!(matches!(
+            wrong_game.unwrap_err().downcast_ref::<CurseForgeError>(),
+            Some(CurseForgeError::WrongGame(_))
+        ));
+        let bad_key = search("not-a-key", "x", 0).unwrap_err();
+        assert!(matches!(
+            bad_key.downcast_ref::<CurseForgeError>(),
+            Some(CurseForgeError::Rejected(403))
+        ));
+    }
 }

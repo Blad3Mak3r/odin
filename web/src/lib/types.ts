@@ -311,6 +311,27 @@ export interface ModSearchResult {
   downloads: number
 }
 
+export interface CurseForgeMod {
+  id: number
+  name: string
+  author: string
+  summary: string
+  icon: string | null
+  downloads: number
+  url: string | null
+}
+
+export interface CurseForgeFeatured {
+  featured: CurseForgeMod[]
+  popular: CurseForgeMod[]
+  recently_updated: CurseForgeMod[]
+}
+
+export interface CurseForgeSearchPage {
+  mods: CurseForgeMod[]
+  total: number
+}
+
 export interface JobHandle {
   id: string
 }

@@ -789,6 +789,7 @@ chmod +x "$d/valheim_server.x86_64""#,
         let installing = crate::supervisor::client::ping_socket_with_retry(
             &control_path,
             Duration::from_secs(1),
+            || async { Ok(()) },
         )
         .await
         .unwrap();
@@ -799,6 +800,7 @@ chmod +x "$d/valheim_server.x86_64""#,
             let pong = crate::supervisor::client::ping_socket_with_retry(
                 &control_path,
                 Duration::from_secs(1),
+                || async { Ok(()) },
             )
             .await
             .unwrap();

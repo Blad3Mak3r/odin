@@ -21,6 +21,7 @@ use crate::instance::lifecycle::{LifecycleLock, SharedInstallLock};
 use crate::paths::Paths;
 use crate::supervisor;
 
+use super::startup::ContainerExited;
 use super::{ContainerSpec, ContainerState, Mount, PodmanClient, container_name};
 
 const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -30,6 +31,8 @@ const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// time is not mistaken for a hung container.
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Container output lines kept to explain a failed start.
+const FAILURE_LOG_LINES: usize = 50;
 
 /// What differs between games that run in a container. Everything else in
 /// this module is shared.
@@ -357,6 +360,7 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     let response = supervisor::client::ping_socket_with_retry(
         &control_socket(paths, &identity),
         START_TIMEOUT,
+        || ensure_container_alive(&client, &container),
     )
     .await
     .with_context(|| {
@@ -399,16 +403,9 @@ async fn wait_for_ark_ready(
             Ok(response) => {
                 bail!("unexpected response while waiting for ARK readiness: {response:?}")
             }
-            Err(error) => {
-                if matches!(
-                    client.inspect(container).await?,
-                    Some(ContainerState::Exited)
-                ) {
-                    bail!(
-                        "ARK: Survival Ascended container exited before RCON became ready: {error}"
-                    );
-                }
-            }
+            Err(_) => ensure_container_alive(client, container)
+                .await
+                .context("ARK: Survival Ascended container exited before RCON became ready")?,
         }
         if Instant::now() >= deadline {
             bail!(
@@ -418,6 +415,32 @@ async fn wait_for_ark_ready(
         }
         sleep(Duration::from_secs(1)).await;
     }
+}
+
+/// Fails with [`ContainerExited`] as soon as Podman reports the container
+/// stopped or gone, so a crashed start surfaces in seconds with its exit code
+/// and output instead of after the full start timeout. A Podman error here is
+/// not proof of a crash and is ignored; the caller keeps waiting.
+async fn ensure_container_alive(client: &PodmanClient, container: &str) -> Result<()> {
+    let exit = match client.inspect_container(container).await {
+        Ok(Some(found)) if found.state == ContainerState::Exited => Some(found.exit),
+        Ok(None) => None,
+        _ => return Ok(()),
+    };
+    let log_tail = if exit.is_some() {
+        client
+            .logs_tail(container, FAILURE_LOG_LINES)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Err(ContainerExited {
+        container: container.to_string(),
+        exit,
+        log_tail,
+    }
+    .into())
 }
 
 async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {

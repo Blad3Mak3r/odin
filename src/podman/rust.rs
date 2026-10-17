@@ -73,11 +73,56 @@ mod tests {
     use crate::podman::dispatch;
     use crate::podman::lifecycle::StopReason;
     use crate::podman::test_support::{
-        fake_podman, fake_podman_with_stopped_container, fake_runtime, temp_paths,
-        write_podman_config,
+        fake_podman, fake_podman_crashing_container, fake_podman_with_stopped_container,
+        fake_runtime, temp_paths, write_podman_config,
     };
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
+
+    #[tokio::test]
+    async fn a_container_that_dies_during_start_fails_fast_with_its_exit_code_and_output() {
+        let paths = temp_paths("rust-start-crash");
+        let podman_socket = paths.data_dir.join("podman.sock");
+        let listener = match UnixListener::bind(&podman_socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        write_podman_config(&paths, &podman_socket);
+        let db = Db::open(&paths).unwrap();
+        let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        fake_podman_crashing_container(
+            listener,
+            3,
+            "[ODIN] Initializing \"Rust\" Dedicated Server\n[ODIN] ERROR: failed to bind\n",
+        );
+
+        // No runtime ever answers, so only the exit check can end this wait.
+        let begun = std::time::Instant::now();
+        let error = dispatch::start(&paths, &db, GameId::Rust, "rusty")
+            .await
+            .unwrap_err();
+
+        assert!(
+            begun.elapsed() < std::time::Duration::from_secs(30),
+            "start did not fail fast"
+        );
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("exited during startup with code 3"),
+            "got {message}"
+        );
+        assert!(
+            message.contains("[ODIN] ERROR: failed to bind"),
+            "got {message}"
+        );
+        let exited = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<crate::podman::startup::ContainerExited>())
+            .expect("the typed exit error must survive the context chain");
+        assert_eq!(exited.log_tail.len(), 2);
+        assert!(!container_instances::desired_running(&db, &instance.identity.id).unwrap());
+    }
 
     #[tokio::test]
     async fn start_creates_the_rust_container_and_prepares_its_native_layout() {

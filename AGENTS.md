@@ -266,3 +266,8 @@ sudo env ODIN_DATA_DIR=/path/to/a/scratch/dir \
   descriptions — in English, regardless of the language used to request
   the work.
 - Do not mention AI/Claude/Codex authorship anywhere in commits or PR text.
+- Run git operations that write history or share work (commits, pushes,
+  merges, rebases, and similar) and pull request work (opening, updating,
+  and describing PRs) in a sub-agent, not in the main session's model:
+  - Claude Code: use the `claude-haiku-5-5` model.
+  - Codex: use the `gpt-6-luna` model.

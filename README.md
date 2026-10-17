@@ -520,6 +520,23 @@ mods.
 > `<data>/install/` and `<data>/games/*/install/` are no longer used and can
 > be deleted.
 
+### CurseForge mod picker (ARK: Survival Ascended)
+
+The ARK: Survival Ascended mod picker looks mods up on CurseForge, which only
+serves requests that carry an API key. Request one from the
+[CurseForge developer console](https://console.curseforge.com/) and set it in
+Odin's configuration file (restart is not needed):
+
+```toml
+[curseforge]
+api_key = "$2a$10$..."
+```
+
+Quote the key: it contains `$` characters. The `CURSE_FORGE_API_KEY`
+environment variable overrides the file. Without a key the picker is disabled
+and mod ids can still be typed by hand. The key is never shown in the
+dashboard or returned by the API.
+
 Odin stores everything under a single **data directory**. Which mode it
 runs in is detected automatically from whether `/etc/odin/config.toml`
 exists (it does after a system-wide `.deb`/`.rpm` install, and does not

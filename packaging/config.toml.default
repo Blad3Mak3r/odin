@@ -13,3 +13,9 @@
 # base_image = "ghcr.io/blad3mak3r/odin-srv:base"
 # proton_image = "ghcr.io/blad3mak3r/odin-srv:proton"
 # odin_binary = "/usr/bin/odin"
+
+# CurseForge API key for the ARK: Survival Ascended mod picker. Request one at
+# https://console.curseforge.com/ and keep the quotes (keys contain `$`).
+# The CURSE_FORGE_API_KEY environment variable overrides this value.
+# [curseforge]
+# api_key = ""

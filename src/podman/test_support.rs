@@ -18,6 +18,7 @@ pub(crate) fn temp_paths(label: &str) -> Paths {
 pub(crate) fn write_podman_config(paths: &Paths, socket: &std::path::Path) {
     let config = crate::config::GlobalConfig {
         data_dir: None,
+        curseforge: None,
         podman: Some(crate::config::PodmanConfig {
             socket: socket.to_path_buf(),
             runtime_image: Some("example/odin-srv:1".into()),

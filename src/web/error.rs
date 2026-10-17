@@ -14,6 +14,7 @@ use crate::game::rust::access_lists::RustAccessListError;
 use crate::instance::InstanceError;
 use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
+use crate::mods::curseforge::CurseForgeError;
 use crate::mods::nexus::NexusError;
 use crate::web::routes::saves::SaveFileError;
 
@@ -91,6 +92,18 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         Some(NexusError::Unauthorized) => return StatusCode::UNAUTHORIZED,
         Some(NexusError::ModNotFound(_)) => return StatusCode::NOT_FOUND,
         Some(NexusError::DownloadUnavailable(_)) => return StatusCode::UNPROCESSABLE_ENTITY,
+        None => {}
+    }
+    match err.downcast_ref::<CurseForgeError>() {
+        Some(
+            CurseForgeError::ApiKeyMissing
+            | CurseForgeError::InvalidReference(_)
+            | CurseForgeError::WrongGame(_),
+        ) => return StatusCode::BAD_REQUEST,
+        Some(CurseForgeError::NotFound(_)) => return StatusCode::NOT_FOUND,
+        // Not 401: the dashboard must not read a bad operator key as the
+        // user's own session being unauthorized.
+        Some(CurseForgeError::Rejected(_)) => return StatusCode::BAD_GATEWAY,
         None => {}
     }
     match err.downcast_ref::<crate::odin_update::SystemUpdateError>() {

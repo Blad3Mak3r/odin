@@ -4,8 +4,8 @@ use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    ark_clusters, backups, bepinex, bulk, changelog, config_files, doctor, events, games,
-    instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
+    ark_clusters, backups, bepinex, bulk, changelog, config_files, curseforge, doctor, events,
+    games, instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
     rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, version, webhooks,
 };
 use crate::web::state::AppState;
@@ -388,6 +388,11 @@ pub fn build_router(state: AppState) -> Router {
             post(bulk::bulk_update_bepinex),
         )
         .route("/mods/search", get(mods::search_mods))
+        .route("/mods/curseforge/status", get(curseforge::status))
+        .route("/mods/curseforge/lookup", get(curseforge::lookup_mod))
+        .route("/mods/curseforge/featured", get(curseforge::featured_mods))
+        .route("/mods/curseforge/search", get(curseforge::search_mods))
+        .route("/mods/curseforge/resolve", post(curseforge::resolve_mods))
         .route("/mods/nexus/trending", get(nexus::trending_mods))
         .route("/mods/nexus/lookup", get(nexus::lookup_mod))
         .route("/mods", get(mods::list_global_mods))

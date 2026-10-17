@@ -7,6 +7,7 @@
 
 pub mod bepinex;
 pub mod config;
+pub mod curseforge;
 pub mod nexus;
 pub mod source;
 pub mod thunderstore;

@@ -1,4 +1,10 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { api } from './api-client'
 import type {
   ActivityEvent,
@@ -18,6 +24,9 @@ import type {
   ConfigFileView,
   ConfigUpdateRequest,
   ConfigView,
+  CurseForgeFeatured,
+  CurseForgeMod,
+  CurseForgeSearchPage,
   GlobalMod,
   GameId,
   GameInstanceTransitions,
@@ -1092,6 +1101,59 @@ export function useNexusTrending() {
     queryKey: ['mods', 'nexus', 'trending'],
     queryFn: () => api.get<ModSearchResult[]>('/mods/nexus/trending'),
     staleTime: 10 * 60_000,
+  })
+}
+
+// CurseForge powers the ARK: Survival Ascended mod picker. The API key is
+// operator configuration, so `status` tells the UI whether to offer it at all.
+export function useCurseForgeStatus() {
+  return useQuery({
+    queryKey: ['curseforge', 'status'],
+    queryFn: () => api.get<{ configured: boolean }>('/mods/curseforge/status'),
+    staleTime: 30_000,
+  })
+}
+
+export function useCurseForgeMods(ids: number[]) {
+  return useQuery({
+    queryKey: ['curseforge', 'mods', ids],
+    queryFn: () => api.post<CurseForgeMod[]>('/mods/curseforge/resolve', { ids }),
+    enabled: ids.length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: 10 * 60_000,
+  })
+}
+
+export function useCurseForgeFeatured() {
+  return useQuery({
+    queryKey: ['curseforge', 'featured'],
+    queryFn: () => api.get<CurseForgeFeatured>('/mods/curseforge/featured'),
+    staleTime: 10 * 60_000,
+  })
+}
+
+export function useCurseForgeSearch(query: string) {
+  return useInfiniteQuery({
+    queryKey: ['curseforge', 'search', query],
+    queryFn: ({ pageParam }) =>
+      api.get<CurseForgeSearchPage>(
+        `/mods/curseforge/search?q=${encodeURIComponent(query)}&index=${pageParam}`,
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((count, page) => count + page.mods.length, 0)
+      return last.mods.length > 0 && loaded < last.total ? loaded : undefined
+    },
+    enabled: query.trim().length > 0,
+    staleTime: 5 * 60_000,
+  })
+}
+
+// A pasted numeric id or mod page URL, resolved one-shot like `useNexusLookup`.
+export function useCurseForgeLookup() {
+  return useMutation({
+    mutationFn: (query: string) =>
+      api.get<CurseForgeMod>(`/mods/curseforge/lookup?query=${encodeURIComponent(query)}`),
   })
 }
 

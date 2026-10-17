@@ -4,6 +4,7 @@ pub mod bepinex;
 pub mod bulk;
 pub mod changelog;
 pub mod config_files;
+pub mod curseforge;
 pub mod doctor;
 pub mod events;
 pub mod games;

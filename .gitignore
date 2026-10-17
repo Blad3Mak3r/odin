@@ -17,3 +17,6 @@
 /.claude/
 /.agents/
 /skills-lock.json
+
+# Local secrets (e.g. CURSE_FORGE_API_KEY for development)
+.env

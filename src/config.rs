@@ -16,7 +16,20 @@ pub struct GlobalConfig {
     /// is equivalent to authority over the service user's containers.
     #[serde(default)]
     pub podman: Option<PodmanConfig>,
+    /// Optional CurseForge credentials for the ARK: Survival Ascended mod
+    /// picker. Without a key the dashboard falls back to typing mod ids.
+    #[serde(default)]
+    pub curseforge: Option<CurseForgeConfig>,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CurseForgeConfig {
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+/// Environment variable that overrides `[curseforge].api_key`.
+pub const CURSEFORGE_API_KEY_ENV: &str = "CURSE_FORGE_API_KEY";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PodmanConfig {
@@ -105,6 +118,22 @@ impl GlobalConfig {
         toml::from_str(&raw)
             .with_context(|| format!("failed to parse config file {}", config_file.display()))
     }
+
+    /// The CurseForge API key: the `CURSE_FORGE_API_KEY` environment
+    /// variable wins over `[curseforge].api_key`. Blank values count as unset.
+    pub fn curseforge_api_key(&self) -> Option<String> {
+        self.curseforge_api_key_with(std::env::var(CURSEFORGE_API_KEY_ENV).ok())
+    }
+
+    fn curseforge_api_key_with(&self, env: Option<String>) -> Option<String> {
+        let clean = |key: String| Some(key.trim().to_string()).filter(|key| !key.is_empty());
+        env.and_then(clean).or_else(|| {
+            self.curseforge
+                .as_ref()
+                .and_then(|config| config.api_key.clone())
+                .and_then(clean)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -173,5 +202,30 @@ mod tests {
         config.odin_binary = Some(plain.clone());
         assert_eq!(config.odin_binary().unwrap(), plain);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn curseforge_key_prefers_the_environment_over_the_config_file() {
+        let config: GlobalConfig =
+            toml::from_str("[curseforge]\napi_key = \"$2a$10$file\"\n").unwrap();
+        assert_eq!(
+            config.curseforge_api_key_with(None).as_deref(),
+            Some("$2a$10$file")
+        );
+        assert_eq!(
+            config
+                .curseforge_api_key_with(Some("  from-env \n".into()))
+                .as_deref(),
+            Some("from-env")
+        );
+    }
+
+    #[test]
+    fn curseforge_key_ignores_blank_values_and_a_missing_section() {
+        let config: GlobalConfig = toml::from_str("[curseforge]\napi_key = \"  \"\n").unwrap();
+        assert_eq!(config.curseforge_api_key_with(Some(" ".into())), None);
+        assert_eq!(GlobalConfig::default().curseforge_api_key_with(None), None);
+        let empty: GlobalConfig = toml::from_str("[curseforge]\n").unwrap();
+        assert_eq!(empty.curseforge_api_key_with(None), None);
     }
 }

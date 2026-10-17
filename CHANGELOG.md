@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.8] - 2026-10-17
+
+### What's Changed
+- refactor(web): move the ARK mod picker to its own Mods tab by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/176
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.7...v0.20.8
+
 ## [0.20.7] - 2026-10-17
 
 ### What's Changed

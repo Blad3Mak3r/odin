@@ -178,7 +178,7 @@ function Picker({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{mod?.name ?? `Mod ${modId}`}</p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {mod ? `by ${mod.author || 'unknown'} · ` : selected.isLoading ? '' : 'Not found on CurseForge · '}ID {modId}
+                  {mod ? `by ${mod.author || 'unknown'} · ` : selected.isFetching ? '' : 'Not found on CurseForge · '}ID {modId}
                 </p>
               </div>
               <Button type="button" variant="ghost" size="icon-xs" aria-label={`Move ${mod?.name ?? modId} up`} disabled={disabled || index === 0} onClick={() => move(index, -1)}>

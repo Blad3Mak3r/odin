@@ -7,7 +7,7 @@ import { UptimeScheduleCard } from '@/components/instance/UptimeScheduleCard'
 import { AccessListsTab } from '@/components/instance/AccessListsTab'
 import { ConfigTab } from '@/components/instance/ConfigTab'
 import { PlayersTab } from '@/components/instance/PlayersTab'
-import { CurseForgeModPicker } from '@/components/instance/CurseForgeModPicker'
+import { ArkModsTab } from '@/components/instance/ArkModsTab'
 import { ModsTab } from '@/components/instance/ModsTab'
 import { SevenDaysModsTab } from '@/components/instance/SevenDaysModsTab'
 import { SevenDaysConsoleTab } from '@/components/instance/SevenDaysConsoleTab'
@@ -290,7 +290,6 @@ function GenericConfigForm({ id, game, config, running, installMode }: { id: str
   const [autoRestart, setAutoRestart] = useState(config.auto_restart)
   const [map, setMap] = useState(config.map ?? 'TheIsland_WP')
   const [sessionName, setSessionName] = useState(config.session_name ?? '')
-  const [mods, setMods] = useState((config.mods ?? []).join(', '))
   const [gameMode, setGameMode] = useState<Cs2GameMode>(config.game_mode ?? 'competitive')
   const [maxPlayers, setMaxPlayers] = useState(String(config.max_players ?? 10))
   const [gslt, setGslt] = useState('')
@@ -298,14 +297,8 @@ function GenericConfigForm({ id, game, config, running, installMode }: { id: str
   const save = () => {
     const request: GenericConfigUpdateRequest = { port: Number(port), query_port: queryPort ? Number(queryPort) : null, admin_port: adminPort ? Number(adminPort) : null, auto_restart: autoRestart }
     if (game === 'ark-asa') {
-      const parsedMods = mods.trim() === '' ? [] : mods.split(',').map((mod) => Number(mod.trim()))
-      if (parsedMods.some((mod) => !Number.isSafeInteger(mod) || mod <= 0)) {
-        toast.error('Mod IDs must be positive whole numbers separated by commas')
-        return
-      }
       request.map = map
       request.session_name = sessionName
-      request.mods = parsedMods
     }
     if (game === 'cs2') {
       request.query_port = null
@@ -319,7 +312,7 @@ function GenericConfigForm({ id, game, config, running, installMode }: { id: str
     update.mutate({ id, request }, { onSuccess: () => toast.success('Odin runtime settings saved'), onError: (error) => toast.error(error.message) })
   }
   const sharedArk = game === 'ark-asa' && installMode === 'shared'
-  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label={game === 'cs2' ? 'Game port (UDP and TCP, also used by RCON)' : 'Game port'} type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === 'ark-asa' ? 'RCON port' : 'Local console port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}{game === 'cs2' && <><ConfigInput id="cs2-map" label="Start map" value={map} disabled={running} onChange={setMap} /><div className="flex flex-col gap-1"><Label htmlFor="cs2-game-mode">Game mode</Label><select id="cs2-game-mode" className="h-9 border bg-background px-3 text-sm" value={gameMode} disabled={running} onChange={(event) => setGameMode(event.target.value as Cs2GameMode)}>{CS2_GAME_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></div><ConfigInput id="cs2-max-players" label="Max players" type="number" min={1} max={64} value={maxPlayers} disabled={running} onChange={setMaxPlayers} /><ConfigInput id="cs2-gslt" label="Game server login token" type="password" placeholder={config.has_gslt ? 'Configured — leave empty to keep it' : 'Optional; needed to be listed publicly'} value={gslt} disabled={running || removeGslt} onChange={setGslt} required={false} />{config.has_gslt && <div className="flex items-center gap-2 sm:col-span-2"><Switch id="cs2-remove-gslt" checked={removeGslt} disabled={running} onCheckedChange={setRemoveGslt} /><Label htmlFor="cs2-remove-gslt">Remove the saved token</Label></div>}{config.tv_port !== undefined && <p className="text-xs text-muted-foreground sm:col-span-2">SourceTV uses UDP port {config.tv_port}, derived from the game port.</p>}</>}{game === 'ark-asa' && <><ConfigInput id="ark-map" label="Map" value={map} disabled={running} onChange={setMap} /><ConfigInput id="ark-session-name" label="Session name" value={sessionName} disabled={running} onChange={setSessionName} /><div className="flex flex-col gap-1 sm:col-span-2"><Label htmlFor="ark-mods">Mods</Label><CurseForgeModPicker id="ark-mods" value={mods} disabled={running} onChange={setMods} /></div></>}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form>{sharedArk ? <div className="border p-4 text-sm text-muted-foreground">Shared ARK native configuration is common to every shared instance. <Link className="text-foreground underline underline-offset-4" to="/games/ark-asa/config">Open shared configuration</Link>.</div> : <AdvancedConfigSection id={id} game={game} running={running} />}{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
+  return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label={game === 'cs2' ? 'Game port (UDP and TCP, also used by RCON)' : 'Game port'} type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === 'ark-asa' ? 'RCON port' : 'Local console port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}{game === 'cs2' && <><ConfigInput id="cs2-map" label="Start map" value={map} disabled={running} onChange={setMap} /><div className="flex flex-col gap-1"><Label htmlFor="cs2-game-mode">Game mode</Label><select id="cs2-game-mode" className="h-9 border bg-background px-3 text-sm" value={gameMode} disabled={running} onChange={(event) => setGameMode(event.target.value as Cs2GameMode)}>{CS2_GAME_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></div><ConfigInput id="cs2-max-players" label="Max players" type="number" min={1} max={64} value={maxPlayers} disabled={running} onChange={setMaxPlayers} /><ConfigInput id="cs2-gslt" label="Game server login token" type="password" placeholder={config.has_gslt ? 'Configured — leave empty to keep it' : 'Optional; needed to be listed publicly'} value={gslt} disabled={running || removeGslt} onChange={setGslt} required={false} />{config.has_gslt && <div className="flex items-center gap-2 sm:col-span-2"><Switch id="cs2-remove-gslt" checked={removeGslt} disabled={running} onCheckedChange={setRemoveGslt} /><Label htmlFor="cs2-remove-gslt">Remove the saved token</Label></div>}{config.tv_port !== undefined && <p className="text-xs text-muted-foreground sm:col-span-2">SourceTV uses UDP port {config.tv_port}, derived from the game port.</p>}</>}{game === 'ark-asa' && <><ConfigInput id="ark-map" label="Map" value={map} disabled={running} onChange={setMap} /><ConfigInput id="ark-session-name" label="Session name" value={sessionName} disabled={running} onChange={setSessionName} /></>}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form>{sharedArk ? <div className="border p-4 text-sm text-muted-foreground">Shared ARK native configuration is common to every shared instance. <Link className="text-foreground underline underline-offset-4" to="/games/ark-asa/config">Open shared configuration</Link>.</div> : <AdvancedConfigSection id={id} game={game} running={running} />}{game === '7d2d' && <SevenDaysTemplateReview id={id} running={running} />}</div>
 }
 
 function TabPanel({ active, className, children }: { active: boolean; className?: string; children: ReactNode }) {
@@ -357,7 +350,7 @@ export function ManagedInstanceDetailPage() {
     ...(detail.game === '7d2d' ? [{ id: 'console', label: 'Console' }, { id: 'players', label: 'Players' }] : []),
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
-    ...((detail.game === 'valheim' || detail.game === '7d2d') && detail.capabilities.mods ? [{ id: 'mods', label: 'Mods' }] : []),
+    ...(((detail.game === 'valheim' || detail.game === '7d2d') && detail.capabilities.mods) || detail.game === 'ark-asa' ? [{ id: 'mods', label: 'Mods' }] : []),
     ...(detail.game === 'palworld' ? [{ id: 'admin', label: 'Admin' }] : []),
     ...((detail.game === 'valheim' || detail.game === 'rust') && detail.capabilities.access_lists ? [{ id: 'lists', label: 'Access lists' }] : []),
     ...(detail.capabilities.backups ? [{ id: 'backups', label: 'Backups' }] : []),
@@ -425,6 +418,9 @@ export function ManagedInstanceDetailPage() {
           <TabPanel active={tab === 'mods'}><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabPanel>
         )}
         {detail.game === '7d2d' && tab === 'mods' && <TabPanel active={tab === 'mods'}><SevenDaysModsTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === 'ark-asa' && tab === 'mods' && genericConfig && (
+          <TabPanel active={tab === 'mods'}><ArkModsTab key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={genericConfig} running={detail.running} /></TabPanel>
+        )}
         {detail.game === 'ark-asa' && detail.install_mode === 'shared'
           ? <TabPanel active={tab === 'saves'}><Card><CardHeader><CardTitle>Shared ARK save files</CardTitle><CardDescription>Browse this instance’s world files and cluster transfer files from the ARK game page.</CardDescription></CardHeader><CardContent><Link className={buttonVariants({ variant: 'outline' })} to="/games/ark-asa/saves">Open ARK Save files</Link></CardContent></Card></TabPanel>
           : <TabPanel active={tab === 'saves'}><SaveFilesTab id={detail.id} running={detail.running} /></TabPanel>}

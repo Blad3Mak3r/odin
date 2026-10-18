@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.10] - 2026-10-18
+
+### What's Changed
+- fix(ark): hand Proton a Steam client that exists for shared instances by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/181
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.9...v0.20.10
+
 ## [0.20.9] - 2026-10-18
 
 ### What's Changed

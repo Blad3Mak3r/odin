@@ -787,9 +787,7 @@ impl Launch {
                 crate::game::palworld::build_command_at(&spec.install_dir, console_log, launch)
             }
             Self::ArkSurvivalAscended(launch) => {
-                if !spec.shared_install {
-                    crate::game::ark_asa::prepare_runtime(&spec.install_dir)?;
-                }
+                crate::game::ark_asa::prepare_runtime(&spec.install_dir)?;
                 let steam_client =
                     crate::game::ark_asa::link_steam_client(&spec.install_dir, &spec.steamcmd_dir)?;
                 crate::game::ark_asa::build_command_at(

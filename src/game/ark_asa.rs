@@ -95,8 +95,11 @@ impl ArkLaunch {
 /// server images remove it before Proton starts; leaving it beside the game
 /// executable can prevent the dedicated server from reaching its own startup.
 ///
-/// Shared installations call this only from their serialized installer job,
-/// never from an instance that may share the files with a running server.
+/// The shared installer calls this after SteamCMD verifies the depot, and every
+/// start repeats it: a shared install made before the DLL was removed would
+/// otherwise keep it until the next manual update. Once the file is gone the
+/// call does nothing, and deleting it under a server that already mapped it
+/// does not affect that server.
 pub fn prepare_runtime(install_dir: &Path) -> Result<()> {
     let steam_client = install_dir.join(STEAM_CLIENT_DLL);
     match fs::remove_file(&steam_client) {

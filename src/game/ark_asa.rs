@@ -108,6 +108,26 @@ pub fn prepare_runtime(install_dir: &Path) -> Result<()> {
     }
 }
 
+/// Makes SteamCMD's Linux Steam client available to Proton, which loads it
+/// natively for the Windows server's Steamworks calls, and returns the
+/// directory to hand Proton as its Steam client install. A shared instance has
+/// no SteamCMD of its own; it uses the one the shared installer left behind.
+pub fn link_steam_client(install_dir: &Path, steamcmd_dir: &Path) -> Result<PathBuf> {
+    link_steam_client_at(
+        install_dir,
+        steamcmd_dir,
+        &crate::steamcmd::steam_home_dir()?,
+    )
+}
+
+fn link_steam_client_at(install_dir: &Path, steamcmd_dir: &Path, home: &Path) -> Result<PathBuf> {
+    let client = crate::steamcmd::client_dir(install_dir, steamcmd_dir);
+    crate::steamcmd::SteamCmd::new(client.clone())
+        .ensure_sdk64_client_at(home)
+        .context("failed to prepare ARK: Survival Ascended's Steam client")?;
+    Ok(client)
+}
+
 pub fn build_command_at(
     install_dir: &Path,
     console_log: &Path,
@@ -285,6 +305,39 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_shared_instance_takes_the_steam_client_from_the_shared_installer() {
+        let root = std::env::temp_dir().join(format!("odin-ark-client-{}", uuid::Uuid::new_v4()));
+        let install = root.join("shared");
+        let shared = install.join(crate::steamcmd::SHARED_STEAMCMD_DIR);
+        let own = root.join("runtime/steamcmd");
+        let home = root.join("home");
+        fs::create_dir_all(shared.join("linux64")).unwrap();
+        fs::create_dir_all(&own).unwrap();
+        fs::write(shared.join("linux64/steamclient.so"), "client").unwrap();
+
+        let client = link_steam_client_at(&install, &own, &home).unwrap();
+
+        assert_eq!(client, shared);
+        assert_eq!(
+            fs::read_to_string(home.join(".steam/sdk64/steamclient.so")).unwrap(),
+            "client"
+        );
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn an_instance_without_a_steam_client_fails_before_proton_starts() {
+        let root = std::env::temp_dir().join(format!("odin-ark-client-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("steamcmd")).unwrap();
+
+        let error =
+            link_steam_client_at(&root, &root.join("steamcmd"), &root.join("home")).unwrap_err();
+
+        assert!(format!("{error:#}").contains("linux64/steamclient.so"));
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

@@ -172,6 +172,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
     ));
     odin_log(&spec, &readiness_banner(&spec));
     let mut readiness_deadline = Instant::now() + ARK_READINESS_TIMEOUT;
+    let mut last_rcon_error: Option<String> = None;
     let mut readiness_poll = tokio::time::interval(READINESS_POLL_INTERVAL);
     readiness_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     readiness_poll.tick().await;
@@ -220,7 +221,18 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                 ));
             }
             _ = readiness_poll.tick(), if !ready.load(Ordering::Relaxed) => {
-                if ark_rcon_ready(&spec).await {
+                let probe = ark_rcon_ready(&spec).await;
+                if let Err(error) = &probe {
+                    // Log each distinct reason once: a refused connection
+                    // while the world loads is expected, a rejected password
+                    // or a malformed reply never recovers.
+                    let reason = format!("{error:#}");
+                    if last_rcon_error.as_deref() != Some(reason.as_str()) {
+                        odin_log(&spec, &format!("RCON is not ready yet: {reason}"));
+                        last_rcon_error = Some(reason);
+                    }
+                }
+                if probe.is_ok() {
                     ready.store(true, Ordering::Relaxed);
                     odin_log(&spec, &format!("\"{}\" Dedicated Server is ready (RCON authenticated)", label(&spec)));
                 } else if Instant::now() >= readiness_deadline {
@@ -463,13 +475,11 @@ fn append_proton_log_tail(spec: &RuntimeSpec) -> Option<&'static str> {
     game::ark_asa::startup_failure_hint(&text)
 }
 
-async fn ark_rcon_ready(spec: &RuntimeSpec) -> bool {
+async fn ark_rcon_ready(spec: &RuntimeSpec) -> Result<()> {
     let Launch::ArkSurvivalAscended(launch) = &spec.launch else {
-        return true;
+        return Ok(());
     };
-    crate::game::rcon::source::send(launch.rcon_port, &launch.rcon_password, &[])
-        .await
-        .is_ok()
+    crate::game::rcon::source::send(launch.rcon_port, &launch.rcon_password, &[]).await
 }
 
 fn append_runtime_log(spec: &RuntimeSpec, message: &str) -> Result<()> {
@@ -643,7 +653,7 @@ mod tests {
             stream.write_all(&[0, 0]).await.unwrap();
         });
 
-        assert!(ark_rcon_ready(&ark_spec(port)).await);
+        ark_rcon_ready(&ark_spec(port)).await.unwrap();
         server.await.unwrap();
     }
 
@@ -657,7 +667,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
-        assert!(!ark_rcon_ready(&ark_spec(port)).await);
+        assert!(ark_rcon_ready(&ark_spec(port)).await.is_err());
     }
 
     #[test]

@@ -422,7 +422,8 @@ sudo systemctl edit odin.service     # override --bind/--port via a drop-in
 
 When a newer release is available, this install can update itself from the
 dashboard's release banner. Confirming the update starts a separate system
-service, so the dashboard can restart while game instances keep running.
+service, so the dashboard can restart while game instances keep running; it
+shows the progress, reconnects and reloads itself once Odin is back.
 Restart running instances afterward to use the new Odin supervisor. Container
 deployments still update by pulling the new image and recreating the container.
 

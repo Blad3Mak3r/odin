@@ -70,8 +70,10 @@ pub fn is_running(paths: &Paths, db: &Db, instance: &RustInstance) -> Result<boo
 mod tests {
     use super::*;
     use crate::db::container_instances;
+    use crate::instance::InstanceError;
     use crate::podman::dispatch;
     use crate::podman::lifecycle::StopReason;
+    use crate::podman::startup::{self, EventStatus, StartupOutcome, StartupPhase};
     use crate::podman::test_support::{
         fake_podman, fake_podman_crashing_container, fake_podman_with_stopped_container,
         fake_runtime, temp_paths, write_podman_config,
@@ -122,6 +124,33 @@ mod tests {
             .expect("the typed exit error must survive the context chain");
         assert_eq!(exited.log_tail.len(), 2);
         assert!(!container_instances::desired_running(&db, &instance.identity.id).unwrap());
+
+        let attempts = startup::load_attempts(&db, &instance.identity.id).unwrap();
+        let [attempt] = attempts.as_slice() else {
+            panic!("expected one attempt, got {attempts:?}");
+        };
+        assert_eq!(attempt.outcome, StartupOutcome::Failed);
+        let failure = attempt.failure.as_ref().unwrap();
+        assert_eq!(failure.phase, StartupPhase::Runtime);
+        assert_eq!(failure.exit_code, Some(3));
+        assert!(failure.reason.contains("exited during startup with code 3"));
+        assert!(
+            failure
+                .log_tail
+                .iter()
+                .any(|line| line.contains("failed to bind"))
+        );
+        assert!(failure.hint.is_some());
+        assert_eq!(attempt.events.last().unwrap().status, EventStatus::Failed);
+
+        // The dead container is still inspectable, so the report explains it
+        // even without reading the recorded attempt.
+        let report = dispatch::startup_report(&paths, &db, GameId::Rust, "rusty")
+            .await
+            .unwrap();
+        let last_run = report.last_run.expect("a stopped container has a last run");
+        assert_eq!(last_run.exit_code, Some(3));
+        assert_eq!(last_run.container_log_tail.len(), 2);
     }
 
     #[tokio::test]
@@ -151,6 +180,30 @@ mod tests {
             .await
             .unwrap();
         assert!(container_instances::desired_running(&db, &instance.identity.id).unwrap());
+
+        let attempts = startup::load_attempts(&db, &instance.identity.id).unwrap();
+        let [attempt] = attempts.as_slice() else {
+            panic!("expected one attempt, got {attempts:?}");
+        };
+        assert_eq!(attempt.outcome, StartupOutcome::Succeeded);
+        assert!(attempt.finished_at.is_some());
+        let phases: Vec<_> = attempt.events.iter().map(|event| event.phase).collect();
+        assert_eq!(
+            phases,
+            [
+                StartupPhase::Preflight,
+                StartupPhase::Image,
+                StartupPhase::Container,
+                StartupPhase::Container,
+                StartupPhase::Runtime,
+            ]
+        );
+        assert!(
+            attempt
+                .events
+                .iter()
+                .all(|event| event.status == EventStatus::Ok)
+        );
 
         let requests = podman.join().unwrap();
         runtime.join().unwrap();
@@ -199,6 +252,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn starting_a_running_instance_leaves_no_attempt_behind() {
+        let paths = temp_paths("rust-start-running");
+        let db = Db::open(&paths).unwrap();
+        let instance = game_instances::create_rust(&paths, &db, "rusty").unwrap();
+        if !crate::podman::test_support::podman_reporting_running(
+            &paths,
+            &[instance.identity.id.as_str()],
+        ) {
+            return;
+        }
+
+        let error = dispatch::start(&paths, &db, GameId::Rust, "rusty")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<InstanceError>(),
+            Some(InstanceError::AlreadyRunning(_))
+        ));
+        assert!(
+            startup::load_attempts(&db, &instance.identity.id)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
     async fn start_recreates_a_stopped_rust_container() {
         let paths = temp_paths("rust-recreate");
         let podman_socket = paths.data_dir.join("podman.sock");
@@ -220,6 +301,16 @@ mod tests {
         dispatch::start(&paths, &db, GameId::Rust, "rusty")
             .await
             .unwrap();
+
+        let attempts = startup::load_attempts(&db, &instance.identity.id).unwrap();
+        assert!(
+            attempts[0].events.iter().any(|event| event
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.starts_with("Previous container run ended"))),
+            "the replaced container's exit must be kept: {:?}",
+            attempts[0].events
+        );
 
         let requests = podman.join().unwrap();
         runtime.join().unwrap();

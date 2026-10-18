@@ -161,7 +161,9 @@ pub(crate) fn podman_reporting_running(paths: &Paths, running_ids: &[&str]) -> b
                     break;
                 }
             }
-            let (status, body) = if running_ids.iter().any(|id| line.contains(id.as_str())) {
+            let (status, body) = if line.contains("/version") {
+                ("200 OK", r#"{"Version":"5.0.0","ApiVersion":"1.41"}"#)
+            } else if running_ids.iter().any(|id| line.contains(id.as_str())) {
                 ("200 OK", r#"{"State":{"Running":true,"Status":"running"}}"#)
             } else {
                 ("404 Not Found", r#"{"cause":"no such container"}"#)

@@ -46,6 +46,9 @@ const STOP_INSTANCES_ON_SHUTDOWN_ENV: &str = "ODIN_STOP_INSTANCES_ON_SHUTDOWN";
 
 pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let db = Arc::new(Db::open(&paths).context("failed to open database")?);
+    if let Err(error) = crate::podman::startup::fail_interrupted_attempts(&db) {
+        tracing::warn!(%error, "could not close interrupted startup attempts");
+    }
     let state = AppState::new(paths, db);
     retention::run_once(&state);
     retention::spawn(state.clone());

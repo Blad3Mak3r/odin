@@ -147,6 +147,7 @@ pub fn build_router(state: AppState) -> Router {
             "/instances/{id}/runtime/health",
             get(games::get_runtime_health_by_id),
         )
+        .route("/instances/{id}/startup", get(games::get_startup_by_id))
         .route(
             "/instances/{id}/runtime/repair",
             post(games::repair_runtime_by_id),
@@ -1573,6 +1574,65 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).unwrap()["podman"]["configured"],
             false
+        );
+        std::fs::remove_dir_all(paths.data_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn startup_route_returns_recorded_attempts_and_no_last_run_without_podman() {
+        use crate::podman::startup::{StartupAttempt, StartupPhase};
+
+        let dir = std::env::temp_dir().join(format!(
+            "odin-router-startup-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        let instance = Instance::create(&paths, &db, "valheim").unwrap();
+        let identity = crate::db::game_instances::ensure_valheim_identity(
+            &db,
+            &instance.state.name,
+            instance.state.created_at,
+        )
+        .unwrap();
+        let mut attempt = StartupAttempt::begin(&db, &identity.id);
+        attempt.phase(StartupPhase::Image, "Checking image example/odin-srv:1");
+        attempt.fail(&anyhow::anyhow!(
+            "Podman API returned 404: manifest unknown"
+        ));
+        let app = build_router(AppState::new(paths.clone(), db));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/instances/{}/startup", identity.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let report = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        assert_eq!(report["last_run"], serde_json::Value::Null);
+        let attempt = &report["attempts"][0];
+        assert_eq!(attempt["outcome"], "failed");
+        assert_eq!(attempt["events"][0]["phase"], "image");
+        assert_eq!(attempt["events"][0]["status"], "failed");
+        assert_eq!(attempt["failure"]["phase"], "image");
+        assert!(
+            attempt["failure"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("manifest unknown")
         );
         std::fs::remove_dir_all(paths.data_dir).ok();
     }

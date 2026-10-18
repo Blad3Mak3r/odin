@@ -68,6 +68,15 @@ pub async fn runtime_health(
     for_container_game!(game, G => lifecycle::runtime_health::<G>(paths, db, name).await)
 }
 
+pub async fn startup_report(
+    paths: &Paths,
+    db: &Db,
+    game: GameId,
+    name: &str,
+) -> Result<lifecycle::StartupReport> {
+    for_container_game!(game, G => lifecycle::startup_report::<G>(paths, db, name).await)
+}
+
 pub async fn repair(paths: &Paths, db: &Db, game: GameId, name: &str) -> Result<()> {
     for_container_game!(game, G => lifecycle::repair::<G>(paths, db, name).await)
 }

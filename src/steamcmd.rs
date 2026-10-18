@@ -9,6 +9,8 @@ use thiserror::Error;
 
 const STEAMCMD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz";
 pub const VALHEIM_DEDICATED_SERVER_APP_ID: &str = "896660";
+/// Relative to a shared install: the SteamCMD the shared installer used.
+pub(crate) const SHARED_STEAMCMD_DIR: &str = ".odin-steamcmd";
 
 #[derive(Debug, Error)]
 pub enum SteamCmdError {
@@ -24,6 +26,17 @@ pub enum SteamCmdError {
 /// configuration" and succeeds when simply run again.
 const APP_UPDATE_ATTEMPTS: u32 = 3;
 const APP_UPDATE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Where the Steamworks client library comes from: the instance's own
+/// SteamCMD, or the one the shared installer left beside the shared files.
+pub(crate) fn client_dir(install_dir: &Path, steamcmd_dir: &Path) -> PathBuf {
+    let shared = install_dir.join(SHARED_STEAMCMD_DIR);
+    if steamcmd_dir.join("linux64/steamclient.so").is_file() || !shared.is_dir() {
+        steamcmd_dir.to_path_buf()
+    } else {
+        shared
+    }
+}
 
 pub struct SteamCmd {
     steamcmd_dir: PathBuf,

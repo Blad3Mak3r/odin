@@ -4,6 +4,17 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.9] - 2026-10-18
+
+### What's Changed
+- feat(podman): explain container start failures and expose startup details by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/177
+- chore: add the git-operator sub-agent and route git work through it by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/180
+- fix(asa): show the server log in the dashboard console by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/178
+- feat(web): follow the Odin self-update with a reconnecting progress dialog by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/179
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.8...v0.20.9
+
 ## [0.20.8] - 2026-10-17
 
 ### What's Changed

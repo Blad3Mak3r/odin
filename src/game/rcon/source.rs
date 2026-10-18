@@ -13,6 +13,9 @@ use tokio::time::timeout;
 const RCON_TIMEOUT: Duration = Duration::from_secs(5);
 const RCON_AUTH: i32 = 3;
 const RCON_AUTH_RESPONSE: i32 = 2;
+/// Valve's protocol answers an auth request with an empty response-value
+/// packet before the auth response; a server may also skip it.
+const RCON_AUTH_PRELUDE_LIMIT: usize = 4;
 const RCON_COMMAND: i32 = 2;
 const REQUEST_ID: i32 = 1;
 const MAX_RCON_PACKET_SIZE: usize = 64 * 1024;
@@ -26,15 +29,24 @@ pub async fn send(port: u16, password: &str, commands: &[&str]) -> Result<()> {
         .context("timed out connecting to Source RCON")?
         .context("failed to connect to Source RCON")?;
     write_rcon_packet(&mut stream, REQUEST_ID, RCON_AUTH, password).await?;
-    let (id, packet_type, _) = read_rcon_packet(&mut stream).await?;
-    anyhow::ensure!(
-        id == REQUEST_ID && packet_type == RCON_AUTH_RESPONSE,
-        "Source RCON authentication failed"
-    );
+    authenticated(&mut stream).await?;
     for command in commands {
         write_rcon_packet(&mut stream, REQUEST_ID, RCON_COMMAND, command).await?;
     }
     Ok(())
+}
+
+/// Reads the server's answer to the auth request, skipping the response-value
+/// packet that precedes it on servers following Valve's specification.
+async fn authenticated(stream: &mut TcpStream) -> Result<()> {
+    for _ in 0..RCON_AUTH_PRELUDE_LIMIT {
+        let (id, packet_type, _) = read_rcon_packet(stream).await?;
+        if packet_type == RCON_AUTH_RESPONSE {
+            anyhow::ensure!(id == REQUEST_ID, "Source RCON authentication failed");
+            return Ok(());
+        }
+    }
+    anyhow::bail!("Source RCON never answered the authentication request")
 }
 
 async fn write_rcon_packet(
@@ -135,6 +147,34 @@ mod tests {
         assert_eq!(auth, (REQUEST_ID, RCON_AUTH, "secret".to_string()));
         assert_eq!(first, (REQUEST_ID, RCON_COMMAND, "SaveWorld".to_string()));
         assert_eq!(second, (REQUEST_ID, RCON_COMMAND, "DoExit".to_string()));
+    }
+
+    #[tokio::test]
+    async fn send_accepts_the_empty_response_value_that_precedes_the_auth_response() {
+        let listener = match TcpListener::bind(("127.0.0.1", 0)).await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("failed to bind a loopback listener: {error}"),
+        };
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            write_rcon_packet(&mut stream, REQUEST_ID, 0, "")
+                .await
+                .unwrap();
+            write_rcon_packet(&mut stream, REQUEST_ID, RCON_AUTH_RESPONSE, "")
+                .await
+                .unwrap();
+            read_request(&mut stream).await
+        });
+
+        send(port, "secret", &["SaveWorld"]).await.unwrap();
+
+        assert_eq!(
+            server.await.unwrap(),
+            (REQUEST_ID, RCON_COMMAND, "SaveWorld".to_string())
+        );
     }
 
     #[tokio::test]

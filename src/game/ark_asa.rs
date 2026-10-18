@@ -95,8 +95,11 @@ impl ArkLaunch {
 /// server images remove it before Proton starts; leaving it beside the game
 /// executable can prevent the dedicated server from reaching its own startup.
 ///
-/// Shared installations call this only from their serialized installer job,
-/// never from an instance that may share the files with a running server.
+/// The shared installer calls this after SteamCMD verifies the depot, and every
+/// start repeats it: a shared install made before the DLL was removed would
+/// otherwise keep it until the next manual update. Once the file is gone the
+/// call does nothing, and deleting it under a server that already mapped it
+/// does not affect that server.
 pub fn prepare_runtime(install_dir: &Path) -> Result<()> {
     let steam_client = install_dir.join(STEAM_CLIENT_DLL);
     match fs::remove_file(&steam_client) {
@@ -162,6 +165,7 @@ pub fn build_command_at(
             crate::game::driver(crate::game::GameId::ArkSurvivalAscended).steam_app_id(),
         )
         .env("PROTON_LOG", "1")
+        .env("WINEDEBUG", WINEDEBUG)
         .env(
             "PROTON_LOG_DIR",
             console_log.parent().unwrap_or_else(|| Path::new(".")),
@@ -268,6 +272,23 @@ impl LogForwarder {
             .write_all(text.as_bytes())
     }
 }
+
+/// Names the cause of a startup failure the Proton log makes unmistakable.
+///
+/// With `-mods`, ASA queries the CurseForge API at boot and treats a failure
+/// as fatal, so the exit status alone ("3") says nothing about the network.
+pub fn startup_failure_hint(proton_log: &str) -> Option<&'static str> {
+    (proton_log.contains("Error querying server mods")
+        || proton_log.contains("Requested mods failed to load on server"))
+    .then_some(
+        "the server could not reach the CurseForge mod API (83374.api.curseforge.com) from the container; check the host's DNS, IPv6 and firewall, or remove the configured mods",
+    )
+}
+
+/// Wine debug channels for the Proton log. Proton's default (`+seh,+unwind`)
+/// is about 90% of the file and hides the network channels a mod-API or
+/// Steam failure needs.
+const WINEDEBUG: &str = "+timestamp,+pid,+tid,+debugstr,+loaddll,+threadname,err+all,warn+winhttp,warn+winsock,warn+secur32";
 
 /// Asks ASA to save before it exits.
 pub async fn save_and_exit(rcon_port: u16, password: &str) -> Result<()> {
@@ -405,10 +426,25 @@ mod tests {
         );
         assert_eq!(env.get("PROTON_LOG").and_then(Option::as_deref), Some("1"));
         assert_eq!(
+            env.get("WINEDEBUG").and_then(Option::as_deref),
+            Some(WINEDEBUG)
+        );
+        assert_eq!(
             env.get("PROTON_LOG_DIR").and_then(Option::as_deref),
             log.parent().map(|path| path.to_str().unwrap())
         );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn unreachable_mod_api_is_named_in_the_startup_failure() {
+        let log = "905728.954:0128:0194:err:eventlog:ReportEventW L\"Error querying server mods: ApiError: Failed (serverUnreachable)\"\n";
+        assert!(
+            startup_failure_hint(log)
+                .unwrap()
+                .contains("CurseForge mod API")
+        );
+        assert_eq!(startup_failure_hint("0024:err:module:import_dll x\n"), None);
     }
 
     #[test]

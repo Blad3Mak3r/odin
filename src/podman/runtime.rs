@@ -187,9 +187,11 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                 pump_log(&mut forwarder);
                 odin_log(&spec, &format!("\"{}\" Dedicated Server exited with {status}", label(&spec)));
                 if !ready.load(Ordering::Relaxed) {
-                    append_proton_log_tail(&spec);
+                    let cause = append_proton_log_tail(&spec)
+                        .map(|hint| format!(": {hint}"))
+                        .unwrap_or_default();
                     bail!(
-                        "ARK: Survival Ascended exited before RCON became ready (status {status}); see the Proton log at {}",
+                        "ARK: Survival Ascended exited before RCON became ready (status {status}){cause}; see the Proton log at {}",
                         paths::instance_logs_dir(&spec.instance_dir).join("steam-2430930.log").display()
                     );
                 }
@@ -443,12 +445,11 @@ fn pump_log(forwarder: &mut Option<game::ark_asa::LogForwarder>) {
 
 /// Copies the end of Proton's own log into `console.log`, preferring its
 /// `err:` lines, so a startup failure is readable without shell access.
-fn append_proton_log_tail(spec: &RuntimeSpec) {
+/// Returns the cause when the log makes one unmistakable.
+fn append_proton_log_tail(spec: &RuntimeSpec) -> Option<&'static str> {
     let app_id = game::driver(spec.launch.game()).steam_app_id();
     let path = paths::instance_logs_dir(&spec.instance_dir).join(format!("steam-{app_id}.log"));
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return;
-    };
+    let text = std::fs::read_to_string(path).ok()?;
     let errors: Vec<&str> = text.lines().filter(|line| line.contains("err:")).collect();
     let lines = if errors.is_empty() {
         text.lines().collect()
@@ -459,6 +460,7 @@ fn append_proton_log_tail(spec: &RuntimeSpec) {
     for line in &lines[start..] {
         odin_log(spec, &format!("proton: {line}"));
     }
+    game::ark_asa::startup_failure_hint(&text)
 }
 
 async fn ark_rcon_ready(spec: &RuntimeSpec) -> bool {

@@ -24,8 +24,6 @@ pub const SERVER_BINARY: &str = "game/cs2.sh";
 pub const CONFIG_FILE: &str = "game/csgo/cfg/server.cfg";
 /// Relative to the instance directory: the instance's own `server.cfg`.
 pub const CONFIG_PATH: &str = "cfg/server.cfg";
-/// Relative to a shared install: the SteamCMD the shared installer used.
-const SHARED_STEAMCMD_DIR: &str = ".odin-steamcmd";
 
 pub const DEFAULT_MAP: &str = "de_dust2";
 pub const DEFAULT_MAX_PLAYERS: u8 = 10;
@@ -166,17 +164,6 @@ pub fn template_path(paths: &Paths, identity: &GameInstanceIdentity) -> Option<P
     .find(|candidate| candidate.is_file())
 }
 
-/// Where the Steamworks client library comes from: the instance's own
-/// SteamCMD, or the one the shared installer left beside the shared files.
-fn steamcmd_dir(install_dir: &Path, steamcmd_dir: &Path) -> PathBuf {
-    let shared = install_dir.join(SHARED_STEAMCMD_DIR);
-    if steamcmd_dir.join("linux64/steamclient.so").is_file() || !shared.is_dir() {
-        steamcmd_dir.to_path_buf()
-    } else {
-        shared
-    }
-}
-
 /// Container-side preparation, run before every launch. The server refuses to
 /// start without `$HOME/.steam/sdk64/steamclient.so`, so the link is repaired
 /// every time. An instance with its own game files also gets its `server.cfg`
@@ -205,7 +192,7 @@ fn prepare_runtime_at(
     steam_home: &Path,
     shared_install: bool,
 ) -> Result<()> {
-    crate::steamcmd::SteamCmd::new(steamcmd_dir(install_dir, steamcmd_dir_hint))
+    crate::steamcmd::SteamCmd::new(crate::steamcmd::client_dir(install_dir, steamcmd_dir_hint))
         .ensure_sdk64_client_at(steam_home)
         .context("failed to prepare Counter-Strike 2's Steamworks runtime")?;
     if !shared_install {
@@ -586,7 +573,7 @@ mod tests {
     #[test]
     fn the_steam_client_comes_from_the_shared_installer_when_there_is_no_private_one() {
         let runtime = Runtime::new("client");
-        let shared = runtime.install.join(SHARED_STEAMCMD_DIR);
+        let shared = runtime.install.join(crate::steamcmd::SHARED_STEAMCMD_DIR);
         fs::create_dir_all(shared.join("linux64")).unwrap();
         fs::write(shared.join("linux64/steamclient.so"), "shared client").unwrap();
         fs::remove_dir_all(runtime.steamcmd.join("linux64")).unwrap();

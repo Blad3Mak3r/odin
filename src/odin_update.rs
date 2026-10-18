@@ -63,12 +63,16 @@ impl SystemUpdate {
             });
         }
         let output = Command::new(&self.systemctl_path)
-            .args(["is-active", "--quiet", SYSTEM_UPDATE_UNIT])
+            .args(["is-active", SYSTEM_UPDATE_UNIT])
             .output()
             .context("failed to query Odin update service")?;
+        // The unit is a oneshot without `RemainAfterExit`, so while the
+        // install runs it is `activating`, for which `is-active` exits
+        // non-zero. Read the printed state instead of the exit code.
+        let state = String::from_utf8_lossy(&output.stdout);
         Ok(SystemUpdateStatus {
             supported: true,
-            running: output.status.success(),
+            running: matches!(state.trim(), "active" | "activating" | "reloading"),
         })
     }
 
@@ -242,8 +246,8 @@ mod tests {
         std::fs::write(
             &systemctl,
             format!(
-                "#!/bin/sh\nif [ \"$1\" = is-active ]; then exit {}; fi\nprintf '%s\\n' \"$@\" > '{}'\n",
-                if active { 0 } else { 1 },
+                "#!/bin/sh\nif [ \"$1\" = is-active ]; then echo {}; exit 3; fi\nprintf '%s\\n' \"$@\" > '{}'\n",
+                if active { "activating" } else { "inactive" },
                 marker.display()
             ),
         )
@@ -289,6 +293,22 @@ mod tests {
                 .downcast_ref::<SystemUpdateError>(),
             Some(SystemUpdateError::AlreadyRunning)
         ));
+    }
+
+    #[test]
+    fn packaged_updater_reports_an_activating_oneshot_as_running() {
+        let (unit, systemctl, _) = fake_systemctl("activating", true);
+        let updater = SystemUpdate::new(unit, systemctl);
+
+        assert!(updater.status().unwrap().running);
+    }
+
+    #[test]
+    fn packaged_updater_reports_an_inactive_unit_as_not_running() {
+        let (unit, systemctl, _) = fake_systemctl("inactive", false);
+        let updater = SystemUpdate::new(unit, systemctl);
+
+        assert!(!updater.status().unwrap().running);
     }
 
     #[test]

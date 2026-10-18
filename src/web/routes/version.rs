@@ -12,6 +12,7 @@ use crate::web::state::AppState;
 
 #[derive(Serialize)]
 pub struct VersionView {
+    pub current_version: &'static str,
     pub latest_version: Option<String>,
     pub latest_release_url: Option<String>,
     pub update_available: bool,
@@ -43,6 +44,7 @@ pub async fn get_version(State(state): State<AppState>) -> ApiResult<Json<Versio
     })
     .await?;
     Ok(Json(VersionView {
+        current_version: status.current_version,
         latest_version: status.latest_version,
         latest_release_url: status.latest_release_url,
         update_available: status.update_available,

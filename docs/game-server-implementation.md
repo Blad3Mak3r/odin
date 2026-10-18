@@ -280,6 +280,18 @@ Wrap blocking clients in `spawn_blocking` and keep the whole attempt under
 process has started (the events socket is not used). Do not invent a parser for
 containers unless there is a concrete need.
 
+**Startup diagnostics.** A game gets these without any code. Every call to
+`lifecycle::start` is recorded as a start attempt (`startup_attempts` table,
+newest 10 per instance) with its phases (preflight, image, container, runtime,
+game readiness) and, on failure, the phase, the reason, the container's exit
+code and OOM flag, and the tail of its output. `GET /api/instances/{id}/startup`
+returns them, plus the last run of a stopped container read live from Podman,
+and the dashboard shows them in the Startup tab. `odin run` narrates its own
+lifecycle with `[ODIN]` lines in `console.log` and on stdout (initialization,
+install, launch, readiness, signals, shutdown, fatal errors); never log the
+launch command line there, because it carries passwords. A start fails fast
+with `ContainerExited` when the container dies before the runtime answers.
+
 **Ports.** `claimed_ports` decides what conflicts. Ports configured only inside
 the game's own file (for example Palworld's REST port and `PublicPort`) are
 not claimed; this is a known gap shared by all native-config games, so document

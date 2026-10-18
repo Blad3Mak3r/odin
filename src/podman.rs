@@ -35,6 +35,7 @@ pub mod runtime;
 pub mod rust;
 pub mod seven_days_to_die;
 pub mod shared_install;
+pub mod startup;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod valheim;
@@ -83,6 +84,20 @@ fn unix_seconds<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64
 #[derive(Debug, Clone)]
 pub struct PodmanContainer {
     pub state: ContainerState,
+    /// What Podman recorded about the last run; meaningful once the
+    /// container is `Exited`.
+    pub exit: ContainerExit,
+}
+
+/// Why and when a container's main process last ended.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContainerExit {
+    pub exit_code: Option<i64>,
+    pub oom_killed: bool,
+    /// Podman's own explanation, e.g. an OCI runtime failure.
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
 }
 
 impl PodmanClient {
@@ -273,7 +288,31 @@ impl PodmanClient {
             .context("failed to decode Podman inspect response")?;
         Ok(Some(PodmanContainer {
             state: ContainerState::from_inspect(&inspect),
+            exit: ContainerExit::from_inspect(&inspect),
         }))
+    }
+
+    /// The last `lines` lines of a container's stdout and stderr. Used to
+    /// explain a failed start, so callers treat an error as "no logs".
+    pub async fn logs_tail(&self, name: &str, lines: usize) -> Result<Vec<String>> {
+        let response = self
+            .client
+            .get(format!(
+                "{API_PREFIX}/containers/{name}/logs?stdout=true&stderr=true&tail={lines}"
+            ))
+            .send()
+            .await
+            .context("failed to request Podman container logs")?;
+        let body = success(response)
+            .await?
+            .bytes()
+            .await
+            .context("failed to read Podman container logs")?;
+        let mut tail = Vec::new();
+        read_log_lines(&body[..], |line| tail.push(cap_log_line(line)))
+            .context("failed to decode Podman container logs")?;
+        let skip = tail.len().saturating_sub(lines);
+        Ok(tail.split_off(skip))
     }
 
     /// Synchronous status probe for legacy CLI paths and the telemetry worker,
@@ -500,10 +539,34 @@ async fn success(response: Response) -> Result<Response> {
     }
 }
 
+/// Longest log line kept in a failure report.
+const MAX_LOG_LINE_CHARS: usize = 1000;
+
+fn cap_log_line(line: &str) -> String {
+    match line.char_indices().nth(MAX_LOG_LINE_CHARS) {
+        Some((end, _)) => format!("{}…", &line[..end]),
+        None => line.to_string(),
+    }
+}
+
+/// Libpod reports failures as `{"cause": .., "message": .., "response": ..}`;
+/// the message is what an operator needs, the JSON envelope is noise.
+fn podman_error_text(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("message")?.as_str().map(str::to_owned))
+        .filter(|message| !message.is_empty())
+        .unwrap_or_else(|| body.to_string())
+}
+
+fn api_error(status: StatusCode, body: &str) -> anyhow::Error {
+    anyhow::anyhow!("Podman API returned {status}: {}", podman_error_text(body))
+}
+
 async fn status_error(response: Response) -> anyhow::Error {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    anyhow::anyhow!("Podman API returned {status}: {body}")
+    api_error(status, &body)
 }
 
 fn blocking_success(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Response> {
@@ -512,14 +575,14 @@ fn blocking_success(response: reqwest::blocking::Response) -> Result<reqwest::bl
     } else {
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        Err(anyhow::anyhow!("Podman API returned {status}: {body}"))
+        Err(api_error(status, &body))
     }
 }
 
 fn blocking_status_error(response: reqwest::blocking::Response) -> anyhow::Error {
     let status = response.status();
     let body = response.text().unwrap_or_default();
-    anyhow::anyhow!("Podman API returned {status}: {body}")
+    api_error(status, &body)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -574,18 +637,48 @@ impl ContainerState {
     }
 }
 
+impl ContainerExit {
+    fn from_inspect(response: &InspectResponse) -> Self {
+        let state = &response.state;
+        // Podman reports "" and the zero time for fields that never happened.
+        let present = |value: &Option<String>| {
+            value
+                .as_deref()
+                .filter(|value| !value.is_empty() && !value.starts_with("0001-01-01"))
+                .map(str::to_owned)
+        };
+        Self {
+            exit_code: state.exit_code,
+            oom_killed: state.oom_killed,
+            error: present(&state.error),
+            started_at: present(&state.started_at),
+            finished_at: present(&state.finished_at),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct InspectResponse {
     #[serde(rename = "State")]
     state: InspectState,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct InspectState {
     #[serde(rename = "Running", default)]
     running: bool,
     #[serde(rename = "Status")]
     status: Option<String>,
+    #[serde(rename = "ExitCode", default)]
+    exit_code: Option<i64>,
+    #[serde(rename = "OOMKilled", default)]
+    oom_killed: bool,
+    #[serde(rename = "Error", default)]
+    error: Option<String>,
+    #[serde(rename = "StartedAt", default)]
+    started_at: Option<String>,
+    #[serde(rename = "FinishedAt", default)]
+    finished_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1542,6 +1635,132 @@ mod tests {
         std::fs::remove_file(socket).ok();
     }
 
+    /// Serves one canned HTTP response on a fresh socket and returns the
+    /// request line it received, or `None` where sockets are not permitted.
+    fn serve_once(
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Option<(std::path::PathBuf, std::thread::JoinHandle<String>)> {
+        let socket =
+            std::env::temp_dir().join(format!("odin-podman-api-{}.sock", uuid::Uuid::new_v4()));
+        let listener = match UnixListener::bind(&socket) {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return None,
+            Err(error) => panic!("failed to bind fake Podman socket: {error}"),
+        };
+        let content_type = content_type.to_owned();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+            request
+        });
+        Some((socket, server))
+    }
+
+    #[tokio::test]
+    async fn client_reads_why_a_container_exited() {
+        let body = br#"{"State":{"Running":false,"Status":"exited","ExitCode":137,
+            "OOMKilled":true,"Error":"crun: cannot start","StartedAt":"2026-10-18T10:00:00Z",
+            "FinishedAt":"2026-10-18T10:00:05Z"}}"#
+            .to_vec();
+        let Some((socket, server)) = serve_once("application/json", body) else {
+            return;
+        };
+
+        let container = PodmanClient::new(&socket)
+            .unwrap()
+            .inspect_container("odin-rust-1")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(container.state, ContainerState::Exited);
+        assert_eq!(
+            container.exit,
+            ContainerExit {
+                exit_code: Some(137),
+                oom_killed: true,
+                error: Some("crun: cannot start".into()),
+                started_at: Some("2026-10-18T10:00:00Z".into()),
+                finished_at: Some("2026-10-18T10:00:05Z".into()),
+            }
+        );
+        assert!(
+            server
+                .join()
+                .unwrap()
+                .contains("/containers/odin-rust-1/json")
+        );
+        std::fs::remove_file(socket).ok();
+    }
+
+    #[test]
+    fn inspect_ignores_podman_placeholders_for_a_container_that_never_ran() {
+        let inspect: InspectResponse = serde_json::from_str(
+            r#"{"State":{"Status":"created","ExitCode":0,"Error":"",
+                "StartedAt":"0001-01-01T00:00:00Z","FinishedAt":"0001-01-01T00:00:00Z"}}"#,
+        )
+        .unwrap();
+
+        let exit = ContainerExit::from_inspect(&inspect);
+
+        assert_eq!(exit.error, None);
+        assert_eq!(exit.started_at, None);
+        assert_eq!(exit.finished_at, None);
+    }
+
+    #[tokio::test]
+    async fn client_returns_the_tail_of_a_container_log() {
+        let mut body = frame(1, b"one\ntwo\n");
+        body.extend(frame(2, b"fatal: bad spec\n"));
+        let Some((socket, server)) = serve_once("application/vnd.docker.raw-stream", body) else {
+            return;
+        };
+
+        let tail = PodmanClient::new(&socket)
+            .unwrap()
+            .logs_tail("odin-rust-1", 2)
+            .await
+            .unwrap();
+
+        assert_eq!(tail, ["two", "fatal: bad spec"]);
+        assert!(server.join().unwrap().starts_with(
+            "GET /v5.0.0/libpod/containers/odin-rust-1/logs?stdout=true&stderr=true&tail=2 "
+        ));
+        std::fs::remove_file(socket).ok();
+    }
+
+    #[test]
+    fn libpod_error_envelopes_are_reduced_to_their_message() {
+        let error = api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"cause":"x","message":"crun: executable file not found","response":500}"#,
+        );
+        assert_eq!(
+            error.to_string(),
+            "Podman API returned 500 Internal Server Error: crun: executable file not found"
+        );
+        let raw = api_error(StatusCode::BAD_GATEWAY, "upstream down");
+        assert!(raw.to_string().ends_with(": upstream down"));
+    }
+
+    #[test]
+    fn overlong_log_lines_are_capped() {
+        let capped = cap_log_line(&"é".repeat(MAX_LOG_LINE_CHARS + 50));
+        assert_eq!(capped.chars().count(), MAX_LOG_LINE_CHARS + 1);
+        assert!(capped.ends_with('…'));
+        assert_eq!(cap_log_line("short"), "short");
+    }
+
     #[tokio::test]
     async fn client_removes_a_stopped_container_over_the_configured_unix_socket() {
         let socket =
@@ -1649,7 +1868,8 @@ mod tests {
             ContainerState::from_inspect(&InspectResponse {
                 state: InspectState {
                     running: true,
-                    status: Some("running".into())
+                    status: Some("running".into()),
+                    ..Default::default()
                 },
             }),
             ContainerState::Running
@@ -1658,7 +1878,8 @@ mod tests {
             ContainerState::from_inspect(&InspectResponse {
                 state: InspectState {
                     running: false,
-                    status: Some("exited".into())
+                    status: Some("exited".into()),
+                    ..Default::default()
                 },
             }),
             ContainerState::Exited

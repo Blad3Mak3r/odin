@@ -21,6 +21,9 @@ use crate::instance::lifecycle::{LifecycleLock, SharedInstallLock};
 use crate::paths::Paths;
 use crate::supervisor;
 
+use super::startup::{
+    ContainerExited, StartupAttempt, StartupAttemptView, StartupPhase, previous_run_note,
+};
 use super::{ContainerSpec, ContainerState, Mount, PodmanClient, container_name};
 
 const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -30,6 +33,8 @@ const CONTAINER_CREATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// time is not mistaken for a hung container.
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Container output lines kept to explain a failed start.
+const FAILURE_LOG_LINES: usize = 50;
 
 /// What differs between games that run in a container. Everything else in
 /// this module is shared.
@@ -302,10 +307,118 @@ pub async fn is_running_async<G: ContainerGame>(
         .is_some_and(ContainerState::is_running))
 }
 
+/// Everything recorded about how this instance's container starts and, when
+/// it has since died, how its last run ended.
+#[derive(Debug, Serialize)]
+pub struct StartupReport {
+    /// Recorded start attempts, newest first.
+    pub attempts: Vec<StartupAttemptView>,
+    /// Present only while the container exists and is stopped.
+    pub last_run: Option<LastRun>,
+}
+
+/// A stopped container's exit details and the logs that explain it. This is
+/// read live, so it also covers a game that dies after `start` returned.
+#[derive(Debug, Serialize)]
+pub struct LastRun {
+    pub exit_code: Option<i64>,
+    pub oom_killed: bool,
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    /// Container stdout/stderr, where `odin run` reports its own failures.
+    pub container_log_tail: Vec<String>,
+    /// SteamCMD's install log.
+    pub install_log_tail: Vec<String>,
+    /// The game's console, including Odin's `[ODIN]` lines.
+    pub console_log_tail: Vec<String>,
+}
+
+const REPORT_LOG_LINES: usize = 50;
+
+pub async fn startup_report<G: ContainerGame>(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+) -> Result<StartupReport> {
+    let instance = G::load(paths, db, name)?;
+    let identity = G::identity(db, &instance)?;
+    Ok(StartupReport {
+        attempts: super::startup::load_attempts(db, &identity.id)?,
+        last_run: last_run::<G>(paths, &identity, &instance).await,
+    })
+}
+
+/// `None` whenever Podman cannot say: not configured, unreachable, no
+/// container, or a container that is not stopped.
+async fn last_run<G: ContainerGame>(
+    paths: &Paths,
+    identity: &GameInstanceIdentity,
+    instance: &G::Instance,
+) -> Option<LastRun> {
+    let config = GlobalConfig::load(paths).ok()?.podman?;
+    let client = PodmanClient::from_config(&config).ok()?;
+    let container = container_name(G::GAME, &identity.id);
+    let found = client.inspect_container(&container).await.ok()??;
+    if found.state != ContainerState::Exited {
+        return None;
+    }
+    let logs = crate::paths::instance_logs_dir(&G::instance_dir(paths, instance));
+    let tail = |file: &str| {
+        crate::commands::logs::read_tail(&logs.join(file), REPORT_LOG_LINES)
+            .map(|text| text.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
+    };
+    Some(LastRun {
+        exit_code: found.exit.exit_code,
+        oom_killed: found.exit.oom_killed,
+        error: found.exit.error,
+        started_at: found.exit.started_at,
+        finished_at: found.exit.finished_at,
+        container_log_tail: client
+            .logs_tail(&container, REPORT_LOG_LINES)
+            .await
+            .unwrap_or_default(),
+        install_log_tail: tail("update.log"),
+        console_log_tail: tail(crate::console_log::CURRENT),
+    })
+}
+
 pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Result<G::Instance> {
     let _lock = LifecycleLock::acquire(paths, G::GAME, name)?;
     let instance = G::load(paths, db, name)?;
     let identity = G::identity(db, &instance)?;
+    let mut attempt = StartupAttempt::begin(db, &identity.id);
+    match start_steps::<G>(paths, db, name, &identity, &instance, &mut attempt).await {
+        Ok(()) => {
+            attempt.succeed();
+            Ok(instance)
+        }
+        Err(error)
+            if matches!(
+                error.downcast_ref::<InstanceError>(),
+                Some(InstanceError::AlreadyRunning(_))
+            ) =>
+        {
+            attempt.discard();
+            Err(error)
+        }
+        Err(error) => {
+            attempt.fail(&error);
+            Err(error)
+        }
+    }
+}
+
+async fn start_steps<G: ContainerGame>(
+    paths: &Paths,
+    db: &Db,
+    name: &str,
+    identity: &GameInstanceIdentity,
+    instance: &G::Instance,
+    attempt: &mut StartupAttempt<'_>,
+) -> Result<()> {
+    attempt.phase(StartupPhase::Preflight, "Checking ports, layout and Podman");
     let _shared_install_lock = if G::GAME == GameId::ArkSurvivalAscended
         && crate::db::game_instances::is_shared_install(db, &identity.id)?
     {
@@ -313,9 +426,9 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     } else {
         None
     };
-    crate::game::ports::ensure_available(paths, db, G::GAME, name, G::ports(&instance)?)?;
-    G::ensure_ready_to_start(paths, db, &instance)?;
-    G::prepare_layout(paths, db, &identity, &instance)?;
+    crate::game::ports::ensure_available(paths, db, G::GAME, name, G::ports(instance)?)?;
+    G::ensure_ready_to_start(paths, db, instance)?;
+    G::prepare_layout(paths, db, identity, instance)?;
 
     let config = config(paths, G::GAME)?;
     let client = PodmanClient::from_config(&config)?;
@@ -326,37 +439,57 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
     let odin_binary = config.odin_binary()?;
     let spec = ContainerSpec::new_with_odin_binary(
         paths,
-        &identity,
-        &G::instance_dir(paths, &instance),
-        G::extra_mounts(paths, db, &instance)?,
+        identity,
+        &G::instance_dir(paths, instance),
+        G::extra_mounts(paths, db, instance)?,
         image.clone(),
         &odin_binary,
         &limits,
     );
-    match client.inspect_container(&container).await? {
-        Some(container_state) if container_state.state.is_running() => {
-            bail!(InstanceError::AlreadyRunning(name.to_string()))
-        }
-        Some(_) => {
-            client.ensure_image(&image).await?;
-            // A stopped container keeps immutable settings from the release
-            // that created it. Recreate it so the requested runtime policy,
-            // mounts and limits always match the current Odin version.
-            client.remove(&container, false).await?;
-            client.create(&spec).await?;
-            wait_for_container(&client, &container).await?;
-            client.start(&container).await?;
-        }
-        None => {
-            client.ensure_image(&image).await?;
-            client.create(&spec).await?;
-            wait_for_container(&client, &container).await?;
-            client.start(&container).await?;
-        }
+    let previous = client.inspect_container(&container).await?;
+    if previous
+        .as_ref()
+        .is_some_and(|found| found.state.is_running())
+    {
+        bail!(InstanceError::AlreadyRunning(name.to_string()))
     }
+
+    attempt.phase(StartupPhase::Image, format!("Checking image {image}"));
+    client.ensure_image(&image).await?;
+
+    attempt.phase(StartupPhase::Container, "Creating the container");
+    if let Some(previous) = previous {
+        // A stopped container keeps immutable settings from the release
+        // that created it. Recreate it so the requested runtime policy,
+        // mounts and limits always match the current Odin version.
+        if previous.state == ContainerState::Exited {
+            let log_tail = client
+                .logs_tail(&container, FAILURE_LOG_LINES)
+                .await
+                .unwrap_or_default();
+            attempt.note(
+                StartupPhase::Container,
+                previous_run_note(&previous.exit, &log_tail),
+            );
+        }
+        client.remove(&container, false).await?;
+    }
+    client.create(&spec).await?;
+    wait_for_container(&client, &container).await?;
+    client.start(&container).await?;
+    attempt.note(
+        StartupPhase::Container,
+        format!("Container {container} started"),
+    );
+
+    attempt.phase(
+        StartupPhase::Runtime,
+        "Waiting for the Odin runtime to answer",
+    );
     let response = supervisor::client::ping_socket_with_retry(
-        &control_socket(paths, &identity),
+        &control_socket(paths, identity),
         START_TIMEOUT,
+        || ensure_container_alive(&client, &container),
     )
     .await
     .with_context(|| {
@@ -377,10 +510,11 @@ pub async fn start<G: ContainerGame>(paths: &Paths, db: &Db, name: &str) -> Resu
         other => bail!("runtime image returned an unexpected startup response: {other:?}"),
     };
     if G::GAME == GameId::ArkSurvivalAscended && !runtime_ready {
-        wait_for_ark_ready(&client, &container, &control_socket(paths, &identity)).await?;
+        attempt.phase(StartupPhase::GameReady, "Waiting for RCON to authenticate");
+        wait_for_ark_ready(&client, &container, &control_socket(paths, identity)).await?;
     }
     container_instances::set_desired_running(db, &identity.id, true)?;
-    Ok(instance)
+    Ok(())
 }
 
 async fn wait_for_ark_ready(
@@ -399,16 +533,9 @@ async fn wait_for_ark_ready(
             Ok(response) => {
                 bail!("unexpected response while waiting for ARK readiness: {response:?}")
             }
-            Err(error) => {
-                if matches!(
-                    client.inspect(container).await?,
-                    Some(ContainerState::Exited)
-                ) {
-                    bail!(
-                        "ARK: Survival Ascended container exited before RCON became ready: {error}"
-                    );
-                }
-            }
+            Err(_) => ensure_container_alive(client, container)
+                .await
+                .context("ARK: Survival Ascended container exited before RCON became ready")?,
         }
         if Instant::now() >= deadline {
             bail!(
@@ -418,6 +545,32 @@ async fn wait_for_ark_ready(
         }
         sleep(Duration::from_secs(1)).await;
     }
+}
+
+/// Fails with [`ContainerExited`] as soon as Podman reports the container
+/// stopped or gone, so a crashed start surfaces in seconds with its exit code
+/// and output instead of after the full start timeout. A Podman error here is
+/// not proof of a crash and is ignored; the caller keeps waiting.
+async fn ensure_container_alive(client: &PodmanClient, container: &str) -> Result<()> {
+    let exit = match client.inspect_container(container).await {
+        Ok(Some(found)) if found.state == ContainerState::Exited => Some(found.exit),
+        Ok(None) => None,
+        _ => return Ok(()),
+    };
+    let log_tail = if exit.is_some() {
+        client
+            .logs_tail(container, FAILURE_LOG_LINES)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Err(ContainerExited {
+        container: container.to_string(),
+        exit,
+        log_tail,
+    }
+    .into())
 }
 
 async fn wait_for_container(client: &PodmanClient, name: &str) -> Result<()> {

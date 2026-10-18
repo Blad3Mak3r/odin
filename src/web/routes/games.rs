@@ -995,6 +995,16 @@ pub async fn get_runtime_health_by_id(
     Ok(Json(health))
 }
 
+pub async fn get_startup_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<crate::podman::lifecycle::StartupReport>> {
+    let identity = resolve_instance_id(&state, &id).await?;
+    let report =
+        dispatch::startup_report(&state.paths, &state.db, identity.game, &identity.name).await?;
+    Ok(Json(report))
+}
+
 pub async fn repair_runtime_by_id(
     State(state): State<AppState>,
     Path(id): Path<String>,

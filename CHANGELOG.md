@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.12] - 2026-10-18
+
+### What's Changed
+- fix(ark): accept Valve's RCON auth prelude and log why readiness fails by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/183
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.11...v0.20.12
+
 ## [0.20.11] - 2026-10-18
 
 ### What's Changed

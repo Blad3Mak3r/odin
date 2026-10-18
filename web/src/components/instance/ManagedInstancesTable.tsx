@@ -1,6 +1,6 @@
 import { TriangleAlert } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { GameIcon } from '@/components/GameIcon'
@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { api } from '@/lib/api-client'
 import { gameLabel } from '@/lib/games'
+import { toastStartFailure } from '@/lib/startFailure'
 import { useManagedInstanceAction, useManagedInstanceTransition } from '@/lib/queries'
 import type { InstanceResources, ManagedInstanceView } from '@/lib/types'
 import { formatBytes } from '@/lib/utils'
@@ -118,6 +119,7 @@ function ManagedInstanceRow({
     enabled: withButtons && instance.running,
     refetchInterval: 10_000,
   })
+  const navigate = useNavigate()
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
@@ -156,10 +158,10 @@ function ManagedInstanceRow({
             <ManageInstanceDialog instance={instance} />
             {instance.running ? (
               <div className="flex justify-end gap-2">
-                <Button size="sm" variant="outline" disabled={busy} onClick={() => restart.mutate(action, { onError: (error) => toast.error(error.message) })}>Restart</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => restart.mutate(action, { onError: (error) => toastStartFailure(error, instance.id, navigate) })}>Restart</Button>
                 <Button size="sm" variant="outline" disabled={busy} onClick={() => stop.mutate(action, { onError: (error) => toast.error(error.message) })}>Stop</Button>
               </div>
-            ) : <Button size="sm" disabled={busy} onClick={() => start.mutate(action, { onError: (error) => toast.error(error.message) })}>Start</Button>}
+            ) : <Button size="sm" disabled={busy} onClick={() => start.mutate(action, { onError: (error) => toastStartFailure(error, instance.id, navigate) })}>Start</Button>}
           </div>
         </TableCell>
       )}

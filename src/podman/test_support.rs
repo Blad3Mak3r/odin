@@ -161,7 +161,9 @@ pub(crate) fn podman_reporting_running(paths: &Paths, running_ids: &[&str]) -> b
                     break;
                 }
             }
-            let (status, body) = if running_ids.iter().any(|id| line.contains(id.as_str())) {
+            let (status, body) = if line.contains("/version") {
+                ("200 OK", r#"{"Version":"5.0.0","ApiVersion":"1.41"}"#)
+            } else if running_ids.iter().any(|id| line.contains(id.as_str())) {
                 ("200 OK", r#"{"State":{"Running":true,"Status":"running"}}"#)
             } else {
                 ("404 Not Found", r#"{"cause":"no such container"}"#)
@@ -176,4 +178,80 @@ pub(crate) fn podman_reporting_running(paths: &Paths, running_ids: &[&str]) -> b
         }
     });
     true
+}
+
+/// A Podman API for a container that dies right after it is started: inspect
+/// reports it `exited` with `exit_code` once `/start` was served, and `/logs`
+/// returns `log_output` as a stdout frame. The server thread lives until the
+/// test process exits.
+pub(crate) fn fake_podman_crashing_container(
+    listener: UnixListener,
+    exit_code: i64,
+    log_output: &str,
+) {
+    let mut frame = vec![1, 0, 0, 0];
+    frame.extend((log_output.len() as u32).to_be_bytes());
+    frame.extend(log_output.as_bytes());
+    std::thread::spawn(move || {
+        let mut created = false;
+        let mut started = false;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            let mut length = 0;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            reader.read_exact(&mut vec![0; length]).unwrap();
+            let exited = format!(
+                r#"{{"State":{{"Running":false,"Status":"exited","ExitCode":{exit_code},"OOMKilled":false}}}}"#
+            );
+            let (status, reply): (&str, Vec<u8>) = if line.contains("/version") {
+                (
+                    "200 OK",
+                    br#"{"Version":"5.0.0","ApiVersion":"1.41"}"#.to_vec(),
+                )
+            } else if line.contains("/exists") {
+                ("204 No Content", Vec::new())
+            } else if line.contains("/containers/create") {
+                created = true;
+                ("201 Created", br#"{"Id":"abc"}"#.to_vec())
+            } else if line.contains("/logs") {
+                ("200 OK", frame.clone())
+            } else if line.contains("/json") && started {
+                ("200 OK", exited.into_bytes())
+            } else if line.contains("/json") && created {
+                (
+                    "200 OK",
+                    br#"{"State":{"Running":false,"Status":"created"}}"#.to_vec(),
+                )
+            } else if line.contains("/json") {
+                (
+                    "404 Not Found",
+                    br#"{"cause":"no such container"}"#.to_vec(),
+                )
+            } else {
+                ("204 No Content", Vec::new())
+            };
+            started |= line.contains("/start");
+            let head = format!(
+                "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                reply.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&reply);
+        }
+    });
 }

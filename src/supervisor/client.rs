@@ -96,10 +96,18 @@ pub async fn ping_socket(control_socket: &std::path::Path) -> Result<Response> {
     request_socket(control_socket, &Request::Ping, CONTROL_REQUEST_TIMEOUT).await
 }
 
-pub async fn ping_socket_with_retry(
+/// Pings until the runtime answers. After every failed attempt `still_wanted`
+/// runs, so the caller can give up early with its own error (for example when
+/// the container has already exited) instead of waiting out the full timeout.
+pub async fn ping_socket_with_retry<F, Fut>(
     control_socket: &std::path::Path,
     timeout: Duration,
-) -> Result<Response> {
+    mut still_wanted: F,
+) -> Result<Response>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -112,10 +120,14 @@ pub async fn ping_socket_with_retry(
         match attempt {
             Ok(response) => return Ok(response),
             Err(_) if tokio::time::Instant::now() < deadline => {
+                still_wanted().await?;
                 tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
             }
             Err(error) => {
-                return Err(error).context("timed out waiting for container runtime socket");
+                return Err(error).context(format!(
+                    "timed out after {}s waiting for the container runtime socket",
+                    timeout.as_secs()
+                ));
             }
         }
     }

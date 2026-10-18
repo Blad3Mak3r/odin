@@ -79,6 +79,50 @@ export interface RuntimeHealth {
   guidance: string[]
 }
 
+export type StartupPhase = 'preflight' | 'image' | 'container' | 'runtime' | 'game_ready'
+
+export interface StartupEvent {
+  at: string
+  phase: StartupPhase
+  status: 'running' | 'ok' | 'failed'
+  detail: string | null
+}
+
+export interface StartupFailure {
+  phase: StartupPhase
+  reason: string
+  exit_code: number | null
+  oom_killed: boolean
+  hint: string | null
+  log_tail: string[]
+}
+
+export interface StartupAttempt {
+  id: number
+  started_at: string
+  finished_at: string | null
+  outcome: 'running' | 'succeeded' | 'failed'
+  events: StartupEvent[]
+  failure: StartupFailure | null
+}
+
+/** How a stopped container's last run ended, read live from Podman and the instance logs. */
+export interface StartupLastRun {
+  exit_code: number | null
+  oom_killed: boolean
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+  container_log_tail: string[]
+  install_log_tail: string[]
+  console_log_tail: string[]
+}
+
+export interface StartupReport {
+  attempts: StartupAttempt[]
+  last_run: StartupLastRun | null
+}
+
 export interface RustConfigUpdateRequest {
   port?: number
   query_port?: number

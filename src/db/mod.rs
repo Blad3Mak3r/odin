@@ -28,6 +28,7 @@ pub mod player_sessions;
 pub mod resource_limits;
 pub mod resource_samples;
 pub mod settings;
+pub mod startup_attempts;
 pub mod uptime_schedules;
 pub mod webhooks;
 

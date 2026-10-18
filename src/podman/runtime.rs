@@ -52,10 +52,25 @@ pub async fn run(spec_path: &Path, expected_instance_id: &str) -> Result<()> {
     };
     let control_path =
         crate::supervisor::control_sock_path(&paths, spec.launch.game(), spec.launch.name());
-    let control = bind_socket(&control_path)?;
+    odin_log(
+        &spec,
+        &format!(
+            "Initializing \"{}\" Dedicated Server (instance {}, Odin {})",
+            label(&spec),
+            spec.launch.name(),
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
+    let control = bind_socket(&control_path)
+        .inspect_err(|error| odin_log(&spec, &format!("ERROR: {error:#}")))?;
+    odin_log(&spec, "Runtime control socket ready");
 
-    let result = run_loop(spec, control).await;
+    let result = run_loop(spec.clone(), control).await;
     let _ = std::fs::remove_file(control_path);
+    match &result {
+        Ok(()) => odin_log(&spec, "Runtime exiting"),
+        Err(error) => odin_log(&spec, &format!("ERROR: {error:#}")),
+    }
     result
 }
 
@@ -75,6 +90,22 @@ fn bind_socket(path: &Path) -> Result<UnixListener> {
 
 fn label(spec: &RuntimeSpec) -> &'static str {
     game::driver(spec.launch.game()).display_name()
+}
+
+/// Prefix of every console-log line the runtime writes itself, so operators
+/// can tell Odin's narration from the game's own output.
+const ODIN_PREFIX: &str = "[ODIN]";
+
+/// Narrates the runtime's own lifecycle. The line goes to the instance
+/// `console.log` (the dashboard's Logs tab) and to the container's stdout,
+/// which Podman keeps and the host reads when a start fails. Best effort: a
+/// missing logs directory must never take the runtime down.
+fn odin_log(spec: &RuntimeSpec, message: &str) {
+    use std::io::Write;
+
+    let line = format!("{ODIN_PREFIX} {message}");
+    let _ = writeln!(std::io::stdout(), "{line}");
+    let _ = append_runtime_log(spec, &line);
 }
 
 async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
@@ -100,8 +131,14 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                     result?;
                     break;
                 }
-                _ = tokio::signal::ctrl_c() => return Ok(()),
-                _ = sigterm.recv() => return Ok(()),
+                _ = tokio::signal::ctrl_c() => {
+                    signal_received(&spec, "SIGINT", true);
+                    return Ok(());
+                }
+                _ = sigterm.recv() => {
+                    signal_received(&spec, "SIGTERM", true);
+                    return Ok(());
+                }
                 Ok((stream, _)) = control.accept() => {
                     tokio::spawn(handle_control(
                         stream, runtime_pid, runtime_started_at, runtime_started,
@@ -109,7 +146,10 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                     ));
                 }
                 Some(action) = actions_rx.recv() => match action {
-                    Action::Stop(_) => return Ok(()),
+                    Action::Stop(_) => {
+                        odin_log(&spec, &format!("Stop requested by Odin during installation, closing \"{}\" Dedicated Server", label(&spec)));
+                        return Ok(());
+                    }
                     Action::Update(reply) => {
                         let _ = reply.send(Err(anyhow!("{} is still installing", label(&spec))));
                     }
@@ -127,6 +167,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
     let ready = Arc::new(AtomicBool::new(
         spec.launch.game() != game::GameId::ArkSurvivalAscended,
     ));
+    odin_log(&spec, &readiness_banner(&spec));
     let mut readiness_deadline = Instant::now() + ARK_READINESS_TIMEOUT;
     let mut readiness_poll = tokio::time::interval(READINESS_POLL_INTERVAL);
     readiness_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -138,13 +179,12 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
             status = child.wait() => {
                 let status = status
                     .with_context(|| format!("failed to wait for {} child", label(&spec)))?;
+                odin_log(&spec, &format!("\"{}\" Dedicated Server exited with {status}", label(&spec)));
                 if !ready.load(Ordering::Relaxed) {
-                    let message = format!(
+                    bail!(
                         "ARK: Survival Ascended exited before RCON became ready (status {status}); see the Proton log at {}",
                         paths::instance_logs_dir(&spec.instance_dir).join("steam-2430930.log").display()
                     );
-                    append_runtime_log(&spec, &message)?;
-                    bail!(message);
                 }
                 if !status.success() {
                     bail!("{} exited with {status}", label(&spec));
@@ -152,10 +192,12 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                 return Ok(());
             }
             _ = tokio::signal::ctrl_c() => {
+                signal_received(&spec, "SIGINT", false);
                 stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec).await?;
                 return Ok(());
             }
             _ = sigterm.recv() => {
+                signal_received(&spec, "SIGTERM", false);
                 stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec).await?;
                 return Ok(());
             }
@@ -168,29 +210,31 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
             _ = readiness_poll.tick(), if !ready.load(Ordering::Relaxed) => {
                 if ark_rcon_ready(&spec).await {
                     ready.store(true, Ordering::Relaxed);
+                    odin_log(&spec, &format!("\"{}\" Dedicated Server is ready (RCON authenticated)", label(&spec)));
                 } else if Instant::now() >= readiness_deadline {
-                    let message = format!(
+                    bail!(
                         "ARK: Survival Ascended did not authenticate RCON within {} seconds; the runtime never became ready. Inspect console.log and {}",
                         ARK_READINESS_TIMEOUT.as_secs(),
                         paths::instance_logs_dir(&spec.instance_dir).join("steam-2430930.log").display()
                     );
-                    append_runtime_log(&spec, &message)?;
-                    bail!(message);
                 }
             }
             Some(action) = actions_rx.recv() => match action {
                 Action::Stop(timeout) => {
+                    odin_log(&spec, &format!("Stop requested by Odin, closing \"{}\" Dedicated Server (timeout {timeout}s)", label(&spec)));
                     stop_child(
                         &mut child, pid, pid_started_at, Duration::from_secs(timeout), &spec,
                     ).await?;
                     return Ok(());
                 }
                 Action::Update(reply) => {
+                    odin_log(&spec, &format!("Update requested by Odin, closing \"{}\" Dedicated Server", label(&spec)));
                     let update = async {
                         stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec)
                             .await?;
                         update_payload(&spec).await?;
                         child = spawn_child(&spec).await?;
+                        odin_log(&spec, &readiness_banner(&spec));
                         pid = child
                             .id()
                             .with_context(|| format!("restarted {} child has no PID", label(&spec)))?;
@@ -231,17 +275,54 @@ fn server_file(spec: &RuntimeSpec) -> PathBuf {
         .join(game::driver(spec.launch.game()).server_binary())
 }
 
+/// Narrates a shutdown signal. `installing` marks one that arrives while
+/// SteamCMD is still downloading, before any game process exists.
+fn signal_received(spec: &RuntimeSpec, signal: &str, installing: bool) {
+    let phase = if installing {
+        " during installation"
+    } else {
+        ""
+    };
+    odin_log(
+        spec,
+        &format!(
+            "{signal} received{phase}, closing \"{}\" Dedicated Server",
+            label(spec)
+        ),
+    );
+}
+
+/// What the runtime reports once the game process exists: ARK is only ready
+/// after RCON authenticates, every other game as soon as it is spawned.
+fn readiness_banner(spec: &RuntimeSpec) -> String {
+    if spec.launch.game() == game::GameId::ArkSurvivalAscended {
+        format!(
+            "Waiting for \"{}\" Dedicated Server to authenticate RCON (up to {} seconds)",
+            label(spec),
+            ARK_READINESS_TIMEOUT.as_secs()
+        )
+    } else {
+        format!(
+            "\"{}\" Dedicated Server has no readiness probe, reporting ready",
+            label(spec)
+        )
+    }
+}
+
 async fn bootstrap(spec: &RuntimeSpec) -> Result<()> {
     if spec.shared_install {
         anyhow::ensure!(
             server_file(spec).is_file(),
             super::shared_install::not_installed_message(spec.launch.game())
         );
+        odin_log(spec, "Using the shared server installation");
         return Ok(());
     }
     if server_file(spec).is_file() {
+        odin_log(spec, "Server files found, skipping install");
         return Ok(());
     }
+    odin_log(spec, "Server files not found, first-time install required");
     seed_steamcmd(&spec.steamcmd_dir)?;
     update_payload(spec).await
 }
@@ -288,22 +369,45 @@ async fn update_payload(spec: &RuntimeSpec) -> Result<()> {
     let log = spec.update_log.clone();
     let expected = server_file(spec);
     let app_id = game::driver(spec.launch.game()).steam_app_id();
+    odin_log(
+        spec,
+        &format!(
+            "Running SteamCMD for app {app_id} (progress in {})",
+            spec.update_log.display()
+        ),
+    );
     tokio::task::spawn_blocking(move || {
         SteamCmd::new(steamcmd).update_app_expect_file(app_id, &install, &log, expected, |_| {})
     })
     .await
-    .context("runtime update task failed")?
+    .context("runtime update task failed")??;
+    odin_log(spec, "SteamCMD finished, server files are in place");
+    Ok(())
 }
 
 async fn spawn_child(spec: &RuntimeSpec) -> Result<tokio::process::Child> {
     let logs = paths::instance_logs_dir(&spec.instance_dir);
     std::fs::create_dir_all(&logs)?;
     let console_log = logs.join("console.log");
+    // Never log the command line: it carries server and RCON passwords.
+    odin_log(
+        spec,
+        &format!("Launching \"{}\" Dedicated Server", label(spec)),
+    );
     let child = spec
         .launch
         .server_command(spec, &console_log)?
         .spawn()
         .context("failed to spawn game server process")?;
+    if let Some(pid) = child.id() {
+        odin_log(
+            spec,
+            &format!(
+                "\"{}\" Dedicated Server process started (pid {pid})",
+                label(spec)
+            ),
+        );
+    }
     Ok(child)
 }
 
@@ -341,19 +445,38 @@ async fn stop_child(
     spec: &RuntimeSpec,
 ) -> Result<()> {
     let quit_sent = spec.launch.request_graceful_stop(&spec.instance_dir).await;
-    if !quit_sent {
+    if quit_sent {
+        odin_log(spec, "Graceful shutdown command delivered to the game");
+    } else {
+        odin_log(spec, "Sending SIGINT to the game process");
         let _ = process::send_signal(pid, started_at, sysinfo::Signal::Interrupt);
     }
     match tokio::time::timeout(timeout, child.wait()).await {
         Ok(status) => {
-            status.context("failed to wait for game shutdown")?;
+            let status = status.context("failed to wait for game shutdown")?;
+            odin_log(
+                spec,
+                &format!("\"{}\" Dedicated Server closed ({status})", label(spec)),
+            );
         }
         Err(_) => {
+            odin_log(
+                spec,
+                &format!(
+                    "\"{}\" Dedicated Server did not stop within {}s, sending SIGKILL",
+                    label(spec),
+                    timeout.as_secs()
+                ),
+            );
             let _ = process::send_signal(pid, started_at, sysinfo::Signal::Kill);
             child
                 .wait()
                 .await
                 .context("failed to reap killed game child")?;
+            odin_log(
+                spec,
+                &format!("\"{}\" Dedicated Server killed", label(spec)),
+            );
         }
     };
     Ok(())
@@ -500,6 +623,88 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
+    fn console_log_of(instance_dir: &Path) -> String {
+        std::fs::read_to_string(paths::instance_logs_dir(instance_dir).join("console.log"))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn odin_log_writes_a_prefixed_stamped_line_to_the_console_log() {
+        let root = std::env::temp_dir().join(format!("odin-narration-{}", uuid::Uuid::new_v4()));
+        let mut spec = spec_for(rust_launch(1));
+        spec.instance_dir = root.clone();
+
+        odin_log(&spec, "hello");
+
+        let log = console_log_of(&root);
+        let line = log.lines().next().unwrap();
+        assert!(line.ends_with("Z [ODIN] hello"), "got {line}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn odin_log_never_fails_when_the_logs_directory_is_unwritable() {
+        // `spec_for` points at a directory that cannot be created.
+        odin_log(&spec_for(rust_launch(1)), "still alive");
+    }
+
+    #[test]
+    fn shutdown_signals_are_narrated_with_the_game_name() {
+        let root = std::env::temp_dir().join(format!("odin-signals-{}", uuid::Uuid::new_v4()));
+        let mut spec = spec_for(rust_launch(1));
+        spec.instance_dir = root.clone();
+
+        signal_received(&spec, "SIGTERM", false);
+        signal_received(&spec, "SIGINT", true);
+
+        let log = console_log_of(&root);
+        assert!(
+            log.contains("[ODIN] SIGTERM received, closing \"Rust\" Dedicated Server"),
+            "got {log}"
+        );
+        assert!(
+            log.contains(
+                "[ODIN] SIGINT received during installation, closing \"Rust\" Dedicated Server"
+            ),
+            "got {log}"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn readiness_banner_distinguishes_ark_from_games_without_a_probe() {
+        assert!(readiness_banner(&ark_spec(1)).contains("authenticate RCON"));
+        assert!(readiness_banner(&spec_for(rust_launch(1))).contains("no readiness probe"));
+    }
+
+    #[tokio::test]
+    async fn run_reports_a_fatal_error_in_the_console_log() {
+        let root = std::env::temp_dir().join(format!("odin-fatal-{}", uuid::Uuid::new_v4()));
+        let mut spec = spec_for(rust_launch(1));
+        spec.instance_dir = root.clone();
+        spec.install_dir = root.join("install");
+        // A shared install that was never made fails bootstrap immediately.
+        spec.shared_install = true;
+        let spec_path = root.join("runtime.json");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+
+        let result = run(&spec_path, "id").await;
+
+        assert!(result.is_err());
+        let log = console_log_of(&root);
+        assert!(
+            log.contains("[ODIN] Initializing \"Rust\" Dedicated Server (instance rusty, Odin "),
+            "got {log}"
+        );
+        assert!(
+            log.contains("[ODIN] Runtime control socket ready"),
+            "got {log}"
+        );
+        assert!(log.contains("[ODIN] ERROR: "), "got {log}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
     async fn stats_response(stats: StatsHandle, pid: u32) -> Response {
         let (client, server) = UnixStream::pair().unwrap();
         let (actions, _receiver) = mpsc::channel(1);
@@ -584,6 +789,7 @@ chmod +x "$d/valheim_server.x86_64""#,
         let installing = crate::supervisor::client::ping_socket_with_retry(
             &control_path,
             Duration::from_secs(1),
+            || async { Ok(()) },
         )
         .await
         .unwrap();
@@ -594,6 +800,7 @@ chmod +x "$d/valheim_server.x86_64""#,
             let pong = crate::supervisor::client::ping_socket_with_retry(
                 &control_path,
                 Duration::from_secs(1),
+                || async { Ok(()) },
             )
             .await
             .unwrap();
@@ -607,6 +814,33 @@ chmod +x "$d/valheim_server.x86_64""#,
             .await
             .unwrap();
         runtime.await.unwrap().unwrap();
+
+        let log = console_log_of(&root.join("instance"));
+        let narration: Vec<&str> = log
+            .lines()
+            .filter_map(|line| line.split_once("Z [ODIN] ").map(|(_, message)| message))
+            .collect();
+        let position = |needle: &str| {
+            narration
+                .iter()
+                .position(|message| message.contains(needle))
+                .unwrap_or_else(|| panic!("missing {needle:?} in {narration:?}"))
+        };
+        assert!(
+            position("Server files not found") < position("Running SteamCMD")
+                && position("Running SteamCMD") < position("SteamCMD finished")
+                && position("SteamCMD finished")
+                    < position("Launching \"Valheim\" Dedicated Server")
+                && position("Launching") < position("process started (pid")
+                && position("process started") < position("no readiness probe")
+                && position("no readiness probe") < position("Stop requested by Odin")
+                && position("Stop requested by Odin") < position("Dedicated Server closed"),
+            "unexpected narration order: {narration:?}"
+        );
+        assert!(
+            !log.contains("-password"),
+            "launch arguments must never be logged: {log}"
+        );
         std::fs::remove_dir_all(root).ok();
     }
 

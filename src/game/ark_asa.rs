@@ -4,13 +4,16 @@
 //! executable runs under Proton; game-owned settings remain in its INI files.
 
 use std::fs;
-use std::path::Path;
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::os::unix::fs::MetadataExt as _;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MAP: &str = "TheIsland_WP";
 const STEAM_CLIENT_DLL: &str = "ShooterGame/Binaries/Win64/steamclient64.dll";
+const GAME_LOG: &str = "ShooterGame/Saved/Logs/ShooterGame.log";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ArkLaunchOptions {
@@ -133,6 +136,11 @@ pub fn build_command_at(
     command
         .current_dir(cwd)
         .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", steam_client_install)
+        // Proton only writes `steam-<SteamGameId>.log` when the id is set.
+        .env(
+            "SteamGameId",
+            crate::game::driver(crate::game::GameId::ArkSurvivalAscended).steam_app_id(),
+        )
         .env("PROTON_LOG", "1")
         .env(
             "PROTON_LOG_DIR",
@@ -168,6 +176,77 @@ pub fn build_command_at(
         command.arg(format!("-ClusterDirOverride={}", cluster.directory));
     }
     Ok(command)
+}
+
+/// Copies ASA's own `ShooterGame.log` into the instance console log.
+///
+/// The Windows server writes almost nothing to stdout under Proton, but the
+/// engine always logs to this file. The runtime calls [`Self::pump`] while the
+/// server runs and once more after it exits.
+pub struct LogForwarder {
+    source: PathBuf,
+    console_log: PathBuf,
+    inode: Option<u64>,
+    offset: u64,
+    partial: Vec<u8>,
+}
+
+impl LogForwarder {
+    /// Created before the server starts: content already in the file belongs
+    /// to a previous run and is skipped, and the engine moving the old file
+    /// aside at startup is detected as a new inode.
+    pub fn new(install_dir: &Path, console_log: &Path) -> Self {
+        let source = install_dir.join(GAME_LOG);
+        let (inode, offset) = fs::metadata(&source)
+            .map(|meta| (Some(meta.ino()), meta.len()))
+            .unwrap_or((None, 0));
+        Self {
+            source,
+            console_log: console_log.to_path_buf(),
+            inode,
+            offset,
+            partial: Vec::new(),
+        }
+    }
+
+    /// Appends the complete lines written since the last call. Best effort:
+    /// a transient I/O error just means the next pump retries.
+    pub fn pump(&mut self) {
+        let _ = self.try_pump();
+    }
+
+    fn try_pump(&mut self) -> std::io::Result<()> {
+        let mut file = fs::File::open(&self.source)?;
+        let meta = file.metadata()?;
+        if self.inode != Some(meta.ino()) {
+            self.inode = Some(meta.ino());
+            self.offset = 0;
+            self.partial.clear();
+        }
+        if meta.len() < self.offset {
+            self.offset = 0;
+            self.partial.clear();
+        }
+        file.seek(SeekFrom::Start(self.offset))?;
+        let mut chunk = Vec::new();
+        file.read_to_end(&mut chunk)?;
+        self.offset += chunk.len() as u64;
+        self.partial.extend_from_slice(&chunk);
+        let Some(end) = self.partial.iter().rposition(|byte| *byte == b'\n') else {
+            return Ok(());
+        };
+        let complete: Vec<u8> = self.partial.drain(..=end).collect();
+        let mut text = String::new();
+        for line in String::from_utf8_lossy(&complete).lines() {
+            text.push_str(line.trim_end_matches('\r'));
+            text.push('\n');
+        }
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.console_log)?
+            .write_all(text.as_bytes())
+    }
 }
 
 /// Asks ASA to save before it exits.
@@ -267,12 +346,50 @@ mod tests {
                 )
             })
             .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            env.get("SteamGameId").and_then(Option::as_deref),
+            Some("2430930")
+        );
         assert_eq!(env.get("PROTON_LOG").and_then(Option::as_deref), Some("1"));
         assert_eq!(
             env.get("PROTON_LOG_DIR").and_then(Option::as_deref),
             log.parent().map(|path| path.to_str().unwrap())
         );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn log_forwarder_copies_new_complete_lines_of_the_current_run() {
+        let root = std::env::temp_dir().join(format!("odin-ark-forward-{}", uuid::Uuid::new_v4()));
+        let source = root.join(GAME_LOG);
+        let console = root.join("console.log");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "previous run\n").unwrap();
+        let mut forwarder = LogForwarder::new(&root, &console);
+
+        // Stale content from the previous run is skipped.
+        forwarder.pump();
+        assert!(!console.exists());
+
+        // The engine moves the old log aside and starts a new one.
+        fs::rename(&source, root.join("backup.log")).unwrap();
+        fs::write(&source, "[boot]\r\nhalf a li").unwrap();
+        forwarder.pump();
+        assert_eq!(fs::read_to_string(&console).unwrap(), "[boot]\n");
+
+        let mut file = fs::OpenOptions::new().append(true).open(&source).unwrap();
+        file.write_all(b"ne\nnext\n").unwrap();
+        forwarder.pump();
+        assert_eq!(
+            fs::read_to_string(&console).unwrap(),
+            "[boot]\nhalf a line\nnext\n"
+        );
+
+        // A truncated log starts over.
+        fs::write(&source, "again\n").unwrap();
+        forwarder.pump();
+        assert!(fs::read_to_string(&console).unwrap().ends_with("again\n"));
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

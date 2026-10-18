@@ -29,6 +29,8 @@ enum Action {
 
 const ARK_READINESS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const LOG_FORWARD_INTERVAL: Duration = Duration::from_millis(500);
+const PROTON_LOG_TAIL_LINES: usize = 30;
 
 pub async fn run(spec_path: &Path, expected_instance_id: &str) -> Result<()> {
     let spec: RuntimeSpec = serde_json::from_slice(
@@ -158,6 +160,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
         }
     }
 
+    let mut forwarder = ark_log_forwarder(&spec);
     let mut child = spawn_child(&spec).await?;
     let mut pid = child
         .id()
@@ -173,14 +176,18 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
     readiness_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     readiness_poll.tick().await;
     let mut stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
+    let mut forward_poll = tokio::time::interval(LOG_FORWARD_INTERVAL);
+    forward_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
             status = child.wait() => {
                 let status = status
                     .with_context(|| format!("failed to wait for {} child", label(&spec)))?;
+                pump_log(&mut forwarder);
                 odin_log(&spec, &format!("\"{}\" Dedicated Server exited with {status}", label(&spec)));
                 if !ready.load(Ordering::Relaxed) {
+                    append_proton_log_tail(&spec);
                     bail!(
                         "ARK: Survival Ascended exited before RCON became ready (status {status}); see the Proton log at {}",
                         paths::instance_logs_dir(&spec.instance_dir).join("steam-2430930.log").display()
@@ -191,14 +198,17 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                 }
                 return Ok(());
             }
+            _ = forward_poll.tick(), if forwarder.is_some() => pump_log(&mut forwarder),
             _ = tokio::signal::ctrl_c() => {
                 signal_received(&spec, "SIGINT", false);
                 stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec).await?;
+                pump_log(&mut forwarder);
                 return Ok(());
             }
             _ = sigterm.recv() => {
                 signal_received(&spec, "SIGTERM", false);
                 stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec).await?;
+                pump_log(&mut forwarder);
                 return Ok(());
             }
             Ok((stream, _)) = control.accept() => {
@@ -212,6 +222,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                     ready.store(true, Ordering::Relaxed);
                     odin_log(&spec, &format!("\"{}\" Dedicated Server is ready (RCON authenticated)", label(&spec)));
                 } else if Instant::now() >= readiness_deadline {
+                    append_proton_log_tail(&spec);
                     bail!(
                         "ARK: Survival Ascended did not authenticate RCON within {} seconds; the runtime never became ready. Inspect console.log and {}",
                         ARK_READINESS_TIMEOUT.as_secs(),
@@ -225,6 +236,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                     stop_child(
                         &mut child, pid, pid_started_at, Duration::from_secs(timeout), &spec,
                     ).await?;
+                    pump_log(&mut forwarder);
                     return Ok(());
                 }
                 Action::Update(reply) => {
@@ -232,7 +244,9 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                     let update = async {
                         stop_child(&mut child, pid, pid_started_at, stop_timeout(&spec), &spec)
                             .await?;
+                        pump_log(&mut forwarder);
                         update_payload(&spec).await?;
+                        forwarder = ark_log_forwarder(&spec);
                         child = spawn_child(&spec).await?;
                         odin_log(&spec, &readiness_banner(&spec));
                         pid = child
@@ -409,6 +423,42 @@ async fn spawn_child(spec: &RuntimeSpec) -> Result<tokio::process::Child> {
         );
     }
     Ok(child)
+}
+
+/// ASA only logs to its own file; the forwarder mirrors it into `console.log`.
+fn ark_log_forwarder(spec: &RuntimeSpec) -> Option<game::ark_asa::LogForwarder> {
+    matches!(spec.launch, Launch::ArkSurvivalAscended(_)).then(|| {
+        game::ark_asa::LogForwarder::new(
+            &spec.install_dir,
+            &paths::instance_logs_dir(&spec.instance_dir).join(crate::console_log::CURRENT),
+        )
+    })
+}
+
+fn pump_log(forwarder: &mut Option<game::ark_asa::LogForwarder>) {
+    if let Some(forwarder) = forwarder {
+        forwarder.pump();
+    }
+}
+
+/// Copies the end of Proton's own log into `console.log`, preferring its
+/// `err:` lines, so a startup failure is readable without shell access.
+fn append_proton_log_tail(spec: &RuntimeSpec) {
+    let app_id = game::driver(spec.launch.game()).steam_app_id();
+    let path = paths::instance_logs_dir(&spec.instance_dir).join(format!("steam-{app_id}.log"));
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let errors: Vec<&str> = text.lines().filter(|line| line.contains("err:")).collect();
+    let lines = if errors.is_empty() {
+        text.lines().collect()
+    } else {
+        errors
+    };
+    let start = lines.len().saturating_sub(PROTON_LOG_TAIL_LINES);
+    for line in &lines[start..] {
+        odin_log(spec, &format!("proton: {line}"));
+    }
 }
 
 async fn ark_rcon_ready(spec: &RuntimeSpec) -> bool {
@@ -620,6 +670,27 @@ mod tests {
         let log =
             std::fs::read_to_string(paths::instance_logs_dir(&root).join("console.log")).unwrap();
         assert!(log.contains("RCON did not become ready"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn ark_startup_failure_includes_the_proton_error_lines() {
+        let root = std::env::temp_dir().join(format!("odin-ark-proton-{}", uuid::Uuid::new_v4()));
+        let mut spec = ark_spec(27020);
+        spec.instance_dir = root.clone();
+        let logs = paths::instance_logs_dir(&root);
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(
+            logs.join("steam-2430930.log"),
+            "0024:trace:noise\n0024:err:module:import_dll Library VCRUNTIME140.dll not found\n",
+        )
+        .unwrap();
+
+        append_proton_log_tail(&spec);
+
+        let log = std::fs::read_to_string(logs.join("console.log")).unwrap();
+        assert!(log.contains("proton: 0024:err:module:import_dll Library VCRUNTIME140.dll"));
+        assert!(!log.contains("trace:noise"));
         std::fs::remove_dir_all(root).ok();
     }
 

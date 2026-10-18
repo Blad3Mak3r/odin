@@ -269,5 +269,7 @@ sudo env ODIN_DATA_DIR=/path/to/a/scratch/dir \
 - Run git operations that write history or share work (commits, pushes,
   merges, rebases, and similar) and pull request work (opening, updating,
   and describing PRs) in a sub-agent, not in the main session's model:
-  - Claude Code: use the `claude-haiku-5-5` model.
+  - Claude Code: delegate to the `git-operator` sub-agent
+    (`.claude/agents/git-operator.md`), which is pinned to the
+    `claude-haiku-5-5` model and carries these git and PR rules.
   - Codex: use the `gpt-6-luna` model.

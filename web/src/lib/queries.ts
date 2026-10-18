@@ -64,6 +64,7 @@ import type {
   SevenDaysPlayer,
   SettingsView,
   RuntimeHealth,
+  StartupReport,
   UptimeScheduleRequest,
   UptimeScheduleView,
   VersionView,
@@ -392,6 +393,10 @@ export function useManagedInstanceAction(action: 'start' | 'stop' | 'restart') {
       queryClient.invalidateQueries({ queryKey: ['managed-instances'] })
       queryClient.invalidateQueries({ queryKey: ['managed-instances', id] })
     },
+    // A failed start is recorded server-side; refresh it so the Startup tab explains why.
+    onError: (_error, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['managed-instances', id, 'startup'] })
+    },
   })
 }
 
@@ -412,6 +417,16 @@ export function useRuntimeHealth(id: string, enabled = true) {
     queryKey: ['managed-instances', id, 'runtime-health'],
     queryFn: () => api.get<RuntimeHealth>(`/instances/${id}/runtime/health`),
     enabled: enabled && Boolean(id),
+  })
+}
+
+/** Polls while a start is in flight so the Startup tab shows each phase as it happens. */
+export function useStartupReport(id: string) {
+  return useQuery({
+    queryKey: ['managed-instances', id, 'startup'],
+    queryFn: () => api.get<StartupReport>(`/instances/${id}/startup`),
+    enabled: Boolean(id),
+    refetchInterval: (query) => (query.state.data?.attempts[0]?.outcome === 'running' ? 1500 : false),
   })
 }
 

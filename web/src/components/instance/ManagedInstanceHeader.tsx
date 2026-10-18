@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useManagedInstanceAction, useManagedInstanceTransition, useManagedResources, useUpdateRuntime } from '@/lib/queries'
 import { gameLabel } from '@/lib/games'
+import { toastStartFailure } from '@/lib/startFailure'
 import type { ManagedInstanceView } from '@/lib/types'
 
 export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceView }) {
@@ -69,7 +70,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
               className="max-sm:h-11"
                 variant="outline"
                 disabled={busy}
-                onClick={() => restart.mutate(action, { onError: (error) => toast.error(error.message) })}
+                onClick={() => restart.mutate(action, { onError: (error) => toastStartFailure(error, instance.id, navigate) })}
               >
                 {restart.isPending && <Loader2 className="size-4 animate-spin" />}
                 Restart
@@ -90,7 +91,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
               size="sm"
               className="max-sm:h-11"
               disabled={busy}
-              onClick={() => start.mutate(action, { onError: (error) => toast.error(error.message) })}
+              onClick={() => start.mutate(action, { onError: (error) => toastStartFailure(error, instance.id, navigate) })}
             >
               {start.isPending && <Loader2 className="size-4 animate-spin" />}
               Start

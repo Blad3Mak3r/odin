@@ -22,6 +22,7 @@ import { ManagedInstanceHeader } from '@/components/instance/ManagedInstanceHead
 import { ManagedLogsTab } from '@/components/instance/ManagedLogsTab'
 import { ManagedResourcesTab } from '@/components/instance/ManagedResourcesTab'
 import { ResourceLimitsTab } from '@/components/instance/ResourceLimitsTab'
+import { StartupTab } from '@/components/instance/StartupTab'
 import { RuntimeHealthCard } from '@/components/instance/RuntimeHealthCard'
 import { LiveLogOutput } from '@/components/instance/LiveLogOutput'
 import { Button } from '@/components/ui/button'
@@ -348,6 +349,7 @@ export function ManagedInstanceDetailPage() {
     { id: 'logs', label: 'Logs' },
     ...(detail.game === 'rust' ? [{ id: 'rcon', label: 'RCON' }] : []),
     ...(detail.game === '7d2d' ? [{ id: 'console', label: 'Console' }, { id: 'players', label: 'Players' }] : []),
+    { id: 'startup', label: 'Startup' },
     { id: 'errors', label: 'Errors' },
     { id: 'config', label: 'Config' },
     ...(((detail.game === 'valheim' || detail.game === '7d2d') && detail.capabilities.mods) || detail.game === 'ark-asa' ? [{ id: 'mods', label: 'Mods' }] : []),
@@ -379,6 +381,7 @@ export function ManagedInstanceDetailPage() {
         {detail.game === 'rust' && <TabPanel active={tab === 'rcon'}><RustRconTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.game === '7d2d' && <TabPanel active={tab === 'console'}><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.game === '7d2d' && <TabPanel active={tab === 'players'}><SevenDaysPlayersTab id={detail.id} running={detail.running} /></TabPanel>}
+        <TabPanel active={tab === 'startup'}><StartupTab id={detail.id} /></TabPanel>
         <TabPanel active={tab === 'errors'}>
           <Card>
             <CardHeader>

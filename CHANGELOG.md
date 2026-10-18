@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.11] - 2026-10-18
+
+### What's Changed
+- fix(ark): clean up legacy shared installs and explain CurseForge startup failures by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/182
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.10...v0.20.11
+
 ## [0.20.10] - 2026-10-18
 
 ### What's Changed

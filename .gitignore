@@ -13,8 +13,9 @@
 
 # Claude Code agent tooling: local settings, git worktrees created by the
 # agent, downloaded skill caches, and their lock file. Machine-local, not
-# project state.
-/.claude/
+# project state. Project sub-agent definitions in .claude/agents/ are tracked.
+/.claude/*
+!/.claude/agents/
 /.agents/
 /skills-lock.json
 

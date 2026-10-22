@@ -11,17 +11,32 @@ export class ApiError extends Error {
   }
 }
 
+let csrfToken: string | null = null
+
+/** Token the server expects in `X-CSRF-Token` on every non-GET request. */
+export function setCsrfToken(token: string | null) {
+  csrfToken = token
+}
+
+let onUnauthorized: (() => void) | undefined
+
+/** Called when a non-auth endpoint answers 401, i.e. the session has expired. */
+export function setUnauthorizedHandler(handler: () => void) {
+  onUnauthorized = handler
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // A `FormData` body must NOT get a manual content-type: the browser sets
   // one itself (including the multipart boundary), and overriding it here
   // would break the upload.
   const isFormData = init?.body instanceof FormData
-  const response = await fetch(`/api${path}`, {
-    headers: init?.body && !isFormData ? { 'content-type': 'application/json' } : undefined,
-    ...init,
-  })
+  const headers: Record<string, string> = {}
+  if (init?.body && !isFormData) headers['content-type'] = 'application/json'
+  if (init?.method && init.method !== 'GET' && csrfToken) headers['x-csrf-token'] = csrfToken
+  const response = await fetch(`/api${path}`, { ...init, headers })
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/')) onUnauthorized?.()
     const body = await response.json().catch(() => null)
     const message = body && typeof body.error === 'string' ? body.error : response.statusText
     throw new ApiError(response.status, message)

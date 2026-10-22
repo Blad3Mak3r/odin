@@ -5,9 +5,14 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api } from './api-client'
+import { api, setCsrfToken } from './api-client'
 import type {
   ActivityEvent,
+  AuditEvent,
+  AuthSession,
+  AuthStatus,
+  AuthUser,
+  UserRole,
   ArkCluster,
   AdvancedConfigChange,
   AdvancedConfigView,
@@ -1390,5 +1395,135 @@ export function useSetWebhookEnabled() {
 export function useTestWebhook() {
   return useMutation({
     mutationFn: (id: string) => api.post<void>(`/webhooks/${id}/test`),
+  })
+}
+
+export function useAuthStatus() {
+  return useQuery({
+    queryKey: ['auth', 'status'],
+    queryFn: async () => {
+      const status = await api.get<AuthStatus>('/auth/status')
+      setCsrfToken(status.csrf_token)
+      return status
+    },
+    retry: false,
+  })
+}
+
+/** Drops cached server data and re-reads who is signed in. */
+function useResetSession() {
+  const queryClient = useQueryClient()
+  return () => {
+    queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' })
+    return queryClient.invalidateQueries({ queryKey: ['auth', 'status'] })
+  }
+}
+
+export type AuthRequest =
+  | { login: string; password: string; remember: boolean }
+  | { token: string; email: string; username?: string; password: string }
+  | { token: string; email: string; password: string }
+
+export function useAuthenticate(mode: 'login' | 'setup' | 'recover') {
+  const reset = useResetSession()
+  return useMutation({
+    mutationFn: (req: AuthRequest) => api.post<AuthUser>(`/auth/${mode}`, req),
+    onSuccess: reset,
+  })
+}
+
+export function useLogout() {
+  const reset = useResetSession()
+  return useMutation({
+    mutationFn: () => api.post<void>('/auth/logout'),
+    onSettled: reset,
+  })
+}
+
+export function useChangePassword() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { current_password: string; new_password: string }) =>
+      api.post<void>('/auth/password', req),
+    // The server starts a fresh session, which carries a new CSRF token.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth', 'status'] }),
+  })
+}
+
+export function useUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: () => api.get<AuthUser[]>('/users'),
+  })
+}
+
+export function useCreateUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: {
+      email: string
+      username?: string
+      password: string
+      role: UserRole
+      require_change: boolean
+    }) =>
+      api.post<AuthUser>('/users', req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useUpdateUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      email,
+      ...req
+    }: {
+      email: string
+      role?: UserRole
+      password?: string
+      require_change?: boolean
+    }) =>
+      api.put<void>(`/users/${encodeURIComponent(email)}`, req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useDeleteUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (email: string) => api.delete<void>(`/users/${encodeURIComponent(email)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useSessions() {
+  return useQuery({
+    queryKey: ['auth', 'sessions'],
+    queryFn: () => api.get<AuthSession[]>('/auth/sessions'),
+  })
+}
+
+export function useRevokeSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/auth/sessions/${id}`),
+    // Ending the current session signs out; the status refetch shows the login.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['auth'] }),
+  })
+}
+
+export function useRevokeOtherSessions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>('/auth/sessions/revoke-others'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth', 'sessions'] }),
+  })
+}
+
+export function useAuditLog() {
+  return useQuery({
+    queryKey: ['auth', 'audit'],
+    queryFn: () => api.get<AuditEvent[]>('/auth/audit?limit=100'),
   })
 }

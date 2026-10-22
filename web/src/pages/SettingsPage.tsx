@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { AccountSettings } from '@/components/AccountSettings'
 import { PageHeader } from '@/components/PageHeader'
 import { QueryError } from '@/components/QueryError'
 import { Badge } from '@/components/ui/badge'
@@ -154,6 +155,8 @@ export function SettingsPage() {
   return (
     <div className="flex flex-col gap-8">
       <PageHeader title="Settings" description="Global configuration shared across all instances." />
+
+      <AccountSettings />
 
       {settings.isError && <QueryError error={settings.error} />}
 

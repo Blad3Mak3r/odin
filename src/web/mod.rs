@@ -3,6 +3,8 @@
 //! is synchronous — this module (and `commands::serve`) is the only place
 //! async/tokio is used.
 
+mod audit;
+mod auth;
 mod backup_scheduler;
 mod error;
 mod image_monitor;
@@ -49,7 +51,17 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     if let Err(error) = crate::podman::startup::fail_interrupted_attempts(&db) {
         tracing::warn!(%error, "could not close interrupted startup attempts");
     }
-    let state = AppState::new(paths, db);
+    let config = crate::config::GlobalConfig::load(&paths)?;
+    let public_origin = config
+        .public_origin()
+        .context("invalid dashboard public_url")?;
+    let trusted_proxies = config
+        .trusted_proxies()
+        .context("invalid dashboard trusted_proxies")?;
+    let state = AppState::new(paths, db)
+        .with_public_origin(public_origin)
+        .with_trusted_proxies(trusted_proxies);
+    auth::arm_bootstrap(&state).context("failed to prepare dashboard sign-in")?;
     retention::run_once(&state);
     retention::spawn(state.clone());
     webhooks::spawn(state.clone());
@@ -58,18 +70,24 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     uptime_scheduler::spawn(state.clone());
     image_monitor::spawn(state.clone());
 
-    let router = router::build_router(state.clone());
+    let router = router::build_app(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind {addr}"))?;
 
     tracing::info!(%addr, "odin dashboard listening");
     println!("Odin dashboard listening on http://{addr}");
+    if let Some(public) = &state.public_origin {
+        println!("Public URL: {}", public.origin);
+    }
     if let Some(ip) = local_network_ip() {
         println!("Network: http://{ip}:{}", addr.port());
     }
 
-    let server = axum::serve(listener, router);
+    let server = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    );
     if !stop_instances_on_shutdown() {
         return server.await.context("web server error");
     }

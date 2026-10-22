@@ -103,6 +103,49 @@ pub fn validate_username(username: &str) -> Result<(), BadRequest> {
     }
 }
 
+/// A blank username means "none". Usernames cannot contain `@`, so a login
+/// string is never ambiguous between an email and a username.
+pub fn optional_username(raw: Option<&str>) -> Result<Option<String>, BadRequest> {
+    match raw.map(str::trim).filter(|name| !name.is_empty()) {
+        None => Ok(None),
+        Some(name) => validate_username(name).map(|()| Some(name.to_string())),
+    }
+}
+
+/// Checks an email address (RFC 5321 limits, dot-atom local part, DNS-style
+/// domain with a dot) and returns it lowercased, the form stored and compared.
+pub fn normalize_email(raw: &str) -> Result<String, BadRequest> {
+    let invalid = || BadRequest("enter a valid email address".into());
+    let email = raw.trim().to_ascii_lowercase();
+    if email.len() > 254 {
+        return Err(invalid());
+    }
+    let (local, domain) = email.split_once('@').ok_or_else(invalid)?;
+    let local_ok = (1..=64).contains(&local.len())
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..")
+        && local
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+/=?^_`{|}~.-".contains(c));
+    let labels: Vec<&str> = domain.split('.').collect();
+    let domain_ok = labels.len() >= 2
+        && labels.iter().all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+        && labels
+            .last()
+            .is_some_and(|tld| tld.len() >= 2 && tld.chars().any(|c| c.is_ascii_alphabetic()));
+    if local_ok && domain_ok {
+        Ok(email)
+    } else {
+        Err(invalid())
+    }
+}
+
 pub fn validate_password(password: &str) -> Result<(), BadRequest> {
     if (MIN_PASSWORD_LEN..=MAX_PASSWORD_LEN).contains(&password.chars().count()) {
         Ok(())
@@ -138,12 +181,13 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 }
 
 /// Creates a session for `user_id`, returning the cookie header value.
-pub async fn start_session(state: &AppState, user_id: &str, secure: bool) -> ApiResult<String> {
+pub async fn start_session(state: &AppState, user_email: &str, secure: bool) -> ApiResult<String> {
     let mut bytes = [0u8; 32];
     rand::rng().fill(&mut bytes);
     let token = hex(&bytes);
-    let (db, user_id, token_hash) = (state.db.clone(), user_id.to_string(), hash_token(&token));
-    run_blocking(move || users::create_session(&db, &user_id, &token_hash)).await?;
+    let (db, user_email, token_hash) =
+        (state.db.clone(), user_email.to_string(), hash_token(&token));
+    run_blocking(move || users::create_session(&db, &user_email, &token_hash)).await?;
     Ok(cookie(&token, SESSION_LIFETIME_DAYS * 86_400, secure))
 }
 
@@ -461,7 +505,15 @@ mod tests {
     }
 
     fn creds(username: &str, password: &str) -> Option<serde_json::Value> {
-        Some(json!({ "username": username, "password": password }))
+        Some(json!({
+            "email": format!("{username}@example.com"),
+            "username": username,
+            "password": password,
+        }))
+    }
+
+    fn login_creds(login: &str, password: &str) -> Option<serde_json::Value> {
+        Some(json!({ "login": login, "password": password }))
     }
 
     #[tokio::test]
@@ -515,7 +567,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            creds("admin", "wrong password"),
+            login_creds("admin", "wrong password"),
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -525,7 +577,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            creds("ADMIN", "correct horse"),
+            login_creds("ADMIN", "correct horse"),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -550,8 +602,9 @@ mod tests {
         .await;
         let admin = admin.unwrap();
 
-        let new_user =
-            Some(json!({ "username": "watcher", "password": "long enough", "role": "viewer" }));
+        let new_user = Some(
+            json!({ "email": "watcher@example.com", "username": "watcher", "password": "long enough", "role": "viewer" }),
+        );
         let (status, ..) = call(&app, "POST", "/api/users", Some(&admin), new_user).await;
         assert_eq!(status, StatusCode::OK);
 
@@ -560,7 +613,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            creds("watcher", "long enough"),
+            login_creds("watcher", "long enough"),
         )
         .await;
         let viewer = viewer.unwrap();
@@ -572,7 +625,7 @@ mod tests {
         let (status, ..) = call(&app, "GET", "/api/users", Some(&viewer), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
 
-        let id = admin_user["id"].as_str().unwrap();
+        let id = admin_user["email"].as_str().unwrap();
         let (status, ..) = call(
             &app,
             "DELETE",
@@ -596,13 +649,112 @@ mod tests {
                     .header(header::ORIGIN, "http://evil.example")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        json!({ "username": "a", "password": "b" }).to_string(),
+                        json!({ "login": "a", "password": "b" }).to_string(),
                     ))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn email_is_the_key_and_username_is_optional_but_unique() {
+        let app = app();
+        let setup = Some(json!({ "email": "Admin@Example.com", "password": "correct horse" }));
+        let (status, admin, body) = call(&app, "POST", "/api/auth/setup", None, setup).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["email"], "admin@example.com");
+        assert!(body["username"].is_null());
+        let admin = admin.unwrap();
+
+        // Login works by email (any case) even without a username.
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("ADMIN@example.com", "correct horse"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let new = |email: &str, username: Option<&str>| {
+            Some(json!({
+                "email": email,
+                "username": username,
+                "password": "long enough",
+                "role": "viewer",
+            }))
+        };
+        let add = |email: &'static str, username: Option<&'static str>| {
+            let (app, admin) = (app.clone(), admin.clone());
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    "/api/users",
+                    Some(&admin),
+                    new(email, username),
+                )
+                .await
+                .0
+            }
+        };
+        assert_eq!(add("a@example.com", Some("alice")).await, StatusCode::OK);
+        assert_eq!(add("b@example.com", None).await, StatusCode::OK);
+        assert_eq!(add("c@example.com", None).await, StatusCode::OK);
+        assert_eq!(
+            add("A@example.com", Some("bob")).await,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            add("d@example.com", Some("ALICE")).await,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(add("not-an-email", None).await, StatusCode::BAD_REQUEST);
+        assert_eq!(add("x@localhost", None).await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            add("e@example.com", Some("a@b")).await,
+            StatusCode::BAD_REQUEST
+        );
+
+        // The username logs in too.
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("Alice", "long enough"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[test]
+    fn email_validation_normalizes_and_rejects_malformed_addresses() {
+        assert_eq!(
+            normalize_email(" Me.You+tag@Mail.Example.COM ").unwrap(),
+            "me.you+tag@mail.example.com"
+        );
+        for bad in [
+            "",
+            "plain",
+            "@example.com",
+            "me@",
+            "me@@example.com",
+            "me@example",
+            "me@-a.com",
+            "me@a..com",
+            ".me@example.com",
+            "me..you@example.com",
+            "me you@example.com",
+            "me@example.c",
+            "me@123.456",
+        ] {
+            assert!(normalize_email(bad).is_err(), "{bad}");
+        }
+        assert!(normalize_email(&format!("{}@example.com", "a".repeat(65))).is_err());
     }
 
     async fn raw(app: &Router, req: Request<Body>) -> Response {
@@ -657,7 +809,7 @@ mod tests {
                 .header("sec-fetch-site", site)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({ "username": "a", "password": "b" }).to_string(),
+                    json!({ "login": "a", "password": "b" }).to_string(),
                 ))
                 .unwrap()
         };
@@ -686,7 +838,7 @@ mod tests {
                 .header(header::ORIGIN, origin)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({ "username": "admin", "password": "correct horse" }).to_string(),
+                    json!({ "email": "admin@example.com", "username": "admin", "password": "correct horse" }).to_string(),
                 ))
                 .unwrap()
         };

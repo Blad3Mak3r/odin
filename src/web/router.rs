@@ -40,7 +40,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/password", post(auth::change_password))
         .route("/users", get(users::list).post(users::create))
-        .route("/users/{id}", put(users::update).delete(users::delete))
+        .route("/users/{email}", put(users::update).delete(users::delete))
         .route("/version", get(version::get_version))
         .route("/update", post(version::start_system_update))
         .route("/changelog", get(changelog::get_changelog))

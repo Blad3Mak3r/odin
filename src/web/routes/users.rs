@@ -6,7 +6,9 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::db::users::{self, Role, User};
-use crate::web::auth::{AuthUser, hash_password, validate_password, validate_username};
+use crate::web::auth::{
+    AuthUser, hash_password, normalize_email, optional_username, validate_password,
+};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -21,7 +23,9 @@ pub async fn list(
 
 #[derive(Deserialize)]
 pub struct CreateUser {
-    pub username: String,
+    pub email: String,
+    #[serde(default)]
+    pub username: Option<String>,
     pub password: String,
     pub role: Role,
 }
@@ -32,11 +36,13 @@ pub async fn create(
     Json(req): Json<CreateUser>,
 ) -> ApiResult<Json<User>> {
     auth.require_admin()?;
-    validate_username(&req.username)?;
+    let email = normalize_email(&req.email)?;
+    let username = optional_username(req.username.as_deref())?;
     validate_password(&req.password)?;
     let db = state.db.clone();
     let user = run_blocking(move || {
-        users::create(&db, &req.username, &hash_password(&req.password)?, req.role)
+        let hash = hash_password(&req.password)?;
+        users::create(&db, &email, username.as_deref(), &hash, req.role)
     })
     .await?;
     Ok(Json(user))
@@ -51,7 +57,7 @@ pub struct UpdateUser {
 pub async fn update(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
-    Path(id): Path<String>,
+    Path(email): Path<String>,
     Json(req): Json<UpdateUser>,
 ) -> ApiResult<StatusCode> {
     auth.require_admin()?;
@@ -64,10 +70,10 @@ pub async fn update(
     let db = state.db.clone();
     run_blocking(move || {
         if let Some(role) = req.role {
-            users::set_role(&db, &id, role)?;
+            users::set_role(&db, &email, role)?;
         }
         if let Some(password) = req.password {
-            users::set_password(&db, &id, &hash_password(&password)?)?;
+            users::set_password(&db, &email, &hash_password(&password)?)?;
         }
         Ok(())
     })
@@ -78,10 +84,10 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
-    Path(id): Path<String>,
+    Path(email): Path<String>,
 ) -> ApiResult<StatusCode> {
     auth.require_admin()?;
     let db = state.db.clone();
-    run_blocking(move || users::delete(&db, &id)).await?;
+    run_blocking(move || users::delete(&db, &email)).await?;
     Ok(StatusCode::NO_CONTENT)
 }

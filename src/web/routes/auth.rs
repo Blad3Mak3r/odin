@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::db::users::{self, User};
 use crate::web::auth::{
     AuthUser, InvalidCredentials, authenticate, clear_cookie, client_ip, hash_password, is_secure,
-    start_session, token_hash_of, validate_password, validate_username, verify_password,
+    normalize_email, optional_username, start_session, token_hash_of, validate_password,
+    verify_password,
 };
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::state::AppState;
@@ -39,8 +40,17 @@ pub async fn status(
 }
 
 #[derive(Deserialize)]
-pub struct Credentials {
-    pub username: String,
+pub struct SetupRequest {
+    pub email: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    pub password: String,
+}
+
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    /// Email address or username.
+    pub login: String,
     pub password: String,
 }
 
@@ -55,17 +65,18 @@ fn with_cookie(cookie: String, body: impl IntoResponse) -> Response {
 pub async fn setup(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<Credentials>,
+    Json(req): Json<SetupRequest>,
 ) -> ApiResult<Response> {
-    validate_username(&req.username)?;
+    let email = normalize_email(&req.email)?;
+    let username = optional_username(req.username.as_deref())?;
     validate_password(&req.password)?;
     let db = state.db.clone();
     let user = run_blocking(move || {
         let hash = hash_password(&req.password)?;
-        users::create_first_admin(&db, &req.username, &hash)
+        users::create_first_admin(&db, &email, username.as_deref(), &hash)
     })
     .await?;
-    let cookie = start_session(&state, &user.id, is_secure(&state, &headers)).await?;
+    let cookie = start_session(&state, &user.email, is_secure(&state, &headers)).await?;
     Ok(with_cookie(cookie, Json(user)))
 }
 
@@ -73,14 +84,14 @@ pub async fn login(
     State(state): State<AppState>,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
-    Json(req): Json<Credentials>,
+    Json(req): Json<LoginRequest>,
 ) -> ApiResult<Response> {
     let ip = client_ip(&headers, peer.as_ref().map(|Extension(c)| c));
-    state.login_throttle.check(&req.username, ip)?;
+    state.login_throttle.check(&req.login, ip)?;
     let db = state.db.clone();
-    let (username, password) = (req.username.clone(), req.password);
+    let (login, password) = (req.login.clone(), req.password);
     let user = run_blocking(move || {
-        let found = users::find_credentials(&db, &username)?;
+        let found = users::find_credentials(&db, login.trim())?;
         // Verify against a dummy hash for unknown users so timing does not
         // reveal which usernames exist.
         let stored = found
@@ -91,12 +102,12 @@ pub async fn login(
     })
     .await?;
     let Some(user) = user else {
-        state.login_throttle.record_failure(&req.username, ip);
-        tracing::warn!(username = %req.username, ?ip, "failed dashboard login");
+        state.login_throttle.record_failure(&req.login, ip);
+        tracing::warn!(login = %req.login, ?ip, "failed dashboard login");
         return Err(InvalidCredentials.into());
     };
-    state.login_throttle.clear_user(&req.username);
-    let cookie = start_session(&state, &user.id, is_secure(&state, &headers)).await?;
+    state.login_throttle.clear_user(&req.login);
+    let cookie = start_session(&state, &user.email, is_secure(&state, &headers)).await?;
     Ok(with_cookie(cookie, Json(user)))
 }
 
@@ -131,16 +142,16 @@ pub async fn change_password(
     Json(req): Json<ChangePassword>,
 ) -> ApiResult<Response> {
     validate_password(&req.new_password)?;
-    let (db, id) = (state.db.clone(), auth.user.id.clone());
+    let (db, email) = (state.db.clone(), auth.user.email.clone());
     run_blocking(move || {
-        let stored = users::password_hash(&db, &id)?.unwrap_or_default();
+        let stored = users::password_hash(&db, &email)?.unwrap_or_default();
         if !verify_password(&req.current_password, &stored) {
             return Err(InvalidCredentials.into());
         }
         // Revokes every session, including this one; a fresh one follows.
-        users::set_password(&db, &id, &hash_password(&req.new_password)?)
+        users::set_password(&db, &email, &hash_password(&req.new_password)?)
     })
     .await?;
-    let cookie = start_session(&state, &auth.user.id, is_secure(&state, &headers)).await?;
+    let cookie = start_session(&state, &auth.user.email, is_secure(&state, &headers)).await?;
     Ok(with_cookie(cookie, StatusCode::NO_CONTENT))
 }

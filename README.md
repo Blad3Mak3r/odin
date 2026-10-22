@@ -407,6 +407,27 @@ tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS reverse proxy
 (which should send `X-Forwarded-Proto: https` so the cookie is marked
 `Secure`) rather than binding it directly to a public address.
 
+State-changing requests are protected against CSRF: the browser's `Origin`
+must match the address it used to reach Odin, and every non-GET call must
+carry the per-session `X-CSRF-Token` the dashboard fetches at sign-in.
+Responses ship a strict Content-Security-Policy, `X-Frame-Options: DENY`
+and related headers, and failed logins are throttled per username and per
+client address (the last `X-Forwarded-For` hop is used when the proxy is on
+loopback).
+
+When the dashboard sits behind a reverse proxy that rewrites the `Host`
+header, declare its public address in `/etc/odin/config.toml` (or with the
+`ODIN_PUBLIC_URL` environment variable, which wins):
+
+```toml
+[server]
+public_url = "https://odin.example.com"   # origin only, no path
+```
+
+An `https` value marks the session cookie `Secure` (as `__Host-odin_session`)
+and enables HSTS. An invalid value stops `odin serve` at startup. The setting
+is optional; without it Odin trusts the `Host` header of the request.
+
 The frontend (`web/`, a Vite + React + TypeScript + Tailwind + shadcn/ui
 project) is embedded into the binary at compile time, so building it is a
 separate step from `cargo build` — see [Development](#development).

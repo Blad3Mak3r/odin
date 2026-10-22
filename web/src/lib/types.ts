@@ -660,3 +660,17 @@ export interface InstanceDefaults {
   backup_interval_hours: number
   backup_retain_count: number
 }
+
+export type UserRole = 'admin' | 'viewer'
+
+export interface AuthUser {
+  id: string
+  username: string
+  role: UserRole
+  created_at: string
+}
+
+export interface AuthStatus {
+  setup_required: boolean
+  user: AuthUser | null
+}

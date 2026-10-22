@@ -2,6 +2,7 @@ import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import {
   Bell,
   Gamepad2,
+  LogOut,
   LayoutDashboard,
   ListChecks,
   Menu,
@@ -16,6 +17,7 @@ import { ActivityFeedPanel } from '@/components/ActivityFeedPanel'
 import { Button } from '@/components/ui/button'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { useLiveSocket } from '@/hooks/useLiveSocket'
+import { useAuthStatus, useLogout } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from './ThemeToggle'
 
@@ -35,6 +37,8 @@ function SidebarNav({
   onNavigate?: () => void
   onOpenActivity: () => void
 }) {
+  const user = useAuthStatus().data?.user
+  const logout = useLogout()
   return (
     <>
       <div className="flex items-center gap-2 px-4 py-5">
@@ -83,6 +87,21 @@ function SidebarNav({
         ))}
       </nav>
       <div className="mt-auto flex items-center gap-2 px-3 py-3">
+        {user && (
+          <div className="mr-auto min-w-0">
+            <p className="truncate text-sm font-medium">{user.username}</p>
+            <p className="text-xs text-muted-foreground">{user.role}</p>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Sign out"
+          disabled={logout.isPending}
+          onClick={() => logout.mutate()}
+        >
+          <LogOut className="size-4" />
+        </Button>
         <ThemeToggle />
         <Button
           variant="ghost"

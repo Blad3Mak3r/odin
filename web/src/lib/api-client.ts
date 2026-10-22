@@ -11,6 +11,13 @@ export class ApiError extends Error {
   }
 }
 
+let onUnauthorized: (() => void) | undefined
+
+/** Called when a non-auth endpoint answers 401, i.e. the session has expired. */
+export function setUnauthorizedHandler(handler: () => void) {
+  onUnauthorized = handler
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // A `FormData` body must NOT get a manual content-type: the browser sets
   // one itself (including the multipart boundary), and overriding it here
@@ -22,6 +29,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/')) onUnauthorized?.()
     const body = await response.json().catch(() => null)
     const message = body && typeof body.error === 'string' ? body.error : response.statusText
     throw new ApiError(response.status, message)

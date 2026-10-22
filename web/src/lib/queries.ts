@@ -8,6 +8,9 @@ import {
 import { api } from './api-client'
 import type {
   ActivityEvent,
+  AuthStatus,
+  AuthUser,
+  UserRole,
   ArkCluster,
   AdvancedConfigChange,
   AdvancedConfigView,
@@ -1390,5 +1393,79 @@ export function useSetWebhookEnabled() {
 export function useTestWebhook() {
   return useMutation({
     mutationFn: (id: string) => api.post<void>(`/webhooks/${id}/test`),
+  })
+}
+
+export function useAuthStatus() {
+  return useQuery({
+    queryKey: ['auth', 'status'],
+    queryFn: () => api.get<AuthStatus>('/auth/status'),
+    retry: false,
+  })
+}
+
+/** Drops cached server data and re-reads who is signed in. */
+function useResetSession() {
+  const queryClient = useQueryClient()
+  return () => {
+    queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' })
+    return queryClient.invalidateQueries({ queryKey: ['auth', 'status'] })
+  }
+}
+
+export function useAuthenticate(mode: 'login' | 'setup') {
+  const reset = useResetSession()
+  return useMutation({
+    mutationFn: (req: { username: string; password: string }) =>
+      api.post<AuthUser>(`/auth/${mode}`, req),
+    onSuccess: reset,
+  })
+}
+
+export function useLogout() {
+  const reset = useResetSession()
+  return useMutation({
+    mutationFn: () => api.post<void>('/auth/logout'),
+    onSettled: reset,
+  })
+}
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (req: { current_password: string; new_password: string }) =>
+      api.post<void>('/auth/password', req),
+  })
+}
+
+export function useUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: () => api.get<AuthUser[]>('/users'),
+  })
+}
+
+export function useCreateUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { username: string; password: string; role: UserRole }) =>
+      api.post<AuthUser>('/users', req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useUpdateUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...req }: { id: string; role?: UserRole; password?: string }) =>
+      api.put<void>(`/users/${id}`, req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useDeleteUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/users/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   })
 }

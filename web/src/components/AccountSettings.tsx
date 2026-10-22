@@ -161,15 +161,25 @@ function SessionsPanel() {
   )
 }
 
-function ResetPasswordDialog({ user, onClose }: { user: AuthUser | null; onClose: () => void }) {
+function ResetPasswordDialog({
+  user,
+  currentUserEmail,
+  onClose,
+}: {
+  user: AuthUser | null
+  currentUserEmail: string
+  onClose: () => void
+}) {
   const update = useUpdateUser()
   const [password, setPassword] = useState('')
-  const [requireChange, setRequireChange] = useState(true)
+  // Unset until the admin touches it: forced for someone else's account, not for their own.
+  const [chosen, setChosen] = useState<boolean | null>(null)
+  const requireChange = chosen ?? user?.email !== currentUserEmail
   const name = user?.username ?? user?.email
 
   const close = () => {
     setPassword('')
-    setRequireChange(true)
+    setChosen(null)
     update.reset()
     onClose()
   }
@@ -211,8 +221,8 @@ function ResetPasswordDialog({ user, onClose }: { user: AuthUser | null; onClose
             />
           </div>
           <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={requireChange} onCheckedChange={setRequireChange} />
-            Require them to choose a new one at sign-in
+            <Checkbox checked={requireChange} onCheckedChange={setChosen} />
+            Require a new password at next sign-in
           </label>
           {update.isError && (
             <p role="alert" className="text-sm text-destructive">
@@ -326,7 +336,11 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
   return (
     <section className="max-w-2xl border">
       {dialog}
-      <ResetPasswordDialog user={resetting} onClose={() => setResetting(null)} />
+      <ResetPasswordDialog
+        user={resetting}
+        currentUserEmail={currentUserEmail}
+        onClose={() => setResetting(null)}
+      />
       <div className="border-b px-4 py-3">
         <h2 className="text-sm font-medium">Users</h2>
         <p className="mt-1 text-xs text-muted-foreground">

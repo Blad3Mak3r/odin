@@ -8,6 +8,7 @@ import {
 import { api, setCsrfToken } from './api-client'
 import type {
   ActivityEvent,
+  AuthSession,
   AuthStatus,
   AuthUser,
   UserRole,
@@ -1478,5 +1479,29 @@ export function useDeleteUser() {
   return useMutation({
     mutationFn: (email: string) => api.delete<void>(`/users/${encodeURIComponent(email)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useSessions() {
+  return useQuery({
+    queryKey: ['auth', 'sessions'],
+    queryFn: () => api.get<AuthSession[]>('/auth/sessions'),
+  })
+}
+
+export function useRevokeSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/auth/sessions/${id}`),
+    // Ending the current session signs out; the status refetch shows the login.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['auth'] }),
+  })
+}
+
+export function useRevokeOtherSessions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<void>('/auth/sessions/revoke-others'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth', 'sessions'] }),
   })
 }

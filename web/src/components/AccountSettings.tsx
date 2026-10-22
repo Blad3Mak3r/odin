@@ -10,6 +10,9 @@ import {
   useChangePassword,
   useCreateUser,
   useDeleteUser,
+  useRevokeOtherSessions,
+  useRevokeSession,
+  useSessions,
   useUpdateUser,
   useUsers,
 } from '@/lib/queries'
@@ -65,6 +68,86 @@ function ChangePasswordForm() {
         Change password
       </Button>
     </form>
+  )
+}
+
+function describeAgent(agent: string | null) {
+  if (!agent) return 'Unknown device'
+  const browser =
+    /Edg\//.test(agent) ? 'Edge'
+    : /OPR\/|Opera/.test(agent) ? 'Opera'
+    : /Firefox\//.test(agent) ? 'Firefox'
+    : /Chrome\//.test(agent) ? 'Chrome'
+    : /Safari\//.test(agent) ? 'Safari'
+    : /curl|wget|python|node/i.test(agent) ? 'Script'
+    : 'Browser'
+  const system =
+    /Windows/.test(agent) ? 'Windows'
+    : /Android/.test(agent) ? 'Android'
+    : /iPhone|iPad|iOS/.test(agent) ? 'iOS'
+    : /Mac OS X|Macintosh/.test(agent) ? 'macOS'
+    : /Linux|X11/.test(agent) ? 'Linux'
+    : null
+  return system ? `${browser} on ${system}` : browser
+}
+
+function SessionsPanel() {
+  const sessions = useSessions()
+  const revoke = useRevokeSession()
+  const revokeOthers = useRevokeOtherSessions()
+  const onError = (e: Error) => toast.error(e.message)
+  const others = sessions.data?.filter((session) => !session.current).length ?? 0
+
+  return (
+    <section className="max-w-2xl border">
+      <div className="flex items-start justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <h2 className="text-sm font-medium">Active sessions</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Devices signed in to your account. Sessions end after a period without use.
+          </p>
+        </div>
+        <Button
+          className="shrink-0"
+          variant="outline"
+          size="sm"
+          disabled={others === 0 || revokeOthers.isPending}
+          onClick={() =>
+            revokeOthers.mutate(undefined, {
+              onSuccess: () => toast.success('Signed out of all other sessions'),
+              onError,
+            })
+          }
+        >
+          Sign out others
+        </Button>
+      </div>
+      <div className="divide-y">
+        {sessions.data?.map((session) => (
+          <div key={session.id} className="flex flex-wrap items-center gap-2 px-4 py-3">
+            <span className="mr-auto min-w-0">
+              <span className="flex items-center gap-2 font-medium">
+                {describeAgent(session.user_agent)}
+                {session.current && <Badge>this session</Badge>}
+                {!session.remember && <Badge variant="outline">not remembered</Badge>}
+              </span>
+              <span className="block truncate text-xs text-muted-foreground">
+                {session.ip ?? 'unknown address'} · last active{' '}
+                {new Date(session.last_used_at).toLocaleString()}
+              </span>
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={revoke.isPending}
+              onClick={() => revoke.mutate(session.id, { onError })}
+            >
+              {session.current ? 'Sign out' : 'Revoke'}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -224,6 +307,7 @@ export function AccountSettings() {
   return (
     <>
       <ChangePasswordForm />
+      <SessionsPanel />
       {user.role === 'admin' && <UsersPanel currentUserEmail={user.email} />}
     </>
   )

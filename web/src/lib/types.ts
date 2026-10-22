@@ -670,6 +670,17 @@ export interface AuthUser {
   created_at: string
 }
 
+export interface AuthSession {
+  id: string
+  created_at: string
+  last_used_at: string
+  expires_at: string
+  remember: boolean
+  ip: string | null
+  user_agent: string | null
+  current: boolean
+}
+
 export interface AuthStatus {
   setup_required: boolean
   recovery_active: boolean

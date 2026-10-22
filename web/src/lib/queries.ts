@@ -1435,9 +1435,12 @@ export function useLogout() {
 }
 
 export function useChangePassword() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (req: { current_password: string; new_password: string }) =>
       api.post<void>('/auth/password', req),
+    // The server starts a fresh session, which carries a new CSRF token.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth', 'status'] }),
   })
 }
 

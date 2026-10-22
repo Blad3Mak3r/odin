@@ -154,9 +154,8 @@ docker run -d \
 ```
 
 Open `http://127.0.0.1:7331` on the host. The image deliberately binds the
-dashboard to loopback by default because it has no authentication. Use an
-SSH tunnel or an authenticating reverse proxy if it must be reachable from
-another machine.
+dashboard to loopback by default because it serves plain HTTP. Use an SSH
+tunnel or a TLS reverse proxy if it must be reachable from another machine.
 
 Host networking (`--network host`; `network_mode: host` in Compose or
 `Network=host` in a Quadlet) is the recommended production setup on Linux.
@@ -336,7 +335,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
 | Command | Description |
 |---|---|
-| `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. No authentication — see [Web dashboard](#web-dashboard). |
+| `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. Requires a dashboard login — see [Web dashboard](#web-dashboard). |
 
 ## Web dashboard
 
@@ -396,11 +395,17 @@ can use local storage, AWS S3, or Cloudflare R2. Remote backups remain listed
 and can be restored or deleted from Odin; restores download a temporary
 archive and remove it again when the operation finishes.
 
-**There is no authentication.** `odin serve` binds to `127.0.0.1` by
-default for exactly this reason; if you want to reach it from another
-machine, put it behind an SSH tunnel (`ssh -L 8080:localhost:7331
-your-host`) or your own authenticating reverse proxy rather than binding it
-directly to a public address.
+**Authentication.** The first time you open the dashboard it asks you to
+create the administrator account; until that exists, every other API route
+answers 401, but whoever reaches the port first can claim the account, so
+complete setup before exposing it. Afterwards the API requires a session
+cookie (`HttpOnly`, `SameSite=Strict`, valid 14 days). Administrators manage
+users under Settings; the `viewer` role is read-only. Passwords are stored as
+Argon2id hashes. Odin speaks plain HTTP: `odin serve` still binds to
+`127.0.0.1` by default, so reach it from another machine through an SSH
+tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS reverse proxy
+(which should send `X-Forwarded-Proto: https` so the cookie is marked
+`Secure`) rather than binding it directly to a public address.
 
 The frontend (`web/`, a Vite + React + TypeScript + Tailwind + shadcn/ui
 project) is embedded into the binary at compile time, so building it is a

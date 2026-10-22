@@ -395,18 +395,39 @@ can use local storage, AWS S3, or Cloudflare R2. Remote backups remain listed
 and can be restored or deleted from Odin; restores download a temporary
 archive and remove it again when the operation finishes.
 
-**Authentication.** The first time you open the dashboard it asks you to
-create the administrator account (email, password and an optional username); until that exists, every other API route
-answers 401, but whoever reaches the port first can claim the account, so
-complete setup before exposing it. Afterwards the API requires a session
-cookie (`HttpOnly`, `SameSite=Strict`, valid 14 days). Accounts are keyed by a unique email address and may also have a unique
-username; sign in with either. Administrators manage
-users under Settings; the `viewer` role is read-only. Passwords are stored as
-Argon2id hashes. Odin speaks plain HTTP: `odin serve` still binds to
-`127.0.0.1` by default, so reach it from another machine through an SSH
-tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS reverse proxy
-(which should send `X-Forwarded-Proto: https` so the cookie is marked
-`Secure`) rather than binding it directly to a public address.
+**Authentication.** Opening the dashboard on a fresh install asks you to
+create the administrator account (email, password and an optional username).
+Creating it requires the one-time **setup token** that `odin serve` prints to
+its log at startup (`journalctl -u odin`, or the container logs), so only
+someone with access to the host can claim the dashboard; until the account
+exists, every other API route answers 401. Afterwards the API requires a
+session cookie (`HttpOnly`, `SameSite=Strict`). Accounts are keyed by a unique
+email address and may also have a unique username; sign in with either.
+Administrators manage users under Settings; the `viewer` role is read-only.
+Passwords are stored as Argon2id hashes. Odin speaks plain HTTP: `odin serve`
+still binds to `127.0.0.1` by default, so reach it from another machine
+through an SSH tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS
+reverse proxy (which should send `X-Forwarded-Proto: https` so the cookie is
+marked `Secure`) rather than binding it directly to a public address.
+
+Sessions slide: "keep me signed in" sessions expire after 14 days without
+use, others after 12 hours and when the browser closes, and none lives past
+90 days. Settings lists your active sessions (device, address, last activity)
+so you can revoke any of them or sign out everywhere else; revoking a session,
+changing a password or deleting a user also closes that session's live event
+streams immediately.
+
+**Lost access?** Create an empty file named `recover-admin` in the data
+directory and restart Odin:
+
+```sh
+sudo touch /var/lib/odin/recover-admin && sudo systemctl restart odin.service
+```
+
+Odin deletes the file, prints a one-time **recovery token** in its log, and
+the sign-in page offers "Recover access": enter the token, the account's
+email and a new password. That signs the account out everywhere, and the
+token stops working once used or at the next restart.
 
 State-changing requests are protected against CSRF: the browser's `Origin`
 must match the address it used to reach Odin, and every non-GET call must

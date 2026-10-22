@@ -396,10 +396,11 @@ and can be restored or deleted from Odin; restores download a temporary
 archive and remove it again when the operation finishes.
 
 **Authentication.** The first time you open the dashboard it asks you to
-create the administrator account; until that exists, every other API route
+create the administrator account (email, password and an optional username); until that exists, every other API route
 answers 401, but whoever reaches the port first can claim the account, so
 complete setup before exposing it. Afterwards the API requires a session
-cookie (`HttpOnly`, `SameSite=Strict`, valid 14 days). Administrators manage
+cookie (`HttpOnly`, `SameSite=Strict`, valid 14 days). Accounts are keyed by a unique email address and may also have a unique
+username; sign in with either. Administrators manage
 users under Settings; the `viewer` role is read-only. Passwords are stored as
 Argon2id hashes. Odin speaks plain HTTP: `odin serve` still binds to
 `127.0.0.1` by default, so reach it from another machine through an SSH

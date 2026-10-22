@@ -1417,12 +1417,15 @@ function useResetSession() {
   }
 }
 
-export function useAuthenticate(mode: 'login' | 'setup') {
+export type AuthRequest =
+  | { login: string; password: string; remember: boolean }
+  | { token: string; email: string; username?: string; password: string }
+  | { token: string; email: string; password: string }
+
+export function useAuthenticate(mode: 'login' | 'setup' | 'recover') {
   const reset = useResetSession()
   return useMutation({
-    mutationFn: (
-      req: { login: string; password: string } | { email: string; username?: string; password: string },
-    ) => api.post<AuthUser>(`/auth/${mode}`, req),
+    mutationFn: (req: AuthRequest) => api.post<AuthUser>(`/auth/${mode}`, req),
     onSuccess: reset,
   })
 }

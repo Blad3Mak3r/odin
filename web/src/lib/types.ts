@@ -672,6 +672,7 @@ export interface AuthUser {
 
 export interface AuthStatus {
   setup_required: boolean
+  recovery_active: boolean
   user: AuthUser | null
   csrf_token: string | null
 }

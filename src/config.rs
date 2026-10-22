@@ -20,6 +20,53 @@ pub struct GlobalConfig {
     /// picker. Without a key the dashboard falls back to typing mod ids.
     #[serde(default)]
     pub curseforge: Option<CurseForgeConfig>,
+    /// Optional dashboard settings.
+    #[serde(default)]
+    pub server: Option<ServerConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// The origin users type to reach the dashboard when it sits behind a
+    /// reverse proxy, e.g. `https://odin.example.com`. Browsers' `Origin`
+    /// headers for it are accepted, and an `https` value marks the session
+    /// cookie `Secure` and enables HSTS.
+    #[serde(default)]
+    pub public_url: Option<String>,
+}
+
+/// Environment variable that overrides `[server].public_url`.
+pub const PUBLIC_URL_ENV: &str = "ODIN_PUBLIC_URL";
+
+/// A validated `scheme://host[:port]` origin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicOrigin {
+    pub origin: String,
+    pub https: bool,
+}
+
+impl PublicOrigin {
+    pub fn parse(raw: &str) -> Result<Self> {
+        let raw = raw.trim().trim_end_matches('/');
+        let (scheme, authority) = raw
+            .split_once("://")
+            .with_context(|| format!("public_url '{raw}' must look like https://host[:port]"))?;
+        let scheme = scheme.to_ascii_lowercase();
+        if scheme != "http" && scheme != "https" {
+            bail!("public_url '{raw}' must use http or https");
+        }
+        let valid = !authority.is_empty()
+            && authority
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'));
+        if !valid {
+            bail!("public_url '{raw}' must be an origin only: no path, query or credentials");
+        }
+        Ok(Self {
+            origin: format!("{scheme}://{}", authority.to_ascii_lowercase()),
+            https: scheme == "https",
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -117,6 +164,26 @@ impl GlobalConfig {
             .with_context(|| format!("failed to read config file {}", config_file.display()))?;
         toml::from_str(&raw)
             .with_context(|| format!("failed to parse config file {}", config_file.display()))
+    }
+
+    /// The dashboard's public origin: `ODIN_PUBLIC_URL` wins over
+    /// `[server].public_url`. Blank values count as unset; an invalid value is
+    /// an error so a typo cannot silently weaken the origin checks.
+    pub fn public_origin(&self) -> Result<Option<PublicOrigin>> {
+        self.public_origin_with(std::env::var(PUBLIC_URL_ENV).ok())
+    }
+
+    fn public_origin_with(&self, env: Option<String>) -> Result<Option<PublicOrigin>> {
+        let clean = |value: String| Some(value.trim().to_string()).filter(|v| !v.is_empty());
+        env.and_then(clean)
+            .or_else(|| {
+                self.server
+                    .as_ref()
+                    .and_then(|server| server.public_url.clone())
+                    .and_then(clean)
+            })
+            .map(|raw| PublicOrigin::parse(&raw))
+            .transpose()
     }
 
     /// The CurseForge API key: the `CURSE_FORGE_API_KEY` environment
@@ -227,5 +294,46 @@ mod tests {
         assert_eq!(GlobalConfig::default().curseforge_api_key_with(None), None);
         let empty: GlobalConfig = toml::from_str("[curseforge]\n").unwrap();
         assert_eq!(empty.curseforge_api_key_with(None), None);
+    }
+
+    #[test]
+    fn public_origin_is_validated_and_env_wins() {
+        let config = GlobalConfig {
+            server: Some(ServerConfig {
+                public_url: Some("HTTPS://Odin.Example.com/".into()),
+            }),
+            ..Default::default()
+        };
+        let parsed = config.public_origin_with(None).unwrap().unwrap();
+        assert_eq!(parsed.origin, "https://odin.example.com");
+        assert!(parsed.https);
+
+        let env = config
+            .public_origin_with(Some("http://10.0.0.2:8080".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.origin, "http://10.0.0.2:8080");
+        assert!(!env.https);
+
+        assert!(
+            config
+                .public_origin_with(Some("   ".into()))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            GlobalConfig::default()
+                .public_origin_with(None)
+                .unwrap()
+                .is_none()
+        );
+        for bad in [
+            "odin.example.com",
+            "ftp://x",
+            "https://x/path",
+            "https://u:p@x",
+        ] {
+            assert!(PublicOrigin::parse(bad).is_err(), "{bad}");
+        }
     }
 }

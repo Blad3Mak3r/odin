@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
 use crate::activity::ActivityLog;
+use crate::config::PublicOrigin;
 use crate::db::Db;
 use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
@@ -27,9 +28,15 @@ pub struct AppState {
     pub system_update: SystemUpdate,
     pub update_check_lock: Arc<Mutex<()>>,
     pub login_throttle: LoginThrottle,
+    pub public_origin: Option<PublicOrigin>,
 }
 
 impl AppState {
+    pub fn with_public_origin(mut self, origin: Option<PublicOrigin>) -> Self {
+        self.public_origin = origin;
+        self
+    }
+
     pub fn new(paths: Paths, db: Arc<Db>) -> Self {
         let activity = ActivityLog::load(db.clone());
         let jobs = JobRegistry::load(db.clone());
@@ -47,6 +54,7 @@ impl AppState {
             system_update: SystemUpdate::packaged(),
             update_check_lock: Arc::new(Mutex::new(())),
             login_throttle: LoginThrottle::default(),
+            public_origin: None,
         }
     }
 }

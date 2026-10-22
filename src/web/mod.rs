@@ -50,7 +50,10 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     if let Err(error) = crate::podman::startup::fail_interrupted_attempts(&db) {
         tracing::warn!(%error, "could not close interrupted startup attempts");
     }
-    let state = AppState::new(paths, db);
+    let public_origin = crate::config::GlobalConfig::load(&paths)
+        .and_then(|config| config.public_origin())
+        .context("invalid dashboard public_url")?;
+    let state = AppState::new(paths, db).with_public_origin(public_origin);
     retention::run_once(&state);
     retention::spawn(state.clone());
     webhooks::spawn(state.clone());
@@ -66,11 +69,17 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
 
     tracing::info!(%addr, "odin dashboard listening");
     println!("Odin dashboard listening on http://{addr}");
+    if let Some(public) = &state.public_origin {
+        println!("Public URL: {}", public.origin);
+    }
     if let Some(ip) = local_network_ip() {
         println!("Network: http://{ip}:{}", addr.port());
     }
 
-    let server = axum::serve(listener, router);
+    let server = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    );
     if !stop_instances_on_shutdown() {
         return server.await.context("web server error");
     }

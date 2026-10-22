@@ -19,3 +19,10 @@
 # The CURSE_FORGE_API_KEY environment variable overrides this value.
 # [curseforge]
 # api_key = ""
+
+# Public address of the dashboard when it is served through a reverse proxy.
+# Requests whose Origin matches it are accepted for state-changing calls, and
+# an https value marks the session cookie Secure and sends HSTS. Origin only:
+# no path. The ODIN_PUBLIC_URL environment variable overrides this value.
+# [server]
+# public_url = "https://odin.example.com"

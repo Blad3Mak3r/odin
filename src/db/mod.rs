@@ -12,6 +12,7 @@
 //! `&Db` and exposes calls shaped like the file-I/O functions they replace.
 
 pub mod activity;
+pub mod auth_events;
 pub mod backup_schedules;
 pub mod backup_storage;
 pub mod backups;

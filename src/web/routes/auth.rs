@@ -1,24 +1,24 @@
 //! First-run setup, recovery, login, logout, password change, and the
 //! caller's own session list.
 
-use std::net::SocketAddr;
+use std::net::IpAddr;
 
 use axum::Json;
-use axum::extract::{ConnectInfo, Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::db::auth_events::{self, AuthEvent};
 use crate::db::users::{self, SessionInfo, User, UserError};
+use crate::web::audit::{self, AuditKind};
 use crate::web::auth::{
-    AuthUser, BootstrapKind, InvalidBootstrapToken, InvalidCredentials, authenticate, clear_cookie,
-    client_ip, hash_password, is_secure, normalize_email, optional_username, session_origin,
+    AuthUser, BootstrapKind, ClientIp, InvalidBootstrapToken, InvalidCredentials, authenticate,
+    clear_cookie, hash_password, is_secure, normalize_email, optional_username, session_origin,
     start_session, token_hash_of, validate_password, verify_password,
 };
-use crate::web::error::{ApiResult, run_blocking};
+use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
-
-type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
 
 #[derive(Serialize)]
 pub struct StatusResponse {
@@ -54,20 +54,39 @@ fn with_cookie(cookie: String, body: impl IntoResponse) -> Response {
 }
 
 /// Checks the one-time token, counting wrong guesses against the caller.
-fn check_bootstrap_token(
+async fn check_bootstrap_token(
     state: &AppState,
     kind: BootstrapKind,
     token: &str,
-    headers: &HeaderMap,
-    peer: &Peer,
+    ip: Option<IpAddr>,
 ) -> ApiResult<()> {
-    let ip = client_ip(headers, peer.as_ref().map(|Extension(c)| c));
-    state.login_throttle.check("bootstrap", ip)?;
+    let detail = format!("{kind:?}").to_lowercase();
+    if let Err(throttled) = state.login_throttle.check("bootstrap", ip) {
+        audit::record(
+            state,
+            AuditKind::LoginThrottled,
+            None,
+            None,
+            ip,
+            Some(&detail),
+        )
+        .await;
+        return Err(throttled.into());
+    }
     if state.bootstrap.matches(kind, token) {
         return Ok(());
     }
     state.login_throttle.record_failure("bootstrap", ip);
     tracing::warn!(?ip, ?kind, "wrong dashboard bootstrap token");
+    audit::record(
+        state,
+        AuditKind::BootstrapTokenFailed,
+        None,
+        None,
+        ip,
+        Some(&detail),
+    )
+    .await;
     Err(InvalidBootstrapToken.into())
 }
 
@@ -83,7 +102,7 @@ pub struct SetupRequest {
 
 pub async fn setup(
     State(state): State<AppState>,
-    peer: Peer,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
     headers: HeaderMap,
     Json(req): Json<SetupRequest>,
 ) -> ApiResult<Response> {
@@ -94,7 +113,7 @@ pub async fn setup(
     if run_blocking(move || users::count(&db)).await? > 0 {
         return Err(UserError::SetupDone.into());
     }
-    check_bootstrap_token(&state, BootstrapKind::Setup, &req.token, &headers, &peer)?;
+    check_bootstrap_token(&state, BootstrapKind::Setup, &req.token, ip).await?;
     let db = state.db.clone();
     let user = run_blocking(move || {
         let hash = hash_password(&req.password)?;
@@ -102,7 +121,16 @@ pub async fn setup(
     })
     .await?;
     state.bootstrap.disarm();
-    let origin = session_origin(&headers, peer.as_ref().map(|Extension(c)| c), true);
+    audit::record(
+        &state,
+        AuditKind::SetupCompleted,
+        Some(&user.email),
+        None,
+        ip,
+        None,
+    )
+    .await;
+    let origin = session_origin(&headers, ip, true);
     let cookie = start_session(&state, &user.email, is_secure(&state, &headers), origin).await?;
     Ok(with_cookie(cookie, Json(user)))
 }
@@ -118,17 +146,17 @@ pub struct RecoverRequest {
 /// token an operator armed by restarting Odin with the marker file present.
 pub async fn recover(
     State(state): State<AppState>,
-    peer: Peer,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
     headers: HeaderMap,
     Json(req): Json<RecoverRequest>,
 ) -> ApiResult<Response> {
     let email = normalize_email(&req.email)?;
     validate_password(&req.password)?;
-    check_bootstrap_token(&state, BootstrapKind::Recovery, &req.token, &headers, &peer)?;
+    check_bootstrap_token(&state, BootstrapKind::Recovery, &req.token, ip).await?;
     let db = state.db.clone();
     let lookup = email.clone();
     let (user, revoked) = run_blocking(move || {
-        let revoked = users::set_password(&db, &lookup, &hash_password(&req.password)?)?;
+        let revoked = users::set_password(&db, &lookup, &hash_password(&req.password)?, false)?;
         let user = users::find_credentials(&db, &lookup)?
             .map(|c| c.user)
             .ok_or(UserError::NotFound(lookup))?;
@@ -138,7 +166,16 @@ pub async fn recover(
     state.sessions.revoke(&revoked);
     state.bootstrap.disarm();
     tracing::warn!(email = %user.email, "dashboard access recovered with the recovery token");
-    let origin = session_origin(&headers, peer.as_ref().map(|Extension(c)| c), true);
+    audit::record(
+        &state,
+        AuditKind::RecoveryUsed,
+        None,
+        Some(&user.email),
+        ip,
+        None,
+    )
+    .await;
+    let origin = session_origin(&headers, ip, true);
     let cookie = start_session(&state, &user.email, is_secure(&state, &headers), origin).await?;
     Ok(with_cookie(cookie, Json(user)))
 }
@@ -155,12 +192,22 @@ pub struct LoginRequest {
 
 pub async fn login(
     State(state): State<AppState>,
-    peer: Peer,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Response> {
-    let ip = client_ip(&headers, peer.as_ref().map(|Extension(c)| c));
-    state.login_throttle.check(&req.login, ip)?;
+    if let Err(throttled) = state.login_throttle.check(&req.login, ip) {
+        audit::record(
+            &state,
+            AuditKind::LoginThrottled,
+            Some(&req.login),
+            None,
+            ip,
+            None,
+        )
+        .await;
+        return Err(throttled.into());
+    }
     let db = state.db.clone();
     let (login, password) = (req.login.clone(), req.password);
     let user = run_blocking(move || {
@@ -177,14 +224,28 @@ pub async fn login(
     let Some(user) = user else {
         state.login_throttle.record_failure(&req.login, ip);
         tracing::warn!(login = %req.login, ?ip, "failed dashboard login");
+        audit::record(
+            &state,
+            AuditKind::LoginFailed,
+            Some(&req.login),
+            None,
+            ip,
+            None,
+        )
+        .await;
         return Err(InvalidCredentials.into());
     };
     state.login_throttle.clear_user(&req.login);
-    let origin = session_origin(
-        &headers,
-        peer.as_ref().map(|Extension(c)| c),
-        req.remember.unwrap_or(true),
-    );
+    audit::record(
+        &state,
+        AuditKind::LoginSucceeded,
+        Some(&user.email),
+        None,
+        ip,
+        None,
+    )
+    .await;
+    let origin = session_origin(&headers, ip, req.remember.unwrap_or(true));
     let cookie = start_session(&state, &user.email, is_secure(&state, &headers), origin).await?;
     Ok(with_cookie(cookie, Json(user)))
 }
@@ -218,11 +279,14 @@ pub struct ChangePassword {
 pub async fn change_password(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
-    peer: Peer,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
     headers: HeaderMap,
     Json(req): Json<ChangePassword>,
 ) -> ApiResult<Response> {
     validate_password(&req.new_password)?;
+    if req.new_password == req.current_password {
+        return Err(BadRequest("the new password must differ from the current one".into()).into());
+    }
     let (db, email) = (state.db.clone(), auth.user.email.clone());
     let revoked = run_blocking(move || {
         let stored = users::password_hash(&db, &email)?.unwrap_or_default();
@@ -230,15 +294,13 @@ pub async fn change_password(
             return Err(InvalidCredentials.into());
         }
         // Revokes every session, including this one; a fresh one follows.
-        users::set_password(&db, &email, &hash_password(&req.new_password)?)
+        users::set_password(&db, &email, &hash_password(&req.new_password)?, false)
     })
     .await?;
     state.sessions.revoke(&revoked);
-    let origin = session_origin(
-        &headers,
-        peer.as_ref().map(|Extension(c)| c),
-        auth.session.remember,
-    );
+    let actor = Some(auth.user.email.as_str());
+    audit::record(&state, AuditKind::PasswordChanged, actor, None, ip, None).await;
+    let origin = session_origin(&headers, ip, auth.session.remember);
     let cookie = start_session(
         &state,
         &auth.user.email,
@@ -277,6 +339,7 @@ pub async fn list_sessions(
 pub async fn revoke_session(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
@@ -286,6 +349,16 @@ pub async fn revoke_session(
         return Err(UserError::NotFound(id).into());
     };
     state.sessions.revoke(&[hash]);
+    let actor = Some(auth.user.email.as_str());
+    audit::record(
+        &state,
+        AuditKind::SessionRevoked,
+        actor,
+        None,
+        ip,
+        Some(&id),
+    )
+    .await;
     if id == auth.session.id {
         return Ok(with_cookie(
             clear_cookie(is_secure(&state, &headers)),
@@ -298,6 +371,7 @@ pub async fn revoke_session(
 pub async fn revoke_other_sessions(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
 ) -> ApiResult<StatusCode> {
     let (db, email, keep) = (
         state.db.clone(),
@@ -306,5 +380,34 @@ pub async fn revoke_other_sessions(
     );
     let revoked = run_blocking(move || users::delete_other_sessions(&db, &email, &keep)).await?;
     state.sessions.revoke(&revoked);
+    let (actor, detail) = (Some(auth.user.email.as_str()), revoked.len().to_string());
+    audit::record(
+        &state,
+        AuditKind::OtherSessionsRevoked,
+        actor,
+        None,
+        ip,
+        Some(&detail),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    limit: Option<usize>,
+}
+
+/// The newest security events, for administrators.
+pub async fn audit_log(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Query(query): Query<AuditQuery>,
+) -> ApiResult<Json<Vec<AuthEvent>>> {
+    auth.require_admin()?;
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let db = state.db.clone();
+    Ok(Json(
+        run_blocking(move || auth_events::recent(&db, limit)).await?,
+    ))
 }

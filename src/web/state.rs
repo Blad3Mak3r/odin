@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
 use crate::activity::ActivityLog;
-use crate::config::PublicOrigin;
+use crate::config::{PublicOrigin, TrustedProxies};
 use crate::db::Db;
 use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
@@ -31,9 +31,15 @@ pub struct AppState {
     pub sessions: SessionRegistry,
     pub bootstrap: BootstrapGate,
     pub public_origin: Option<PublicOrigin>,
+    pub trusted_proxies: TrustedProxies,
 }
 
 impl AppState {
+    pub fn with_trusted_proxies(mut self, proxies: TrustedProxies) -> Self {
+        self.trusted_proxies = proxies;
+        self
+    }
+
     pub fn with_public_origin(mut self, origin: Option<PublicOrigin>) -> Self {
         self.public_origin = origin;
         self
@@ -59,6 +65,7 @@ impl AppState {
             sessions: SessionRegistry::default(),
             bootstrap: BootstrapGate::default(),
             public_origin: None,
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 }

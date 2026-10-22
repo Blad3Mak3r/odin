@@ -3,6 +3,7 @@
 //! is synchronous — this module (and `commands::serve`) is the only place
 //! async/tokio is used.
 
+mod audit;
 mod auth;
 mod backup_scheduler;
 mod error;
@@ -50,10 +51,16 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     if let Err(error) = crate::podman::startup::fail_interrupted_attempts(&db) {
         tracing::warn!(%error, "could not close interrupted startup attempts");
     }
-    let public_origin = crate::config::GlobalConfig::load(&paths)
-        .and_then(|config| config.public_origin())
+    let config = crate::config::GlobalConfig::load(&paths)?;
+    let public_origin = config
+        .public_origin()
         .context("invalid dashboard public_url")?;
-    let state = AppState::new(paths, db).with_public_origin(public_origin);
+    let trusted_proxies = config
+        .trusted_proxies()
+        .context("invalid dashboard trusted_proxies")?;
+    let state = AppState::new(paths, db)
+        .with_public_origin(public_origin)
+        .with_trusted_proxies(trusted_proxies);
     auth::arm_bootstrap(&state).context("failed to prepare dashboard sign-in")?;
     retention::run_once(&state);
     retention::spawn(state.clone());

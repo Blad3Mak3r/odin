@@ -26,6 +26,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
+use crate::config::TrustedProxies;
 use crate::db::users::{self, Role, SessionInfo, SessionOrigin, User};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
@@ -185,14 +186,10 @@ impl SessionRegistry {
 }
 
 /// Describes the client for the session list.
-pub fn session_origin(
-    headers: &HeaderMap,
-    peer: Option<&ConnectInfo<SocketAddr>>,
-    remember: bool,
-) -> SessionOrigin {
+pub fn session_origin(headers: &HeaderMap, ip: Option<IpAddr>, remember: bool) -> SessionOrigin {
     SessionOrigin {
         remember,
-        ip: client_ip(headers, peer).map(|ip| ip.to_string()),
+        ip: ip.map(|ip| ip.to_string()),
         user_agent: headers
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
@@ -439,6 +436,12 @@ fn is_public(path: &str) -> bool {
     )
 }
 
+/// What an account whose password someone else chose may still do: replace
+/// it, or leave. The status route is public and tells the dashboard why.
+fn allowed_before_password_change(path: &str) -> bool {
+    matches!(path, "/api/auth/password" | "/api/auth/logout")
+}
+
 /// Paths a viewer may call with a mutating method: their own account only.
 fn viewer_may_mutate(path: &str) -> bool {
     matches!(path, "/api/auth/logout" | "/api/auth/password")
@@ -451,6 +454,12 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
     if !path.starts_with("/api/") && path != "/api" {
         return next.run(req).await;
     }
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    let ip = resolve_client_ip(&state.trusted_proxies, &headers, peer);
+    req.extensions_mut().insert(ClientIp(ip));
     let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     if !safe && !origin_allowed(&state, req.headers()) {
         return error_response(StatusCode::FORBIDDEN, "cross-origin request rejected");
@@ -465,6 +474,9 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
     };
     if !safe && !csrf_valid(req.headers(), &auth.csrf_token) {
         return error_response(StatusCode::FORBIDDEN, "missing or invalid CSRF token");
+    }
+    if auth.user.must_change_password && !allowed_before_password_change(&path) {
+        return error_response(StatusCode::FORBIDDEN, "password change required");
     }
     if !safe && auth.user.role != Role::Admin && !viewer_may_mutate(&path) {
         return error_response(StatusCode::FORBIDDEN, &Forbidden.to_string());
@@ -555,18 +567,35 @@ pub async fn security_headers(State(state): State<AppState>, req: Request, next:
     response
 }
 
-/// The client address for throttling: the TCP peer, or, when that is a local
-/// reverse proxy, the last `X-Forwarded-For` hop it appended.
-pub fn client_ip(headers: &HeaderMap, peer: Option<&ConnectInfo<SocketAddr>>) -> Option<IpAddr> {
-    let peer = peer?.0.ip();
-    if peer.is_loopback()
-        && let Some(forwarded) = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.rsplit(',').next())
-            .and_then(|hop| hop.trim().parse::<IpAddr>().ok())
-    {
-        return Some(forwarded);
+/// The caller's address as resolved by [`require_auth`]; `None` without a socket.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientIp(pub Option<IpAddr>);
+
+/// The client address for throttling and the audit log. A connection from a
+/// trusted proxy is believed about who is behind it: the nearest
+/// `X-Forwarded-For` hop that is not itself a trusted proxy. Anyone else's
+/// header is ignored, so it cannot be used to dodge the limits.
+pub fn resolve_client_ip(
+    trusted: &TrustedProxies,
+    headers: &HeaderMap,
+    peer: Option<IpAddr>,
+) -> Option<IpAddr> {
+    let peer = peer?.to_canonical();
+    if !trusted.contains(peer) {
+        return Some(peer);
+    }
+    let hops: Vec<&str> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .collect();
+    for hop in hops.into_iter().rev() {
+        match hop.trim().parse::<IpAddr>() {
+            Ok(ip) if trusted.contains(ip) => continue,
+            Ok(ip) => return Some(ip.to_canonical()),
+            Err(_) => break,
+        }
     }
     Some(peer)
 }
@@ -805,7 +834,7 @@ mod tests {
         let admin = admin.unwrap();
 
         let new_user = Some(
-            json!({ "email": "watcher@example.com", "username": "watcher", "password": "long enough", "role": "viewer" }),
+            json!({ "email": "watcher@example.com", "username": "watcher", "password": "long enough", "role": "viewer", "require_change": false }),
         );
         let (status, ..) = call(&app, "POST", "/api/users", Some(&admin), new_user).await;
         assert_eq!(status, StatusCode::OK);
@@ -1217,6 +1246,210 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_password_chosen_by_someone_else_must_be_replaced() {
+        let app = app();
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", "correct horse"),
+        )
+        .await;
+        let admin = admin.unwrap();
+        let new_user = Some(
+            json!({ "email": "kim@example.com", "password": "temporary pass", "role": "viewer" }),
+        );
+        let (status, ..) = call(&app, "POST", "/api/users", Some(&admin), new_user).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let kim = login_cookie(&app, "kim@example.com", "temporary pass", true).await;
+        let (_, _, status) = call(&app, "GET", "/api/auth/status", Some(&kim), None).await;
+        assert_eq!(status["user"]["must_change_password"], true);
+
+        // Everything but changing the password (or leaving) is refused.
+        let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&kim), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, ..) = call(&app, "GET", "/api/auth/sessions", Some(&kim), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let change =
+            |new: &str| Some(json!({ "current_password": "temporary pass", "new_password": new }));
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/password",
+            Some(&kim),
+            change("temporary pass"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, fresh, _) = call(
+            &app,
+            "POST",
+            "/api/auth/password",
+            Some(&kim),
+            change("my own secret"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let kim = fresh.unwrap();
+        let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&kim), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, _, status) = call(&app, "GET", "/api/auth/status", Some(&kim), None).await;
+        assert_eq!(status["user"]["must_change_password"], false);
+
+        // An admin reset marks it again, unless they opt out or reset their own.
+        let reset = |require: Option<bool>| {
+            Some(json!({ "password": "reset by admin", "require_change": require }))
+        };
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/kim@example.com",
+            Some(&admin),
+            reset(None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&kim), None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "the reset ends their sessions"
+        );
+        let kim = login_cookie(&app, "kim@example.com", "reset by admin", true).await;
+        let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&kim), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/kim@example.com",
+            Some(&admin),
+            reset(Some(false)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let kim = login_cookie(&app, "kim@example.com", "reset by admin", true).await;
+        let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&kim), None).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/admin@example.com",
+            Some(&admin),
+            reset(None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let admin = login_cookie(&app, "admin", "reset by admin", true).await;
+        let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&admin), None).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "resetting your own password is not forced"
+        );
+    }
+
+    #[tokio::test]
+    async fn security_events_reach_the_admin_audit_log_only() {
+        let app = app();
+        call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", "correct horse"),
+        )
+        .await;
+        call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("admin", "wrong password"),
+        )
+        .await;
+        let admin = login_cookie(&app, "admin", "correct horse", true).await;
+        let new_user = Some(json!({
+            "email": "v@example.com", "password": "long enough", "role": "viewer", "require_change": false,
+        }));
+        call(&app, "POST", "/api/users", Some(&admin), new_user).await;
+        let viewer = login_cookie(&app, "v@example.com", "long enough", true).await;
+        call(
+            &app,
+            "PUT",
+            "/api/users/v@example.com",
+            Some(&admin),
+            Some(json!({ "role": "admin" })),
+        )
+        .await;
+        call(
+            &app,
+            "DELETE",
+            "/api/users/v@example.com",
+            Some(&admin),
+            None,
+        )
+        .await;
+
+        let (status, ..) = call(&app, "GET", "/api/auth/audit", Some(&viewer), None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "the deleted viewer is signed out"
+        );
+
+        let (status, _, log) =
+            call(&app, "GET", "/api/auth/audit?limit=50", Some(&admin), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let kinds: Vec<&str> = log
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "user_deleted",
+                "role_changed",
+                "login_succeeded",
+                "user_created",
+                "login_succeeded",
+                "login_failed",
+                "setup_completed",
+            ]
+        );
+        let newest = &log[0];
+        assert_eq!(newest["actor"], "admin@example.com");
+        assert_eq!(newest["target"], "v@example.com");
+        let failed = &log[5];
+        assert_eq!(failed["actor"], "admin", "a failure records what was typed");
+        assert!(
+            log.as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e.get("password").is_none())
+        );
+
+        let (_, _, limited) =
+            call(&app, "GET", "/api/auth/audit?limit=2", Some(&admin), None).await;
+        assert_eq!(limited.as_array().unwrap().len(), 2);
+
+        // A viewer cannot read it.
+        let other = Some(json!({
+            "email": "w@example.com", "password": "long enough", "role": "viewer", "require_change": false,
+        }));
+        call(&app, "POST", "/api/users", Some(&admin), other).await;
+        let viewer = login_cookie(&app, "w@example.com", "long enough", true).await;
+        let (status, ..) = call(&app, "GET", "/api/auth/audit", Some(&viewer), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
     async fn raw(app: &Router, req: Request<Body>) -> Response {
         app.clone().oneshot(req).await.unwrap()
     }
@@ -1362,19 +1595,45 @@ mod tests {
     }
 
     #[test]
-    fn client_ip_trusts_forwarded_for_only_from_a_local_proxy() {
+    fn forwarded_for_is_believed_only_from_trusted_proxies() {
+        let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-forwarded-for",
-            "198.51.100.1, 203.0.113.7".parse().unwrap(),
+            "6.6.6.6, 198.51.100.1, 10.0.0.7".parse().unwrap(),
         );
-        let local = ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap());
-        let remote = ConnectInfo("192.0.2.5:5000".parse::<SocketAddr>().unwrap());
+        // Default: only loopback is trusted. A proxy in the 10/8 network is a
+        // plain client, so its header is ignored.
+        let default = TrustedProxies::default();
         assert_eq!(
-            client_ip(&headers, Some(&local)),
-            "203.0.113.7".parse().ok()
+            resolve_client_ip(&default, &headers, ip("10.0.0.9")),
+            ip("10.0.0.9")
         );
-        assert_eq!(client_ip(&headers, Some(&remote)), "192.0.2.5".parse().ok());
-        assert_eq!(client_ip(&headers, None), None);
+        assert_eq!(
+            resolve_client_ip(&default, &headers, ip("127.0.0.1")),
+            ip("10.0.0.7")
+        );
+        // With 10/8 trusted, hops are skipped from the right until a stranger.
+        let trusted = TrustedProxies::parse(["10.0.0.0/8"]).unwrap();
+        assert_eq!(
+            resolve_client_ip(&trusted, &headers, ip("10.0.0.9")),
+            ip("198.51.100.1")
+        );
+        // A spoofed leftmost entry is never reached.
+        assert_ne!(
+            resolve_client_ip(&trusted, &headers, ip("10.0.0.9")),
+            ip("6.6.6.6")
+        );
+        // An unparseable hop or a missing header falls back to the peer.
+        headers.insert("x-forwarded-for", "garbage".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&trusted, &headers, ip("10.0.0.9")),
+            ip("10.0.0.9")
+        );
+        assert_eq!(
+            resolve_client_ip(&trusted, &HeaderMap::new(), ip("10.0.0.9")),
+            ip("10.0.0.9")
+        );
+        assert_eq!(resolve_client_ip(&trusted, &headers, None), None);
     }
 }

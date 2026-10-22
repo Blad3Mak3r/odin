@@ -7,6 +7,8 @@ CREATE TABLE users (
     username      TEXT UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
+    -- Set when someone else chose the password; the owner must replace it.
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL
 );
 
@@ -25,3 +27,16 @@ CREATE TABLE auth_sessions (
     user_agent   TEXT
 );
 CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_email);
+
+-- Security-relevant account events (sign-ins, resets, role changes...). Kept
+-- apart from the instance activity feed, which every account can read. No
+-- foreign keys: the history outlives the accounts it mentions.
+CREATE TABLE auth_events (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    at     TEXT NOT NULL,
+    kind   TEXT NOT NULL,
+    actor  TEXT,
+    target TEXT,
+    ip     TEXT,
+    detail TEXT
+);

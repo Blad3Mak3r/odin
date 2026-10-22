@@ -67,6 +67,8 @@ pub struct User {
     pub username: Option<String>,
     pub role: Role,
     pub created_at: DateTime<Utc>,
+    /// The password was set by someone else and must be replaced at sign-in.
+    pub must_change_password: bool,
 }
 
 /// A user together with the stored password hash, for login only.
@@ -105,6 +107,7 @@ pub fn create_first_admin(
         username: username.map(str::to_string),
         role: Role::Admin,
         created_at: now,
+        must_change_password: false,
     })
 }
 
@@ -114,12 +117,20 @@ pub fn create(
     username: Option<&str>,
     password_hash: &str,
     role: Role,
+    must_change_password: bool,
 ) -> Result<User> {
     let now = Utc::now();
     let result = db.conn().execute(
-        "INSERT INTO users (email, username, password_hash, role, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![email, username, password_hash, role.as_str(), now],
+        "INSERT INTO users (email, username, password_hash, role, created_at, must_change_password) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            email,
+            username,
+            password_hash,
+            role.as_str(),
+            now,
+            must_change_password
+        ],
     );
     match result {
         Ok(_) => Ok(User {
@@ -127,6 +138,7 @@ pub fn create(
             username: username.map(str::to_string),
             role,
             created_at: now,
+            must_change_password,
         }),
         Err(rusqlite::Error::SqliteFailure(err, Some(message)))
             if err.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -145,13 +157,13 @@ pub fn create(
 pub fn find_credentials(db: &Db, login: &str) -> Result<Option<UserCredentials>> {
     db.conn()
         .query_row(
-            "SELECT email, username, role, created_at, password_hash FROM users \
+            "SELECT email, username, role, created_at, must_change_password, password_hash FROM users \
              WHERE email = ?1 OR username = ?1",
             params![login],
             |row| {
                 Ok(UserCredentials {
                     user: row_to_user(row)?,
-                    password_hash: row.get(4)?,
+                    password_hash: row.get(5)?,
                 })
             },
         )
@@ -173,7 +185,7 @@ pub fn password_hash(db: &Db, email: &str) -> Result<Option<String>> {
 pub fn list(db: &Db) -> Result<Vec<User>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT email, username, role, created_at FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE",
+        "SELECT email, username, role, created_at, must_change_password FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], row_to_user)?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
@@ -203,12 +215,17 @@ pub fn set_role(db: &Db, email: &str, role: Role) -> Result<()> {
 }
 
 /// Replaces the password and revokes every session of that user, returning
-/// the revoked token hashes.
-pub fn set_password(db: &Db, email: &str, password_hash: &str) -> Result<Vec<String>> {
+/// the revoked token hashes. `must_change` marks a password someone else chose.
+pub fn set_password(
+    db: &Db,
+    email: &str,
+    password_hash: &str,
+    must_change: bool,
+) -> Result<Vec<String>> {
     let conn = db.conn();
     let updated = conn.execute(
-        "UPDATE users SET password_hash = ?2 WHERE email = ?1",
-        params![email, password_hash],
+        "UPDATE users SET password_hash = ?2, must_change_password = ?3 WHERE email = ?1",
+        params![email, password_hash, must_change],
     )?;
     if updated == 0 {
         return Err(UserError::NotFound(email.to_string()).into());
@@ -329,12 +346,12 @@ pub fn user_for_session(db: &Db, token_hash: &str) -> Result<Option<(User, Sessi
     db.conn()
         .query_row(
             &format!(
-                "SELECT u.email, u.username, u.role, u.created_at, {SESSION_COLUMNS} \
+                "SELECT u.email, u.username, u.role, u.created_at, u.must_change_password, {SESSION_COLUMNS} \
                  FROM auth_sessions s JOIN users u ON u.email = s.user_email \
                  WHERE s.token_hash = ?1 AND s.expires_at > ?2"
             ),
             params![token_hash, Utc::now()],
-            |row| Ok((row_to_user(row)?, row_to_session(row, 4)?)),
+            |row| Ok((row_to_user(row)?, row_to_session(row, 5)?)),
         )
         .optional()
         .map_err(Into::into)
@@ -432,5 +449,6 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         username: row.get(1)?,
         role: Role::parse(&role),
         created_at: row.get(3)?,
+        must_change_password: row.get(4)?,
     })
 }

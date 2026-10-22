@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api } from './api-client'
+import { api, setCsrfToken } from './api-client'
 import type {
   ActivityEvent,
   AuthStatus,
@@ -1399,7 +1399,11 @@ export function useTestWebhook() {
 export function useAuthStatus() {
   return useQuery({
     queryKey: ['auth', 'status'],
-    queryFn: () => api.get<AuthStatus>('/auth/status'),
+    queryFn: async () => {
+      const status = await api.get<AuthStatus>('/auth/status')
+      setCsrfToken(status.csrf_token)
+      return status
+    },
     retry: false,
   })
 }

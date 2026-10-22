@@ -8,6 +8,7 @@ import {
 import { api, setCsrfToken } from './api-client'
 import type {
   ActivityEvent,
+  AuditEvent,
   AuthSession,
   AuthStatus,
   AuthUser,
@@ -1459,7 +1460,13 @@ export function useUsers() {
 export function useCreateUser() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (req: { email: string; username?: string; password: string; role: UserRole }) =>
+    mutationFn: (req: {
+      email: string
+      username?: string
+      password: string
+      role: UserRole
+      require_change: boolean
+    }) =>
       api.post<AuthUser>('/users', req),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   })
@@ -1468,7 +1475,15 @@ export function useCreateUser() {
 export function useUpdateUser() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ email, ...req }: { email: string; role?: UserRole; password?: string }) =>
+    mutationFn: ({
+      email,
+      ...req
+    }: {
+      email: string
+      role?: UserRole
+      password?: string
+      require_change?: boolean
+    }) =>
       api.put<void>(`/users/${encodeURIComponent(email)}`, req),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   })
@@ -1503,5 +1518,12 @@ export function useRevokeOtherSessions() {
   return useMutation({
     mutationFn: () => api.post<void>('/auth/sessions/revoke-others'),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth', 'sessions'] }),
+  })
+}
+
+export function useAuditLog() {
+  return useQuery({
+    queryKey: ['auth', 'audit'],
+    queryFn: () => api.get<AuditEvent[]>('/auth/audit?limit=100'),
   })
 }

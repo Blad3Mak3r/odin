@@ -668,6 +668,18 @@ export interface AuthUser {
   username: string | null
   role: UserRole
   created_at: string
+  /** Someone else chose this password; it must be replaced at sign-in. */
+  must_change_password: boolean
+}
+
+export interface AuditEvent {
+  id: number
+  at: string
+  kind: string
+  actor: string | null
+  target: string | null
+  ip: string | null
+  detail: string | null
 }
 
 export interface AuthSession {

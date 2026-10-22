@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useAuthenticate, useAuthStatus } from '@/lib/queries'
+import { useAuthenticate, useAuthStatus, useChangePassword, useLogout } from '@/lib/queries'
 
 type Mode = 'login' | 'setup' | 'recover'
 
@@ -135,6 +135,74 @@ function AuthForm({ mode: initialMode, recoveryActive }: { mode: Mode; recoveryA
   )
 }
 
+/** Shown instead of the app while the password was chosen by someone else. */
+function ForcedPasswordChange() {
+  const change = useChangePassword()
+  const logout = useLogout()
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    change.mutate({ current_password: current, new_password: next })
+  }
+
+  return (
+    <div className="flex min-h-svh items-center justify-center px-4">
+      <form onSubmit={submit} className="flex w-full max-w-sm flex-col gap-4 rounded-xl border p-6">
+        <div className="flex items-center gap-2">
+          <img src="/logo.png" alt="" className="size-8 shrink-0" />
+          <h1 className="text-lg font-semibold tracking-tight">Choose a new password</h1>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          An administrator set your password. Replace it with one only you know to continue.
+        </p>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="forced-current">Current password</Label>
+          <Input
+            id="forced-current"
+            type="password"
+            autoComplete="current-password"
+            autoFocus
+            required
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="forced-new">New password</Label>
+          <Input
+            id="forced-new"
+            type="password"
+            autoComplete="new-password"
+            required
+            minLength={8}
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">At least 8 characters, different from the current one.</p>
+        </div>
+        {change.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {change.error.message}
+          </p>
+        )}
+        <Button type="submit" disabled={change.isPending}>
+          Change password
+        </Button>
+        <Button
+          type="button"
+          variant="link"
+          className="h-auto self-center p-0 text-xs"
+          onClick={() => logout.mutate()}
+        >
+          Sign out
+        </Button>
+      </form>
+    </div>
+  )
+}
+
 /** Shows the app only to a signed-in user; otherwise the setup or login form. */
 export function AuthGate({ children }: { children: ReactNode }) {
   const status = useAuthStatus()
@@ -155,5 +223,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!status.data) return null
   if (status.data.setup_required) return <AuthForm mode="setup" recoveryActive={false} />
   if (!status.data.user) return <AuthForm mode="login" recoveryActive={status.data.recovery_active} />
+  if (status.data.user.must_change_password) return <ForcedPasswordChange />
   return <>{children}</>
 }

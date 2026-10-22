@@ -3,9 +3,19 @@ import { toast } from 'sonner'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  useAuditLog,
   useAuthStatus,
   useChangePassword,
   useCreateUser,
@@ -16,7 +26,7 @@ import {
   useUpdateUser,
   useUsers,
 } from '@/lib/queries'
-import type { UserRole } from '@/lib/types'
+import type { AuditEvent, AuthUser, UserRole } from '@/lib/types'
 
 function ChangePasswordForm() {
   const change = useChangePassword()
@@ -151,6 +161,137 @@ function SessionsPanel() {
   )
 }
 
+function ResetPasswordDialog({ user, onClose }: { user: AuthUser | null; onClose: () => void }) {
+  const update = useUpdateUser()
+  const [password, setPassword] = useState('')
+  const [requireChange, setRequireChange] = useState(true)
+  const name = user?.username ?? user?.email
+
+  const close = () => {
+    setPassword('')
+    setRequireChange(true)
+    update.reset()
+    onClose()
+  }
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!user) return
+    update.mutate(
+      { email: user.email, password, require_change: requireChange },
+      {
+        onSuccess: () => {
+          toast.success(`Password reset for ${name}`)
+          close()
+        },
+      },
+    )
+  }
+
+  return (
+    <Dialog open={user !== null} onOpenChange={(open) => !open && close()}>
+      <DialogContent>
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>Reset password for {name}</DialogTitle>
+            <DialogDescription>
+              They are signed out everywhere and must use this password next time.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="reset-password">New password</Label>
+            <Input
+              id="reset-password"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={requireChange} onCheckedChange={setRequireChange} />
+            Require them to choose a new one at sign-in
+          </label>
+          {update.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {update.error.message}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={close}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={update.isPending}>
+              Reset password
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const AUDIT_LABELS: Record<string, string> = {
+  setup_completed: 'First administrator created',
+  recovery_used: 'Access recovered',
+  bootstrap_token_failed: 'Wrong setup or recovery token',
+  login_succeeded: 'Signed in',
+  login_failed: 'Failed sign-in',
+  login_throttled: 'Sign-in blocked (too many attempts)',
+  password_changed: 'Password changed',
+  password_reset: 'Password reset',
+  user_created: 'User created',
+  user_deleted: 'User deleted',
+  role_changed: 'Role changed',
+  session_revoked: 'Session revoked',
+  other_sessions_revoked: 'Other sessions revoked',
+}
+
+const AUDIT_ALERTS = new Set(['bootstrap_token_failed', 'login_failed', 'login_throttled'])
+
+function auditSummary(event: AuditEvent) {
+  const who = [event.actor, event.target && `→ ${event.target}`].filter(Boolean).join(' ')
+  return [who, event.detail].filter(Boolean).join(' · ')
+}
+
+function SecurityLog() {
+  const log = useAuditLog()
+  return (
+    <section className="max-w-2xl border">
+      <div className="flex items-start justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <h2 className="text-sm font-medium">Security log</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Sign-ins, resets and account changes, newest first. Kept for 90 days.
+          </p>
+        </div>
+        <Button className="shrink-0" variant="outline" size="sm" onClick={() => log.refetch()}>
+          Refresh
+        </Button>
+      </div>
+      <div className="max-h-96 divide-y overflow-y-auto">
+        {log.data?.length === 0 && (
+          <p className="px-4 py-3 text-sm text-muted-foreground">No events yet.</p>
+        )}
+        {log.data?.map((event) => (
+          <div key={event.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm">
+            <Badge variant={AUDIT_ALERTS.has(event.kind) ? 'destructive' : 'secondary'}>
+              {AUDIT_LABELS[event.kind] ?? event.kind}
+            </Badge>
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">{auditSummary(event)}</span>
+            <span className="text-xs text-muted-foreground">
+              {event.ip ? `${event.ip} · ` : ''}
+              {new Date(event.at).toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
   const users = useUsers()
   const create = useCreateUser()
@@ -161,13 +302,15 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<UserRole>('viewer')
+  const [requireChange, setRequireChange] = useState(true)
+  const [resetting, setResetting] = useState<AuthUser | null>(null)
 
   const onError = (e: Error) => toast.error(e.message)
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     create.mutate(
-      { email, username: username.trim() || undefined, password, role },
+      { email, username: username.trim() || undefined, password, role, require_change: requireChange },
       {
         onSuccess: () => {
           setEmail('')
@@ -180,18 +323,10 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
     )
   }
 
-  const resetPassword = (email: string, name: string) => {
-    const value = window.prompt(`New password for ${name} (at least 8 characters)`)
-    if (!value) return
-    update.mutate(
-      { email, password: value },
-      { onSuccess: () => toast.success(`Password reset for ${name}`), onError },
-    )
-  }
-
   return (
     <section className="max-w-2xl border">
       {dialog}
+      <ResetPasswordDialog user={resetting} onClose={() => setResetting(null)} />
       <div className="border-b px-4 py-3">
         <h2 className="text-sm font-medium">Users</h2>
         <p className="mt-1 text-xs text-muted-foreground">
@@ -207,6 +342,7 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
                 <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
               )}
             </span>
+            {user.must_change_password && <Badge variant="outline">must change password</Badge>}
             <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>{user.role}</Badge>
             <Button
               variant="outline"
@@ -224,7 +360,7 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => resetPassword(user.email, user.username ?? user.email)}
+              onClick={() => setResetting(user)}
             >
               Reset password
             </Button>
@@ -293,6 +429,10 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             <option value="admin">admin</option>
           </select>
         </div>
+        <label className="flex w-full items-center gap-2 text-sm">
+          <Checkbox checked={requireChange} onCheckedChange={setRequireChange} />
+          Require a new password at first sign-in
+        </label>
         <Button type="submit" disabled={create.isPending}>
           Add user
         </Button>
@@ -309,6 +449,7 @@ export function AccountSettings() {
       <ChangePasswordForm />
       <SessionsPanel />
       {user.role === 'admin' && <UsersPanel currentUserEmail={user.email} />}
+      {user.role === 'admin' && <SecurityLog />}
     </>
   )
 }

@@ -1,14 +1,16 @@
 //! Login, logout, first-run setup, and self-service password change.
 
 use axum::Json;
-use axum::extract::{Extension, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::db::users::{self, User};
 use crate::web::auth::{
-    AuthUser, InvalidCredentials, authenticate, clear_cookie, hash_password, is_secure,
+    AuthUser, InvalidCredentials, authenticate, clear_cookie, client_ip, hash_password, is_secure,
     start_session, token_hash_of, validate_password, validate_username, verify_password,
 };
 use crate::web::error::{ApiResult, run_blocking};
@@ -18,6 +20,8 @@ use crate::web::state::AppState;
 pub struct StatusResponse {
     pub setup_required: bool,
     pub user: Option<User>,
+    /// Echo in `X-CSRF-Token` on every non-GET request.
+    pub csrf_token: Option<String>,
 }
 
 pub async fn status(
@@ -26,10 +30,11 @@ pub async fn status(
 ) -> ApiResult<Json<StatusResponse>> {
     let db = state.db.clone();
     let setup_required = run_blocking(move || users::count(&db)).await? == 0;
-    let user = authenticate(&state, &headers).await?.map(|a| a.user);
+    let auth = authenticate(&state, &headers).await?;
     Ok(Json(StatusResponse {
         setup_required,
-        user,
+        csrf_token: auth.as_ref().map(|a| a.csrf_token.clone()),
+        user: auth.map(|a| a.user),
     }))
 }
 
@@ -60,16 +65,18 @@ pub async fn setup(
         users::create_first_admin(&db, &req.username, &hash)
     })
     .await?;
-    let cookie = start_session(&state, &user.id, is_secure(&headers)).await?;
+    let cookie = start_session(&state, &user.id, is_secure(&state, &headers)).await?;
     Ok(with_cookie(cookie, Json(user)))
 }
 
 pub async fn login(
     State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(req): Json<Credentials>,
 ) -> ApiResult<Response> {
-    state.login_throttle.check(&req.username)?;
+    let ip = client_ip(&headers, peer.as_ref().map(|Extension(c)| c));
+    state.login_throttle.check(&req.username, ip)?;
     let db = state.db.clone();
     let (username, password) = (req.username.clone(), req.password);
     let user = run_blocking(move || {
@@ -84,11 +91,12 @@ pub async fn login(
     })
     .await?;
     let Some(user) = user else {
-        state.login_throttle.record_failure(&req.username);
+        state.login_throttle.record_failure(&req.username, ip);
+        tracing::warn!(username = %req.username, ?ip, "failed dashboard login");
         return Err(InvalidCredentials.into());
     };
-    state.login_throttle.clear(&req.username);
-    let cookie = start_session(&state, &user.id, is_secure(&headers)).await?;
+    state.login_throttle.clear_user(&req.username);
+    let cookie = start_session(&state, &user.id, is_secure(&state, &headers)).await?;
     Ok(with_cookie(cookie, Json(user)))
 }
 
@@ -105,7 +113,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
         run_blocking(move || users::delete_session(&db, &token_hash)).await?;
     }
     Ok(with_cookie(
-        clear_cookie(is_secure(&headers)),
+        clear_cookie(is_secure(&state, &headers)),
         StatusCode::NO_CONTENT,
     ))
 }
@@ -133,6 +141,6 @@ pub async fn change_password(
         users::set_password(&db, &id, &hash_password(&req.new_password)?)
     })
     .await?;
-    let cookie = start_session(&state, &auth.user.id, is_secure(&headers)).await?;
+    let cookie = start_session(&state, &auth.user.id, is_secure(&state, &headers)).await?;
     Ok(with_cookie(cookie, StatusCode::NO_CONTENT))
 }

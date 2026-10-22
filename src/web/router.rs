@@ -21,10 +21,15 @@ const MOD_UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024;
 /// authentication. `build_router` is the unguarded route table, kept separate
 /// so handler tests do not need to log in.
 pub fn build_app(state: AppState) -> Router {
-    build_router(state.clone()).layer(axum::middleware::from_fn_with_state(
-        state,
-        crate::web::auth::require_auth,
-    ))
+    build_router(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::web::auth::require_auth,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::web::auth::security_headers,
+        ))
 }
 
 pub fn build_router(state: AppState) -> Router {

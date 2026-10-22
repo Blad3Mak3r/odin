@@ -39,6 +39,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/password", post(auth::change_password))
+        .route("/auth/recover", post(auth::recover))
+        .route("/auth/sessions", get(auth::list_sessions))
+        .route(
+            "/auth/sessions/revoke-others",
+            post(auth::revoke_other_sessions),
+        )
+        .route("/auth/sessions/{id}", delete(auth::revoke_session))
         .route("/users", get(users::list).post(users::create))
         .route("/users/{email}", put(users::update).delete(users::delete))
         .route("/version", get(version::get_version))

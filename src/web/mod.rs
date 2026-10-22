@@ -54,6 +54,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
         .and_then(|config| config.public_origin())
         .context("invalid dashboard public_url")?;
     let state = AppState::new(paths, db).with_public_origin(public_origin);
+    auth::arm_bootstrap(&state).context("failed to prepare dashboard sign-in")?;
     retention::run_once(&state);
     retention::spawn(state.clone());
     webhooks::spawn(state.clone());

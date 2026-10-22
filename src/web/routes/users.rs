@@ -68,16 +68,18 @@ pub async fn update(
         validate_password(password)?;
     }
     let db = state.db.clone();
-    run_blocking(move || {
+    let revoked = run_blocking(move || {
+        let mut revoked = Vec::new();
         if let Some(role) = req.role {
             users::set_role(&db, &email, role)?;
         }
         if let Some(password) = req.password {
-            users::set_password(&db, &email, &hash_password(&password)?)?;
+            revoked = users::set_password(&db, &email, &hash_password(&password)?)?;
         }
-        Ok(())
+        Ok(revoked)
     })
     .await?;
+    state.sessions.revoke(&revoked);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -88,6 +90,7 @@ pub async fn delete(
 ) -> ApiResult<StatusCode> {
     auth.require_admin()?;
     let db = state.db.clone();
-    run_blocking(move || users::delete(&db, &email)).await?;
+    let revoked = run_blocking(move || users::delete(&db, &email)).await?;
+    state.sessions.revoke(&revoked);
     Ok(StatusCode::NO_CONTENT)
 }

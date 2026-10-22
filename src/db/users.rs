@@ -7,9 +7,19 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use uuid::Uuid;
+
 use super::Db;
 
-pub const SESSION_LIFETIME_DAYS: i64 = 14;
+/// Idle timeout of a "remember me" session.
+pub const REMEMBER_IDLE_DAYS: i64 = 14;
+/// Idle timeout of a session that was not remembered; its cookie also dies
+/// with the browser.
+pub const SHORT_IDLE_HOURS: i64 = 12;
+/// No session outlives this, however actively it is used.
+pub const MAX_SESSION_DAYS: i64 = 90;
+/// `last_used_at` and the expiry are refreshed at most this often.
+const TOUCH_INTERVAL_SECS: i64 = 60;
 
 #[derive(Debug, Error)]
 pub enum UserError {
@@ -192,8 +202,9 @@ pub fn set_role(db: &Db, email: &str, role: Role) -> Result<()> {
     Ok(())
 }
 
-/// Replaces the password and revokes every session of that user.
-pub fn set_password(db: &Db, email: &str, password_hash: &str) -> Result<()> {
+/// Replaces the password and revokes every session of that user, returning
+/// the revoked token hashes.
+pub fn set_password(db: &Db, email: &str, password_hash: &str) -> Result<Vec<String>> {
     let conn = db.conn();
     let updated = conn.execute(
         "UPDATE users SET password_hash = ?2 WHERE email = ?1",
@@ -202,15 +213,17 @@ pub fn set_password(db: &Db, email: &str, password_hash: &str) -> Result<()> {
     if updated == 0 {
         return Err(UserError::NotFound(email.to_string()).into());
     }
+    let hashes = session_hashes(&conn, email, None)?;
     conn.execute(
         "DELETE FROM auth_sessions WHERE user_email = ?1",
         params![email],
     )?;
-    Ok(())
+    Ok(hashes)
 }
 
 /// Deletes a user (their sessions cascade); refuses the last administrator.
-pub fn delete(db: &Db, email: &str) -> Result<()> {
+/// Returns the token hashes of the sessions that went with it.
+pub fn delete(db: &Db, email: &str) -> Result<Vec<String>> {
     let conn = db.conn();
     let role: Option<String> = conn
         .query_row(
@@ -225,11 +238,53 @@ pub fn delete(db: &Db, email: &str) -> Result<()> {
     if Role::parse(&role) == Role::Admin && admin_count(&conn)? <= 1 {
         return Err(UserError::LastAdmin.into());
     }
+    let hashes = session_hashes(&conn, email, None)?;
     conn.execute("DELETE FROM users WHERE email = ?1", params![email])?;
-    Ok(())
+    Ok(hashes)
 }
 
-pub fn create_session(db: &Db, user_email: &str, token_hash: &str) -> Result<()> {
+/// One login session, as stored. `token_hash` never leaves the server.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionInfo {
+    pub id: String,
+    #[serde(skip)]
+    pub token_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub remember: bool,
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+/// What the server knows about the client when a session starts.
+#[derive(Debug, Clone, Default)]
+pub struct SessionOrigin {
+    pub remember: bool,
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+impl SessionInfo {
+    pub fn idle_timeout(&self) -> Duration {
+        idle_timeout(self.remember)
+    }
+}
+
+fn idle_timeout(remember: bool) -> Duration {
+    if remember {
+        Duration::days(REMEMBER_IDLE_DAYS)
+    } else {
+        Duration::hours(SHORT_IDLE_HOURS)
+    }
+}
+
+pub fn create_session(
+    db: &Db,
+    user_email: &str,
+    token_hash: &str,
+    origin: &SessionOrigin,
+) -> Result<()> {
     let now = Utc::now();
     let conn = db.conn();
     conn.execute(
@@ -237,29 +292,111 @@ pub fn create_session(db: &Db, user_email: &str, token_hash: &str) -> Result<()>
         params![now],
     )?;
     conn.execute(
-        "INSERT INTO auth_sessions (token_hash, user_email, created_at, expires_at) \
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO auth_sessions \
+         (token_hash, id, user_email, created_at, last_used_at, expires_at, remember, ip, user_agent) \
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8)",
         params![
             token_hash,
+            Uuid::new_v4().to_string(),
             user_email,
             now,
-            now + Duration::days(SESSION_LIFETIME_DAYS)
+            now + idle_timeout(origin.remember),
+            origin.remember,
+            origin.ip,
+            origin.user_agent,
         ],
     )?;
     Ok(())
 }
 
-pub fn user_for_session(db: &Db, token_hash: &str) -> Result<Option<User>> {
+const SESSION_COLUMNS: &str = "s.id, s.token_hash, s.created_at, s.last_used_at, s.expires_at, \
+                               s.remember, s.ip, s.user_agent";
+
+fn row_to_session(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<SessionInfo> {
+    Ok(SessionInfo {
+        id: row.get(offset)?,
+        token_hash: row.get(offset + 1)?,
+        created_at: row.get(offset + 2)?,
+        last_used_at: row.get(offset + 3)?,
+        expires_at: row.get(offset + 4)?,
+        remember: row.get(offset + 5)?,
+        ip: row.get(offset + 6)?,
+        user_agent: row.get(offset + 7)?,
+    })
+}
+
+pub fn user_for_session(db: &Db, token_hash: &str) -> Result<Option<(User, SessionInfo)>> {
     db.conn()
         .query_row(
-            "SELECT u.email, u.username, u.role, u.created_at FROM auth_sessions s \
-             JOIN users u ON u.email = s.user_email \
-             WHERE s.token_hash = ?1 AND s.expires_at > ?2",
+            &format!(
+                "SELECT u.email, u.username, u.role, u.created_at, {SESSION_COLUMNS} \
+                 FROM auth_sessions s JOIN users u ON u.email = s.user_email \
+                 WHERE s.token_hash = ?1 AND s.expires_at > ?2"
+            ),
             params![token_hash, Utc::now()],
-            row_to_user,
+            |row| Ok((row_to_user(row)?, row_to_session(row, 4)?)),
         )
         .optional()
         .map_err(Into::into)
+}
+
+/// Slides the session's expiry forward, at most once per minute and never
+/// past the absolute cap. Returns whether it was refreshed.
+pub fn touch_session(db: &Db, session: &SessionInfo) -> Result<bool> {
+    let now = Utc::now();
+    if now - session.last_used_at < Duration::seconds(TOUCH_INTERVAL_SECS) {
+        return Ok(false);
+    }
+    let expires =
+        (now + session.idle_timeout()).min(session.created_at + Duration::days(MAX_SESSION_DAYS));
+    db.conn().execute(
+        "UPDATE auth_sessions SET last_used_at = ?2, expires_at = ?3 WHERE token_hash = ?1",
+        params![session.token_hash, now, expires],
+    )?;
+    Ok(true)
+}
+
+pub fn list_sessions(db: &Db, user_email: &str) -> Result<Vec<SessionInfo>> {
+    let conn = db.conn();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {SESSION_COLUMNS} FROM auth_sessions s \
+         WHERE s.user_email = ?1 AND s.expires_at > ?2 ORDER BY s.last_used_at DESC"
+    ))?;
+    let rows = stmt.query_map(params![user_email, Utc::now()], |row| {
+        row_to_session(row, 0)
+    })?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+/// Deletes one of the user's sessions by its public id; returns its token
+/// hash so live streams can be closed, or `None` if it is not theirs.
+pub fn delete_session_by_id(db: &Db, user_email: &str, id: &str) -> Result<Option<String>> {
+    let conn = db.conn();
+    let hash: Option<String> = conn
+        .query_row(
+            "SELECT token_hash FROM auth_sessions WHERE id = ?1 AND user_email = ?2",
+            params![id, user_email],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(hash) = &hash {
+        conn.execute(
+            "DELETE FROM auth_sessions WHERE token_hash = ?1",
+            params![hash],
+        )?;
+    }
+    Ok(hash)
+}
+
+/// Deletes every session of the user except `keep`; returns the revoked hashes.
+pub fn delete_other_sessions(db: &Db, user_email: &str, keep: &str) -> Result<Vec<String>> {
+    let conn = db.conn();
+    let hashes = session_hashes(&conn, user_email, Some(keep))?;
+    conn.execute(
+        "DELETE FROM auth_sessions WHERE user_email = ?1 AND token_hash != ?2",
+        params![user_email, keep],
+    )?;
+    Ok(hashes)
 }
 
 pub fn delete_session(db: &Db, token_hash: &str) -> Result<()> {
@@ -268,6 +405,18 @@ pub fn delete_session(db: &Db, token_hash: &str) -> Result<()> {
         params![token_hash],
     )?;
     Ok(())
+}
+
+fn session_hashes(
+    conn: &rusqlite::Connection,
+    user_email: &str,
+    except: Option<&str>,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT token_hash FROM auth_sessions WHERE user_email = ?1 AND token_hash != ?2",
+    )?;
+    stmt.query_map(params![user_email, except.unwrap_or("")], |row| row.get(0))?
+        .collect()
 }
 
 fn admin_count(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {

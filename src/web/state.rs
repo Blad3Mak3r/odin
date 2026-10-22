@@ -7,7 +7,7 @@ use crate::config::PublicOrigin;
 use crate::db::Db;
 use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
-use crate::web::auth::LoginThrottle;
+use crate::web::auth::{BootstrapGate, LoginThrottle, SessionRegistry};
 use crate::web::jobs::JobRegistry;
 use crate::web::log_tail::LogTailRegistry;
 use crate::web::players::PlayerRegistry;
@@ -28,6 +28,8 @@ pub struct AppState {
     pub system_update: SystemUpdate,
     pub update_check_lock: Arc<Mutex<()>>,
     pub login_throttle: LoginThrottle,
+    pub sessions: SessionRegistry,
+    pub bootstrap: BootstrapGate,
     pub public_origin: Option<PublicOrigin>,
 }
 
@@ -54,6 +56,8 @@ impl AppState {
             system_update: SystemUpdate::packaged(),
             update_check_lock: Arc::new(Mutex::new(())),
             login_throttle: LoginThrottle::default(),
+            sessions: SessionRegistry::default(),
+            bootstrap: BootstrapGate::default(),
             public_origin: None,
         }
     }

@@ -10,10 +10,18 @@ CREATE TABLE users (
     created_at    TEXT NOT NULL
 );
 
+-- `id` is the public handle shown in the session list; `token_hash` stays
+-- secret. A session slides: `expires_at` moves forward as it is used, up to
+-- an absolute cap measured from `created_at` (enforced in code).
 CREATE TABLE auth_sessions (
-    token_hash TEXT PRIMARY KEY,
-    user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE ON UPDATE CASCADE,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
+    token_hash   TEXT PRIMARY KEY,
+    id           TEXT NOT NULL UNIQUE,
+    user_email   TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE ON UPDATE CASCADE,
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    remember     INTEGER NOT NULL,
+    ip           TEXT,
+    user_agent   TEXT
 );
 CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_email);

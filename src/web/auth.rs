@@ -15,15 +15,18 @@ use std::time::{Duration, Instant};
 use argon2::password_hash::PasswordVerifier;
 use argon2::{Argon2, PasswordHasher};
 use axum::Json;
+use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use rand::RngExt;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tokio::sync::watch;
 
-use crate::db::users::{self, Role, SESSION_LIFETIME_DAYS, User};
+use crate::db::users::{self, Role, SessionInfo, SessionOrigin, User};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -52,6 +55,9 @@ pub struct AuthUser {
     pub user: User,
     /// Token the client must echo in `X-CSRF-Token` on mutating requests.
     pub csrf_token: String,
+    pub session: SessionInfo,
+    /// The session's expiry just slid forward, so the cookie should too.
+    pub refreshed: bool,
 }
 
 impl AuthUser {
@@ -75,6 +81,124 @@ pub struct InvalidCredentials;
 #[derive(Debug, thiserror::Error)]
 #[error("too many failed attempts; try again in a minute")]
 pub struct TooManyAttempts;
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid or missing token")]
+pub struct InvalidBootstrapToken;
+
+/// What a one-time token printed in the server log unlocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapKind {
+    /// Creating the first administrator.
+    Setup,
+    /// Resetting a password after losing access.
+    Recovery,
+}
+
+/// Holds the one-time token that gates first-run setup or recovery. It lives
+/// only in memory and in the server log, so using it proves access to the
+/// host, not just to the network port.
+#[derive(Clone, Default)]
+pub struct BootstrapGate(Arc<Mutex<Option<(BootstrapKind, String)>>>);
+
+impl BootstrapGate {
+    pub fn arm(&self, kind: BootstrapKind, token: String) {
+        *self.0.lock().expect("bootstrap gate lock poisoned") = Some((kind, token));
+    }
+
+    pub fn kind(&self) -> Option<BootstrapKind> {
+        self.0
+            .lock()
+            .expect("bootstrap gate lock poisoned")
+            .as_ref()
+            .map(|(kind, _)| *kind)
+    }
+
+    pub fn matches(&self, kind: BootstrapKind, given: &str) -> bool {
+        self.0
+            .lock()
+            .expect("bootstrap gate lock poisoned")
+            .as_ref()
+            .is_some_and(|(k, token)| *k == kind && constant_time_eq(token, given.trim()))
+    }
+
+    pub fn disarm(&self) {
+        *self.0.lock().expect("bootstrap gate lock poisoned") = None;
+    }
+}
+
+/// Marker file that, when present at startup, arms a recovery token.
+pub const RECOVERY_MARKER: &str = "recover-admin";
+
+/// Arms the setup token when no account exists, or the recovery token when
+/// the operator left a [`RECOVERY_MARKER`] file in the data directory, and
+/// prints it. The marker is consumed so recovery needs a deliberate restart.
+pub fn arm_bootstrap(state: &AppState) -> anyhow::Result<()> {
+    let marker = state.paths.data_dir.join(RECOVERY_MARKER);
+    let marked = marker.exists();
+    if marked {
+        std::fs::remove_file(&marker)?;
+    }
+    if users::count(&state.db)? == 0 {
+        let token = random_token();
+        println!("Dashboard setup token (needed to create the first account): {token}");
+        tracing::warn!(%token, "dashboard has no accounts; setup token issued");
+        state.bootstrap.arm(BootstrapKind::Setup, token);
+    } else if marked {
+        let token = random_token();
+        println!("Dashboard recovery token (valid until used or restart): {token}");
+        tracing::warn!(%token, "dashboard recovery requested; recovery token issued");
+        state.bootstrap.arm(BootstrapKind::Recovery, token);
+    }
+    Ok(())
+}
+
+pub fn random_token() -> String {
+    let mut bytes = [0u8; 16];
+    rand::rng().fill(&mut bytes);
+    hex(&bytes)
+}
+
+/// Live event streams, keyed by session token hash, so revoking a session
+/// ends the streams it opened.
+#[derive(Clone, Default)]
+pub struct SessionRegistry(Arc<Mutex<HashMap<String, watch::Sender<bool>>>>);
+
+impl SessionRegistry {
+    fn watch(&self, token_hash: &str) -> watch::Receiver<bool> {
+        let mut map = self.0.lock().expect("session registry lock poisoned");
+        map.retain(|_, tx| tx.receiver_count() > 0);
+        map.entry(token_hash.to_string())
+            .or_insert_with(|| watch::channel(false).0)
+            .subscribe()
+    }
+
+    /// Signals every stream of the given sessions to end.
+    pub fn revoke(&self, token_hashes: &[String]) {
+        let mut map = self.0.lock().expect("session registry lock poisoned");
+        for hash in token_hashes {
+            if let Some(tx) = map.remove(hash) {
+                tx.send_replace(true);
+            }
+        }
+    }
+}
+
+/// Describes the client for the session list.
+pub fn session_origin(
+    headers: &HeaderMap,
+    peer: Option<&ConnectInfo<SocketAddr>>,
+    remember: bool,
+) -> SessionOrigin {
+    SessionOrigin {
+        remember,
+        ip: client_ip(headers, peer).map(|ip| ip.to_string()),
+        user_agent: headers
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(|ua| ua.chars().filter(|c| !c.is_control()).take(200).collect()),
+    }
+}
 
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
     let hash = Argon2::default()
@@ -180,28 +304,41 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
             == 0
 }
 
-/// Creates a session for `user_id`, returning the cookie header value.
-pub async fn start_session(state: &AppState, user_email: &str, secure: bool) -> ApiResult<String> {
+/// Creates a session for `user_email`, returning the cookie header value.
+pub async fn start_session(
+    state: &AppState,
+    user_email: &str,
+    secure: bool,
+    origin: SessionOrigin,
+) -> ApiResult<String> {
     let mut bytes = [0u8; 32];
     rand::rng().fill(&mut bytes);
     let token = hex(&bytes);
     let (db, user_email, token_hash) =
         (state.db.clone(), user_email.to_string(), hash_token(&token));
-    run_blocking(move || users::create_session(&db, &user_email, &token_hash)).await?;
-    Ok(cookie(&token, SESSION_LIFETIME_DAYS * 86_400, secure))
+    let remember = origin.remember;
+    run_blocking(move || users::create_session(&db, &user_email, &token_hash, &origin)).await?;
+    Ok(session_cookie(&token, remember, secure))
+}
+
+/// A remembered session's cookie outlives the browser; any other dies with it.
+fn session_cookie(token: &str, remember: bool, secure: bool) -> String {
+    let max_age = remember.then_some(users::REMEMBER_IDLE_DAYS * 86_400);
+    cookie(token, max_age, secure)
 }
 
 pub fn clear_cookie(secure: bool) -> String {
-    cookie("", 0, secure)
+    cookie("", Some(0), secure)
 }
 
-fn cookie(value: &str, max_age: i64, secure: bool) -> String {
+fn cookie(value: &str, max_age: Option<i64>, secure: bool) -> String {
     let (name, flag) = if secure {
         (SECURE_SESSION_COOKIE, "; Secure")
     } else {
         (SESSION_COOKIE, "")
     };
-    format!("{name}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{flag}")
+    let max_age = max_age.map_or(String::new(), |age| format!("; Max-Age={age}"));
+    format!("{name}={value}; Path=/; HttpOnly; SameSite=Strict{max_age}{flag}")
 }
 
 /// Whether the browser reached us over HTTPS: the configured public URL says
@@ -226,16 +363,25 @@ fn session_token(headers: &HeaderMap) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Resolves the caller's session, if any.
+/// Resolves the caller's session, if any, sliding its expiry forward.
 pub async fn authenticate(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<AuthUser>> {
     let Some(token) = session_token(headers) else {
         return Ok(None);
     };
     let (db, token_hash) = (state.db.clone(), hash_token(&token));
-    let user = run_blocking(move || users::user_for_session(&db, &token_hash)).await?;
-    Ok(user.map(|user| AuthUser {
+    let found = run_blocking(move || {
+        let Some((user, session)) = users::user_for_session(&db, &token_hash)? else {
+            return Ok(None);
+        };
+        let refreshed = users::touch_session(&db, &session)?;
+        Ok(Some((user, session, refreshed)))
+    })
+    .await?;
+    Ok(found.map(|(user, session, refreshed)| AuthUser {
         user,
         csrf_token: csrf_token_for(&token),
+        session,
+        refreshed,
     }))
 }
 
@@ -289,17 +435,19 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 fn is_public(path: &str) -> bool {
     matches!(
         path,
-        "/api/auth/status" | "/api/auth/login" | "/api/auth/setup"
+        "/api/auth/status" | "/api/auth/login" | "/api/auth/setup" | "/api/auth/recover"
     )
 }
 
-/// Paths a viewer may call with a mutating method.
+/// Paths a viewer may call with a mutating method: their own account only.
 fn viewer_may_mutate(path: &str) -> bool {
     matches!(path, "/api/auth/logout" | "/api/auth/password")
+        || path.starts_with("/api/auth/sessions")
 }
 
 pub async fn require_auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
+    let headers = req.headers().clone();
     if !path.starts_with("/api/") && path != "/api" {
         return next.run(req).await;
     }
@@ -321,8 +469,52 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
     if !safe && auth.user.role != Role::Admin && !viewer_may_mutate(&path) {
         return error_response(StatusCode::FORBIDDEN, &Forbidden.to_string());
     }
-    req.extensions_mut().insert(auth);
-    next.run(req).await
+    let token = session_token(req.headers());
+    req.extensions_mut().insert(auth.clone());
+    let mut response = next.run(req).await;
+    if auth.refreshed
+        && auth.session.remember
+        && !response.headers().contains_key(header::SET_COOKIE)
+        && let Some(token) = token
+        && let Ok(value) =
+            HeaderValue::from_str(&session_cookie(&token, true, is_secure(&state, &headers)))
+    {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    end_stream_on_revoke(&state, &auth, response).await
+}
+
+/// Server-sent event streams outlive the request that opened them, so they
+/// are cut when their session is revoked or runs out.
+async fn end_stream_on_revoke(state: &AppState, auth: &AuthUser, response: Response) -> Response {
+    let is_stream = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/event-stream"));
+    if !is_stream {
+        return response;
+    }
+    let mut revoked = state.sessions.watch(&auth.session.token_hash);
+    // A revocation between authenticating and subscribing would be missed.
+    let (db, hash) = (state.db.clone(), auth.session.token_hash.clone());
+    if let Ok(None) = run_blocking(move || users::user_for_session(&db, &hash)).await {
+        return error_response(StatusCode::UNAUTHORIZED, "authentication required");
+    }
+    let lifetime = (auth.session.expires_at - chrono::Utc::now())
+        .to_std()
+        .unwrap_or_default();
+    let stop = async move {
+        tokio::select! {
+            _ = revoked.wait_for(|revoked| *revoked) => {}
+            _ = tokio::time::sleep(lifetime) => {}
+        }
+    };
+    let (parts, body) = response.into_parts();
+    Response::from_parts(
+        parts,
+        Body::from_stream(body.into_data_stream().take_until(stop)),
+    )
 }
 
 /// Adds browser-hardening headers to every response, and keeps API
@@ -454,6 +646,11 @@ mod tests {
     }
 
     fn app_with(public: Option<&str>) -> Router {
+        app_state(public).0
+    }
+
+    /// The router plus its state, with the setup token armed as `SETUP`.
+    fn app_state(public: Option<&str>) -> (Router, AppState) {
         let dir = std::env::temp_dir().join(format!(
             "odin-auth-test-{}-{}",
             std::process::id(),
@@ -466,8 +663,12 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         let public = public.map(|raw| crate::config::PublicOrigin::parse(raw).unwrap());
-        crate::web::router::build_app(AppState::new(paths, db).with_public_origin(public))
+        let state = AppState::new(paths, db).with_public_origin(public);
+        state.bootstrap.arm(BootstrapKind::Setup, SETUP.into());
+        (crate::web::router::build_app(state.clone()), state)
     }
+
+    const SETUP: &str = "setup-token";
 
     async fn call(
         app: &Router,
@@ -506,6 +707,7 @@ mod tests {
 
     fn creds(username: &str, password: &str) -> Option<serde_json::Value> {
         Some(json!({
+            "token": SETUP,
             "email": format!("{username}@example.com"),
             "username": username,
             "password": password,
@@ -661,7 +863,9 @@ mod tests {
     #[tokio::test]
     async fn email_is_the_key_and_username_is_optional_but_unique() {
         let app = app();
-        let setup = Some(json!({ "email": "Admin@Example.com", "password": "correct horse" }));
+        let setup = Some(
+            json!({ "token": SETUP, "email": "Admin@Example.com", "password": "correct horse" }),
+        );
         let (status, admin, body) = call(&app, "POST", "/api/auth/setup", None, setup).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["email"], "admin@example.com");
@@ -757,6 +961,262 @@ mod tests {
         assert!(normalize_email(&format!("{}@example.com", "a".repeat(65))).is_err());
     }
 
+    #[tokio::test]
+    async fn setup_needs_the_logged_token_and_recovery_needs_the_marker() {
+        let (app, state) = app_state(None);
+        let body = |token: &str| {
+            Some(json!({ "token": token, "email": "a@example.com", "password": "correct horse" }))
+        };
+        for wrong in ["", "nope"] {
+            let (status, ..) = call(&app, "POST", "/api/auth/setup", None, body(wrong)).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{wrong:?}");
+        }
+        let (_, _, status) = call(&app, "GET", "/api/auth/status", None, None).await;
+        assert_eq!(status["setup_required"], true);
+        let (status, ..) = call(&app, "POST", "/api/auth/setup", None, body(SETUP)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state.bootstrap.kind(), None);
+
+        // No marker file: restart arms nothing, so recovery is refused.
+        arm_bootstrap(&state).unwrap();
+        assert_eq!(state.bootstrap.kind(), None);
+        let recover = |token: &str, email: &str| {
+            Some(json!({ "token": token, "email": email, "password": "brand new pass" }))
+        };
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/recover",
+            None,
+            recover("x", "a@example.com"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // The marker arms a one-time token and is consumed.
+        let marker = state.paths.data_dir.join(RECOVERY_MARKER);
+        std::fs::write(&marker, "").unwrap();
+        arm_bootstrap(&state).unwrap();
+        assert!(!marker.exists());
+        assert_eq!(state.bootstrap.kind(), Some(BootstrapKind::Recovery));
+        let (_, _, status) = call(&app, "GET", "/api/auth/status", None, None).await;
+        assert_eq!(status["recovery_active"], true);
+
+        let token = state.bootstrap.0.lock().unwrap().clone().unwrap().1;
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/recover",
+            None,
+            recover(&token, "ghost@example.com"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, cookie, _) = call(
+            &app,
+            "POST",
+            "/api/auth/recover",
+            None,
+            recover(&token, "A@example.com"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(cookie.is_some());
+        assert_eq!(state.bootstrap.kind(), None);
+
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("a@example.com", "correct horse"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("a@example.com", "brand new pass"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    async fn login_cookie(app: &Router, login: &str, password: &str, remember: bool) -> String {
+        let body = json!({ "login": login, "password": password, "remember": remember });
+        let response = raw(
+            app,
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::USER_AGENT, "Mozilla/5.0 test")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert_eq!(set_cookie.contains("Max-Age="), remember, "{set_cookie}");
+        set_cookie.split(';').next().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn sessions_can_be_listed_and_revoked_by_their_owner() {
+        let app = app();
+        call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", "correct horse"),
+        )
+        .await;
+        let first = login_cookie(&app, "admin", "correct horse", true).await;
+        let second = login_cookie(&app, "admin", "correct horse", false).await;
+
+        let (_, _, list) = call(&app, "GET", "/api/auth/sessions", Some(&first), None).await;
+        let list = list.as_array().unwrap();
+        assert_eq!(list.len(), 3); // setup + two logins
+        assert_eq!(list.iter().filter(|s| s["current"] == true).count(), 1);
+        assert!(list.iter().all(|s| s.get("token_hash").is_none()));
+        assert!(list.iter().any(|s| s["user_agent"] == "Mozilla/5.0 test"));
+        assert!(list.iter().any(|s| s["remember"] == false));
+
+        let other = list.iter().find(|s| s["current"] == false).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (status, ..) = call(
+            &app,
+            "DELETE",
+            &format!("/api/auth/sessions/{other}"),
+            Some(&first),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, ..) = call(
+            &app,
+            "DELETE",
+            &format!("/api/auth/sessions/{other}"),
+            Some(&first),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/sessions/revoke-others",
+            Some(&first),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, ..) = call(&app, "GET", "/api/auth/sessions", Some(&second), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (_, _, list) = call(&app, "GET", "/api/auth/sessions", Some(&first), None).await;
+        assert_eq!(list.as_array().unwrap().len(), 1);
+
+        // Ending the current session signs out.
+        let id = list[0]["id"].as_str().unwrap();
+        let (status, ..) = call(
+            &app,
+            "DELETE",
+            &format!("/api/auth/sessions/{id}"),
+            Some(&first),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, ..) = call(&app, "GET", "/api/auth/sessions", Some(&first), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn revoking_a_session_ends_its_event_stream() {
+        let app = app();
+        call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", "correct horse"),
+        )
+        .await;
+        let streaming = login_cookie(&app, "admin", "correct horse", true).await;
+        let admin = login_cookie(&app, "admin", "correct horse", true).await;
+
+        let response = raw(
+            &app,
+            Request::builder()
+                .uri("/api/events/sse")
+                .header(header::COOKIE, &streaming)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let reader = tokio::spawn(async move {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                axum::body::to_bytes(response.into_body(), usize::MAX),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!reader.is_finished(), "the stream should stay open");
+
+        // The setup session and the streaming one both belong to this user.
+        call(
+            &app,
+            "POST",
+            "/api/auth/sessions/revoke-others",
+            Some(&admin),
+            None,
+        )
+        .await;
+        let outcome = reader.await.unwrap();
+        assert!(outcome.is_ok(), "stream was not closed after revocation");
+    }
+
+    #[tokio::test]
+    async fn sessions_slide_and_never_pass_the_absolute_cap() {
+        let (_, state) = app_state(None);
+        let db = &state.db;
+        users::create_first_admin(db, "a@example.com", None, "hash").unwrap();
+        let origin = users::SessionOrigin {
+            remember: true,
+            ..Default::default()
+        };
+        users::create_session(db, "a@example.com", "tok", &origin).unwrap();
+        let (_, mut session) = users::user_for_session(db, "tok").unwrap().unwrap();
+
+        // Used a moment ago: no write.
+        assert!(!users::touch_session(db, &session).unwrap());
+
+        // Idle for a while: the expiry slides forward.
+        session.last_used_at -= chrono::Duration::minutes(5);
+        assert!(users::touch_session(db, &session).unwrap());
+        let (_, slid) = users::user_for_session(db, "tok").unwrap().unwrap();
+        assert!(slid.expires_at > session.expires_at);
+
+        // An ancient session is capped at created_at + MAX_SESSION_DAYS.
+        session.created_at -=
+            chrono::Duration::days(users::MAX_SESSION_DAYS) - chrono::Duration::hours(1);
+        session.last_used_at -= chrono::Duration::minutes(5);
+        users::touch_session(db, &session).unwrap();
+        let (_, capped) = users::user_for_session(db, "tok").unwrap().unwrap();
+        assert!(
+            capped.expires_at
+                <= session.created_at + chrono::Duration::days(users::MAX_SESSION_DAYS)
+        );
+    }
+
     async fn raw(app: &Router, req: Request<Body>) -> Response {
         app.clone().oneshot(req).await.unwrap()
     }
@@ -838,7 +1298,7 @@ mod tests {
                 .header(header::ORIGIN, origin)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({ "email": "admin@example.com", "username": "admin", "password": "correct horse" }).to_string(),
+                    json!({ "token": SETUP, "email": "admin@example.com", "username": "admin", "password": "correct horse" }).to_string(),
                 ))
                 .unwrap()
         };

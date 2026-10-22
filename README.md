@@ -417,6 +417,13 @@ so you can revoke any of them or sign out everywhere else; revoking a session,
 changing a password or deleting a user also closes that session's live event
 streams immediately.
 
+Administrators also get a **Security log** in Settings: sign-ins and failures,
+blocked attempts, wrong setup or recovery tokens, password changes and resets,
+and user or role changes, kept for 90 days and not visible to viewers. When an
+administrator creates an account or resets someone's password, that account
+must choose a new password at its next sign-in (this can be turned off per
+action).
+
 **Lost access?** Create an empty file named `recover-admin` in the data
 directory and restart Odin:
 
@@ -449,6 +456,19 @@ public_url = "https://odin.example.com"   # origin only, no path
 An `https` value marks the session cookie `Secure` (as `__Host-odin_session`)
 and enables HSTS. An invalid value stops `odin serve` at startup. The setting
 is optional; without it Odin trusts the `Host` header of the request.
+
+Login limits and the security log need the real client address. Odin uses the
+TCP peer, and believes `X-Forwarded-For` only from trusted proxies: loopback
+by default. If the proxy runs elsewhere (a Docker network, another host), list
+it, otherwise every user looks like the proxy and shares one limit:
+
+```toml
+[server]
+trusted_proxies = ["172.16.0.0/12"]   # addresses or CIDR ranges
+```
+
+`ODIN_TRUSTED_PROXIES` (comma-separated) overrides it, and an invalid entry
+stops `odin serve` at startup.
 
 The frontend (`web/`, a Vite + React + TypeScript + Tailwind + shadcn/ui
 project) is embedded into the binary at compile time, so building it is a

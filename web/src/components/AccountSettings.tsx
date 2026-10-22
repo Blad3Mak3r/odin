@@ -68,12 +68,13 @@ function ChangePasswordForm() {
   )
 }
 
-function UsersPanel({ currentUserId }: { currentUserId: string }) {
+function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
   const users = useUsers()
   const create = useCreateUser()
   const update = useUpdateUser()
   const remove = useDeleteUser()
   const { confirm, dialog } = useConfirmDialog()
+  const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<UserRole>('viewer')
@@ -83,23 +84,24 @@ function UsersPanel({ currentUserId }: { currentUserId: string }) {
   const submit = (event: FormEvent) => {
     event.preventDefault()
     create.mutate(
-      { username, password, role },
+      { email, username: username.trim() || undefined, password, role },
       {
         onSuccess: () => {
+          setEmail('')
           setUsername('')
           setPassword('')
-          toast.success(`User ${username} created`)
+          toast.success(`User ${email} created`)
         },
         onError,
       },
     )
   }
 
-  const resetPassword = (id: string, name: string) => {
+  const resetPassword = (email: string, name: string) => {
     const value = window.prompt(`New password for ${name} (at least 8 characters)`)
     if (!value) return
     update.mutate(
-      { id, password: value },
+      { email, password: value },
       { onSuccess: () => toast.success(`Password reset for ${name}`), onError },
     )
   }
@@ -115,8 +117,13 @@ function UsersPanel({ currentUserId }: { currentUserId: string }) {
       </div>
       <div className="divide-y">
         {users.data?.map((user) => (
-          <div key={user.id} className="flex flex-wrap items-center gap-2 px-4 py-3">
-            <span className="mr-auto font-medium">{user.username}</span>
+          <div key={user.email} className="flex flex-wrap items-center gap-2 px-4 py-3">
+            <span className="mr-auto min-w-0">
+              <span className="block truncate font-medium">{user.username ?? user.email}</span>
+              {user.username && (
+                <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
+              )}
+            </span>
             <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>{user.role}</Badge>
             <Button
               variant="outline"
@@ -124,7 +131,7 @@ function UsersPanel({ currentUserId }: { currentUserId: string }) {
               disabled={update.isPending}
               onClick={() =>
                 update.mutate(
-                  { id: user.id, role: user.role === 'admin' ? 'viewer' : 'admin' },
+                  { email: user.email, role: user.role === 'admin' ? 'viewer' : 'admin' },
                   { onError },
                 )
               }
@@ -134,21 +141,21 @@ function UsersPanel({ currentUserId }: { currentUserId: string }) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => resetPassword(user.id, user.username)}
+              onClick={() => resetPassword(user.email, user.username ?? user.email)}
             >
               Reset password
             </Button>
             <Button
               variant="outline"
               size="sm"
-              disabled={user.id === currentUserId || remove.isPending}
+              disabled={user.email === currentUserEmail || remove.isPending}
               onClick={async () => {
                 const ok = await confirm({
-                  title: `Delete ${user.username}?`,
+                  title: `Delete ${user.username ?? user.email}?`,
                   description: 'This account and its sessions are removed immediately.',
                   confirmLabel: 'Delete',
                 })
-                if (ok) remove.mutate(user.id, { onError })
+                if (ok) remove.mutate(user.email, { onError })
               }}
             >
               Delete
@@ -158,11 +165,23 @@ function UsersPanel({ currentUserId }: { currentUserId: string }) {
       </div>
       <form onSubmit={submit} className="flex flex-wrap items-end gap-2 border-t p-4">
         <div className="flex flex-col gap-2">
-          <Label htmlFor="new-username">Username</Label>
+          <Label htmlFor="new-email">Email</Label>
+          <Input
+            id="new-email"
+            type="email"
+            autoComplete="off"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="new-username">Username (optional)</Label>
           <Input
             id="new-username"
             autoComplete="off"
-            required
+            pattern="[A-Za-z0-9._\-]{3,32}"
+            title="3-32 letters, digits, '.', '_' or '-'"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
           />
@@ -205,7 +224,7 @@ export function AccountSettings() {
   return (
     <>
       <ChangePasswordForm />
-      {user.role === 'admin' && <UsersPanel currentUserId={user.id} />}
+      {user.role === 'admin' && <UsersPanel currentUserEmail={user.email} />}
     </>
   )
 }

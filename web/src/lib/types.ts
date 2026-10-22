@@ -664,8 +664,8 @@ export interface InstanceDefaults {
 export type UserRole = 'admin' | 'viewer'
 
 export interface AuthUser {
-  id: string
-  username: string
+  email: string
+  username: string | null
   role: UserRole
   created_at: string
 }

@@ -1420,8 +1420,9 @@ function useResetSession() {
 export function useAuthenticate(mode: 'login' | 'setup') {
   const reset = useResetSession()
   return useMutation({
-    mutationFn: (req: { username: string; password: string }) =>
-      api.post<AuthUser>(`/auth/${mode}`, req),
+    mutationFn: (
+      req: { login: string; password: string } | { email: string; username?: string; password: string },
+    ) => api.post<AuthUser>(`/auth/${mode}`, req),
     onSuccess: reset,
   })
 }
@@ -1454,7 +1455,7 @@ export function useUsers() {
 export function useCreateUser() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (req: { username: string; password: string; role: UserRole }) =>
+    mutationFn: (req: { email: string; username?: string; password: string; role: UserRole }) =>
       api.post<AuthUser>('/users', req),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   })
@@ -1463,8 +1464,8 @@ export function useCreateUser() {
 export function useUpdateUser() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, ...req }: { id: string; role?: UserRole; password?: string }) =>
-      api.put<void>(`/users/${id}`, req),
+    mutationFn: ({ email, ...req }: { email: string; role?: UserRole; password?: string }) =>
+      api.put<void>(`/users/${encodeURIComponent(email)}`, req),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   })
 }
@@ -1472,7 +1473,7 @@ export function useUpdateUser() {
 export function useDeleteUser() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => api.delete<void>(`/users/${id}`),
+    mutationFn: (email: string) => api.delete<void>(`/users/${encodeURIComponent(email)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   })
 }

@@ -89,7 +89,7 @@ function SidebarNav({
       <div className="mt-auto flex items-center gap-2 px-3 py-3">
         {user && (
           <div className="mr-auto min-w-0">
-            <p className="truncate text-sm font-medium">{user.username}</p>
+            <p className="truncate text-sm font-medium">{user.username ?? user.email}</p>
             <p className="text-xs text-muted-foreground">{user.role}</p>
           </div>
         )}

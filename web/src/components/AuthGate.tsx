@@ -8,13 +8,18 @@ import { useAuthenticate, useAuthStatus } from '@/lib/queries'
 
 function AuthForm({ mode }: { mode: 'login' | 'setup' }) {
   const authenticate = useAuthenticate(mode)
+  const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const setup = mode === 'setup'
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    authenticate.mutate({ username, password })
+    authenticate.mutate(
+      setup
+        ? { email, username: username.trim() || undefined, password }
+        : { login: email, password },
+    )
   }
 
   return (
@@ -32,16 +37,33 @@ function AuthForm({ mode }: { mode: 'login' | 'setup' }) {
           </p>
         )}
         <div className="flex flex-col gap-2">
-          <Label htmlFor="auth-username">Username</Label>
+          <Label htmlFor="auth-email">{setup ? 'Email' : 'Email or username'}</Label>
           <Input
-            id="auth-username"
-            autoComplete="username"
+            id="auth-email"
+            type={setup ? 'email' : 'text'}
+            autoComplete={setup ? 'email' : 'username'}
             autoFocus
             required
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
           />
         </div>
+        {setup && (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="auth-username">Username (optional)</Label>
+            <Input
+              id="auth-username"
+              autoComplete="username"
+              pattern="[A-Za-z0-9._\-]{3,32}"
+              title="3-32 letters, digits, '.', '_' or '-'"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              An alternative to your email when signing in.
+            </p>
+          </div>
+        )}
         <div className="flex flex-col gap-2">
           <Label htmlFor="auth-password">Password</Label>
           <Input

@@ -26,3 +26,10 @@
 # no path. The ODIN_PUBLIC_URL environment variable overrides this value.
 # [server]
 # public_url = "https://odin.example.com"
+#
+# Reverse proxies whose X-Forwarded-For header Odin believes when it works
+# out who is signing in (for login limits and the security log). Addresses or
+# CIDR ranges; loopback is always trusted. List your proxy's address when it
+# is not on this host, for example a Docker network. The ODIN_TRUSTED_PROXIES
+# environment variable (comma-separated) overrides this value.
+# trusted_proxies = ["172.16.0.0/12"]

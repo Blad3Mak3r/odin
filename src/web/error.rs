@@ -9,6 +9,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::backup::BackupError;
+use crate::db::users::UserError;
 use crate::db::webhooks::WebhookError;
 use crate::game::rust::access_lists::RustAccessListError;
 use crate::instance::InstanceError;
@@ -16,6 +17,7 @@ use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
 use crate::mods::curseforge::CurseForgeError;
 use crate::mods::nexus::NexusError;
+use crate::web::auth::{Forbidden, InvalidCredentials, TooManyAttempts};
 use crate::web::routes::saves::SaveFileError;
 
 /// A catch-all for ad-hoc input validation in route handlers that doesn't
@@ -84,6 +86,20 @@ fn classify(err: &anyhow::Error) -> StatusCode {
     }
     if let Some(WebhookError::NotFound(_)) = err.downcast_ref::<WebhookError>() {
         return StatusCode::NOT_FOUND;
+    }
+    match err.downcast_ref::<UserError>() {
+        Some(UserError::NotFound(_)) => return StatusCode::NOT_FOUND,
+        Some(_) => return StatusCode::CONFLICT,
+        None => {}
+    }
+    if err.downcast_ref::<InvalidCredentials>().is_some() {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if err.downcast_ref::<Forbidden>().is_some() {
+        return StatusCode::FORBIDDEN;
+    }
+    if err.downcast_ref::<TooManyAttempts>().is_some() {
+        return StatusCode::TOO_MANY_REQUESTS;
     }
     match err.downcast_ref::<NexusError>() {
         Some(NexusError::ApiKeyMissing | NexusError::InvalidReference(_)) => {

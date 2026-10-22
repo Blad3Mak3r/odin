@@ -3,6 +3,7 @@
 //! is synchronous — this module (and `commands::serve`) is the only place
 //! async/tokio is used.
 
+mod auth;
 mod backup_scheduler;
 mod error;
 mod image_monitor;
@@ -58,7 +59,7 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     uptime_scheduler::spawn(state.clone());
     image_monitor::spawn(state.clone());
 
-    let router = router::build_router(state.clone());
+    let router = router::build_app(state.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind {addr}"))?;

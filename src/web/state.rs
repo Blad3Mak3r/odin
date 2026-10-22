@@ -6,6 +6,7 @@ use crate::activity::ActivityLog;
 use crate::db::Db;
 use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
+use crate::web::auth::LoginThrottle;
 use crate::web::jobs::JobRegistry;
 use crate::web::log_tail::LogTailRegistry;
 use crate::web::players::PlayerRegistry;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub log_tail: LogTailRegistry,
     pub system_update: SystemUpdate,
     pub update_check_lock: Arc<Mutex<()>>,
+    pub login_throttle: LoginThrottle,
 }
 
 impl AppState {
@@ -44,6 +46,7 @@ impl AppState {
             log_tail: LogTailRegistry::new(),
             system_update: SystemUpdate::packaged(),
             update_check_lock: Arc::new(Mutex::new(())),
+            login_throttle: LoginThrottle::default(),
         }
     }
 }

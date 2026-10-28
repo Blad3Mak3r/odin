@@ -442,6 +442,90 @@ fn allowed_before_password_change(path: &str) -> bool {
     matches!(path, "/api/auth/password" | "/api/auth/logout")
 }
 
+/// Raw configuration content: native server files hold admin and RCON
+/// passwords in the clear, so viewers may not read them at all.
+fn viewer_blocked(path: &str) -> bool {
+    ["/config/files/", "/config-template", "/bepinex/config"]
+        .iter()
+        .any(|area| path.contains(area))
+}
+
+const MASK: &str = "********";
+/// Largest JSON response a viewer's request is filtered in memory.
+const MAX_FILTERED_BYTES: usize = 16 * 1024 * 1024;
+
+fn is_secret_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["password", "secret", "api_key", "access_key", "token"]
+        .iter()
+        .any(|word| key.contains(word))
+}
+
+/// Replaces every non-empty string under a secret-looking key with a mask,
+/// so a viewer sees that a value is set but not what it is. Flags and
+/// counts such as `secret_access_key_configured: true` are left alone.
+fn mask_secrets(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if is_secret_key(key) {
+                    mask_all_strings(child);
+                } else {
+                    mask_secrets(child);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(mask_secrets),
+        _ => {}
+    }
+}
+
+fn mask_all_strings(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::String(text) if !text.is_empty() => *text = MASK.to_string(),
+        Value::Object(map) => map.values_mut().for_each(mask_all_strings),
+        Value::Array(items) => items.iter_mut().for_each(mask_all_strings),
+        _ => {}
+    }
+}
+
+/// Applies [`mask_secrets`] to a JSON response. A response that cannot be
+/// filtered is refused rather than sent through unfiltered.
+async fn mask_json_response(response: Response) -> Response {
+    let is_json = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("application/json"));
+    if !is_json {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let refused = || {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "response could not be filtered",
+        )
+    };
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_FILTERED_BYTES).await else {
+        return refused();
+    };
+    if bytes.is_empty() {
+        return Response::from_parts(parts, Body::empty());
+    }
+    let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return refused();
+    };
+    mask_secrets(&mut json);
+    let Ok(filtered) = serde_json::to_vec(&json) else {
+        return refused();
+    };
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(filtered))
+}
+
 /// Paths a viewer may call with a mutating method: their own account only.
 fn viewer_may_mutate(path: &str) -> bool {
     matches!(path, "/api/auth/logout" | "/api/auth/password")
@@ -478,7 +562,11 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
     if auth.user.must_change_password && !allowed_before_password_change(&path) {
         return error_response(StatusCode::FORBIDDEN, "password change required");
     }
-    if !safe && auth.user.role != Role::Admin && !viewer_may_mutate(&path) {
+    let viewer = auth.user.role != Role::Admin;
+    if viewer && viewer_blocked(&path) {
+        return error_response(StatusCode::FORBIDDEN, "this area is for administrators");
+    }
+    if !safe && viewer && !viewer_may_mutate(&path) {
         return error_response(StatusCode::FORBIDDEN, &Forbidden.to_string());
     }
     let token = session_token(req.headers());
@@ -493,7 +581,13 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
     {
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
-    end_stream_on_revoke(&state, &auth, response).await
+    let response = end_stream_on_revoke(&state, &auth, response).await;
+    // Viewers get read access without the secrets in what they read; their
+    // own account's responses (`/api/auth/*`) are theirs to see.
+    if viewer && safe && !path.starts_with("/api/auth/") {
+        return mask_json_response(response).await;
+    }
+    response
 }
 
 /// Server-sent event streams outlive the request that opened them, so they
@@ -1464,6 +1558,91 @@ mod tests {
         let viewer = login_cookie(&app, "w@example.com", &pw("user"), true).await;
         let (status, ..) = call(&app, "GET", "/api/auth/audit", Some(&viewer), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn viewers_read_instances_without_seeing_secrets() {
+        let (app, state) = app_state(None);
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let admin = admin.unwrap();
+        let viewer = Some(json!({
+            "email": "v@example.com", "password": pw("user"), "role": "viewer", "require_change": false,
+        }));
+        call(&app, "POST", "/api/users", Some(&admin), viewer).await;
+        let viewer = login_cookie(&app, "v@example.com", &pw("user"), true).await;
+
+        let created =
+            crate::instance::Instance::create(&state.paths, &state.db, "meadows").unwrap();
+        let secret = created.state.password.clone().unwrap();
+        let id = crate::db::game_instances::ensure_valheim_identity(
+            &state.db,
+            "meadows",
+            created.state.created_at,
+        )
+        .unwrap()
+        .id;
+        let config = format!("/api/instances/{id}/config");
+
+        let (_, _, seen) = call(&app, "GET", &config, Some(&admin), None).await;
+        assert_eq!(seen["password"], secret.as_str(), "administrators see it");
+        let (status, _, seen) = call(&app, "GET", &config, Some(&viewer), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(seen["password"], MASK);
+        assert_eq!(seen["world_name"], created.state.world_name.as_str());
+
+        // Raw native files, the 7DTD template review and mod configs are admin-only.
+        for area in [
+            format!("/api/instances/{id}/config/files/any.ini"),
+            format!("/api/instances/{id}/7d2d/config-template"),
+            format!("/api/instances/{id}/valheim/bepinex/config"),
+            "/api/games/ark-asa/config/files/Game.ini".to_string(),
+        ] {
+            let (status, ..) = call(&app, "GET", &area, Some(&viewer), None).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{area}");
+            let (status, ..) = call(&app, "GET", &area, Some(&admin), None).await;
+            assert_ne!(status, StatusCode::FORBIDDEN, "{area}");
+        }
+
+        // The viewer's own CSRF token must not be masked.
+        let (_, _, status) = call(&app, "GET", "/api/auth/status", Some(&viewer), None).await;
+        assert_ne!(status["csrf_token"], MASK);
+        assert_eq!(status["csrf_token"].as_str().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn secret_looking_values_are_masked_but_flags_and_empties_are_not() {
+        let mut value = json!({
+            "name": "keep",
+            "password": "hunter2",
+            "rcon_password": "",
+            "nested": [{ "admin_password": "a", "port": 1 }],
+            "secret_access_key_configured": true,
+            "api_key": null,
+            "tokens": ["x", { "y": "z" }],
+        });
+        mask_secrets(&mut value);
+        assert_eq!(
+            value,
+            json!({
+                "name": "keep",
+                "password": MASK,
+                "rcon_password": "",
+                "nested": [{ "admin_password": MASK, "port": 1 }],
+                "secret_access_key_configured": true,
+                "api_key": null,
+                "tokens": [MASK, { "y": MASK }],
+            })
+        );
+        assert!(viewer_blocked("/api/instances/1/config/files/a"));
+        assert!(!viewer_blocked("/api/instances/1/config/advanced"));
+        assert!(!viewer_blocked("/api/instances/1/config"));
     }
 
     async fn raw(app: &Router, req: Request<Body>) -> Response {

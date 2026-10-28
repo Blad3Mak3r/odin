@@ -403,7 +403,11 @@ someone with access to the host can claim the dashboard; until the account
 exists, every other API route answers 401. Afterwards the API requires a
 session cookie (`HttpOnly`, `SameSite=Strict`). Accounts are keyed by a unique
 email address and may also have a unique username; sign in with either.
-Administrators manage users under Settings; the `viewer` role is read-only.
+Administrators manage users under Settings; the `viewer` role is read-only and
+never sees secrets: raw native configuration files, the 7 Days to Die template
+review and mod configuration files are refused, and every password, key or
+token value in the JSON a viewer receives (an RCON or server password, say) is
+replaced by `********`.
 Passwords are stored as Argon2id hashes. Odin speaks plain HTTP: `odin serve`
 still binds to `127.0.0.1` by default, so reach it from another machine
 through an SSH tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS

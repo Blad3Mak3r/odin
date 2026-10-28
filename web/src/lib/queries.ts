@@ -1398,6 +1398,11 @@ export function useTestWebhook() {
   })
 }
 
+/** Whether the signed-in user is an administrator; viewers cannot read raw configuration. */
+export function useIsAdmin() {
+  return useAuthStatus().data?.user?.role === 'admin'
+}
+
 export function useAuthStatus() {
   return useQuery({
     queryKey: ['auth', 'status'],

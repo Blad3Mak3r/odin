@@ -678,7 +678,7 @@ mod tests {
         app_state(public).0
     }
 
-    /// The router plus its state, with the setup token armed as `SETUP`.
+    /// The router plus its state, with a random setup token armed.
     fn app_state(public: Option<&str>) -> (Router, AppState) {
         let dir = std::env::temp_dir().join(format!(
             "odin-auth-test-{}-{}",
@@ -693,11 +693,27 @@ mod tests {
         let db = Arc::new(Db::open(&paths).unwrap());
         let public = public.map(|raw| crate::config::PublicOrigin::parse(raw).unwrap());
         let state = AppState::new(paths, db).with_public_origin(public);
-        state.bootstrap.arm(BootstrapKind::Setup, SETUP.into());
+        state.bootstrap.arm(BootstrapKind::Setup, setup_token());
         (crate::web::router::build_app(state.clone()), state)
     }
 
-    const SETUP: &str = "setup-token";
+    /// Credentials are generated for the test run and never written in
+    /// source: one random password per label, stable within the process.
+    fn pw(label: &str) -> String {
+        static PASSWORDS: std::sync::OnceLock<Mutex<HashMap<String, String>>> =
+            std::sync::OnceLock::new();
+        PASSWORDS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .entry(label.to_string())
+            .or_insert_with(random_token)
+            .clone()
+    }
+
+    fn setup_token() -> String {
+        pw("setup-token")
+    }
 
     async fn call(
         app: &Router,
@@ -736,7 +752,7 @@ mod tests {
 
     fn creds(username: &str, password: &str) -> Option<serde_json::Value> {
         Some(json!({
-            "token": SETUP,
+            "token": setup_token(),
             "email": format!("{username}@example.com"),
             "username": username,
             "password": password,
@@ -761,7 +777,7 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -775,7 +791,7 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("evil", "correct horse"),
+            creds("evil", &pw("admin")),
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
@@ -789,7 +805,7 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
 
@@ -798,7 +814,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("admin", "wrong password"),
+            login_creds("admin", &pw("wrong")),
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -808,7 +824,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("ADMIN", "correct horse"),
+            login_creds("ADMIN", &pw("admin")),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -828,13 +844,13 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
         let admin = admin.unwrap();
 
         let new_user = Some(
-            json!({ "email": "watcher@example.com", "username": "watcher", "password": "long enough", "role": "viewer", "require_change": false }),
+            json!({ "email": "watcher@example.com", "username": "watcher", "password": pw("user"), "role": "viewer", "require_change": false }),
         );
         let (status, ..) = call(&app, "POST", "/api/users", Some(&admin), new_user).await;
         assert_eq!(status, StatusCode::OK);
@@ -844,7 +860,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("watcher", "long enough"),
+            login_creds("watcher", &pw("user")),
         )
         .await;
         let viewer = viewer.unwrap();
@@ -880,7 +896,7 @@ mod tests {
                     .header(header::ORIGIN, "http://evil.example")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        json!({ "login": "a", "password": "b" }).to_string(),
+                        json!({ "login": "a", "password": pw("wrong") }).to_string(),
                     ))
                     .unwrap(),
             )
@@ -893,7 +909,7 @@ mod tests {
     async fn email_is_the_key_and_username_is_optional_but_unique() {
         let app = app();
         let setup = Some(
-            json!({ "token": SETUP, "email": "Admin@Example.com", "password": "correct horse" }),
+            json!({ "token": setup_token(), "email": "Admin@Example.com", "password": pw("admin") }),
         );
         let (status, admin, body) = call(&app, "POST", "/api/auth/setup", None, setup).await;
         assert_eq!(status, StatusCode::OK);
@@ -907,7 +923,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("ADMIN@example.com", "correct horse"),
+            login_creds("ADMIN@example.com", &pw("admin")),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -916,7 +932,7 @@ mod tests {
             Some(json!({
                 "email": email,
                 "username": username,
-                "password": "long enough",
+                "password": pw("user"),
                 "role": "viewer",
             }))
         };
@@ -958,7 +974,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("Alice", "long enough"),
+            login_creds("Alice", &pw("user")),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -994,15 +1010,15 @@ mod tests {
     async fn setup_needs_the_logged_token_and_recovery_needs_the_marker() {
         let (app, state) = app_state(None);
         let body = |token: &str| {
-            Some(json!({ "token": token, "email": "a@example.com", "password": "correct horse" }))
+            Some(json!({ "token": token, "email": "a@example.com", "password": pw("admin") }))
         };
-        for wrong in ["", "nope"] {
-            let (status, ..) = call(&app, "POST", "/api/auth/setup", None, body(wrong)).await;
+        for wrong in [String::new(), pw("wrong")] {
+            let (status, ..) = call(&app, "POST", "/api/auth/setup", None, body(&wrong)).await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{wrong:?}");
         }
         let (_, _, status) = call(&app, "GET", "/api/auth/status", None, None).await;
         assert_eq!(status["setup_required"], true);
-        let (status, ..) = call(&app, "POST", "/api/auth/setup", None, body(SETUP)).await;
+        let (status, ..) = call(&app, "POST", "/api/auth/setup", None, body(&setup_token())).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(state.bootstrap.kind(), None);
 
@@ -1010,14 +1026,14 @@ mod tests {
         arm_bootstrap(&state).unwrap();
         assert_eq!(state.bootstrap.kind(), None);
         let recover = |token: &str, email: &str| {
-            Some(json!({ "token": token, "email": email, "password": "brand new pass" }))
+            Some(json!({ "token": token, "email": email, "password": pw("recovered") }))
         };
         let (status, ..) = call(
             &app,
             "POST",
             "/api/auth/recover",
             None,
-            recover("x", "a@example.com"),
+            recover(&pw("wrong"), "a@example.com"),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
@@ -1058,7 +1074,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("a@example.com", "correct horse"),
+            login_creds("a@example.com", &pw("admin")),
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -1067,7 +1083,7 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("a@example.com", "brand new pass"),
+            login_creds("a@example.com", &pw("recovered")),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -1100,11 +1116,11 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
-        let first = login_cookie(&app, "admin", "correct horse", true).await;
-        let second = login_cookie(&app, "admin", "correct horse", false).await;
+        let first = login_cookie(&app, "admin", &pw("admin"), true).await;
+        let second = login_cookie(&app, "admin", &pw("admin"), false).await;
 
         let (_, _, list) = call(&app, "GET", "/api/auth/sessions", Some(&first), None).await;
         let list = list.as_array().unwrap();
@@ -1174,11 +1190,11 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
-        let streaming = login_cookie(&app, "admin", "correct horse", true).await;
-        let admin = login_cookie(&app, "admin", "correct horse", true).await;
+        let streaming = login_cookie(&app, "admin", &pw("admin"), true).await;
+        let admin = login_cookie(&app, "admin", &pw("admin"), true).await;
 
         let response = raw(
             &app,
@@ -1217,7 +1233,7 @@ mod tests {
     async fn sessions_slide_and_never_pass_the_absolute_cap() {
         let (_, state) = app_state(None);
         let db = &state.db;
-        users::create_first_admin(db, "a@example.com", None, "hash").unwrap();
+        users::create_first_admin(db, "a@example.com", None, &random_token()).unwrap();
         let origin = users::SessionOrigin {
             remember: true,
             ..Default::default()
@@ -1254,17 +1270,17 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
         let admin = admin.unwrap();
         let new_user = Some(
-            json!({ "email": "kim@example.com", "password": "temporary pass", "role": "viewer" }),
+            json!({ "email": "kim@example.com", "password": pw("temporary"), "role": "viewer" }),
         );
         let (status, ..) = call(&app, "POST", "/api/users", Some(&admin), new_user).await;
         assert_eq!(status, StatusCode::OK);
 
-        let kim = login_cookie(&app, "kim@example.com", "temporary pass", true).await;
+        let kim = login_cookie(&app, "kim@example.com", &pw("temporary"), true).await;
         let (_, _, status) = call(&app, "GET", "/api/auth/status", Some(&kim), None).await;
         assert_eq!(status["user"]["must_change_password"], true);
 
@@ -1275,13 +1291,13 @@ mod tests {
         assert_eq!(status, StatusCode::FORBIDDEN);
 
         let change =
-            |new: &str| Some(json!({ "current_password": "temporary pass", "new_password": new }));
+            |new: &str| Some(json!({ "current_password": pw("temporary"), "new_password": new }));
         let (status, ..) = call(
             &app,
             "POST",
             "/api/auth/password",
             Some(&kim),
-            change("temporary pass"),
+            change(&pw("temporary")),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1290,7 +1306,7 @@ mod tests {
             "POST",
             "/api/auth/password",
             Some(&kim),
-            change("my own secret"),
+            change(&pw("chosen")),
         )
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
@@ -1302,7 +1318,7 @@ mod tests {
 
         // An admin reset marks it again, unless they opt out or reset their own.
         let reset = |require: Option<bool>| {
-            Some(json!({ "password": "reset by admin", "require_change": require }))
+            Some(json!({ "password": pw("reset"), "require_change": require }))
         };
         let (status, ..) = call(
             &app,
@@ -1319,7 +1335,7 @@ mod tests {
             StatusCode::UNAUTHORIZED,
             "the reset ends their sessions"
         );
-        let kim = login_cookie(&app, "kim@example.com", "reset by admin", true).await;
+        let kim = login_cookie(&app, "kim@example.com", &pw("reset"), true).await;
         let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&kim), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
 
@@ -1332,7 +1348,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
-        let kim = login_cookie(&app, "kim@example.com", "reset by admin", true).await;
+        let kim = login_cookie(&app, "kim@example.com", &pw("reset"), true).await;
         let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&kim), None).await;
         assert_eq!(status, StatusCode::OK);
 
@@ -1345,7 +1361,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
-        let admin = login_cookie(&app, "admin", "reset by admin", true).await;
+        let admin = login_cookie(&app, "admin", &pw("reset"), true).await;
         let (status, ..) = call(&app, "GET", "/api/webhooks", Some(&admin), None).await;
         assert_eq!(
             status,
@@ -1362,7 +1378,7 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
         call(
@@ -1370,15 +1386,15 @@ mod tests {
             "POST",
             "/api/auth/login",
             None,
-            login_creds("admin", "wrong password"),
+            login_creds("admin", &pw("wrong")),
         )
         .await;
-        let admin = login_cookie(&app, "admin", "correct horse", true).await;
+        let admin = login_cookie(&app, "admin", &pw("admin"), true).await;
         let new_user = Some(json!({
-            "email": "v@example.com", "password": "long enough", "role": "viewer", "require_change": false,
+            "email": "v@example.com", "password": pw("user"), "role": "viewer", "require_change": false,
         }));
         call(&app, "POST", "/api/users", Some(&admin), new_user).await;
-        let viewer = login_cookie(&app, "v@example.com", "long enough", true).await;
+        let viewer = login_cookie(&app, "v@example.com", &pw("user"), true).await;
         call(
             &app,
             "PUT",
@@ -1442,10 +1458,10 @@ mod tests {
 
         // A viewer cannot read it.
         let other = Some(json!({
-            "email": "w@example.com", "password": "long enough", "role": "viewer", "require_change": false,
+            "email": "w@example.com", "password": pw("user"), "role": "viewer", "require_change": false,
         }));
         call(&app, "POST", "/api/users", Some(&admin), other).await;
-        let viewer = login_cookie(&app, "w@example.com", "long enough", true).await;
+        let viewer = login_cookie(&app, "w@example.com", &pw("user"), true).await;
         let (status, ..) = call(&app, "GET", "/api/auth/audit", Some(&viewer), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
     }
@@ -1462,7 +1478,7 @@ mod tests {
             "POST",
             "/api/auth/setup",
             None,
-            creds("admin", "correct horse"),
+            creds("admin", &pw("admin")),
         )
         .await;
         let cookie = cookie.unwrap();
@@ -1502,7 +1518,7 @@ mod tests {
                 .header("sec-fetch-site", site)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({ "login": "a", "password": "b" }).to_string(),
+                    json!({ "login": "a", "password": pw("wrong") }).to_string(),
                 ))
                 .unwrap()
         };
@@ -1531,7 +1547,7 @@ mod tests {
                 .header(header::ORIGIN, origin)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({ "token": SETUP, "email": "admin@example.com", "username": "admin", "password": "correct horse" }).to_string(),
+                    json!({ "token": setup_token(), "email": "admin@example.com", "username": "admin", "password": pw("admin") }).to_string(),
                 ))
                 .unwrap()
         };

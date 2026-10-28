@@ -14,8 +14,8 @@ use crate::db::users::{self, SessionInfo, User, UserError};
 use crate::web::audit::{self, AuditKind};
 use crate::web::auth::{
     AuthUser, BootstrapKind, ClientIp, InvalidBootstrapToken, InvalidCredentials, authenticate,
-    clear_cookie, hash_password, is_secure, normalize_email, optional_username, session_origin,
-    start_session, token_hash_of, validate_password, verify_password,
+    clear_cookie, hash_password, is_secure, normalize_email, optional_username, random_token,
+    session_origin, start_session, token_hash_of, validate_password, verify_password,
 };
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
@@ -254,7 +254,7 @@ pub async fn login(
 /// as known ones.
 fn dummy_hash() -> &'static str {
     static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    HASH.get_or_init(|| hash_password("odin-dummy-password").unwrap_or_default())
+    HASH.get_or_init(|| hash_password(&random_token()).unwrap_or_default())
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {

@@ -528,8 +528,10 @@ async fn mask_json_response(response: Response) -> Response {
 
 /// Paths a viewer may call with a mutating method: their own account only.
 fn viewer_may_mutate(path: &str) -> bool {
-    matches!(path, "/api/auth/logout" | "/api/auth/password")
-        || path.starts_with("/api/auth/sessions")
+    matches!(
+        path,
+        "/api/auth/logout" | "/api/auth/password" | "/api/auth/profile"
+    ) || path.starts_with("/api/auth/sessions")
 }
 
 pub async fn require_auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
@@ -1695,6 +1697,152 @@ mod tests {
             "{set_cookie}"
         );
         assert!(set_cookie.contains("; Secure"));
+    }
+
+    #[tokio::test]
+    async fn accounts_edit_their_own_profile_and_admins_disable_others() {
+        let app = app();
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let admin = admin.unwrap();
+        for (email, username) in [("sam@example.com", Some("sam")), ("max@example.com", None)] {
+            let body = Some(json!({
+                "email": email, "username": username, "password": pw("user"),
+                "role": "viewer", "require_change": false,
+            }));
+            let (status, ..) = call(&app, "POST", "/api/users", Some(&admin), body).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        let sam = login_cookie(&app, "sam", &pw("user"), true).await;
+
+        // Viewers may edit themselves: set, clear and collide on the username.
+        let put = |cookie: &str, body: serde_json::Value| {
+            let (app, cookie) = (app.clone(), cookie.to_string());
+            async move { call(&app, "PUT", "/api/auth/profile", Some(&cookie), Some(body)).await }
+        };
+        let (status, _, user) = put(&sam, json!({ "username": "samuel" })).await;
+        assert_eq!(
+            (status, user["username"].as_str()),
+            (StatusCode::OK, Some("samuel"))
+        );
+        let (status, ..) = put(&sam, json!({ "username": "admin" })).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let (status, ..) = put(&sam, json!({ "username": "has@sign" })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (_, _, user) = put(&sam, json!({ "username": "" })).await;
+        assert!(user["username"].is_null());
+
+        // A new email needs the password, and the session survives the change.
+        let (status, ..) = put(&sam, json!({ "email": "sam2@example.com" })).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let wrong = json!({ "email": "sam2@example.com", "current_password": pw("wrong") });
+        assert_eq!(put(&sam, wrong).await.0, StatusCode::UNAUTHORIZED);
+        let taken = json!({ "email": "MAX@example.com", "current_password": pw("user") });
+        assert_eq!(put(&sam, taken).await.0, StatusCode::CONFLICT);
+        let moved = json!({ "email": "Sam2@Example.com", "current_password": pw("user") });
+        let (status, _, user) = put(&sam, moved).await;
+        assert_eq!(
+            (status, user["email"].as_str()),
+            (StatusCode::OK, Some("sam2@example.com"))
+        );
+        let (status, ..) = call(&app, "GET", "/api/auth/sessions", Some(&sam), None).await;
+        assert_eq!(status, StatusCode::OK, "the session follows the new email");
+        login_cookie(&app, "sam2@example.com", &pw("user"), true).await;
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("sam@example.com", &pw("user")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Disabling signs the account out and refuses new sign-ins until restored.
+        let disable = |on: bool| Some(json!({ "disabled": on }));
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/sam2@example.com",
+            Some(&admin),
+            disable(true),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, ..) = call(&app, "GET", "/api/auth/sessions", Some(&sam), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("sam2@example.com", &pw("user")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (_, _, users) = call(&app, "GET", "/api/users", Some(&admin), None).await;
+        let listed = users
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["email"] == "sam2@example.com")
+            .unwrap();
+        assert_eq!(listed["disabled"], true);
+        assert!(!listed["last_login_at"].is_null());
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/sam2@example.com",
+            Some(&admin),
+            disable(false),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        login_cookie(&app, "sam2@example.com", &pw("user"), true).await;
+
+        // Never one's own account, and never the last enabled administrator.
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/admin@example.com",
+            Some(&admin),
+            disable(true),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let second = Some(json!({
+            "email": "boss@example.com", "password": pw("user"), "role": "admin", "require_change": false,
+        }));
+        call(&app, "POST", "/api/users", Some(&admin), second).await;
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/boss@example.com",
+            Some(&admin),
+            disable(true),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let demote = Some(json!({ "role": "viewer" }));
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/admin@example.com",
+            Some(&admin),
+            demote,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "the disabled admin does not count"
+        );
     }
 
     async fn raw(app: &Router, req: Request<Body>) -> Response {

@@ -39,6 +39,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/password", post(auth::change_password))
+        .route("/auth/profile", put(auth::update_profile))
         .route("/auth/recover", post(auth::recover))
         .route("/auth/audit", get(auth::audit_log))
         .route("/auth/sessions", get(auth::list_sessions))

@@ -20,6 +20,9 @@ pub enum AuditKind {
     RoleChanged,
     SessionRevoked,
     OtherSessionsRevoked,
+    ProfileUpdated,
+    AccountDisabled,
+    AccountEnabled,
 }
 
 impl AuditKind {
@@ -38,6 +41,9 @@ impl AuditKind {
             Self::RoleChanged => "role_changed",
             Self::SessionRevoked => "session_revoked",
             Self::OtherSessionsRevoked => "other_sessions_revoked",
+            Self::ProfileUpdated => "profile_updated",
+            Self::AccountDisabled => "account_disabled",
+            Self::AccountEnabled => "account_enabled",
         }
     }
 }

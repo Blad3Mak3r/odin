@@ -79,6 +79,9 @@ pub struct UpdateUser {
     /// to true, except when an administrator resets their own password.
     #[serde(default)]
     pub require_change: Option<bool>,
+    /// Block (`true`) or restore (`false`) the account's ability to sign in.
+    #[serde(default)]
+    pub disabled: Option<bool>,
 }
 
 pub async fn update(
@@ -89,8 +92,11 @@ pub async fn update(
     Json(req): Json<UpdateUser>,
 ) -> ApiResult<StatusCode> {
     auth.require_admin()?;
-    if req.role.is_none() && req.password.is_none() {
+    if req.role.is_none() && req.password.is_none() && req.disabled.is_none() {
         return Err(BadRequest("nothing to update".into()).into());
+    }
+    if req.disabled == Some(true) && email.eq_ignore_ascii_case(&auth.user.email) {
+        return Err(BadRequest("you cannot disable your own account".into()).into());
     }
     if let Some(password) = &req.password {
         validate_password(password)?;
@@ -98,14 +104,22 @@ pub async fn update(
     let own_account = email.eq_ignore_ascii_case(&auth.user.email);
     let must_change = req.require_change.unwrap_or(!own_account);
     let (db, target) = (state.db.clone(), email.clone());
-    let (role, password) = (req.role, req.password.is_some());
+    let (role, password, disabled) = (req.role, req.password.is_some(), req.disabled);
     let revoked = run_blocking(move || {
         let mut revoked = Vec::new();
         if let Some(role) = req.role {
             users::set_role(&db, &target, role)?;
         }
+        if let Some(disabled) = req.disabled {
+            revoked.extend(users::set_disabled(&db, &target, disabled)?);
+        }
         if let Some(password) = req.password {
-            revoked = users::set_password(&db, &target, &hash_password(&password)?, must_change)?;
+            revoked.extend(users::set_password(
+                &db,
+                &target,
+                &hash_password(&password)?,
+                must_change,
+            )?);
         }
         Ok(revoked)
     })
@@ -123,6 +137,14 @@ pub async fn update(
             Some(&role),
         )
         .await;
+    }
+    if let Some(disabled) = disabled {
+        let kind = if disabled {
+            AuditKind::AccountDisabled
+        } else {
+            AuditKind::AccountEnabled
+        };
+        audit::record(&state, kind, actor, Some(&email), ip, None).await;
     }
     if password {
         audit::record(

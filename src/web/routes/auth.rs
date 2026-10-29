@@ -218,9 +218,17 @@ pub async fn login(
             .as_ref()
             .map_or(dummy_hash(), |c| c.password_hash.as_str());
         let ok = verify_password(&password, stored);
-        Ok(found.filter(|_| ok).map(|c| c.user))
+        let Some(found) = found.filter(|_| ok) else {
+            return Ok((None, false));
+        };
+        if found.user.disabled {
+            return Ok((None, true));
+        }
+        users::record_login(&db, &found.user.email)?;
+        Ok((Some(found.user), false))
     })
     .await?;
+    let (user, disabled) = user;
     let Some(user) = user else {
         state.login_throttle.record_failure(&req.login, ip);
         tracing::warn!(login = %req.login, ?ip, "failed dashboard login");
@@ -230,7 +238,7 @@ pub async fn login(
             Some(&req.login),
             None,
             ip,
-            None,
+            disabled.then_some("account disabled"),
         )
         .await;
         return Err(InvalidCredentials.into());
@@ -255,6 +263,72 @@ pub async fn login(
 fn dummy_hash() -> &'static str {
     static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     HASH.get_or_init(|| hash_password(&random_token()).unwrap_or_default())
+}
+
+#[derive(Deserialize)]
+pub struct ProfileUpdate {
+    /// A new email address. Changing it needs `current_password`.
+    #[serde(default)]
+    pub email: Option<String>,
+    /// A new username; blank removes it.
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub current_password: Option<String>,
+}
+
+/// Lets any account change its own email and username.
+pub async fn update_profile(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    Json(req): Json<ProfileUpdate>,
+) -> ApiResult<Json<User>> {
+    if req.email.is_none() && req.username.is_none() {
+        return Err(BadRequest("nothing to update".into()).into());
+    }
+    let new_email = req.email.as_deref().map(normalize_email).transpose()?;
+    let username = req
+        .username
+        .as_deref()
+        .map(|name| optional_username(Some(name)))
+        .transpose()?;
+    let (db, old_email) = (state.db.clone(), auth.user.email.clone());
+    let current_password = req.current_password.unwrap_or_default();
+    let user = run_blocking(move || {
+        let mut email = old_email.clone();
+        if let Some(new_email) = new_email.filter(|new| *new != old_email) {
+            let stored = users::password_hash(&db, &old_email)?.unwrap_or_default();
+            if !verify_password(&current_password, &stored) {
+                return Err(InvalidCredentials.into());
+            }
+            users::set_email(&db, &old_email, &new_email)?;
+            email = new_email;
+        }
+        if let Some(username) = username {
+            users::set_username(&db, &email, username.as_deref())?;
+        }
+        users::find_by_email(&db, &email)?.ok_or_else(|| UserError::NotFound(email).into())
+    })
+    .await?;
+    let detail = [
+        req.email.is_some().then_some("email"),
+        req.username.is_some().then_some("username"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    audit::record(
+        &state,
+        AuditKind::ProfileUpdated,
+        Some(&auth.user.email),
+        Some(&user.email),
+        ip,
+        Some(&detail),
+    )
+    .await;
+    Ok(Json(user))
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {

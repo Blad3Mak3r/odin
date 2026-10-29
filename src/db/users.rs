@@ -69,6 +69,9 @@ pub struct User {
     pub created_at: DateTime<Utc>,
     /// The password was set by someone else and must be replaced at sign-in.
     pub must_change_password: bool,
+    /// Cannot sign in; its sessions are gone.
+    pub disabled: bool,
+    pub last_login_at: Option<DateTime<Utc>>,
 }
 
 /// A user together with the stored password hash, for login only.
@@ -108,6 +111,8 @@ pub fn create_first_admin(
         role: Role::Admin,
         created_at: now,
         must_change_password: false,
+        disabled: false,
+        last_login_at: None,
     })
 }
 
@@ -139,6 +144,8 @@ pub fn create(
             role,
             created_at: now,
             must_change_password,
+            disabled: false,
+            last_login_at: None,
         }),
         Err(rusqlite::Error::SqliteFailure(err, Some(message)))
             if err.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -157,13 +164,13 @@ pub fn create(
 pub fn find_credentials(db: &Db, login: &str) -> Result<Option<UserCredentials>> {
     db.conn()
         .query_row(
-            "SELECT email, username, role, created_at, must_change_password, password_hash FROM users \
+            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at, password_hash FROM users \
              WHERE email = ?1 OR username = ?1",
             params![login],
             |row| {
                 Ok(UserCredentials {
                     user: row_to_user(row)?,
-                    password_hash: row.get(5)?,
+                    password_hash: row.get(7)?,
                 })
             },
         )
@@ -185,26 +192,24 @@ pub fn password_hash(db: &Db, email: &str) -> Result<Option<String>> {
 pub fn list(db: &Db) -> Result<Vec<User>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT email, username, role, created_at, must_change_password FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE",
+        "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], row_to_user)?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
 
-/// Changes a user's role; refuses to demote the last administrator.
+/// Changes a user's role; refuses to demote the last enabled administrator.
 pub fn set_role(db: &Db, email: &str, role: Role) -> Result<()> {
     let conn = db.conn();
-    let current: Option<String> = conn
-        .query_row(
-            "SELECT role FROM users WHERE email = ?1",
-            params![email],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let Some(current) = current else {
+    let current = role_and_state(&conn, email)?;
+    let Some((current, disabled)) = current else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
-    if Role::parse(&current) == Role::Admin && role != Role::Admin && admin_count(&conn)? <= 1 {
+    if Role::parse(&current) == Role::Admin
+        && !disabled
+        && role != Role::Admin
+        && admin_count(&conn)? <= 1
+    {
         return Err(UserError::LastAdmin.into());
     }
     conn.execute(
@@ -242,22 +247,97 @@ pub fn set_password(
 /// Returns the token hashes of the sessions that went with it.
 pub fn delete(db: &Db, email: &str) -> Result<Vec<String>> {
     let conn = db.conn();
-    let role: Option<String> = conn
-        .query_row(
-            "SELECT role FROM users WHERE email = ?1",
-            params![email],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let Some(role) = role else {
+    let Some((role, disabled)) = role_and_state(&conn, email)? else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
-    if Role::parse(&role) == Role::Admin && admin_count(&conn)? <= 1 {
+    if Role::parse(&role) == Role::Admin && !disabled && admin_count(&conn)? <= 1 {
         return Err(UserError::LastAdmin.into());
     }
     let hashes = session_hashes(&conn, email, None)?;
     conn.execute("DELETE FROM users WHERE email = ?1", params![email])?;
     Ok(hashes)
+}
+
+/// Enables or disables an account. Disabling signs it out everywhere and
+/// returns the revoked token hashes; the last enabled administrator cannot
+/// be disabled.
+pub fn set_disabled(db: &Db, email: &str, disabled: bool) -> Result<Vec<String>> {
+    let conn = db.conn();
+    let Some((role, was_disabled)) = role_and_state(&conn, email)? else {
+        return Err(UserError::NotFound(email.to_string()).into());
+    };
+    if disabled && Role::parse(&role) == Role::Admin && !was_disabled && admin_count(&conn)? <= 1 {
+        return Err(UserError::LastAdmin.into());
+    }
+    conn.execute(
+        "UPDATE users SET disabled = ?2 WHERE email = ?1",
+        params![email, disabled],
+    )?;
+    if !disabled {
+        return Ok(Vec::new());
+    }
+    let hashes = session_hashes(&conn, email, None)?;
+    conn.execute(
+        "DELETE FROM auth_sessions WHERE user_email = ?1",
+        params![email],
+    )?;
+    Ok(hashes)
+}
+
+/// Sets or clears (`None`) the optional username.
+pub fn set_username(db: &Db, email: &str, username: Option<&str>) -> Result<()> {
+    let result = db.conn().execute(
+        "UPDATE users SET username = ?2 WHERE email = ?1",
+        params![email, username],
+    );
+    match result {
+        Ok(0) => Err(UserError::NotFound(email.to_string()).into()),
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(err, _))
+            if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            Err(UserError::UsernameTaken(username.unwrap_or_default().to_string()).into())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Changes the primary key. Sessions follow through `ON UPDATE CASCADE`.
+pub fn set_email(db: &Db, email: &str, new_email: &str) -> Result<()> {
+    let result = db.conn().execute(
+        "UPDATE users SET email = ?2 WHERE email = ?1",
+        params![email, new_email],
+    );
+    match result {
+        Ok(0) => Err(UserError::NotFound(email.to_string()).into()),
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(err, _))
+            if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            Err(UserError::EmailTaken(new_email.to_string()).into())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+pub fn record_login(db: &Db, email: &str) -> Result<()> {
+    db.conn().execute(
+        "UPDATE users SET last_login_at = ?2 WHERE email = ?1",
+        params![email, Utc::now()],
+    )?;
+    Ok(())
+}
+
+pub fn find_by_email(db: &Db, email: &str) -> Result<Option<User>> {
+    db.conn()
+        .query_row(
+            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at \
+             FROM users WHERE email = ?1",
+            params![email],
+            row_to_user,
+        )
+        .optional()
+        .map_err(Into::into)
 }
 
 /// One login session, as stored. `token_hash` never leaves the server.
@@ -346,12 +426,12 @@ pub fn user_for_session(db: &Db, token_hash: &str) -> Result<Option<(User, Sessi
     db.conn()
         .query_row(
             &format!(
-                "SELECT u.email, u.username, u.role, u.created_at, u.must_change_password, {SESSION_COLUMNS} \
+                "SELECT u.email, u.username, u.role, u.created_at, u.must_change_password, u.disabled, u.last_login_at, {SESSION_COLUMNS} \
                  FROM auth_sessions s JOIN users u ON u.email = s.user_email \
-                 WHERE s.token_hash = ?1 AND s.expires_at > ?2"
+                 WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.disabled = 0"
             ),
             params![token_hash, Utc::now()],
-            |row| Ok((row_to_user(row)?, row_to_session(row, 5)?)),
+            |row| Ok((row_to_user(row)?, row_to_session(row, 7)?)),
         )
         .optional()
         .map_err(Into::into)
@@ -436,10 +516,24 @@ fn session_hashes(
         .collect()
 }
 
+fn role_and_state(
+    conn: &rusqlite::Connection,
+    email: &str,
+) -> rusqlite::Result<Option<(String, bool)>> {
+    conn.query_row(
+        "SELECT role, disabled FROM users WHERE email = ?1",
+        params![email],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+}
+
 fn admin_count(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
-    conn.query_row("SELECT COUNT(*) FROM users WHERE role = 'admin'", [], |r| {
-        r.get(0)
-    })
+    conn.query_row(
+        "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0",
+        [],
+        |r| r.get(0),
+    )
 }
 
 fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
@@ -450,5 +544,7 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         role: Role::parse(&role),
         created_at: row.get(3)?,
         must_change_password: row.get(4)?,
+        disabled: row.get(5)?,
+        last_login_at: row.get(6)?,
     })
 }

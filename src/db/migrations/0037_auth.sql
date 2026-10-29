@@ -9,6 +9,9 @@ CREATE TABLE users (
     role          TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
     -- Set when someone else chose the password; the owner must replace it.
     must_change_password INTEGER NOT NULL DEFAULT 0,
+    -- A disabled account keeps its data but cannot sign in or hold sessions.
+    disabled      INTEGER NOT NULL DEFAULT 0,
+    last_login_at TEXT,
     created_at    TEXT NOT NULL
 );
 

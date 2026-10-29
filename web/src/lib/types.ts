@@ -660,3 +660,44 @@ export interface InstanceDefaults {
   backup_interval_hours: number
   backup_retain_count: number
 }
+
+export type UserRole = 'admin' | 'viewer'
+
+export interface AuthUser {
+  email: string
+  username: string | null
+  role: UserRole
+  created_at: string
+  /** Someone else chose this password; it must be replaced at sign-in. */
+  must_change_password: boolean
+  disabled: boolean
+  last_login_at: string | null
+}
+
+export interface AuditEvent {
+  id: number
+  at: string
+  kind: string
+  actor: string | null
+  target: string | null
+  ip: string | null
+  detail: string | null
+}
+
+export interface AuthSession {
+  id: string
+  created_at: string
+  last_used_at: string
+  expires_at: string
+  remember: boolean
+  ip: string | null
+  user_agent: string | null
+  current: boolean
+}
+
+export interface AuthStatus {
+  setup_required: boolean
+  recovery_active: boolean
+  user: AuthUser | null
+  csrf_token: string | null
+}

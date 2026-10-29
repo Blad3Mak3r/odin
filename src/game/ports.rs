@@ -167,6 +167,7 @@ mod tests {
         let config = crate::config::GlobalConfig {
             data_dir: None,
             curseforge: None,
+            server: None,
             podman: Some(crate::config::PodmanConfig {
                 socket,
                 runtime_image: None,

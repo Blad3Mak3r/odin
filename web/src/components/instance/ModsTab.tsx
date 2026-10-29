@@ -8,7 +8,7 @@ import { buttonVariants } from '@/components/ui/button-variants'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { getModSource, MOD_SOURCE_LABEL } from '@/lib/modSource'
-import { useMods, useSetModEnabled } from '@/lib/queries'
+import { useIsAdmin, useMods, useSetModEnabled } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 
 const ModConfigFiles = lazy(() =>
@@ -16,6 +16,7 @@ const ModConfigFiles = lazy(() =>
 )
 
 export function ModsTab({ id, name, running, path }: { id: string; name: string; running: boolean; path: string[] }) {
+  const isAdmin = useIsAdmin()
   if (path.length > 0 && !(path.length === 1 && path[0] === 'installed')) {
     return <Navigate to={`/instance/${id}/mods`} replace />
   }
@@ -23,9 +24,11 @@ export function ModsTab({ id, name, running, path }: { id: string; name: string;
   return (
     <div className="flex flex-col gap-8">
       <InstalledMods id={id} name={name} running={running} />
-      <Suspense fallback={<span className="text-sm text-muted-foreground">Loading configuration files…</span>}>
-        <ModConfigFiles id={id} />
-      </Suspense>
+      {isAdmin && (
+        <Suspense fallback={<span className="text-sm text-muted-foreground">Loading configuration files…</span>}>
+          <ModConfigFiles id={id} />
+        </Suspense>
+      )}
     </div>
   )
 }

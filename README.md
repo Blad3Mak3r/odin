@@ -412,7 +412,9 @@ Passwords are stored as Argon2id hashes. Odin speaks plain HTTP: `odin serve`
 still binds to `127.0.0.1` by default, so reach it from another machine
 through an SSH tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS
 reverse proxy (which should send `X-Forwarded-Proto: https` so the cookie is
-marked `Secure`) rather than binding it directly to a public address.
+marked `Secure`; Odin believes that header only from a trusted proxy, see
+`trusted_proxies` below, and otherwise ignores it) rather than binding it
+directly to a public address.
 
 Sessions slide: "keep me signed in" sessions expire after 14 days without
 use, others after 12 hours and when the browser closes, and none lives past
@@ -420,6 +422,13 @@ use, others after 12 hours and when the browser closes, and none lives past
 so you can revoke any of them or sign out everywhere else; revoking a session,
 changing a password or deleting a user also closes that session's live event
 streams immediately.
+
+Each account can edit its own email (which needs its password) and username
+under Settings. Administrators can disable an account, which signs it out and
+blocks new sign-ins until it is enabled again, and see when each account last
+signed in. The last enabled administrator can be neither disabled, demoted nor
+deleted. Viewers get a read-only dashboard: write controls are hidden or
+disabled, and the API refuses their changes in any case.
 
 Administrators also get a **Security log** in Settings: sign-ins and failures,
 blocked attempts, wrong setup or recovery tokens, password changes and resets,

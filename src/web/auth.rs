@@ -534,7 +534,6 @@ fn viewer_may_mutate(path: &str) -> bool {
 
 pub async fn require_auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    let headers = req.headers().clone();
     if !path.starts_with("/api/") && path != "/api" {
         return next.run(req).await;
     }
@@ -542,6 +541,12 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip());
+    // Only a trusted proxy may say the client used HTTPS; anyone else's claim
+    // is dropped before any handler sees it.
+    if !peer.is_some_and(|peer| state.trusted_proxies.contains(peer)) {
+        req.headers_mut().remove("x-forwarded-proto");
+    }
+    let headers = req.headers().clone();
     let ip = resolve_client_ip(&state.trusted_proxies, &headers, peer);
     req.extensions_mut().insert(ClientIp(ip));
     let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
@@ -1643,6 +1648,53 @@ mod tests {
         assert!(viewer_blocked("/api/instances/1/config/files/a"));
         assert!(!viewer_blocked("/api/instances/1/config/advanced"));
         assert!(!viewer_blocked("/api/instances/1/config"));
+    }
+
+    #[tokio::test]
+    async fn only_a_trusted_proxy_can_mark_the_connection_https() {
+        let app = app();
+        call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let login = |peer: Option<&str>| {
+            let mut req = Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-forwarded-proto", "https")
+                .body(Body::from(
+                    json!({ "login": "admin", "password": pw("admin") }).to_string(),
+                ))
+                .unwrap();
+            if let Some(peer) = peer {
+                let peer: SocketAddr = peer.parse().unwrap();
+                req.extensions_mut().insert(ConnectInfo(peer));
+            }
+            req
+        };
+        let cookie = |response: &Response| {
+            response.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        // A stranger's claim is ignored, and so is one with no known peer.
+        for peer in [Some("203.0.113.9:4000"), None] {
+            let set_cookie = cookie(&raw(&app, login(peer)).await);
+            assert!(!set_cookie.contains("Secure"), "{peer:?}: {set_cookie}");
+        }
+        // The local proxy is believed.
+        let set_cookie = cookie(&raw(&app, login(Some("127.0.0.1:4000"))).await);
+        assert!(
+            set_cookie.starts_with("__Host-odin_session="),
+            "{set_cookie}"
+        );
+        assert!(set_cookie.contains("; Secure"));
     }
 
     async fn raw(app: &Router, req: Request<Body>) -> Response {

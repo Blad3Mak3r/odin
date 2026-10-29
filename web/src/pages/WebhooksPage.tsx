@@ -25,6 +25,7 @@ import { ACTIVITY_KIND_LABELS } from '@/lib/activity'
 import {
   useCreateWebhook,
   useDeleteWebhook,
+  useIsAdmin,
   useSetWebhookEnabled,
   useTestWebhook,
   useUpdateWebhook,
@@ -36,13 +37,14 @@ const ACTIVITY_KINDS = Object.keys(ACTIVITY_KIND_LABELS) as ActivityKind['kind']
 
 export function WebhooksPage() {
   const webhooks = useWebhooks()
+  const isAdmin = useIsAdmin()
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Webhooks"
         description="Send a message to Discord (or anything Discord-compatible) when something happens."
-        action={<CreateWebhookDialog />}
+        action={isAdmin ? <CreateWebhookDialog /> : undefined}
       />
 
       {webhooks.isError && <QueryError error={webhooks.error} />}
@@ -71,6 +73,7 @@ export function WebhooksPage() {
 }
 
 function WebhookRow({ webhook }: { webhook: WebhookView }) {
+  const isAdmin = useIsAdmin()
   const setEnabled = useSetWebhookEnabled()
   const deleteWebhook = useDeleteWebhook()
   const testWebhook = useTestWebhook()
@@ -100,6 +103,7 @@ function WebhookRow({ webhook }: { webhook: WebhookView }) {
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Webhook #{webhook.id.slice(0, 8)}</span>
         <Switch
           checked={webhook.enabled}
+          disabled={!isAdmin}
           onCheckedChange={(enabled) =>
             setEnabled.mutate(
               { id: webhook.id, enabled },
@@ -119,7 +123,7 @@ function WebhookRow({ webhook }: { webhook: WebhookView }) {
           ))
         )}
       </div>
-      <div className="flex justify-end gap-2">
+      <div hidden={!isAdmin} className="flex justify-end gap-2">
         <EditWebhookDialog webhook={webhook} />
         <Button size="sm" variant="outline" disabled={testWebhook.isPending} onClick={handleTest}>
           {testWebhook.isPending && <Loader2 className="size-4 animate-spin" />}

@@ -12,6 +12,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   useClearNexusApiKey,
   useCheckRuntimeImages,
+  useIsAdmin,
   usePullRuntimeImage,
   useRuntimeImages,
   useSetInstanceDefaults,
@@ -129,6 +130,7 @@ function PodmanSettings({ podman, configFile }: { podman: PodmanSettingsView; co
 }
 
 export function SettingsPage() {
+  const isAdmin = useIsAdmin()
   const settings = useSettings()
   const setApiKey = useSetNexusApiKey()
   const clearApiKey = useClearNexusApiKey()
@@ -158,6 +160,7 @@ export function SettingsPage() {
 
       <AccountSettings />
 
+      <fieldset disabled={!isAdmin} className="flex min-w-0 flex-col gap-8 border-0 p-0">
       {settings.isError && <QueryError error={settings.error} />}
 
       {settings.isLoading ? (
@@ -228,6 +231,7 @@ export function SettingsPage() {
           )}
         </div>
       </div>
+      </fieldset>
     </div>
   )
 }

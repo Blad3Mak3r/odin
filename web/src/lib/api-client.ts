@@ -18,6 +18,13 @@ export function setCsrfToken(token: string | null) {
   csrfToken = token
 }
 
+let readOnly = false
+
+/** Viewers cannot change anything; the server refuses it, this just answers sooner. */
+export function setReadOnly(value: boolean) {
+  readOnly = value
+}
+
 let onUnauthorized: (() => void) | undefined
 
 /** Called when a non-auth endpoint answers 401, i.e. the session has expired. */
@@ -29,6 +36,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // A `FormData` body must NOT get a manual content-type: the browser sets
   // one itself (including the multipart boundary), and overriding it here
   // would break the upload.
+  if (readOnly && init?.method && init.method !== 'GET' && !path.startsWith('/auth/')) {
+    throw new ApiError(403, 'This account is read-only. Ask an administrator to make the change.')
+  }
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
   if (init?.body && !isFormData) headers['content-type'] = 'application/json'

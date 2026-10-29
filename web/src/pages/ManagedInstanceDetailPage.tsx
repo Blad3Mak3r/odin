@@ -319,8 +319,13 @@ function GenericConfigForm({ id, game, config, running, installMode }: { id: str
   return <div className="flex flex-col gap-6"><form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save() }}><p className="text-sm text-muted-foreground">Odin manages process ports and restart behavior. Game settings are below and come directly from the server-generated file.</p><div className="grid gap-4 sm:grid-cols-2"><ConfigInput id="generic-port" label={game === 'cs2' ? 'Game port (UDP and TCP, also used by RCON)' : 'Game port'} type="number" min={1} max={65535} value={port} disabled={running} onChange={setPort} />{config.query_port !== null && <ConfigInput id="generic-query-port" label={game === 'palworld' ? 'Steam query port' : 'Query port'} type="number" min={1} max={65535} value={queryPort} disabled={running} onChange={setQueryPort} />}{config.admin_port !== null && <ConfigInput id="generic-admin-port" label={game === 'palworld' ? 'REST API port' : game === 'ark-asa' ? 'RCON port' : 'Local console port'} type="number" min={1} max={65535} value={adminPort} disabled={running} onChange={setAdminPort} />}{game === 'cs2' && <><ConfigInput id="cs2-map" label="Start map" value={map} disabled={running} onChange={setMap} /><div className="flex flex-col gap-1"><Label htmlFor="cs2-game-mode">Game mode</Label><select id="cs2-game-mode" className="h-9 border bg-background px-3 text-sm" value={gameMode} disabled={running} onChange={(event) => setGameMode(event.target.value as Cs2GameMode)}>{CS2_GAME_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></div><ConfigInput id="cs2-max-players" label="Max players" type="number" min={1} max={64} value={maxPlayers} disabled={running} onChange={setMaxPlayers} /><ConfigInput id="cs2-gslt" label="Game server login token" type="password" placeholder={config.has_gslt ? 'Configured — leave empty to keep it' : 'Optional; needed to be listed publicly'} value={gslt} disabled={running || removeGslt} onChange={setGslt} required={false} />{config.has_gslt && <div className="flex items-center gap-2 sm:col-span-2"><Switch id="cs2-remove-gslt" checked={removeGslt} disabled={running} onCheckedChange={setRemoveGslt} /><Label htmlFor="cs2-remove-gslt">Remove the saved token</Label></div>}{config.tv_port !== undefined && <p className="text-xs text-muted-foreground sm:col-span-2">SourceTV uses UDP port {config.tv_port}, derived from the game port.</p>}</>}{game === 'ark-asa' && <><ConfigInput id="ark-map" label="Map" value={map} disabled={running} onChange={setMap} /><ConfigInput id="ark-session-name" label="Session name" value={sessionName} disabled={running} onChange={setSessionName} /></>}</div><div className="flex items-center justify-between rounded-xl border p-3"><div><Label htmlFor="generic-auto-restart">Restart automatically</Label><p className="text-xs text-muted-foreground">Restart this server after an unexpected exit.</p></div><Switch id="generic-auto-restart" checked={autoRestart} disabled={running} onCheckedChange={setAutoRestart} /></div><Button className="w-fit" type="submit" disabled={running || update.isPending}>Save Odin settings</Button></form>{sharedArk ? <div className="border p-4 text-sm text-muted-foreground">Shared ARK native configuration is common to every shared instance. <Link className="text-foreground underline underline-offset-4" to="/games/ark-asa/config">Open shared configuration</Link>.</div> : <AdvancedConfigSection id={id} game={game} running={running} />}{game === '7d2d' && isAdmin && <SevenDaysTemplateReview id={id} running={running} />}</div>
 }
 
-function TabPanel({ active, className, children }: { active: boolean; className?: string; children: ReactNode }) {
-  return active ? <div className={className}>{children}</div> : null
+/// `writes` marks a tab whose controls change the server: viewers see it
+/// with every control disabled, because the API would refuse them anyway.
+function TabPanel({ active, className, children, writes = false }: { active: boolean; className?: string; children: ReactNode; writes?: boolean }) {
+  const isAdmin = useIsAdmin()
+  if (!active) return null
+  const panel = <div className={className}>{children}</div>
+  return writes && !isAdmin ? <fieldset disabled className="min-w-0 border-0 p-0">{panel}</fieldset> : panel
 }
 
 export function ManagedInstanceDetailPage() {
@@ -381,9 +386,9 @@ export function ManagedInstanceDetailPage() {
       <RouteTabs label="Instance sections" tabs={tabs.map((item) => ({ label: item.label, to: `/instance/${id}/${item.id}` }))} />
       <div className="flex flex-col gap-2">
         <TabPanel active={tab === 'logs'}><ManagedLogsTab id={detail.id} /></TabPanel>
-        {detail.game === 'rust' && <TabPanel active={tab === 'rcon'}><RustRconTab id={detail.id} running={detail.running} /></TabPanel>}
-        {detail.game === '7d2d' && <TabPanel active={tab === 'console'}><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabPanel>}
-        {detail.game === '7d2d' && <TabPanel active={tab === 'players'}><SevenDaysPlayersTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === 'rust' && <TabPanel writes active={tab === 'rcon'}><RustRconTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === '7d2d' && <TabPanel writes active={tab === 'console'}><SevenDaysConsoleTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === '7d2d' && <TabPanel writes active={tab === 'players'}><SevenDaysPlayersTab id={detail.id} running={detail.running} /></TabPanel>}
         <TabPanel active={tab === 'startup'}><StartupTab id={detail.id} /></TabPanel>
         <TabPanel active={tab === 'errors'}>
           <Card>
@@ -398,7 +403,7 @@ export function ManagedInstanceDetailPage() {
             </CardContent>
           </Card>
         </TabPanel>
-        <TabPanel active={tab === 'config'} className="flex flex-col gap-6">
+        <TabPanel writes active={tab === 'config'} className="flex flex-col gap-6">
           {detail.game === 'valheim'
             ? <ConfigTab id={detail.id} />
             : rustConfig
@@ -410,29 +415,29 @@ export function ManagedInstanceDetailPage() {
           <UptimeScheduleCard id={detail.id} />
           {detail.game === 'rust' && <WipeMapCard id={detail.id} name={detail.name} running={detail.running} />}
         </TabPanel>
-        {detail.game === 'palworld' && <TabPanel active={tab === 'admin'}><PalworldAdminTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === 'palworld' && <TabPanel writes active={tab === 'admin'}><PalworldAdminTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.capabilities.backups && (
-          <TabPanel active={tab === 'backups'}><BackupsTab id={detail.id} name={detail.name} game={detail.game} running={detail.running} /></TabPanel>
+          <TabPanel writes active={tab === 'backups'}><BackupsTab id={detail.id} name={detail.name} game={detail.game} running={detail.running} /></TabPanel>
         )}
         {detail.game === 'rust' && tab === 'lists' && (
-          <TabPanel active={tab === 'lists'}><RustAccessListsTab id={detail.id} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabPanel>
+          <TabPanel writes active={tab === 'lists'}><RustAccessListsTab id={detail.id} path={nestedPath} running={detail.running} basePath={listsBasePath} /></TabPanel>
         )}
         {detail.game === 'valheim' && tab === 'lists' && (
-          <TabPanel active={tab === 'lists'}><AccessListsTab id={detail.id} path={nestedPath} /></TabPanel>
+          <TabPanel writes active={tab === 'lists'}><AccessListsTab id={detail.id} path={nestedPath} /></TabPanel>
         )}
         {detail.game === 'valheim' && tab === 'mods' && (
-          <TabPanel active={tab === 'mods'}><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabPanel>
+          <TabPanel writes active={tab === 'mods'}><ModsTab id={detail.id} name={detail.name} running={detail.running} path={nestedPath} /></TabPanel>
         )}
-        {detail.game === '7d2d' && tab === 'mods' && <TabPanel active={tab === 'mods'}><SevenDaysModsTab id={detail.id} running={detail.running} /></TabPanel>}
+        {detail.game === '7d2d' && tab === 'mods' && <TabPanel writes active={tab === 'mods'}><SevenDaysModsTab id={detail.id} running={detail.running} /></TabPanel>}
         {detail.game === 'ark-asa' && tab === 'mods' && genericConfig && (
-          <TabPanel active={tab === 'mods'}><ArkModsTab key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={genericConfig} running={detail.running} /></TabPanel>
+          <TabPanel writes active={tab === 'mods'}><ArkModsTab key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} config={genericConfig} running={detail.running} /></TabPanel>
         )}
         {detail.game === 'ark-asa' && detail.install_mode === 'shared'
           ? <TabPanel active={tab === 'saves'}><Card><CardHeader><CardTitle>Shared ARK save files</CardTitle><CardDescription>Browse this instance’s world files and cluster transfer files from the ARK game page.</CardDescription></CardHeader><CardContent><Link className={buttonVariants({ variant: 'outline' })} to="/games/ark-asa/saves">Open ARK Save files</Link></CardContent></Card></TabPanel>
           : <TabPanel active={tab === 'saves'}><SaveFilesTab id={detail.id} running={detail.running} /></TabPanel>}
         <TabPanel active={tab === 'resources'}><ManagedResourcesTab id={detail.id} running={detail.running} /></TabPanel>
-        <TabPanel active={tab === 'limits'}><ResourceLimitsTab id={detail.id} /></TabPanel>
-        {detail.game === 'valheim' && <TabPanel active={tab === 'players'}><PlayersTab id={detail.id} running={detail.running} /></TabPanel>}
+        <TabPanel writes active={tab === 'limits'}><ResourceLimitsTab id={detail.id} /></TabPanel>
+        {detail.game === 'valheim' && <TabPanel writes active={tab === 'players'}><PlayersTab id={detail.id} running={detail.running} /></TabPanel>}
       </div>
     </div>
   )

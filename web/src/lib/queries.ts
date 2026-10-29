@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api, setCsrfToken } from './api-client'
+import { api, setCsrfToken, setReadOnly } from './api-client'
 import type {
   ActivityEvent,
   AuditEvent,
@@ -1409,6 +1409,7 @@ export function useAuthStatus() {
     queryFn: async () => {
       const status = await api.get<AuthStatus>('/auth/status')
       setCsrfToken(status.csrf_token)
+      setReadOnly(status.user?.role === 'viewer')
       return status
     },
     retry: false,

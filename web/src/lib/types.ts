@@ -670,6 +670,8 @@ export interface AuthUser {
   created_at: string
   /** Someone else chose this password; it must be replaced at sign-in. */
   must_change_password: boolean
+  disabled: boolean
+  last_login_at: string | null
 }
 
 export interface AuditEvent {

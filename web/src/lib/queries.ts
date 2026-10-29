@@ -1489,6 +1489,7 @@ export function useUpdateUser() {
       role?: UserRole
       password?: string
       require_change?: boolean
+      disabled?: boolean
     }) =>
       api.put<void>(`/users/${encodeURIComponent(email)}`, req),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
@@ -1531,5 +1532,14 @@ export function useAuditLog() {
   return useQuery({
     queryKey: ['auth', 'audit'],
     queryFn: () => api.get<AuditEvent[]>('/auth/audit?limit=100'),
+  })
+}
+
+export function useUpdateProfile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { email?: string; username?: string; current_password?: string }) =>
+      api.put<AuthUser>('/auth/profile', req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth'] }),
   })
 }

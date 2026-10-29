@@ -22,11 +22,89 @@ import {
   useDeleteUser,
   useRevokeOtherSessions,
   useRevokeSession,
+  useUpdateProfile,
   useSessions,
   useUpdateUser,
   useUsers,
 } from '@/lib/queries'
 import type { AuditEvent, AuthUser, UserRole } from '@/lib/types'
+
+function ProfileForm({ user }: { user: AuthUser }) {
+  const update = useUpdateProfile()
+  const [email, setEmail] = useState(user.email)
+  const [username, setUsername] = useState(user.username ?? '')
+  const [password, setPassword] = useState('')
+  const emailChanged = email.trim().toLowerCase() !== user.email
+  const usernameChanged = username.trim() !== (user.username ?? '')
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    update.mutate(
+      {
+        ...(emailChanged ? { email, current_password: password } : {}),
+        ...(usernameChanged ? { username: username.trim() } : {}),
+      },
+      {
+        onSuccess: (saved) => {
+          setEmail(saved.email)
+          setUsername(saved.username ?? '')
+          setPassword('')
+          toast.success('Profile saved')
+        },
+        onError: (e) => toast.error(e.message),
+      },
+    )
+  }
+
+  return (
+    <form onSubmit={submit} className="flex max-w-md flex-col gap-4 rounded-xl border p-4">
+      <h2 className="text-sm font-medium">Profile</h2>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="profile-email">Email</Label>
+        <Input
+          id="profile-email"
+          type="email"
+          autoComplete="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="profile-username">Username (optional)</Label>
+        <Input
+          id="profile-username"
+          autoComplete="username"
+          pattern="[A-Za-z0-9._\-]{3,32}"
+          title="3-32 letters, digits, '.', '_' or '-'"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+      </div>
+      {emailChanged && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="profile-password">Current password</Label>
+          <Input
+            id="profile-password"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">Needed to change your email address.</p>
+        </div>
+      )}
+      <Button
+        type="submit"
+        className="w-fit"
+        disabled={update.isPending || (!emailChanged && !usernameChanged)}
+      >
+        Save profile
+      </Button>
+    </form>
+  )
+}
 
 function ChangePasswordForm() {
   const change = useChangePassword()
@@ -257,6 +335,9 @@ const AUDIT_LABELS: Record<string, string> = {
   role_changed: 'Role changed',
   session_revoked: 'Session revoked',
   other_sessions_revoked: 'Other sessions revoked',
+  profile_updated: 'Profile updated',
+  account_disabled: 'Account disabled',
+  account_enabled: 'Account enabled',
 }
 
 const AUDIT_ALERTS = new Set(['bootstrap_token_failed', 'login_failed', 'login_throttled'])
@@ -355,7 +436,13 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
               {user.username && (
                 <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
               )}
+              <span className="block text-xs text-muted-foreground">
+                {user.last_login_at
+                  ? `Last signed in ${new Date(user.last_login_at).toLocaleString()}`
+                  : 'Never signed in'}
+              </span>
             </span>
+            {user.disabled && <Badge variant="destructive">disabled</Badge>}
             {user.must_change_password && <Badge variant="outline">must change password</Badge>}
             <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>{user.role}</Badge>
             <Button
@@ -370,6 +457,16 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
               }
             >
               Make {user.role === 'admin' ? 'viewer' : 'admin'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={user.email === currentUserEmail || update.isPending}
+              onClick={() =>
+                update.mutate({ email: user.email, disabled: !user.disabled }, { onError })
+              }
+            >
+              {user.disabled ? 'Enable' : 'Disable'}
             </Button>
             <Button
               variant="outline"
@@ -460,6 +557,7 @@ export function AccountSettings() {
   if (!user) return null
   return (
     <>
+      <ProfileForm key={`${user.email}:${user.username}`} user={user} />
       <ChangePasswordForm />
       <SessionsPanel />
       {user.role === 'admin' && <UsersPanel currentUserEmail={user.email} />}

@@ -24,7 +24,7 @@ use crate::supervisor;
 use super::startup::{
     ContainerExited, StartupAttempt, StartupAttemptView, StartupPhase, previous_run_note,
 };
-use super::{ContainerSpec, ContainerState, Mount, PodmanClient, container_name};
+use super::{ContainerSpec, ContainerState, ContainerStats, Mount, PodmanClient, container_name};
 
 const START_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CONTAINER_CREATE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -292,6 +292,18 @@ pub fn container_is_running(paths: &Paths, identity: &GameInstanceIdentity) -> R
     Ok(client
         .inspect_blocking(&container_name(identity.game, &identity.id))?
         .is_some_and(ContainerState::is_running))
+}
+
+/// Current cgroup counters of a running instance container; `None` when
+/// Podman has none for it.
+pub fn container_stats(
+    paths: &Paths,
+    identity: &GameInstanceIdentity,
+) -> Result<Option<ContainerStats>> {
+    let Some(config) = GlobalConfig::load(paths)?.podman else {
+        return Ok(None);
+    };
+    PodmanClient::from_config(&config)?.stats_blocking(&container_name(identity.game, &identity.id))
 }
 
 pub async fn is_running_async<G: ContainerGame>(

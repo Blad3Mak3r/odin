@@ -14,6 +14,7 @@ use tokio::sync::broadcast;
 use crate::db::Db;
 use crate::game::GameId;
 use crate::instance::InstanceError;
+use crate::podman::ContainerStats;
 use crate::web::players::PlayerInfo;
 
 /// Samples kept per series (host, and each instance). At the telemetry
@@ -161,6 +162,9 @@ pub struct RuntimeRegistry {
     transitions: Arc<Mutex<HashMap<GameInstanceKey, InstanceTransition>>>,
     transition_events: broadcast::Sender<GameInstanceTransitions>,
     auto_restart_attempts: Arc<Mutex<HashMap<GameInstanceKey, DateTime<Utc>>>>,
+    /// Previous `(cpu_nano, system_nano)` reading per container name, so the
+    /// next reading can be turned into a CPU percentage.
+    cpu_readings: Arc<Mutex<HashMap<String, (u64, u64)>>>,
     db: Arc<Db>,
     last_persisted_at: Arc<Mutex<Option<DateTime<Utc>>>>,
 }
@@ -176,6 +180,7 @@ impl RuntimeRegistry {
             transitions: Arc::new(Mutex::new(HashMap::new())),
             transition_events,
             auto_restart_attempts: Arc::new(Mutex::new(HashMap::new())),
+            cpu_readings: Arc::new(Mutex::new(HashMap::new())),
             db,
             last_persisted_at: Arc::new(Mutex::new(None)),
         }
@@ -276,6 +281,35 @@ impl RuntimeRegistry {
             .iter()
             .copied()
             .collect()
+    }
+
+    /// CPU percentage (100 = one core) since this container's previous
+    /// reading; `0.0` on the first reading or after the counters restarted.
+    pub fn container_cpu_percent(&self, container: &str, stats: &ContainerStats) -> f32 {
+        let previous = self
+            .cpu_readings
+            .lock()
+            .expect("cpu readings lock poisoned")
+            .insert(container.to_owned(), (stats.cpu_nano, stats.system_nano));
+        match previous {
+            Some((cpu_nano, system_nano))
+                if stats.cpu_nano >= cpu_nano && stats.system_nano > system_nano =>
+            {
+                let busy = (stats.cpu_nano - cpu_nano) as f64;
+                let elapsed = (stats.system_nano - system_nano) as f64;
+                (busy / elapsed * 100.0) as f32
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Drops a stopped container's previous reading so a later start begins
+    /// from a fresh baseline.
+    pub fn forget_container_cpu(&self, container: &str) {
+        self.cpu_readings
+            .lock()
+            .expect("cpu readings lock poisoned")
+            .remove(container);
     }
 
     /// Updates one game instance's cached snapshot; returns `true` if
@@ -671,5 +705,43 @@ mod tests {
             "shared",
             chrono::Duration::minutes(1),
         ));
+    }
+
+    fn reading(cpu_nano: u64, system_nano: u64) -> ContainerStats {
+        ContainerStats {
+            cpu_nano,
+            system_nano,
+            memory_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn container_cpu_percent_is_the_delta_between_readings() {
+        let registry = temp_registry("cpu-delta");
+        assert_eq!(
+            registry.container_cpu_percent("c", &reading(10_000_000_000, 50_000_000_000)),
+            0.0
+        );
+        // 1.5 s of CPU over 3 s of wall clock is half a core.
+        let percent = registry.container_cpu_percent("c", &reading(11_500_000_000, 53_000_000_000));
+        assert!((percent - 50.0).abs() < 0.001, "got {percent}");
+        // Two busy cores report 200%.
+        let percent = registry.container_cpu_percent("c", &reading(17_500_000_000, 56_000_000_000));
+        assert!((percent - 200.0).abs() < 0.001, "got {percent}");
+    }
+
+    #[test]
+    fn container_cpu_percent_restarts_from_zero_when_counters_reset() {
+        let registry = temp_registry("cpu-reset");
+        registry.container_cpu_percent("c", &reading(9_000_000_000, 50_000_000_000));
+        assert_eq!(
+            registry.container_cpu_percent("c", &reading(1_000_000_000, 53_000_000_000)),
+            0.0
+        );
+        registry.forget_container_cpu("c");
+        assert_eq!(
+            registry.container_cpu_percent("c", &reading(2_000_000_000, 56_000_000_000)),
+            0.0
+        );
     }
 }

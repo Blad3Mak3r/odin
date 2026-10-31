@@ -3,12 +3,10 @@
 //!
 //! `client` is the `odin serve` side; the runtime side lives in
 //! `podman::runtime`. `protocol` defines the newline-delimited JSON messages
-//! exchanged between them over the runtime's control socket, and `stats`
-//! samples the game process's resource usage for the runtime.
+//! exchanged between them over the runtime's control socket.
 
 pub mod client;
 pub mod protocol;
-pub mod stats;
 
 use std::path::PathBuf;
 

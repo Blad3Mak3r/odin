@@ -1367,14 +1367,13 @@ pub(crate) fn rust_resource_snapshot(
     instance: &RustInstance,
 ) -> anyhow::Result<InstanceSnapshot> {
     if !rust::is_running(&state.paths, &state.db, instance)? {
+        forget_container_cpu(state, &instance.identity);
         return Ok(InstanceSnapshot::default());
     }
     // Rust has no readiness signal.
     Ok(InstanceSnapshot {
         ready: false,
-        ..crate::web::routes::resources::container_snapshot(
-            &crate::podman::lifecycle::control_socket(&state.paths, &instance.identity),
-        )
+        ..crate::web::routes::resources::container_snapshot(state, &instance.identity)
     })
 }
 
@@ -1385,11 +1384,22 @@ pub(crate) fn generic_resource_snapshot(
     instance: &GenericGameInstance,
 ) -> anyhow::Result<InstanceSnapshot> {
     if !crate::podman::lifecycle::container_is_running(&state.paths, &instance.identity)? {
+        forget_container_cpu(state, &instance.identity);
         return Ok(InstanceSnapshot::default());
     }
     Ok(crate::web::routes::resources::container_snapshot(
-        &crate::podman::lifecycle::control_socket(&state.paths, &instance.identity),
+        state,
+        &instance.identity,
     ))
+}
+
+fn forget_container_cpu(
+    state: &AppState,
+    identity: &crate::db::game_instances::GameInstanceIdentity,
+) {
+    state
+        .runtime
+        .forget_container_cpu(&crate::podman::container_name(identity.game, &identity.id));
 }
 
 #[cfg(test)]

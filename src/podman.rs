@@ -333,6 +333,23 @@ impl PodmanClient {
         Ok(Some(ContainerState::from_inspect(&inspect)))
     }
 
+    /// One cgroup reading for a running container, or `None` when Podman has
+    /// no stats for it (not found or not running). Blocking, for the
+    /// telemetry worker.
+    pub fn stats_blocking(&self, name: &str) -> Result<Option<ContainerStats>> {
+        let response = self
+            .blocking_client()?
+            .get(format!(
+                "{API_PREFIX}/containers/stats?containers={name}&stream=false"
+            ))
+            .send()
+            .context("failed to read Podman container stats")?;
+        let report: StatsReport = blocking_success(response)?
+            .json()
+            .context("failed to decode Podman stats response")?;
+        Ok(report.stats.into_iter().flatten().next())
+    }
+
     pub async fn create(&self, spec: &ContainerSpec) -> Result<()> {
         let response = self
             .client
@@ -655,6 +672,30 @@ impl ContainerExit {
             finished_at: present(&state.finished_at),
         }
     }
+}
+
+/// Libpod's `{"Error": .., "Stats": [..]}` envelope. `Stats` is `null` for a
+/// container that does not exist or is not running.
+#[derive(Deserialize)]
+struct StatsReport {
+    #[serde(rename = "Stats")]
+    stats: Option<Vec<ContainerStats>>,
+}
+
+/// A container's cgroup counters. Podman's own `CPU` field is a lifetime
+/// average, so callers derive a live percentage from two `cpu_nano`
+/// readings instead.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct ContainerStats {
+    /// Cumulative CPU time of every process in the container.
+    #[serde(rename = "CPUNano")]
+    pub cpu_nano: u64,
+    /// Wall clock of this reading, from the same clock as `cpu_nano`.
+    #[serde(rename = "SystemNano")]
+    pub system_nano: u64,
+    /// Memory in use without reclaimable page cache.
+    #[serde(rename = "MemUsage")]
+    pub memory_bytes: u64,
 }
 
 #[derive(Deserialize)]
@@ -1122,6 +1163,24 @@ impl From<&ResourceLimits> for LinuxResources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stats_report_reads_the_cgroup_counters() {
+        let report: StatsReport = serde_json::from_str(
+            r#"{"Error":null,"Stats":[{"AvgCPU":81.9,"ContainerID":"3cc5","Name":"odin-x","PerCPU":null,"CPU":81.9,"CPUNano":10940837000,"CPUSystemNano":15980,"SystemNano":1793473044761418048,"MemUsage":114688,"MemLimit":16640040960,"MemPerc":0.0006,"PIDs":1}]}"#,
+        )
+        .unwrap();
+        let stats = report.stats.unwrap().remove(0);
+        assert_eq!(stats.cpu_nano, 10_940_837_000);
+        assert_eq!(stats.system_nano, 1_793_473_044_761_418_048);
+        assert_eq!(stats.memory_bytes, 114_688);
+    }
+
+    #[test]
+    fn stats_report_for_a_missing_container_is_empty() {
+        let report: StatsReport = serde_json::from_str(r#"{"Error":{},"Stats":null}"#).unwrap();
+        assert!(report.stats.into_iter().flatten().next().is_none());
+    }
 
     fn frame(stream: u8, payload: &[u8]) -> Vec<u8> {
         let mut bytes = vec![stream, 0, 0, 0];

@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use argon2::password_hash::PasswordVerifier;
 use argon2::{Argon2, PasswordHasher};
@@ -20,6 +20,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use rand::RngExt;
 use serde_json::json;
@@ -39,8 +40,17 @@ pub const CSRF_HEADER: &str = "x-csrf-token";
 const MIN_PASSWORD_LEN: usize = 8;
 const MAX_PASSWORD_LEN: usize = 128;
 const LOCKOUT: Duration = Duration::from_secs(60);
-const MAX_FAILURES_PER_USER: u32 = 5;
+/// One account tried from one address.
+const MAX_FAILURES_PER_PAIR: u32 = 5;
+/// One account tried from anywhere: high enough that a single attacker cannot
+/// lock a victim out of their own address, low enough to stop a spread-out guess.
+const MAX_FAILURES_PER_USER: u32 = 30;
+/// One address trying any accounts.
 const MAX_FAILURES_PER_IP: u32 = 20;
+/// Password hashes computed at the same time.
+const HASH_CONCURRENCY: usize = 4;
+/// How long a request waits for a free hashing slot before giving up.
+const HASH_WAIT: Duration = Duration::from_secs(3);
 /// Bound on tracked throttle keys, so spraying usernames cannot grow memory.
 const MAX_TRACKED_KEYS: usize = 10_000;
 
@@ -80,8 +90,17 @@ pub struct Forbidden;
 pub struct InvalidCredentials;
 
 #[derive(Debug, thiserror::Error)]
-#[error("too many failed attempts; try again in a minute")]
-pub struct TooManyAttempts;
+#[error("too many failed attempts; try again in {retry_after} seconds")]
+pub struct TooManyAttempts {
+    /// Seconds until the lockout ends; also sent as `Retry-After`.
+    pub retry_after: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the server is busy checking passwords; try again shortly")]
+pub struct Busy {
+    pub retry_after: u64,
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("invalid or missing token")]
@@ -701,63 +720,180 @@ pub fn resolve_client_ip(
     Some(peer)
 }
 
-/// Failed-login counters held in memory, keyed by username and by client
-/// address so neither one hammered account nor one noisy client is free.
+/// Bounds how many password hashes run at once. Argon2 is deliberately
+/// expensive in CPU and memory, so without a bound a spread-out flood of
+/// sign-in attempts could starve the server that also runs the games.
+#[derive(Clone)]
+pub struct HashGate {
+    slots: Arc<tokio::sync::Semaphore>,
+    wait: Duration,
+}
+
+impl Default for HashGate {
+    fn default() -> Self {
+        Self::new(HASH_CONCURRENCY, HASH_WAIT)
+    }
+}
+
+impl HashGate {
+    pub fn new(slots: usize, wait: Duration) -> Self {
+        Self {
+            slots: Arc::new(tokio::sync::Semaphore::new(slots)),
+            wait,
+        }
+    }
+
+    /// Runs password work on the blocking pool once a slot is free, or fails
+    /// with [`Busy`] if none frees up in time.
+    pub async fn run<F, T>(&self, work: F) -> ApiResult<T>
+    where
+        F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = tokio::time::timeout(self.wait, self.slots.clone().acquire_owned()).await;
+        let Ok(Ok(_permit)) = permit else {
+            return Err(Busy {
+                retry_after: self.wait.as_secs().max(1),
+            }
+            .into());
+        };
+        run_blocking(work).await
+    }
+}
+
+/// Failures so far and when the latest happened, by throttle key.
+type Counters = HashMap<String, (u32, DateTime<Utc>)>;
+
+enum ThrottleWrite {
+    Upsert(String, u32, DateTime<Utc>),
+    Delete(String),
+}
+
+/// Failed-login counters, kept in memory and mirrored to the database so a
+/// restart does not forgive a lockout. Counted per account from one address,
+/// per account overall, and per address, so neither a hammered account nor a
+/// noisy client is free, yet one attacker cannot lock others out.
 #[derive(Clone, Default)]
-pub struct LoginThrottle(Arc<Mutex<HashMap<String, (u32, Instant)>>>);
+pub struct LoginThrottle {
+    counters: Arc<Mutex<Counters>>,
+    db: Option<Arc<crate::db::Db>>,
+}
 
 impl LoginThrottle {
-    fn keys(username: &str, ip: Option<IpAddr>) -> [(String, u32); 2] {
+    /// Resumes the counters that are still inside their lockout window.
+    pub fn with_db(db: Arc<crate::db::Db>) -> Self {
+        let since = Utc::now() - lockout();
+        let counters = crate::db::auth_throttle::load_since(&db, since)
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(key, failures, at)| (key, (failures, at)))
+                    .collect()
+            })
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "could not load login counters");
+                HashMap::new()
+            });
+        Self {
+            counters: Arc::new(Mutex::new(counters)),
+            db: Some(db),
+        }
+    }
+
+    fn keys(username: &str, ip: Option<IpAddr>) -> [(String, u32); 3] {
+        let user = username.to_ascii_lowercase();
+        let ip = ip.map(|ip| ip.to_string()).unwrap_or_default();
         [
-            (
-                format!("user:{}", username.to_ascii_lowercase()),
-                MAX_FAILURES_PER_USER,
-            ),
-            (
-                format!("ip:{}", ip.map(|ip| ip.to_string()).unwrap_or_default()),
-                MAX_FAILURES_PER_IP,
-            ),
+            (format!("pair:{user}|{ip}"), MAX_FAILURES_PER_PAIR),
+            (format!("user:{user}"), MAX_FAILURES_PER_USER),
+            (format!("ip:{ip}"), MAX_FAILURES_PER_IP),
         ]
     }
 
     pub fn check(&self, username: &str, ip: Option<IpAddr>) -> Result<(), TooManyAttempts> {
-        let mut map = self.0.lock().expect("login throttle lock poisoned");
-        for (key, max) in Self::keys(username, ip) {
-            match map.get(&key) {
-                Some((_, at)) if at.elapsed() >= LOCKOUT => {
-                    map.remove(&key);
-                }
-                Some((n, _)) if *n >= max => return Err(TooManyAttempts),
-                _ => {}
-            }
+        let now = Utc::now();
+        let counters = self.counters.lock().expect("login throttle lock poisoned");
+        let retry_after = Self::keys(username, ip)
+            .iter()
+            .filter_map(|(key, max)| {
+                let (failures, at) = counters.get(key)?;
+                let remaining = (*at + lockout() - now).num_seconds();
+                (*failures >= *max && remaining > 0).then_some(remaining as u64)
+            })
+            .max();
+        match retry_after {
+            Some(retry_after) => Err(TooManyAttempts { retry_after }),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     pub fn record_failure(&self, username: &str, ip: Option<IpAddr>) {
-        let mut map = self.0.lock().expect("login throttle lock poisoned");
-        if map.len() >= MAX_TRACKED_KEYS {
-            map.retain(|_, (_, at)| at.elapsed() < LOCKOUT);
-        }
-        for (key, _) in Self::keys(username, ip) {
-            if map.len() >= MAX_TRACKED_KEYS && !map.contains_key(&key) {
-                continue;
+        let now = Utc::now();
+        let mut writes = Vec::new();
+        {
+            let mut counters = self.counters.lock().expect("login throttle lock poisoned");
+            if counters.len() >= MAX_TRACKED_KEYS {
+                counters.retain(|_, (_, at)| now - *at < lockout());
             }
-            let entry = map.entry(key).or_insert((0, Instant::now()));
-            entry.0 += 1;
-            entry.1 = Instant::now();
+            for (key, _) in Self::keys(username, ip) {
+                if counters.len() >= MAX_TRACKED_KEYS && !counters.contains_key(&key) {
+                    continue;
+                }
+                let entry = counters.entry(key.clone()).or_insert((0, now));
+                if now - entry.1 >= lockout() {
+                    entry.0 = 0;
+                }
+                *entry = (entry.0 + 1, now);
+                writes.push(ThrottleWrite::Upsert(key, entry.0, now));
+            }
         }
+        self.persist(writes);
     }
 
-    /// Forgives the account's counter after a successful login; the
+    /// Forgives the account after a successful sign-in from this address; the
     /// address counter is left to expire so a valid account cannot be used
     /// to reset it.
-    pub fn clear_user(&self, username: &str) {
-        self.0
-            .lock()
-            .expect("login throttle lock poisoned")
-            .remove(&Self::keys(username, None)[0].0);
+    pub fn clear_user(&self, username: &str, ip: Option<IpAddr>) {
+        let keys = Self::keys(username, ip);
+        let mut writes = Vec::new();
+        {
+            let mut counters = self.counters.lock().expect("login throttle lock poisoned");
+            for (key, _) in &keys[..2] {
+                if counters.remove(key).is_some() {
+                    writes.push(ThrottleWrite::Delete(key.clone()));
+                }
+            }
+        }
+        self.persist(writes);
     }
+
+    fn persist(&self, writes: Vec<ThrottleWrite>) {
+        let Some(db) = self.db.clone().filter(|_| !writes.is_empty()) else {
+            return;
+        };
+        let work = move || {
+            for write in writes {
+                let result = match write {
+                    ThrottleWrite::Upsert(key, failures, at) => {
+                        crate::db::auth_throttle::upsert(&db, &key, failures, at)
+                    }
+                    ThrottleWrite::Delete(key) => crate::db::auth_throttle::delete(&db, &key),
+                };
+                if let Err(error) = result {
+                    tracing::warn!(%error, "could not save a login counter");
+                }
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(work);
+            }
+            Err(_) => work(),
+        }
+    }
+}
+
+fn lockout() -> chrono::Duration {
+    chrono::Duration::from_std(LOCKOUT).expect("lockout fits a chrono duration")
 }
 
 #[cfg(test)]
@@ -1970,23 +2106,137 @@ mod tests {
         assert!(!headers.contains_key(header::STRICT_TRANSPORT_SECURITY));
     }
 
-    #[test]
-    fn throttle_locks_by_username_and_by_address() {
-        let throttle = LoginThrottle::default();
-        let ip: Option<IpAddr> = Some("203.0.113.9".parse().unwrap());
-        for _ in 0..MAX_FAILURES_PER_USER {
-            assert!(throttle.check("Admin", ip).is_ok());
-            throttle.record_failure("admin", ip);
-        }
-        assert!(throttle.check("ADMIN", ip).is_err());
-        throttle.clear_user("admin");
-        assert!(throttle.check("admin", ip).is_ok());
+    fn ip(text: &str) -> Option<IpAddr> {
+        Some(text.parse().unwrap())
+    }
 
-        for n in 0..MAX_FAILURES_PER_IP {
-            throttle.record_failure(&format!("user{n}"), ip);
+    #[test]
+    fn one_attacker_cannot_lock_an_account_for_everyone() {
+        let throttle = LoginThrottle::default();
+        let attacker = ip("203.0.113.9");
+        for _ in 0..MAX_FAILURES_PER_PAIR {
+            assert!(throttle.check("Admin", attacker).is_ok());
+            throttle.record_failure("admin", attacker);
         }
-        assert!(throttle.check("someone-new", ip).is_err());
+        let locked = throttle.check("ADMIN", attacker).unwrap_err();
+        assert!(
+            (1..=60).contains(&locked.retry_after),
+            "{}",
+            locked.retry_after
+        );
+        // The owner, from their own address, is untouched.
+        assert!(throttle.check("admin", ip("198.51.100.4")).is_ok());
+        // A good sign-in clears the pair.
+        throttle.clear_user("admin", attacker);
+        assert!(throttle.check("admin", attacker).is_ok());
+    }
+
+    #[test]
+    fn spread_out_guessing_is_still_stopped() {
+        // Many addresses against one account.
+        let throttle = LoginThrottle::default();
+        for n in 0..MAX_FAILURES_PER_USER {
+            throttle.record_failure("victim", ip(&format!("10.0.0.{n}")));
+        }
+        assert!(throttle.check("victim", ip("192.0.2.77")).is_err());
+        assert!(throttle.check("someone-else", ip("192.0.2.77")).is_ok());
+
+        // One address against many accounts.
+        let throttle = LoginThrottle::default();
+        let noisy = ip("203.0.113.9");
+        for n in 0..MAX_FAILURES_PER_IP {
+            throttle.record_failure(&format!("user{n}"), noisy);
+        }
+        assert!(throttle.check("someone-new", noisy).is_err());
         assert!(throttle.check("someone-new", None).is_ok());
+    }
+
+    #[test]
+    fn lockouts_survive_a_restart() {
+        let (_, state) = app_state(None);
+        let client = ip("203.0.113.9");
+        let before = LoginThrottle::with_db(state.db.clone());
+        for _ in 0..MAX_FAILURES_PER_PAIR {
+            before.record_failure("admin", client);
+        }
+        let after = LoginThrottle::with_db(state.db.clone());
+        assert!(
+            after.check("admin", client).is_err(),
+            "the lockout was forgotten"
+        );
+        // Forgiving the account is remembered too.
+        after.clear_user("admin", client);
+        assert!(
+            LoginThrottle::with_db(state.db.clone())
+                .check("admin", client)
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_locked_out_sign_in_gets_429_with_retry_after() {
+        let app = app();
+        call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let attempt = |password: String| {
+            let body = json!({ "login": "admin", "password": password }).to_string();
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        for _ in 0..MAX_FAILURES_PER_PAIR {
+            assert_eq!(
+                raw(&app, attempt(pw("wrong"))).await.status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        // Even the right password is refused while locked.
+        let response = raw(&app, attempt(pw("admin"))).await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let wait: u64 = response.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1..=60).contains(&wait), "{wait}");
+    }
+
+    #[tokio::test]
+    async fn password_hashing_is_bounded_and_overflow_gets_503() {
+        let gate = HashGate::new(1, Duration::from_millis(50));
+        let (release, hold) = tokio::sync::oneshot::channel::<()>();
+        let busy = gate.clone();
+        let running = tokio::spawn(async move {
+            busy.run(move || {
+                hold.blocking_recv().ok();
+                Ok(())
+            })
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let refused = gate.run(|| Ok(())).await.expect_err("no free slot");
+        assert!(refused.0.downcast_ref::<Busy>().is_some());
+        let response = axum::response::IntoResponse::into_response(refused);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+
+        release.send(()).unwrap();
+        assert!(running.await.unwrap().is_ok());
+        assert_eq!(
+            gate.run(|| Ok(7)).await.ok(),
+            Some(7),
+            "the slot is free again"
+        );
     }
 
     #[test]

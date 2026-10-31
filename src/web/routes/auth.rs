@@ -115,11 +115,13 @@ pub async fn setup(
     }
     check_bootstrap_token(&state, BootstrapKind::Setup, &req.token, ip).await?;
     let db = state.db.clone();
-    let user = run_blocking(move || {
-        let hash = hash_password(&req.password)?;
-        users::create_first_admin(&db, &email, username.as_deref(), &hash)
-    })
-    .await?;
+    let user = state
+        .hashing
+        .run(move || {
+            let hash = hash_password(&req.password)?;
+            users::create_first_admin(&db, &email, username.as_deref(), &hash)
+        })
+        .await?;
     state.bootstrap.disarm();
     audit::record(
         &state,
@@ -155,14 +157,16 @@ pub async fn recover(
     check_bootstrap_token(&state, BootstrapKind::Recovery, &req.token, ip).await?;
     let db = state.db.clone();
     let lookup = email.clone();
-    let (user, revoked) = run_blocking(move || {
-        let revoked = users::set_password(&db, &lookup, &hash_password(&req.password)?, false)?;
-        let user = users::find_credentials(&db, &lookup)?
-            .map(|c| c.user)
-            .ok_or(UserError::NotFound(lookup))?;
-        Ok((user, revoked))
-    })
-    .await?;
+    let (user, revoked) = state
+        .hashing
+        .run(move || {
+            let revoked = users::set_password(&db, &lookup, &hash_password(&req.password)?, false)?;
+            let user = users::find_credentials(&db, &lookup)?
+                .map(|c| c.user)
+                .ok_or(UserError::NotFound(lookup))?;
+            Ok((user, revoked))
+        })
+        .await?;
     state.sessions.revoke(&revoked);
     state.bootstrap.disarm();
     tracing::warn!(email = %user.email, "dashboard access recovered with the recovery token");
@@ -210,24 +214,26 @@ pub async fn login(
     }
     let db = state.db.clone();
     let (login, password) = (req.login.clone(), req.password);
-    let user = run_blocking(move || {
-        let found = users::find_credentials(&db, login.trim())?;
-        // Verify against a dummy hash for unknown users so timing does not
-        // reveal which accounts exist.
-        let stored = found
-            .as_ref()
-            .map_or(dummy_hash(), |c| c.password_hash.as_str());
-        let ok = verify_password(&password, stored);
-        let Some(found) = found.filter(|_| ok) else {
-            return Ok((None, false));
-        };
-        if found.user.disabled {
-            return Ok((None, true));
-        }
-        users::record_login(&db, &found.user.email)?;
-        Ok((Some(found.user), false))
-    })
-    .await?;
+    let user = state
+        .hashing
+        .run(move || {
+            let found = users::find_credentials(&db, login.trim())?;
+            // Verify against a dummy hash for unknown users so timing does not
+            // reveal which accounts exist.
+            let stored = found
+                .as_ref()
+                .map_or(dummy_hash(), |c| c.password_hash.as_str());
+            let ok = verify_password(&password, stored);
+            let Some(found) = found.filter(|_| ok) else {
+                return Ok((None, false));
+            };
+            if found.user.disabled {
+                return Ok((None, true));
+            }
+            users::record_login(&db, &found.user.email)?;
+            Ok((Some(found.user), false))
+        })
+        .await?;
     let (user, disabled) = user;
     let Some(user) = user else {
         state.login_throttle.record_failure(&req.login, ip);
@@ -243,7 +249,7 @@ pub async fn login(
         .await;
         return Err(InvalidCredentials.into());
     };
-    state.login_throttle.clear_user(&req.login);
+    state.login_throttle.clear_user(&req.login, ip);
     audit::record(
         &state,
         AuditKind::LoginSucceeded,
@@ -295,22 +301,24 @@ pub async fn update_profile(
         .transpose()?;
     let (db, old_email) = (state.db.clone(), auth.user.email.clone());
     let current_password = req.current_password.unwrap_or_default();
-    let user = run_blocking(move || {
-        let mut email = old_email.clone();
-        if let Some(new_email) = new_email.filter(|new| *new != old_email) {
-            let stored = users::password_hash(&db, &old_email)?.unwrap_or_default();
-            if !verify_password(&current_password, &stored) {
-                return Err(InvalidCredentials.into());
+    let user = state
+        .hashing
+        .run(move || {
+            let mut email = old_email.clone();
+            if let Some(new_email) = new_email.filter(|new| *new != old_email) {
+                let stored = users::password_hash(&db, &old_email)?.unwrap_or_default();
+                if !verify_password(&current_password, &stored) {
+                    return Err(InvalidCredentials.into());
+                }
+                users::set_email(&db, &old_email, &new_email)?;
+                email = new_email;
             }
-            users::set_email(&db, &old_email, &new_email)?;
-            email = new_email;
-        }
-        if let Some(username) = username {
-            users::set_username(&db, &email, username.as_deref())?;
-        }
-        users::find_by_email(&db, &email)?.ok_or_else(|| UserError::NotFound(email).into())
-    })
-    .await?;
+            if let Some(username) = username {
+                users::set_username(&db, &email, username.as_deref())?;
+            }
+            users::find_by_email(&db, &email)?.ok_or_else(|| UserError::NotFound(email).into())
+        })
+        .await?;
     let detail = [
         req.email.is_some().then_some("email"),
         req.username.is_some().then_some("username"),
@@ -362,15 +370,17 @@ pub async fn change_password(
         return Err(BadRequest("the new password must differ from the current one".into()).into());
     }
     let (db, email) = (state.db.clone(), auth.user.email.clone());
-    let revoked = run_blocking(move || {
-        let stored = users::password_hash(&db, &email)?.unwrap_or_default();
-        if !verify_password(&req.current_password, &stored) {
-            return Err(InvalidCredentials.into());
-        }
-        // Revokes every session, including this one; a fresh one follows.
-        users::set_password(&db, &email, &hash_password(&req.new_password)?, false)
-    })
-    .await?;
+    let revoked = state
+        .hashing
+        .run(move || {
+            let stored = users::password_hash(&db, &email)?.unwrap_or_default();
+            if !verify_password(&req.current_password, &stored) {
+                return Err(InvalidCredentials.into());
+            }
+            // Revokes every session, including this one; a fresh one follows.
+            users::set_password(&db, &email, &hash_password(&req.new_password)?, false)
+        })
+        .await?;
     state.sessions.revoke(&revoked);
     let actor = Some(auth.user.email.as_str());
     audit::record(&state, AuditKind::PasswordChanged, actor, None, ip, None).await;

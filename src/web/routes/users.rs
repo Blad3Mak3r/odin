@@ -46,18 +46,20 @@ pub async fn create(
     validate_password(&req.password)?;
     let db = state.db.clone();
     let must_change = req.require_change.unwrap_or(true);
-    let user = run_blocking(move || {
-        let hash = hash_password(&req.password)?;
-        users::create(
-            &db,
-            &email,
-            username.as_deref(),
-            &hash,
-            req.role,
-            must_change,
-        )
-    })
-    .await?;
+    let user = state
+        .hashing
+        .run(move || {
+            let hash = hash_password(&req.password)?;
+            users::create(
+                &db,
+                &email,
+                username.as_deref(),
+                &hash,
+                req.role,
+                must_change,
+            )
+        })
+        .await?;
     let role = format!("{:?}", user.role).to_lowercase();
     audit::record(
         &state,
@@ -105,25 +107,27 @@ pub async fn update(
     let must_change = req.require_change.unwrap_or(!own_account);
     let (db, target) = (state.db.clone(), email.clone());
     let (role, password, disabled) = (req.role, req.password.is_some(), req.disabled);
-    let revoked = run_blocking(move || {
-        let mut revoked = Vec::new();
-        if let Some(role) = req.role {
-            users::set_role(&db, &target, role)?;
-        }
-        if let Some(disabled) = req.disabled {
-            revoked.extend(users::set_disabled(&db, &target, disabled)?);
-        }
-        if let Some(password) = req.password {
-            revoked.extend(users::set_password(
-                &db,
-                &target,
-                &hash_password(&password)?,
-                must_change,
-            )?);
-        }
-        Ok(revoked)
-    })
-    .await?;
+    let revoked = state
+        .hashing
+        .run(move || {
+            let mut revoked = Vec::new();
+            if let Some(role) = req.role {
+                users::set_role(&db, &target, role)?;
+            }
+            if let Some(disabled) = req.disabled {
+                revoked.extend(users::set_disabled(&db, &target, disabled)?);
+            }
+            if let Some(password) = req.password {
+                revoked.extend(users::set_password(
+                    &db,
+                    &target,
+                    &hash_password(&password)?,
+                    must_change,
+                )?);
+            }
+            Ok(revoked)
+        })
+        .await?;
     state.sessions.revoke(&revoked);
     let actor = Some(auth.user.email.as_str());
     if let Some(role) = role {

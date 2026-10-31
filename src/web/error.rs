@@ -17,7 +17,9 @@ use crate::instance::lists::ListsError;
 use crate::mods::config::ConfigFileError;
 use crate::mods::curseforge::CurseForgeError;
 use crate::mods::nexus::NexusError;
-use crate::web::auth::{Forbidden, InvalidBootstrapToken, InvalidCredentials, TooManyAttempts};
+use crate::web::auth::{
+    Busy, Forbidden, InvalidBootstrapToken, InvalidCredentials, TooManyAttempts,
+};
 use crate::web::routes::saves::SaveFileError;
 
 /// A catch-all for ad-hoc input validation in route handlers that doesn't
@@ -51,7 +53,18 @@ impl IntoResponse for ApiError {
         let body = ErrorBody {
             error: format!("{:#}", self.0),
         };
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        let retry_after = self
+            .0
+            .downcast_ref::<TooManyAttempts>()
+            .map(|e| e.retry_after)
+            .or_else(|| self.0.downcast_ref::<Busy>().map(|e| e.retry_after));
+        if let Some(seconds) = retry_after {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, seconds.into());
+        }
+        response
     }
 }
 
@@ -99,6 +112,9 @@ fn classify(err: &anyhow::Error) -> StatusCode {
         || err.downcast_ref::<InvalidBootstrapToken>().is_some()
     {
         return StatusCode::FORBIDDEN;
+    }
+    if err.downcast_ref::<Busy>().is_some() {
+        return StatusCode::SERVICE_UNAVAILABLE;
     }
     if err.downcast_ref::<TooManyAttempts>().is_some() {
         return StatusCode::TOO_MANY_REQUESTS;

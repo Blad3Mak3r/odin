@@ -43,3 +43,11 @@ CREATE TABLE auth_events (
     ip     TEXT,
     detail TEXT
 );
+
+-- Failed-login counters, kept so a restart does not clear a lockout. Keys are
+-- hashed-free labels such as `ip:203.0.113.9`; rows expire with the lockout.
+CREATE TABLE auth_throttle (
+    key             TEXT PRIMARY KEY,
+    failures        INTEGER NOT NULL,
+    last_failure_at TEXT NOT NULL
+);

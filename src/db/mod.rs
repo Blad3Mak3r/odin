@@ -13,6 +13,7 @@
 
 pub mod activity;
 pub mod auth_events;
+pub mod auth_throttle;
 pub mod backup_schedules;
 pub mod backup_storage;
 pub mod backups;

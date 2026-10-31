@@ -34,6 +34,12 @@ pub fn run_once(state: &AppState) {
         }
     }
 
+    if let Err(error) =
+        crate::db::auth_throttle::purge_before(&state.db, Utc::now() - chrono::Duration::days(1))
+    {
+        tracing::warn!(%error, "failed to purge stale login counters");
+    }
+
     match state.jobs.purge_before(before) {
         Ok(deleted) if deleted > 0 => {
             tracing::info!(deleted, "purged expired jobs");

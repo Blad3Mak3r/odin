@@ -7,7 +7,7 @@ use crate::config::{PublicOrigin, TrustedProxies};
 use crate::db::Db;
 use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
-use crate::web::auth::{BootstrapGate, LoginThrottle, SessionRegistry};
+use crate::web::auth::{BootstrapGate, HashGate, LoginThrottle, SessionRegistry};
 use crate::web::jobs::JobRegistry;
 use crate::web::log_tail::LogTailRegistry;
 use crate::web::players::PlayerRegistry;
@@ -28,6 +28,7 @@ pub struct AppState {
     pub system_update: SystemUpdate,
     pub update_check_lock: Arc<Mutex<()>>,
     pub login_throttle: LoginThrottle,
+    pub hashing: HashGate,
     pub sessions: SessionRegistry,
     pub bootstrap: BootstrapGate,
     pub public_origin: Option<PublicOrigin>,
@@ -49,6 +50,7 @@ impl AppState {
         let activity = ActivityLog::load(db.clone());
         let jobs = JobRegistry::load(db.clone());
         let runtime = RuntimeRegistry::new(db.clone());
+        let login_throttle = LoginThrottle::with_db(db.clone());
         Self {
             paths: Arc::new(paths),
             db: db.clone(),
@@ -61,7 +63,8 @@ impl AppState {
             log_tail: LogTailRegistry::new(),
             system_update: SystemUpdate::packaged(),
             update_check_lock: Arc::new(Mutex::new(())),
-            login_throttle: LoginThrottle::default(),
+            login_throttle,
+            hashing: HashGate::default(),
             sessions: SessionRegistry::default(),
             bootstrap: BootstrapGate::default(),
             public_origin: None,

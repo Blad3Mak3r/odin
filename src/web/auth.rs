@@ -37,8 +37,6 @@ pub const SESSION_COOKIE: &str = "odin_session";
 /// browsers refuse the cookie unless it is `Secure`, host-only and `Path=/`.
 pub const SECURE_SESSION_COOKIE: &str = "__Host-odin_session";
 pub const CSRF_HEADER: &str = "x-csrf-token";
-const MIN_PASSWORD_LEN: usize = 8;
-const MAX_PASSWORD_LEN: usize = 128;
 const LOCKOUT: Duration = Duration::from_secs(60);
 /// One account tried from one address.
 const MAX_FAILURES_PER_PAIR: u32 = 5;
@@ -286,14 +284,10 @@ pub fn normalize_email(raw: &str) -> Result<String, BadRequest> {
     }
 }
 
-pub fn validate_password(password: &str) -> Result<(), BadRequest> {
-    if (MIN_PASSWORD_LEN..=MAX_PASSWORD_LEN).contains(&password.chars().count()) {
-        Ok(())
-    } else {
-        Err(BadRequest(format!(
-            "password must be {MIN_PASSWORD_LEN}-{MAX_PASSWORD_LEN} characters"
-        )))
-    }
+/// Length and strength rules for a new password; `identity` is the account's
+/// email and username, which it must not contain.
+pub fn validate_password(password: &str, identity: &[&str]) -> Result<(), BadRequest> {
+    crate::web::password_policy::check(password, identity)
 }
 
 fn hex(bytes: &[u8]) -> String {

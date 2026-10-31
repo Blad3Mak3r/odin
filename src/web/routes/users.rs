@@ -43,7 +43,10 @@ pub async fn create(
     auth.require_admin()?;
     let email = normalize_email(&req.email)?;
     let username = optional_username(req.username.as_deref())?;
-    validate_password(&req.password)?;
+    validate_password(
+        &req.password,
+        &[&email, username.as_deref().unwrap_or_default()],
+    )?;
     let db = state.db.clone();
     let must_change = req.require_change.unwrap_or(true);
     let user = state
@@ -101,7 +104,7 @@ pub async fn update(
         return Err(BadRequest("you cannot disable your own account".into()).into());
     }
     if let Some(password) = &req.password {
-        validate_password(password)?;
+        validate_password(password, &[&email])?;
     }
     let own_account = email.eq_ignore_ascii_case(&auth.user.email);
     let must_change = req.require_change.unwrap_or(!own_account);

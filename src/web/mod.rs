@@ -10,6 +10,7 @@ mod error;
 mod image_monitor;
 pub mod jobs;
 mod log_tail;
+mod password_policy;
 mod players;
 mod retention;
 mod router;

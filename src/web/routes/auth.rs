@@ -108,7 +108,10 @@ pub async fn setup(
 ) -> ApiResult<Response> {
     let email = normalize_email(&req.email)?;
     let username = optional_username(req.username.as_deref())?;
-    validate_password(&req.password)?;
+    validate_password(
+        &req.password,
+        &[&email, username.as_deref().unwrap_or_default()],
+    )?;
     let db = state.db.clone();
     if run_blocking(move || users::count(&db)).await? > 0 {
         return Err(UserError::SetupDone.into());
@@ -153,7 +156,7 @@ pub async fn recover(
     Json(req): Json<RecoverRequest>,
 ) -> ApiResult<Response> {
     let email = normalize_email(&req.email)?;
-    validate_password(&req.password)?;
+    validate_password(&req.password, &[&email])?;
     check_bootstrap_token(&state, BootstrapKind::Recovery, &req.token, ip).await?;
     let db = state.db.clone();
     let lookup = email.clone();
@@ -365,7 +368,13 @@ pub async fn change_password(
     headers: HeaderMap,
     Json(req): Json<ChangePassword>,
 ) -> ApiResult<Response> {
-    validate_password(&req.new_password)?;
+    validate_password(
+        &req.new_password,
+        &[
+            &auth.user.email,
+            auth.user.username.as_deref().unwrap_or_default(),
+        ],
+    )?;
     if req.new_password == req.current_password {
         return Err(BadRequest("the new password must differ from the current one".into()).into());
     }

@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { PasswordStrength } from '@/components/PasswordStrength'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -106,7 +107,7 @@ function ProfileForm({ user }: { user: AuthUser }) {
   )
 }
 
-function ChangePasswordForm() {
+function ChangePasswordForm({ user }: { user: AuthUser }) {
   const change = useChangePassword()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -151,6 +152,7 @@ function ChangePasswordForm() {
           value={next}
           onChange={(e) => setNext(e.target.value)}
         />
+        <PasswordStrength password={next} identity={[user.email, user.username ?? '']} />
       </div>
       <Button type="submit" className="w-fit" disabled={change.isPending}>
         Change password
@@ -297,6 +299,7 @@ function ResetPasswordDialog({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
+            <PasswordStrength password={password} identity={[user?.email ?? '', user?.username ?? '']} />
           </div>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={requireChange} onCheckedChange={setChosen} />
@@ -527,6 +530,7 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
+          <PasswordStrength password={password} identity={[email, username]} />
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor="new-user-role">Role</Label>
@@ -558,7 +562,7 @@ export function AccountSettings() {
   return (
     <>
       <ProfileForm key={`${user.email}:${user.username}`} user={user} />
-      <ChangePasswordForm />
+      <ChangePasswordForm user={user} />
       <SessionsPanel />
       {user.role === 'admin' && <UsersPanel currentUserEmail={user.email} />}
       {user.role === 'admin' && <SecurityLog />}

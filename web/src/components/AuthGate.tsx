@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { type FormEvent, type ReactNode, useState } from 'react'
+import { PasswordStrength } from '@/components/PasswordStrength'
 import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -101,7 +102,7 @@ function AuthForm({ mode: initialMode, recoveryActive }: { mode: Mode; recoveryA
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          {!login && <p className="text-xs text-muted-foreground">At least 8 characters.</p>}
+          {!login && <PasswordStrength password={password} identity={[email, username]} />}
         </div>
         {login && (
           <label className="flex items-center gap-2 text-sm">
@@ -180,7 +181,8 @@ function ForcedPasswordChange() {
             value={next}
             onChange={(e) => setNext(e.target.value)}
           />
-          <p className="text-xs text-muted-foreground">At least 8 characters, different from the current one.</p>
+          <PasswordStrength password={next} />
+          <p className="text-xs text-muted-foreground">Different from the current one.</p>
         </div>
         {change.isError && (
           <p role="alert" className="text-sm text-destructive">

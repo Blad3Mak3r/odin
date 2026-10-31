@@ -408,7 +408,9 @@ never sees secrets: raw native configuration files, the 7 Days to Die template
 review and mod configuration files are refused, and every password, key or
 token value in the JSON a viewer receives (an RCON or server password, say) is
 replaced by `********`.
-Passwords are stored as Argon2id hashes. Odin speaks plain HTTP: `odin serve`
+Passwords are stored as Argon2id hashes, must be 8-128 characters, and are
+refused when they are very common, a simple repeat or run, or built from the
+account's own email or username; the forms show a strength meter as you type. Odin speaks plain HTTP: `odin serve`
 still binds to `127.0.0.1` by default, so reach it from another machine
 through an SSH tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS
 reverse proxy (which should send `X-Forwarded-Proto: https` so the cookie is
@@ -486,6 +488,23 @@ trusted_proxies = ["172.16.0.0/12"]   # addresses or CIDR ranges
 
 `ODIN_TRUSTED_PROXIES` (comma-separated) overrides it, and an invalid entry
 stops `odin serve` at startup.
+
+**Behind a Cloudflare Tunnel.** `cloudflared` connects from the same machine,
+so loopback is already trusted. Set the public address and the header Cloudflare
+fills with the visitor's address, and keep Odin bound to `127.0.0.1`:
+
+```toml
+[server]
+public_url = "https://odin.example.com"
+client_ip_header = "CF-Connecting-IP"
+```
+
+If `cloudflared` runs in a container, add that container's network to
+`trusted_proxies` too. After signing in, Settings → Active sessions shows the
+address Odin saw for your session, so you can check it is yours and not
+`127.0.0.1` or Cloudflare's. If every visitor looks the same Odin logs a
+warning once, because they would all share one set of sign-in limits. IPv6
+visitors are limited by their /64 network rather than by single address.
 
 The frontend (`web/`, a Vite + React + TypeScript + Tailwind + shadcn/ui
 project) is embedded into the binary at compile time, so building it is a

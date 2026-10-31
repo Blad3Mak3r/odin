@@ -568,7 +568,13 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
         req.headers_mut().remove("x-forwarded-proto");
     }
     let headers = req.headers().clone();
-    let ip = resolve_client_ip(&state.trusted_proxies, &headers, peer);
+    let ip = resolve_client_ip(
+        &state.trusted_proxies,
+        state.client_ip_header.as_ref(),
+        &headers,
+        peer,
+    );
+    warn_if_proxy_hides_clients(&state, peer, ip);
     req.extensions_mut().insert(ClientIp(ip));
     let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     if !safe && !origin_allowed(&state, req.headers()) {
@@ -697,12 +703,22 @@ pub struct ClientIp(pub Option<IpAddr>);
 /// header is ignored, so it cannot be used to dodge the limits.
 pub fn resolve_client_ip(
     trusted: &TrustedProxies,
+    client_header: Option<&HeaderName>,
     headers: &HeaderMap,
     peer: Option<IpAddr>,
 ) -> Option<IpAddr> {
     let peer = peer?.to_canonical();
     if !trusted.contains(peer) {
         return Some(peer);
+    }
+    // A header the operator named (Cloudflare's `CF-Connecting-IP`, say) is
+    // set by the proxy itself and wins over the client-extendable chain.
+    let named = client_header
+        .and_then(|name| headers.get(name))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<IpAddr>().ok());
+    if let Some(ip) = named {
+        return Some(ip.to_canonical());
     }
     let hops: Vec<&str> = headers
         .get_all("x-forwarded-for")
@@ -718,6 +734,39 @@ pub fn resolve_client_ip(
         }
     }
     Some(peer)
+}
+
+/// A trusted proxy that sends no client address makes every visitor look
+/// like the proxy, so they would all share one set of sign-in limits. Say so
+/// once, since the symptom (everyone locked out together) is confusing.
+fn warn_if_proxy_hides_clients(state: &AppState, peer: Option<IpAddr>, resolved: Option<IpAddr>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    let behind_proxy = state.public_origin.is_some() || state.client_ip_header.is_some();
+    let hidden = peer.is_some_and(|peer| {
+        state.trusted_proxies.contains(peer) && resolved == Some(peer.to_canonical())
+    });
+    if behind_proxy && hidden && !WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            header = ?state.client_ip_header,
+            "a trusted proxy connected without a usable client address; every visitor will \
+             share one set of sign-in limits. Set `client_ip_header` (for example \
+             CF-Connecting-IP) or check that the proxy sends X-Forwarded-For"
+        );
+    }
+}
+
+/// The label a client is counted under by the sign-in limits. An IPv6 user
+/// controls a whole /64, so counting single addresses would let them step
+/// around every limit; IPv4 addresses stay as they are.
+fn throttle_label(ip: IpAddr) -> String {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => {
+            let network = u128::from(v6) >> 64 << 64;
+            format!("{}/64", std::net::Ipv6Addr::from(network))
+        }
+        v4 => v4.to_string(),
+    }
 }
 
 /// Bounds how many password hashes run at once. Argon2 is deliberately
@@ -801,7 +850,7 @@ impl LoginThrottle {
 
     fn keys(username: &str, ip: Option<IpAddr>) -> [(String, u32); 3] {
         let user = username.to_ascii_lowercase();
-        let ip = ip.map(|ip| ip.to_string()).unwrap_or_default();
+        let ip = ip.map(throttle_label).unwrap_or_default();
         [
             (format!("pair:{user}|{ip}"), MAX_FAILURES_PER_PAIR),
             (format!("user:{user}"), MAX_FAILURES_PER_USER),
@@ -2240,6 +2289,72 @@ mod tests {
     }
 
     #[test]
+    fn a_named_client_header_comes_from_trusted_proxies_only() {
+        // Cloudflare Tunnel: the connection comes from the local cloudflared,
+        // which forwards the visitor in CF-Connecting-IP and appends to X-Forwarded-For.
+        let cf = HeaderName::from_static("cf-connecting-ip");
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", "2001:db8::7".parse().unwrap());
+        headers.insert("x-forwarded-for", "6.6.6.6, 203.0.113.5".parse().unwrap());
+        let trusted = TrustedProxies::default();
+
+        // The named header wins over the chain, and is canonicalised.
+        assert_eq!(
+            resolve_client_ip(&trusted, Some(&cf), &headers, ip("127.0.0.1")),
+            ip("2001:db8::7")
+        );
+        // Without it configured, the right-most untrusted hop is used.
+        assert_eq!(
+            resolve_client_ip(&trusted, None, &headers, ip("127.0.0.1")),
+            ip("203.0.113.5")
+        );
+        // A garbled or missing header falls back instead of failing.
+        headers.insert("cf-connecting-ip", "not-an-ip".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&trusted, Some(&cf), &headers, ip("127.0.0.1")),
+            ip("203.0.113.5")
+        );
+        headers.remove("cf-connecting-ip");
+        assert_eq!(
+            resolve_client_ip(&trusted, Some(&cf), &headers, ip("127.0.0.1")),
+            ip("203.0.113.5")
+        );
+        // A stranger connecting directly cannot choose its address.
+        headers.insert("cf-connecting-ip", "198.51.100.77".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&trusted, Some(&cf), &headers, ip("192.0.2.9")),
+            ip("192.0.2.9")
+        );
+        // IPv4-mapped IPv6 is the same client as the IPv4 address.
+        headers.insert("cf-connecting-ip", "::ffff:198.51.100.77".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&trusted, Some(&cf), &headers, ip("127.0.0.1")),
+            ip("198.51.100.77")
+        );
+    }
+
+    #[test]
+    fn ipv6_clients_are_limited_by_their_64_not_one_address() {
+        let throttle = LoginThrottle::default();
+        for n in 0..MAX_FAILURES_PER_IP {
+            // Rotating through addresses of one /64 does not escape the limit.
+            throttle.record_failure(&format!("user{n}"), ip(&format!("2001:db8:1:2::{n:x}")));
+        }
+        assert!(throttle.check("fresh", ip("2001:db8:1:2:ffff::1")).is_err());
+        // A neighbouring /64 and IPv4 clients are separate.
+        assert!(throttle.check("fresh", ip("2001:db8:1:3::1")).is_ok());
+        assert!(throttle.check("fresh", ip("203.0.113.9")).is_ok());
+        assert_eq!(
+            throttle_label("2001:db8:1:2::5".parse().unwrap()),
+            "2001:db8:1:2::/64"
+        );
+        assert_eq!(
+            throttle_label("::ffff:203.0.113.9".parse().unwrap()),
+            "203.0.113.9"
+        );
+    }
+
+    #[test]
     fn forwarded_for_is_believed_only_from_trusted_proxies() {
         let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
         let mut headers = HeaderMap::new();
@@ -2251,34 +2366,34 @@ mod tests {
         // plain client, so its header is ignored.
         let default = TrustedProxies::default();
         assert_eq!(
-            resolve_client_ip(&default, &headers, ip("10.0.0.9")),
+            resolve_client_ip(&default, None, &headers, ip("10.0.0.9")),
             ip("10.0.0.9")
         );
         assert_eq!(
-            resolve_client_ip(&default, &headers, ip("127.0.0.1")),
+            resolve_client_ip(&default, None, &headers, ip("127.0.0.1")),
             ip("10.0.0.7")
         );
         // With 10/8 trusted, hops are skipped from the right until a stranger.
         let trusted = TrustedProxies::parse(["10.0.0.0/8"]).unwrap();
         assert_eq!(
-            resolve_client_ip(&trusted, &headers, ip("10.0.0.9")),
+            resolve_client_ip(&trusted, None, &headers, ip("10.0.0.9")),
             ip("198.51.100.1")
         );
         // A spoofed leftmost entry is never reached.
         assert_ne!(
-            resolve_client_ip(&trusted, &headers, ip("10.0.0.9")),
+            resolve_client_ip(&trusted, None, &headers, ip("10.0.0.9")),
             ip("6.6.6.6")
         );
         // An unparseable hop or a missing header falls back to the peer.
         headers.insert("x-forwarded-for", "garbage".parse().unwrap());
         assert_eq!(
-            resolve_client_ip(&trusted, &headers, ip("10.0.0.9")),
+            resolve_client_ip(&trusted, None, &headers, ip("10.0.0.9")),
             ip("10.0.0.9")
         );
         assert_eq!(
-            resolve_client_ip(&trusted, &HeaderMap::new(), ip("10.0.0.9")),
+            resolve_client_ip(&trusted, None, &HeaderMap::new(), ip("10.0.0.9")),
             ip("10.0.0.9")
         );
-        assert_eq!(resolve_client_ip(&trusted, &headers, None), None);
+        assert_eq!(resolve_client_ip(&trusted, None, &headers, None), None);
     }
 }

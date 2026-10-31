@@ -58,7 +58,11 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let trusted_proxies = config
         .trusted_proxies()
         .context("invalid dashboard trusted_proxies")?;
+    let client_ip_header = config
+        .client_ip_header()
+        .context("invalid dashboard client_ip_header")?;
     let state = AppState::new(paths, db)
+        .with_client_ip_header(client_ip_header)
         .with_public_origin(public_origin)
         .with_trusted_proxies(trusted_proxies);
     auth::arm_bootstrap(&state).context("failed to prepare dashboard sign-in")?;

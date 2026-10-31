@@ -38,6 +38,10 @@ pub struct ServerConfig {
     /// header is believed. Loopback is always trusted.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// A header a trusted proxy fills with the real client address, such as
+    /// Cloudflare's `CF-Connecting-IP`. Preferred over `X-Forwarded-For`.
+    #[serde(default)]
+    pub client_ip_header: Option<String>,
 }
 
 /// Environment variable that overrides `[server].public_url`.
@@ -46,6 +50,9 @@ pub const PUBLIC_URL_ENV: &str = "ODIN_PUBLIC_URL";
 /// Environment variable that overrides `[server].trusted_proxies`
 /// (comma-separated addresses or CIDR ranges).
 pub const TRUSTED_PROXIES_ENV: &str = "ODIN_TRUSTED_PROXIES";
+
+/// Environment variable that overrides `[server].client_ip_header`.
+pub const CLIENT_IP_HEADER_ENV: &str = "ODIN_CLIENT_IP_HEADER";
 
 /// Networks whose `X-Forwarded-For` header is believed, so the client
 /// address behind a reverse proxy is the real one. Loopback always counts.
@@ -244,6 +251,30 @@ impl GlobalConfig {
                     .and_then(clean)
             })
             .map(|raw| PublicOrigin::parse(&raw))
+            .transpose()
+    }
+
+    /// The header a trusted proxy puts the client address in:
+    /// `ODIN_CLIENT_IP_HEADER` wins over `[server].client_ip_header`. A name
+    /// that is not a valid header is an error, not silently ignored.
+    pub fn client_ip_header(&self) -> Result<Option<axum::http::HeaderName>> {
+        self.client_ip_header_with(std::env::var(CLIENT_IP_HEADER_ENV).ok())
+    }
+
+    fn client_ip_header_with(&self, env: Option<String>) -> Result<Option<axum::http::HeaderName>> {
+        let clean = |value: String| Some(value.trim().to_string()).filter(|v| !v.is_empty());
+        env.and_then(clean)
+            .or_else(|| {
+                self.server
+                    .as_ref()
+                    .and_then(|server| server.client_ip_header.clone())
+                    .and_then(clean)
+            })
+            .map(|name| {
+                axum::http::HeaderName::from_bytes(name.as_bytes()).with_context(|| {
+                    format!("client_ip_header '{name}' is not a valid header name")
+                })
+            })
             .transpose()
     }
 
@@ -470,6 +501,35 @@ mod tests {
                 .trusted_proxies_with(Some("  ".into()))
                 .unwrap()
                 .contains("10.1.1.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn client_ip_header_is_validated_and_env_wins() {
+        let config = GlobalConfig {
+            server: Some(ServerConfig {
+                client_ip_header: Some(" CF-Connecting-IP ".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let name = config.client_ip_header_with(None).unwrap().unwrap();
+        assert_eq!(name.as_str(), "cf-connecting-ip");
+        let env = config
+            .client_ip_header_with(Some("X-Real-IP".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.as_str(), "x-real-ip");
+        assert!(
+            GlobalConfig::default()
+                .client_ip_header_with(None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            config
+                .client_ip_header_with(Some("not a header".into()))
+                .is_err()
         );
     }
 }

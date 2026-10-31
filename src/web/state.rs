@@ -33,11 +33,17 @@ pub struct AppState {
     pub bootstrap: BootstrapGate,
     pub public_origin: Option<PublicOrigin>,
     pub trusted_proxies: TrustedProxies,
+    pub client_ip_header: Option<axum::http::HeaderName>,
 }
 
 impl AppState {
     pub fn with_trusted_proxies(mut self, proxies: TrustedProxies) -> Self {
         self.trusted_proxies = proxies;
+        self
+    }
+
+    pub fn with_client_ip_header(mut self, header: Option<axum::http::HeaderName>) -> Self {
+        self.client_ip_header = header;
         self
     }
 
@@ -69,6 +75,7 @@ impl AppState {
             bootstrap: BootstrapGate::default(),
             public_origin: None,
             trusted_proxies: TrustedProxies::default(),
+            client_ip_header: None,
         }
     }
 }

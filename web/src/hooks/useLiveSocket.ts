@@ -47,6 +47,14 @@ export function useLiveSocket() {
       applyWireEvent(queryClient, parsed)
     }
 
+    // A rejected reconnect (401) closes the stream for good: the session
+    // ended, so re-read who is signed in and let the gate show the login.
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED) {
+        queryClient.invalidateQueries({ queryKey: ['auth', 'status'] })
+      }
+    }
+
     return () => {
       source.close()
     }

@@ -19,3 +19,22 @@
 # The CURSE_FORGE_API_KEY environment variable overrides this value.
 # [curseforge]
 # api_key = ""
+
+# Public address of the dashboard when it is served through a reverse proxy.
+# Requests whose Origin matches it are accepted for state-changing calls, and
+# an https value marks the session cookie Secure and sends HSTS. Origin only:
+# no path. The ODIN_PUBLIC_URL environment variable overrides this value.
+# [server]
+# public_url = "https://odin.example.com"
+#
+# Reverse proxies whose X-Forwarded-For header Odin believes when it works
+# out who is signing in (for login limits and the security log). Addresses or
+# CIDR ranges; loopback is always trusted. List your proxy's address when it
+# is not on this host, for example a Docker network. The ODIN_TRUSTED_PROXIES
+# environment variable (comma-separated) overrides this value.
+# trusted_proxies = ["172.16.0.0/12"]
+#
+# Header the trusted proxy fills with the real visitor address. Preferred over
+# X-Forwarded-For when set. Behind a Cloudflare Tunnel use CF-Connecting-IP.
+# The ODIN_CLIENT_IP_HEADER environment variable overrides this value.
+# client_ip_header = "CF-Connecting-IP"

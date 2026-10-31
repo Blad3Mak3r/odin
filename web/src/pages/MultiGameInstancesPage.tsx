@@ -10,13 +10,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { QueryError } from '@/components/QueryError'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { useGames, useManagedInstances } from '@/lib/queries'
+import { useGames, useIsAdmin, useManagedInstances } from '@/lib/queries'
 import type { GameId } from '@/lib/types'
 
 type Filter = 'all' | GameId
 type BulkResult = { id: string; game: GameId | null; name: string | null; ok: boolean; error: string | null; job_id: string | null }
 
 export function MultiGameInstancesPage() {
+  const isAdmin = useIsAdmin()
   const instances = useManagedInstances()
   const games = useGames()
   const [filter, setFilter] = useState<Filter>('all')
@@ -39,7 +40,7 @@ export function MultiGameInstancesPage() {
       <PageHeader
         title="Instances"
         description="Every game server Odin manages."
-        action={<CreateManagedInstanceDialog games={games.data ?? []} />}
+        action={isAdmin ? <CreateManagedInstanceDialog games={games.data ?? []} /> : undefined}
       />
       <ToggleGroup value={[filter]} onValueChange={(value) => value[0] && setFilter(value[0] as Filter)} variant="outline" size="sm">
         <ToggleGroupItem value="all">All</ToggleGroupItem>
@@ -61,7 +62,7 @@ export function MultiGameInstancesPage() {
         isLoading={instances.isLoading}
         error={instances.isError ? instances.error : undefined}
         emptyMessage="No instances for this filter."
-        selectable
+        selectable={isAdmin}
         selectedIds={selected}
         onToggle={toggle}
         onToggleAll={(checked) => setSelected((previous) => {

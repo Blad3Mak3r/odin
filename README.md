@@ -154,9 +154,8 @@ docker run -d \
 ```
 
 Open `http://127.0.0.1:7331` on the host. The image deliberately binds the
-dashboard to loopback by default because it has no authentication. Use an
-SSH tunnel or an authenticating reverse proxy if it must be reachable from
-another machine.
+dashboard to loopback by default because it serves plain HTTP. Use an SSH
+tunnel or a TLS reverse proxy if it must be reachable from another machine.
 
 Host networking (`--network host`; `network_mode: host` in Compose or
 `Network=host` in a Quadlet) is the recommended production setup on Linux.
@@ -336,7 +335,7 @@ can't start or end with a hyphen (e.g. `my-server`, not `My Server`).
 
 | Command | Description |
 |---|---|
-| `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. No authentication — see [Web dashboard](#web-dashboard). |
+| `odin serve [--bind ADDR] [--port PORT]` | Start the web dashboard (JSON API + embedded frontend). Defaults to `127.0.0.1:7331`. Requires a dashboard login — see [Web dashboard](#web-dashboard). |
 
 ## Web dashboard
 
@@ -396,11 +395,116 @@ can use local storage, AWS S3, or Cloudflare R2. Remote backups remain listed
 and can be restored or deleted from Odin; restores download a temporary
 archive and remove it again when the operation finishes.
 
-**There is no authentication.** `odin serve` binds to `127.0.0.1` by
-default for exactly this reason; if you want to reach it from another
-machine, put it behind an SSH tunnel (`ssh -L 8080:localhost:7331
-your-host`) or your own authenticating reverse proxy rather than binding it
+**Authentication.** Opening the dashboard on a fresh install asks you to
+create the administrator account (email, password and an optional username).
+Creating it requires the one-time **setup token** that `odin serve` prints to
+its log at startup (`journalctl -u odin`, or the container logs), so only
+someone with access to the host can claim the dashboard; until the account
+exists, every other API route answers 401. Afterwards the API requires a
+session cookie (`HttpOnly`, `SameSite=Strict`). Accounts are keyed by a unique
+email address and may also have a unique username; sign in with either.
+Administrators manage users under Settings; the `viewer` role is read-only and
+never sees secrets: raw native configuration files, the 7 Days to Die template
+review and mod configuration files are refused, and every password, key or
+token value in the JSON a viewer receives (an RCON or server password, say) is
+replaced by `********`.
+Passwords are stored as Argon2id hashes, must be 8-128 characters, and are
+refused when they are very common, a simple repeat or run, or built from the
+account's own email or username; the forms show a strength meter as you type. Odin speaks plain HTTP: `odin serve`
+still binds to `127.0.0.1` by default, so reach it from another machine
+through an SSH tunnel (`ssh -L 8080:localhost:7331 your-host`) or a TLS
+reverse proxy (which should send `X-Forwarded-Proto: https` so the cookie is
+marked `Secure`; Odin believes that header only from a trusted proxy, see
+`trusted_proxies` below, and otherwise ignores it) rather than binding it
 directly to a public address.
+
+Sessions slide: "keep me signed in" sessions expire after 14 days without
+use, others after 12 hours and when the browser closes, and none lives past
+90 days. Settings lists your active sessions (device, address, last activity)
+so you can revoke any of them or sign out everywhere else; revoking a session,
+changing a password or deleting a user also closes that session's live event
+streams immediately.
+
+Each account can edit its own email (which needs its password) and username
+under Settings. Administrators can disable an account, which signs it out and
+blocks new sign-ins until it is enabled again, and see when each account last
+signed in. The last enabled administrator can be neither disabled, demoted nor
+deleted. Viewers get a read-only dashboard: write controls are hidden or
+disabled, and the API refuses their changes in any case.
+
+Administrators also get a **Security log** in Settings: sign-ins and failures,
+blocked attempts, wrong setup or recovery tokens, password changes and resets,
+and user or role changes, kept for 90 days and not visible to viewers. When an
+administrator creates an account or resets someone's password, that account
+must choose a new password at its next sign-in (this can be turned off per
+action).
+
+**Lost access?** Create an empty file named `recover-admin` in the data
+directory and restart Odin:
+
+```sh
+sudo touch /var/lib/odin/recover-admin && sudo systemctl restart odin.service
+```
+
+Odin deletes the file, prints a one-time **recovery token** in its log, and
+the sign-in page offers "Recover access": enter the token, the account's
+email and a new password. That signs the account out everywhere, and the
+token stops working once used or at the next restart.
+
+State-changing requests are protected against CSRF: the browser's `Origin`
+must match the address it used to reach Odin, and every non-GET call must
+carry the per-session `X-CSRF-Token` the dashboard fetches at sign-in.
+Responses ship a strict Content-Security-Policy, `X-Frame-Options: DENY`
+and related headers. Failed sign-ins are counted per account from one address
+(5), per account overall (30) and per address (20); reaching a limit answers
+`429` with a `Retry-After` header for a minute. The counters are stored in the
+database, so a restart does not clear a lockout, and one client cannot lock an
+account out for everyone else. Password hashing is capped at four at a time:
+if a flood saturates it, further attempts get `503` with `Retry-After` instead
+of starving the server that runs your games.
+
+When the dashboard sits behind a reverse proxy that rewrites the `Host`
+header, declare its public address in `/etc/odin/config.toml` (or with the
+`ODIN_PUBLIC_URL` environment variable, which wins):
+
+```toml
+[server]
+public_url = "https://odin.example.com"   # origin only, no path
+```
+
+An `https` value marks the session cookie `Secure` (as `__Host-odin_session`)
+and enables HSTS. An invalid value stops `odin serve` at startup. The setting
+is optional; without it Odin trusts the `Host` header of the request.
+
+Login limits and the security log need the real client address. Odin uses the
+TCP peer, and believes `X-Forwarded-For` only from trusted proxies: loopback
+by default. If the proxy runs elsewhere (a Docker network, another host), list
+it, otherwise every user looks like the proxy and shares one limit:
+
+```toml
+[server]
+trusted_proxies = ["172.16.0.0/12"]   # addresses or CIDR ranges
+```
+
+`ODIN_TRUSTED_PROXIES` (comma-separated) overrides it, and an invalid entry
+stops `odin serve` at startup.
+
+**Behind a Cloudflare Tunnel.** `cloudflared` connects from the same machine,
+so loopback is already trusted. Set the public address and the header Cloudflare
+fills with the visitor's address, and keep Odin bound to `127.0.0.1`:
+
+```toml
+[server]
+public_url = "https://odin.example.com"
+client_ip_header = "CF-Connecting-IP"
+```
+
+If `cloudflared` runs in a container, add that container's network to
+`trusted_proxies` too. After signing in, Settings → Active sessions shows the
+address Odin saw for your session, so you can check it is yours and not
+`127.0.0.1` or Cloudflare's. If every visitor looks the same Odin logs a
+warning once, because they would all share one set of sign-in limits. IPv6
+visitors are limited by their /64 network rather than by single address.
 
 The frontend (`web/`, a Vite + React + TypeScript + Tailwind + shadcn/ui
 project) is embedded into the binary at compile time, so building it is a

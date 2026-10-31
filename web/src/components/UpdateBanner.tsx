@@ -5,7 +5,7 @@ import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { UpdateProgressDialog } from '@/components/UpdateProgressDialog'
 import { Button } from '@/components/ui/button'
 import { gameLabel } from '@/lib/games'
-import { useSystemUpdate, useVersion } from '@/lib/queries'
+import { useIsAdmin, useSystemUpdate, useVersion } from '@/lib/queries'
 
 const DISMISSED_KEY = 'odin-update-dismissed-version'
 
@@ -30,6 +30,7 @@ function writeDismissedVersion(version: string) {
 /// version, while running instances left on an older supervisor stay visible
 /// until they are restarted.
 export function UpdateBanner() {
+  const isAdmin = useIsAdmin()
   const version = useVersion()
   const systemUpdate = useSystemUpdate()
   const { confirm, dialog } = useConfirmDialog()
@@ -58,7 +59,7 @@ export function UpdateBanner() {
   const progress = updatingFrom && (
     <UpdateProgressDialog startVersion={updatingFrom} onClose={() => setUpdatingFrom(null)} />
   )
-  if (!availableRelease && outdated.length === 0) {
+  if (!isAdmin || (!availableRelease && outdated.length === 0)) {
     return progress || null
   }
 

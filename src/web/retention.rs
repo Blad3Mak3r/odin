@@ -7,6 +7,8 @@ use chrono::Utc;
 use crate::web::state::AppState;
 
 const RETENTION: chrono::Duration = chrono::Duration::days(7);
+/// Security events are worth keeping much longer than instance chatter.
+const AUDIT_RETENTION: chrono::Duration = chrono::Duration::days(90);
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub fn run_once(state: &AppState) {
@@ -20,6 +22,22 @@ pub fn run_once(state: &AppState) {
         Err(error) => {
             tracing::warn!(%error, "failed to purge expired activity events");
         }
+    }
+
+    match crate::db::auth_events::purge_before(&state.db, Utc::now() - AUDIT_RETENTION) {
+        Ok(deleted) if deleted > 0 => {
+            tracing::info!(deleted, "purged expired audit events");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(%error, "failed to purge expired audit events");
+        }
+    }
+
+    if let Err(error) =
+        crate::db::auth_throttle::purge_before(&state.db, Utc::now() - chrono::Duration::days(1))
+    {
+        tracing::warn!(%error, "failed to purge stale login counters");
     }
 
     match state.jobs.purge_before(before) {

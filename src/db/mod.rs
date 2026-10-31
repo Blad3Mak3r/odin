@@ -12,6 +12,8 @@
 //! `&Db` and exposes calls shaped like the file-I/O functions they replace.
 
 pub mod activity;
+pub mod auth_events;
+pub mod auth_throttle;
 pub mod backup_schedules;
 pub mod backup_storage;
 pub mod backups;
@@ -30,6 +32,7 @@ pub mod resource_samples;
 pub mod settings;
 pub mod startup_attempts;
 pub mod uptime_schedules;
+pub mod users;
 pub mod webhooks;
 
 use std::path::Path;

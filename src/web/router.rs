@@ -4,9 +4,10 @@ use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
 use crate::web::routes::{
-    ark_clusters, backups, bepinex, bulk, changelog, config_files, curseforge, doctor, events,
-    games, instances, jobs, lists, mods, nexus, palworld, players, resource_limits, resources,
-    rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, version, webhooks,
+    ark_clusters, auth, backups, bepinex, bulk, changelog, config_files, curseforge, doctor,
+    events, games, instances, jobs, lists, mods, nexus, palworld, players, resource_limits,
+    resources, rust_access_lists, saves, settings, seven_days_to_die, uptime_schedules, users,
+    version, webhooks,
 };
 use crate::web::state::AppState;
 use crate::web::{sse, static_files};
@@ -16,8 +17,39 @@ use crate::web::{sse, static_files};
 /// Axum's own default body limit (2 MiB) applies to every other route.
 const MOD_UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024;
 
+/// The router `odin serve` runs: every `/api` route behind session
+/// authentication. `build_router` is the unguarded route table, kept separate
+/// so handler tests do not need to log in.
+pub fn build_app(state: AppState) -> Router {
+    build_router(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::web::auth::require_auth,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::web::auth::security_headers,
+        ))
+}
+
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
+        .route("/auth/status", get(auth::status))
+        .route("/auth/setup", post(auth::setup))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/password", post(auth::change_password))
+        .route("/auth/profile", put(auth::update_profile))
+        .route("/auth/recover", post(auth::recover))
+        .route("/auth/audit", get(auth::audit_log))
+        .route("/auth/sessions", get(auth::list_sessions))
+        .route(
+            "/auth/sessions/revoke-others",
+            post(auth::revoke_other_sessions),
+        )
+        .route("/auth/sessions/{id}", delete(auth::revoke_session))
+        .route("/users", get(users::list).post(users::create))
+        .route("/users/{email}", put(users::update).delete(users::delete))
         .route("/version", get(version::get_version))
         .route("/update", post(version::start_system_update))
         .route("/changelog", get(changelog::get_changelog))

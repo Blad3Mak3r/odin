@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { api } from '@/lib/api-client'
 import { gameLabel } from '@/lib/games'
 import { toastStartFailure } from '@/lib/startFailure'
-import { useManagedInstanceAction, useManagedInstanceTransition } from '@/lib/queries'
+import { useIsAdmin, useManagedInstanceAction, useManagedInstanceTransition } from '@/lib/queries'
 import type { InstanceResources, ManagedInstanceView } from '@/lib/types'
 import { formatBytes } from '@/lib/utils'
 
@@ -120,6 +120,7 @@ function ManagedInstanceRow({
     refetchInterval: 10_000,
   })
   const navigate = useNavigate()
+  const isAdmin = useIsAdmin()
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
@@ -154,7 +155,7 @@ function ManagedInstanceRow({
       {withButtons && <TableCell className="hidden lg:table-cell">{instance.running && resources.data ? `${resources.data.cpu_percent.toFixed(0)}% · ${formatBytes(resources.data.memory_bytes)}` : '—'}</TableCell>}
       {withButtons && (
         <TableCell className="text-right">
-          <div className="flex flex-wrap justify-end gap-2">
+          <div hidden={!isAdmin} className="flex flex-wrap justify-end gap-2">
             <ManageInstanceDialog instance={instance} />
             {instance.running ? (
               <div className="flex justify-end gap-2">

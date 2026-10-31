@@ -3,9 +3,11 @@ use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
 use crate::activity::ActivityLog;
+use crate::config::{PublicOrigin, TrustedProxies};
 use crate::db::Db;
 use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
+use crate::web::auth::{BootstrapGate, HashGate, LoginThrottle, SessionRegistry};
 use crate::web::jobs::JobRegistry;
 use crate::web::log_tail::LogTailRegistry;
 use crate::web::players::PlayerRegistry;
@@ -25,13 +27,36 @@ pub struct AppState {
     pub log_tail: LogTailRegistry,
     pub system_update: SystemUpdate,
     pub update_check_lock: Arc<Mutex<()>>,
+    pub login_throttle: LoginThrottle,
+    pub hashing: HashGate,
+    pub sessions: SessionRegistry,
+    pub bootstrap: BootstrapGate,
+    pub public_origin: Option<PublicOrigin>,
+    pub trusted_proxies: TrustedProxies,
+    pub client_ip_header: Option<axum::http::HeaderName>,
 }
 
 impl AppState {
+    pub fn with_trusted_proxies(mut self, proxies: TrustedProxies) -> Self {
+        self.trusted_proxies = proxies;
+        self
+    }
+
+    pub fn with_client_ip_header(mut self, header: Option<axum::http::HeaderName>) -> Self {
+        self.client_ip_header = header;
+        self
+    }
+
+    pub fn with_public_origin(mut self, origin: Option<PublicOrigin>) -> Self {
+        self.public_origin = origin;
+        self
+    }
+
     pub fn new(paths: Paths, db: Arc<Db>) -> Self {
         let activity = ActivityLog::load(db.clone());
         let jobs = JobRegistry::load(db.clone());
         let runtime = RuntimeRegistry::new(db.clone());
+        let login_throttle = LoginThrottle::with_db(db.clone());
         Self {
             paths: Arc::new(paths),
             db: db.clone(),
@@ -44,6 +69,13 @@ impl AppState {
             log_tail: LogTailRegistry::new(),
             system_update: SystemUpdate::packaged(),
             update_check_lock: Arc::new(Mutex::new(())),
+            login_throttle,
+            hashing: HashGate::default(),
+            sessions: SessionRegistry::default(),
+            bootstrap: BootstrapGate::default(),
+            public_origin: None,
+            trusted_proxies: TrustedProxies::default(),
+            client_ip_header: None,
         }
     }
 }

@@ -48,6 +48,7 @@ async-stream = "0.3"
 regex = "1"
 rusqlite = { version = "0.40", features = ["bundled", "chrono", "uuid", "fallible_uint"] }
 sha2 = "0.11"
+argon2 = "0.6"
 libc = "0.2"
 cap-std = "4"
 

@@ -1,4 +1,5 @@
 pub mod ark_clusters;
+pub mod auth;
 pub mod backups;
 pub mod bepinex;
 pub mod bulk;
@@ -22,5 +23,6 @@ pub mod saves;
 pub mod settings;
 pub mod seven_days_to_die;
 pub mod uptime_schedules;
+pub mod users;
 pub mod version;
 pub mod webhooks;

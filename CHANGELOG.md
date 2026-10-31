@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-31
+
+### What's Changed
+- feat(dashboard): add dashboard authentication with users and roles by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/184
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.20.12...v0.21.0
+
 ## [0.20.12] - 2026-10-18
 
 ### What's Changed

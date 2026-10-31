@@ -8,6 +8,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use sysinfo::Disks;
 
+use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_samples::{self, ResourceSampleRow};
 use crate::instance::Instance;
 use crate::web::error::{ApiResult, run_blocking};
@@ -173,24 +174,31 @@ fn disk_usage_for(path: &std::path::Path) -> (u64, u64) {
         .unwrap_or((0, 0))
 }
 
-/// Snapshot of a running containerized game, read from its runtime's control
-/// socket. A runtime that cannot answer yields zeros rather than an error so
-/// one unresponsive container never blanks the whole telemetry tick.
-pub(crate) fn container_snapshot(control_socket: &std::path::Path) -> InstanceSnapshot {
+/// Snapshot of a running containerized game: CPU and memory come from the
+/// container's cgroup via Podman, readiness from its runtime's control socket.
+/// A container that cannot answer yields zeros rather than an error so one
+/// unresponsive container never blanks the whole telemetry tick.
+pub(crate) fn container_snapshot(
+    state: &AppState,
+    identity: &GameInstanceIdentity,
+) -> InstanceSnapshot {
+    let control_socket = crate::podman::lifecycle::control_socket(&state.paths, identity);
     let ready = matches!(
-        crate::supervisor::client::ping_socket_blocking(control_socket, SUPERVISOR_PING_TIMEOUT),
+        crate::supervisor::client::ping_socket_blocking(&control_socket, SUPERVISOR_PING_TIMEOUT),
         Ok(crate::supervisor::protocol::Response::Pong { ready: true, .. })
     );
-    let (cpu_percent, memory_bytes) = match crate::supervisor::client::stats_socket_blocking(
-        control_socket,
-        SUPERVISOR_PING_TIMEOUT,
-    ) {
-        Ok(crate::supervisor::protocol::Response::Stats {
-            cpu_percent,
-            memory_bytes,
-        }) => (cpu_percent, memory_bytes),
-        _ => (0.0, 0),
-    };
+    let container = crate::podman::container_name(identity.game, &identity.id);
+    let (cpu_percent, memory_bytes) =
+        match crate::podman::lifecycle::container_stats(&state.paths, identity) {
+            Ok(Some(stats)) => (
+                state.runtime.container_cpu_percent(&container, &stats),
+                stats.memory_bytes,
+            ),
+            _ => {
+                state.runtime.forget_container_cpu(&container);
+                (0.0, 0)
+            }
+        };
     InstanceSnapshot {
         running: true,
         ready,
@@ -200,8 +208,8 @@ pub(crate) fn container_snapshot(control_socket: &std::path::Path) -> InstanceSn
 }
 
 /// Computed by `spawn_telemetry` for each currently-running instance on its
-/// background tick. Blocking (`sysinfo` process walk) — call from a
-/// blocking context.
+/// background tick. Blocking (Podman and control-socket calls) — call from
+/// a blocking context.
 pub(crate) fn compute_instance_snapshot(
     state: &AppState,
     instance: &Instance,
@@ -217,9 +225,10 @@ pub(crate) fn compute_instance_snapshot(
         crate::game::GameId::Valheim,
         &instance.state.name,
     )? {
+        state
+            .runtime
+            .forget_container_cpu(&crate::podman::container_name(identity.game, &identity.id));
         return Ok(InstanceSnapshot::default());
     }
-    Ok(container_snapshot(
-        &crate::podman::lifecycle::control_socket(&state.paths, &identity),
-    ))
+    Ok(container_snapshot(state, &identity))
 }

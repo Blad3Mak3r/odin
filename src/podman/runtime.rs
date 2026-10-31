@@ -1,8 +1,8 @@
 //! `odin run` implementation used inside an `odin-srv` container.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -18,7 +18,6 @@ use crate::steamcmd::SteamCmd;
 use crate::supervisor::protocol::{
     ErrorCode, PROTOCOL_VERSION, Request, Response, read_frame, write_frame,
 };
-use crate::supervisor::stats::{StatsHandle, refresh_stats_periodically};
 
 use super::{Launch, RuntimeSpec};
 
@@ -114,9 +113,6 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("failed to register SIGTERM handler")?;
     let (actions_tx, mut actions_rx) = mpsc::channel(4);
-    // CPU needs a long-lived sampler: a `System` built per request reports
-    // 0% inside a container's PID namespace.
-    let stats: StatsHandle = Arc::new(Mutex::new(None));
 
     // The first start downloads the whole game, which can take longer than
     // the host is willing to wait for a first answer: keep serving control
@@ -144,7 +140,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                 Ok((stream, _)) = control.accept() => {
                     tokio::spawn(handle_control(
                         stream, runtime_pid, runtime_started_at, runtime_started,
-                        Arc::new(AtomicBool::new(false)), actions_tx.clone(), stats.clone(),
+                        Arc::new(AtomicBool::new(false)), actions_tx.clone(),
                     ));
                 }
                 Some(action) = actions_rx.recv() => match action {
@@ -176,7 +172,6 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
     let mut readiness_poll = tokio::time::interval(READINESS_POLL_INTERVAL);
     readiness_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     readiness_poll.tick().await;
-    let mut stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
     let mut forward_poll = tokio::time::interval(LOG_FORWARD_INTERVAL);
     forward_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -217,7 +212,7 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
             Ok((stream, _)) = control.accept() => {
                 tokio::spawn(handle_control(
                     stream, pid, pid_started_at, started_at,
-                    ready.clone(), actions_tx.clone(), stats.clone(),
+                    ready.clone(), actions_tx.clone(),
                 ));
             }
             _ = readiness_poll.tick(), if !ready.load(Ordering::Relaxed) => {
@@ -273,10 +268,6 @@ async fn run_loop(spec: RuntimeSpec, control: UnixListener) -> Result<()> {
                             Ordering::Relaxed,
                         );
                         readiness_deadline = Instant::now() + ARK_READINESS_TIMEOUT;
-                        // The old sampler still tracks the dead pid.
-                        stats_refresher.abort();
-                        *stats.lock().expect("stats lock poisoned") = None;
-                        stats_refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
                         Ok(())
                     }.await;
                     let failed = update.is_err();
@@ -551,7 +542,6 @@ async fn handle_control(
     started_at: chrono::DateTime<Utc>,
     ready: Arc<AtomicBool>,
     actions: mpsc::Sender<Action>,
-    stats: StatsHandle,
 ) {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
@@ -589,16 +579,6 @@ async fn handle_control(
                 }
             }
         }
-        Ok(Some(Request::Stats)) => match *stats.lock().expect("stats lock poisoned") {
-            Some((cpu_percent, memory_bytes)) => Response::Stats {
-                cpu_percent,
-                memory_bytes,
-            },
-            None => Response::Error {
-                code: ErrorCode::StatsNotReady,
-                message: "stats not yet available".into(),
-            },
-        },
         Ok(None) => return,
         Err(error) => Response::Error {
             code: ErrorCode::Unknown,
@@ -613,7 +593,6 @@ mod tests {
     use super::*;
     use crate::game::rust;
     use crate::podman::Launch;
-    use crate::supervisor::stats::STATS_REFRESH_INTERVAL;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn ark_spec(rcon_port: u16) -> RuntimeSpec {
@@ -786,51 +765,6 @@ mod tests {
         );
         assert!(log.contains("[ODIN] ERROR: "), "got {log}");
         std::fs::remove_dir_all(root).ok();
-    }
-
-    async fn stats_response(stats: StatsHandle, pid: u32) -> Response {
-        let (client, server) = UnixStream::pair().unwrap();
-        let (actions, _receiver) = mpsc::channel(1);
-        let handler = tokio::spawn(handle_control(
-            server,
-            pid,
-            0,
-            Utc::now(),
-            Arc::new(AtomicBool::new(true)),
-            actions,
-            stats,
-        ));
-        let (read, mut write) = client.into_split();
-        write_frame(&mut write, &Request::Stats).await.unwrap();
-        let response = read_frame::<Response, _>(&mut BufReader::new(read))
-            .await
-            .unwrap()
-            .unwrap();
-        handler.await.unwrap();
-        response
-    }
-
-    #[tokio::test]
-    async fn stats_report_cpu_for_a_busy_child() {
-        let mut child = tokio::process::Command::new("sh")
-            .args(["-c", "while :; do :; done"])
-            .spawn()
-            .unwrap();
-        let pid = child.id().unwrap();
-        let stats: StatsHandle = Arc::new(Mutex::new(None));
-        let refresher = tokio::spawn(refresh_stats_periodically(pid, stats.clone()));
-
-        // Past one refresh interval the sampler holds a CPU delta; a
-        // freshly built `System` can never provide one.
-        tokio::time::sleep(STATS_REFRESH_INTERVAL + std::time::Duration::from_secs(1)).await;
-        let response = stats_response(stats, pid).await;
-
-        refresher.abort();
-        child.kill().await.unwrap();
-        assert!(
-            matches!(response, Response::Stats { cpu_percent, memory_bytes } if cpu_percent > 0.0 && memory_bytes > 0),
-            "expected nonzero CPU and memory, got {response:?}"
-        );
     }
 
     use std::os::unix::fs::PermissionsExt;
@@ -1348,7 +1282,6 @@ chmod +x "$d/valheim_server.x86_64""#,
             Utc::now(),
             Arc::new(AtomicBool::new(false)),
             actions,
-            Arc::new(Mutex::new(None)),
         ));
 
         write_frame(&mut client, &Request::Ping).await.unwrap();
@@ -1363,18 +1296,6 @@ chmod +x "$d/valheim_server.x86_64""#,
                 ready: false,
                 ..
             })
-        ));
-    }
-
-    #[tokio::test]
-    async fn stats_are_not_ready_before_the_first_sample() {
-        let response = stats_response(Arc::new(Mutex::new(None)), 1).await;
-        assert!(matches!(
-            response,
-            Response::Error {
-                code: ErrorCode::StatsNotReady,
-                ..
-            }
         ));
     }
 }

@@ -23,13 +23,6 @@ pub fn ping_socket_blocking(
     request_socket_blocking(control_socket, timeout, &Request::Ping)
 }
 
-pub fn stats_socket_blocking(
-    control_socket: &std::path::Path,
-    timeout: Duration,
-) -> Result<Response> {
-    request_socket_blocking(control_socket, timeout, &Request::Stats)
-}
-
 fn request_socket_blocking(
     control_socket: &std::path::Path,
     timeout: Duration,

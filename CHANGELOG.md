@@ -4,6 +4,14 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-11-01
+
+### What's Changed
+- refactor(web): read instance CPU and memory from Podman stats by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/185
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.21.0...v0.21.1
+
 ## [0.21.0] - 2026-10-31
 
 ### What's Changed

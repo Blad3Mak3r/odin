@@ -478,6 +478,7 @@ pub async fn upload_mod(
     let activity = state.activity.clone();
     let id = state.jobs.spawn(
         JobKindDescr::ModUpload {
+            game: crate::game::GameId::Valheim,
             instance: name.clone(),
             name: mod_name.clone(),
         },

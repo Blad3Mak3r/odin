@@ -23,6 +23,8 @@ const WEBHOOK_EVENT_KINDS: &[&str] = &[
     "backup_created",
     "backup_restored",
     "backup_pruned",
+    "job_failed",
+    "startup_failed",
     "player_joined",
     "player_left",
 ];

@@ -103,7 +103,16 @@ async fn apply(state: &AppState, scheduled: ScheduledAction) {
             Some(instance.name),
         ),
         Err(error) => {
-            tracing::warn!(game = %instance.game, instance = %instance.name, %error, "scheduled lifecycle action failed")
+            tracing::warn!(game = %instance.game, instance = %instance.name, %error, "scheduled lifecycle action failed");
+            if action == Action::Start {
+                state.activity.record_for(
+                    instance.game,
+                    ActivityKind::StartupFailed {
+                        reason: format!("{error:#}"),
+                    },
+                    Some(instance.name),
+                );
+            }
         }
     }
 }

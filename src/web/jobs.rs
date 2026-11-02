@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::activity::{ActivityKind, ActivityLog};
 use crate::db::Db;
 use crate::db::jobs as db_jobs;
 use crate::game::{GameId, RuntimeImage};
@@ -51,6 +52,8 @@ pub enum JobKindDescr {
         instance: String,
     },
     ModUpload {
+        #[serde(default = "valheim_game")]
+        game: GameId,
         instance: String,
         name: String,
     },
@@ -86,6 +89,34 @@ pub enum JobKindDescr {
 
 const fn valheim_game() -> GameId {
     GameId::Valheim
+}
+
+impl JobKindDescr {
+    /// The wire tag (`"kind"` in the serialized form) naming this job type.
+    fn tag(&self) -> String {
+        encode_kind(self).map(|(tag, _)| tag).unwrap_or_default()
+    }
+
+    /// The game and instance a job acts on, to attribute its activity
+    /// events. Jobs that predate the multi-game model carry no game and are
+    /// Valheim's, matching their `serde` defaults.
+    fn target(&self) -> (GameId, Option<&str>) {
+        match self {
+            Self::RuntimeUpdate { game, instance }
+            | Self::BackupCreate { game, instance }
+            | Self::BackupRestore { game, instance, .. }
+            | Self::ModUpload { game, instance, .. } => (*game, Some(instance)),
+            Self::SharedInstall { game } => (*game, None),
+            Self::MapWipe { instance } | Self::FullWipe { instance } => {
+                (GameId::Rust, Some(instance))
+            }
+            Self::ModAdd { instance, .. }
+            | Self::ModUpdate { instance }
+            | Self::BepInExUpdate { instance, .. }
+            | Self::BepInExInstall { instance, .. } => (GameId::Valheim, Some(instance)),
+            Self::ImagePull { .. } => (GameId::Valheim, None),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +167,9 @@ struct JobRecord {
 pub struct JobRegistry {
     jobs: Arc<Mutex<HashMap<JobId, JobRecord>>>,
     db: Arc<Db>,
+    /// Where a failed job is reported, so webhooks and the activity feed see
+    /// it without every job having to remember to.
+    activity: Option<ActivityLog>,
 }
 
 /// Handed to a running job's closure so it can report progress lines.
@@ -203,7 +237,15 @@ impl JobRegistry {
         Self {
             jobs: Arc::new(Mutex::new(jobs)),
             db,
+            activity: None,
         }
+    }
+
+    /// Reports every job that ends `failed` to `activity` as a `JobFailed`
+    /// event.
+    pub fn with_activity(mut self, activity: ActivityLog) -> Self {
+        self.activity = Some(activity);
+        self
     }
 
     /// Spawns `work` onto the blocking thread pool and returns immediately
@@ -258,6 +300,17 @@ impl JobRegistry {
                     message: format!("{e:#}"),
                 },
             };
+            if let (JobStatus::Failed { message }, Some(activity)) = (&status, &registry.activity) {
+                let (game, instance) = kind.target();
+                activity.record_for(
+                    game,
+                    ActivityKind::JobFailed {
+                        job: kind.tag(),
+                        message: message.clone(),
+                    },
+                    instance.map(str::to_string),
+                );
+            }
             registry.set_status(&job_id, status);
         });
 
@@ -426,6 +479,69 @@ mod tests {
         let snapshot = registry.get(&id).unwrap();
         assert!(matches!(snapshot.status, JobStatus::Succeeded));
         assert_eq!(snapshot.log, vec!["working".to_string()]);
+    }
+
+    async fn finished(registry: &JobRegistry, id: &str) {
+        for _ in 0..100 {
+            if !matches!(
+                registry.get(id).unwrap().status,
+                JobStatus::Queued | JobStatus::Running
+            ) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_job_is_reported_to_the_activity_feed_and_a_successful_one_is_not() {
+        let db = temp_db("activity");
+        let activity = ActivityLog::load(db.clone());
+        let registry = JobRegistry::load(db).with_activity(activity.clone());
+        let kind = || JobKindDescr::BackupCreate {
+            game: GameId::Palworld,
+            instance: "pals".into(),
+        };
+
+        let ok = registry.spawn(kind(), |_logger| Ok(()));
+        finished(&registry, &ok).await;
+        assert!(activity.subscribe().0.is_empty());
+
+        let failed = registry.spawn(kind(), |_logger| anyhow::bail!("disk full"));
+        finished(&registry, &failed).await;
+
+        let (history, _rx) = activity.subscribe();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].game, GameId::Palworld);
+        assert_eq!(history[0].instance.as_deref(), Some("pals"));
+        assert!(matches!(
+            &history[0].kind,
+            ActivityKind::JobFailed { job, message }
+                if job == "backup_create" && message == "disk full"
+        ));
+    }
+
+    #[test]
+    fn a_job_is_attributed_to_the_game_it_acts_on() {
+        let upload = JobKindDescr::ModUpload {
+            game: GameId::SevenDaysToDie,
+            instance: "undead".into(),
+            name: "mod".into(),
+        };
+        assert_eq!(upload.target(), (GameId::SevenDaysToDie, Some("undead")));
+        let wipe = JobKindDescr::MapWipe {
+            instance: "rusty".into(),
+        };
+        assert_eq!(wipe.target(), (GameId::Rust, Some("rusty")));
+        let install = JobKindDescr::SharedInstall { game: GameId::Cs2 };
+        assert_eq!(install.target(), (GameId::Cs2, None));
+    }
+
+    #[test]
+    fn a_stored_mod_upload_without_a_game_is_valheims() {
+        let kind: JobKindDescr =
+            serde_json::from_str(r#"{"kind":"mod_upload","instance":"a","name":"b"}"#).unwrap();
+        assert_eq!(kind.target(), (GameId::Valheim, Some("a")));
     }
 
     #[tokio::test]

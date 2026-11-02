@@ -59,6 +59,16 @@ pub enum ActivityKind {
     },
     MapWiped,
     FullWiped,
+    JobFailed {
+        job: String,
+        message: String,
+    },
+    /// An automatic start (crash restart or uptime schedule) that did not
+    /// bring the instance up. Manual starts report their failure to the
+    /// admin who asked for them and are not recorded.
+    StartupFailed {
+        reason: String,
+    },
     PlayerJoined {
         name: String,
     },

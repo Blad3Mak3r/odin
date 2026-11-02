@@ -4,6 +4,8 @@
 //! global events SSE already reads from, so this needs no second event bus
 //! — every event worth alerting on already flows through it.
 
+use std::time::Duration;
+
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::activity::{ActivityEvent, ActivityKind};
@@ -48,11 +50,58 @@ async fn forward(state: &AppState, event: ActivityEvent) {
         if !hook.event_kinds.is_empty() && !hook.event_kinds.contains(&tag) {
             continue;
         }
-        let url = hook.url.clone();
-        let content = content.clone();
-        if let Err(e) = tokio::task::spawn_blocking(move || post(&url, &content)).await {
-            tracing::warn!(error = %e, "webhook post task panicked");
+        // One task per delivery, so a slow or failing destination retrying
+        // in the background never delays the others or the next event.
+        tokio::spawn(deliver(hook.url.clone(), content.clone()));
+    }
+}
+
+/// Delay before each retry of a failed delivery; its length is the retry
+/// budget.
+const RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(4),
+    Duration::from_secs(16),
+];
+
+const POST_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn deliver(url: String, content: String) {
+    deliver_with(&url, &content, &RETRY_DELAYS).await;
+}
+
+async fn deliver_with(url: &str, content: &str, delays: &[Duration]) {
+    let mut retries = delays.iter();
+    loop {
+        let (post_url, post_content) = (url.to_string(), content.to_string());
+        let error = match tokio::task::spawn_blocking(move || post(&post_url, &post_content)).await
+        {
+            Ok(Ok(())) => return,
+            Ok(Err(e)) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "webhook post task panicked");
+                return;
+            }
+        };
+        match retries.next() {
+            Some(delay) if is_transient(&error) => tokio::time::sleep(*delay).await,
+            _ => {
+                tracing::warn!(error = %error, "webhook delivery failed");
+                return;
+            }
         }
+    }
+}
+
+/// Whether a failed post is worth retrying: network trouble, a timeout, a
+/// server error or rate limiting. A 4xx such as a revoked URL will not fix
+/// itself.
+fn is_transient(error: &anyhow::Error) -> bool {
+    match error.downcast_ref::<reqwest::Error>() {
+        Some(e) => e
+            .status()
+            .is_none_or(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS),
+        None => false,
     }
 }
 
@@ -61,6 +110,7 @@ async fn forward(state: &AppState, event: ActivityEvent) {
 pub(crate) fn post(url: &str, content: &str) -> anyhow::Result<()> {
     crate::http::CLIENT
         .post(url)
+        .timeout(POST_TIMEOUT)
         .json(&serde_json::json!({ "content": content }))
         .send()?
         .error_for_status()?;
@@ -130,6 +180,14 @@ fn describe(event: &ActivityEvent) -> String {
         }
         ActivityKind::MapWiped => format!("💥 Map wiped for **{instance}**"),
         ActivityKind::FullWiped => format!("💥 Full wipe completed for **{instance}**"),
+        ActivityKind::JobFailed { job, message } => {
+            let message: String = message.chars().take(500).collect();
+            format!("❌ Job `{job}` failed for **{instance}**: {message}")
+        }
+        ActivityKind::StartupFailed { reason } => {
+            let reason: String = reason.chars().take(500).collect();
+            format!("🚨 **{instance}** failed to start automatically: {reason}")
+        }
         ActivityKind::PlayerJoined { name } => format!("👋 {name} joined **{instance}**"),
         ActivityKind::PlayerLeft { name } => format!("👋 {name} left **{instance}**"),
     }
@@ -173,6 +231,110 @@ mod tests {
             kind: ActivityKind::InstanceStopped,
         };
         assert!(describe(&event).contains("my-server"));
+    }
+
+    /// Serves one canned response per connection, in order, and returns the
+    /// URL plus a counter of the requests received.
+    fn serve(statuses: &'static [u16]) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/hook", listener.local_addr().unwrap());
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let served = count.clone();
+        std::thread::spawn(move || {
+            for status in statuses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                // Read the head and the body so the client sees a clean close.
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let read = stream.read(&mut chunk).unwrap();
+                    request.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&request).to_lowercase();
+                    if let Some(head_end) = text.find("\r\n\r\n") {
+                        let length = text
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if request.len() >= head_end + 4 + length {
+                            break;
+                        }
+                    }
+                    if read == 0 {
+                        break;
+                    }
+                }
+                served.fetch_add(1, Ordering::SeqCst);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                );
+            }
+        });
+        (url, count)
+    }
+
+    const NO_WAIT: [Duration; 3] = [Duration::ZERO; 3];
+
+    #[tokio::test]
+    async fn a_server_error_is_retried_until_it_succeeds() {
+        let (url, count) = serve(&[500, 429, 204]);
+
+        deliver_with(&url, "hello", &NO_WAIT).await;
+
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_client_error_is_not_retried() {
+        let (url, count) = serve(&[404, 204]);
+
+        deliver_with(&url, "hello", &NO_WAIT).await;
+
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retries_stop_after_the_budget_is_spent() {
+        let (url, count) = serve(&[503, 503, 503, 503, 503]);
+
+        deliver_with(&url, "hello", &NO_WAIT).await;
+
+        // The first attempt plus one retry per delay.
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn failures_are_described_for_the_webhook() {
+        let event = |kind| ActivityEvent {
+            id: "evt-1".to_string(),
+            at: Utc::now(),
+            game: crate::game::GameId::Palworld,
+            instance: Some("pals".to_string()),
+            instance_id: None,
+            kind,
+        };
+        let job = describe(&event(ActivityKind::JobFailed {
+            job: "backup_create".to_string(),
+            message: "x".repeat(2000),
+        }));
+        assert!(job.contains("backup_create") && job.contains("pals"));
+        assert!(job.chars().count() < 600);
+        let startup = describe(&event(ActivityKind::StartupFailed {
+            reason: "port in use".to_string(),
+        }));
+        assert!(startup.contains("pals") && startup.contains("port in use"));
+        assert_eq!(
+            kind_tag(&ActivityKind::StartupFailed {
+                reason: String::new()
+            }),
+            "startup_failed"
+        );
     }
 
     #[test]

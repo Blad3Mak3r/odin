@@ -407,7 +407,7 @@ export type JobKindDescr =
   | { kind: 'image_pull'; image: RuntimeImageRole }
   | { kind: 'mod_add'; instance: string; mod_id: string }
   | { kind: 'mod_update'; instance: string }
-  | { kind: 'mod_upload'; instance: string; name: string }
+  | { kind: 'mod_upload'; game?: GameId; instance: string; name: string }
   | { kind: 'backup_create'; game: GameId; instance: string }
   | { kind: 'backup_restore'; game: GameId; instance: string; backup_id: string }
   | { kind: 'map_wipe'; instance: string }
@@ -587,6 +587,8 @@ export type ActivityKind =
   | { kind: 'backup_pruned'; backup_id: string }
   | { kind: 'map_wiped' }
   | { kind: 'full_wiped' }
+  | { kind: 'job_failed'; job: string; message: string }
+  | { kind: 'startup_failed'; reason: string }
   | { kind: 'player_joined'; name: string }
   | { kind: 'player_left'; name: string }
 

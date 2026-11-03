@@ -681,6 +681,8 @@ export interface AuthUser {
   must_change_password: boolean
   disabled: boolean
   last_login_at: string | null
+  /** When the profile picture was set; null when there is none. */
+  avatar_updated_at: string | null
 }
 
 export interface AuditEvent {

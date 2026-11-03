@@ -1538,6 +1538,26 @@ export function useAuditLog() {
   })
 }
 
+export function useUploadAvatar() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (image: Blob) => {
+      const form = new FormData()
+      form.set('file', image, 'avatar.png')
+      return api.upload<AuthUser>('/auth/avatar', form)
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth'] }),
+  })
+}
+
+export function useDeleteAvatar() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.delete<AuthUser>('/auth/avatar'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth'] }),
+  })
+}
+
 export function useUpdateProfile() {
   const queryClient = useQueryClient()
   return useMutation({

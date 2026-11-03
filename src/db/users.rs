@@ -31,6 +31,12 @@ pub enum UserError {
     UsernameTaken(String),
     #[error("at least one administrator must remain")]
     LastAdmin,
+    #[error(
+        "the owner account cannot be demoted, disabled or deleted, and only the owner can reset its password"
+    )]
+    Owner,
+    #[error("instance '{0}' does not exist")]
+    UnknownInstance(String),
     #[error("initial setup has already been completed")]
     SetupDone,
 }
@@ -39,6 +45,9 @@ pub enum UserError {
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Admin,
+    /// Runs the instances it was granted, without touching anything global
+    /// or sensitive.
+    Operator,
     Viewer,
 }
 
@@ -46,15 +55,16 @@ impl Role {
     fn as_str(self) -> &'static str {
         match self {
             Role::Admin => "admin",
+            Role::Operator => "operator",
             Role::Viewer => "viewer",
         }
     }
 
     fn parse(value: &str) -> Self {
-        if value == "admin" {
-            Role::Admin
-        } else {
-            Role::Viewer
+        match value {
+            "admin" => Role::Admin,
+            "operator" => Role::Operator,
+            _ => Role::Viewer,
         }
     }
 }
@@ -72,6 +82,9 @@ pub struct User {
     /// Cannot sign in; its sessions are gone.
     pub disabled: bool,
     pub last_login_at: Option<DateTime<Utc>>,
+    /// The administrator created at first-run setup; protected from the
+    /// other administrators.
+    pub is_owner: bool,
 }
 
 /// A user together with the stored password hash, for login only.
@@ -98,8 +111,8 @@ pub fn create_first_admin(
 ) -> Result<User> {
     let now = Utc::now();
     let inserted = db.conn().execute(
-        "INSERT INTO users (email, username, password_hash, role, created_at) \
-         SELECT ?1, ?2, ?3, 'admin', ?4 WHERE NOT EXISTS (SELECT 1 FROM users)",
+        "INSERT INTO users (email, username, password_hash, role, created_at, is_owner) \
+         SELECT ?1, ?2, ?3, 'admin', ?4, 1 WHERE NOT EXISTS (SELECT 1 FROM users)",
         params![email, username, password_hash, now],
     )?;
     if inserted == 0 {
@@ -113,6 +126,7 @@ pub fn create_first_admin(
         must_change_password: false,
         disabled: false,
         last_login_at: None,
+        is_owner: true,
     })
 }
 
@@ -146,6 +160,7 @@ pub fn create(
             must_change_password,
             disabled: false,
             last_login_at: None,
+            is_owner: false,
         }),
         Err(rusqlite::Error::SqliteFailure(err, Some(message)))
             if err.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -164,13 +179,13 @@ pub fn create(
 pub fn find_credentials(db: &Db, login: &str) -> Result<Option<UserCredentials>> {
     db.conn()
         .query_row(
-            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at, password_hash FROM users \
+            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at, is_owner, password_hash FROM users \
              WHERE email = ?1 OR username = ?1",
             params![login],
             |row| {
                 Ok(UserCredentials {
                     user: row_to_user(row)?,
-                    password_hash: row.get(7)?,
+                    password_hash: row.get(8)?,
                 })
             },
         )
@@ -192,7 +207,7 @@ pub fn password_hash(db: &Db, email: &str) -> Result<Option<String>> {
 pub fn list(db: &Db) -> Result<Vec<User>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE",
+        "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at, is_owner FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], row_to_user)?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
@@ -205,6 +220,9 @@ pub fn set_role(db: &Db, email: &str, role: Role) -> Result<()> {
     let Some((current, disabled)) = current else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
+    if role != Role::Admin && is_owner(&conn, email)? {
+        return Err(UserError::Owner.into());
+    }
     if Role::parse(&current) == Role::Admin
         && !disabled
         && role != Role::Admin
@@ -250,6 +268,9 @@ pub fn delete(db: &Db, email: &str) -> Result<Vec<String>> {
     let Some((role, disabled)) = role_and_state(&conn, email)? else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
+    if is_owner(&conn, email)? {
+        return Err(UserError::Owner.into());
+    }
     if Role::parse(&role) == Role::Admin && !disabled && admin_count(&conn)? <= 1 {
         return Err(UserError::LastAdmin.into());
     }
@@ -266,6 +287,9 @@ pub fn set_disabled(db: &Db, email: &str, disabled: bool) -> Result<Vec<String>>
     let Some((role, was_disabled)) = role_and_state(&conn, email)? else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
+    if disabled && is_owner(&conn, email)? {
+        return Err(UserError::Owner.into());
+    }
     if disabled && Role::parse(&role) == Role::Admin && !was_disabled && admin_count(&conn)? <= 1 {
         return Err(UserError::LastAdmin.into());
     }
@@ -331,7 +355,7 @@ pub fn record_login(db: &Db, email: &str) -> Result<()> {
 pub fn find_by_email(db: &Db, email: &str) -> Result<Option<User>> {
     db.conn()
         .query_row(
-            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at \
+            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at, is_owner \
              FROM users WHERE email = ?1",
             params![email],
             row_to_user,
@@ -426,12 +450,12 @@ pub fn user_for_session(db: &Db, token_hash: &str) -> Result<Option<(User, Sessi
     db.conn()
         .query_row(
             &format!(
-                "SELECT u.email, u.username, u.role, u.created_at, u.must_change_password, u.disabled, u.last_login_at, {SESSION_COLUMNS} \
+                "SELECT u.email, u.username, u.role, u.created_at, u.must_change_password, u.disabled, u.last_login_at, u.is_owner, {SESSION_COLUMNS} \
                  FROM auth_sessions s JOIN users u ON u.email = s.user_email \
                  WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.disabled = 0"
             ),
             params![token_hash, Utc::now()],
-            |row| Ok((row_to_user(row)?, row_to_session(row, 7)?)),
+            |row| Ok((row_to_user(row)?, row_to_session(row, 8)?)),
         )
         .optional()
         .map_err(Into::into)
@@ -463,6 +487,12 @@ pub fn list_sessions(db: &Db, user_email: &str) -> Result<Vec<SessionInfo>> {
         row_to_session(row, 0)
     })?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+/// Token hashes of every session of a user, so live streams opened under
+/// the old permissions can be closed.
+pub fn session_token_hashes(db: &Db, user_email: &str) -> Result<Vec<String>> {
+    session_hashes(&db.conn(), user_email, None).map_err(Into::into)
 }
 
 /// Deletes one of the user's sessions by its public id; returns its token
@@ -528,6 +558,16 @@ fn role_and_state(
     .optional()
 }
 
+fn is_owner(conn: &rusqlite::Connection, email: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT is_owner FROM users WHERE email = ?1",
+        params![email],
+        |r| r.get(0),
+    )
+    .optional()
+    .map(|owner| owner.unwrap_or(false))
+}
+
 fn admin_count(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0",
@@ -546,5 +586,6 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         must_change_password: row.get(4)?,
         disabled: row.get(5)?,
         last_login_at: row.get(6)?,
+        is_owner: row.get(7)?,
     })
 }

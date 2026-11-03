@@ -60,7 +60,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         // 0021 replaces the parent identity table in order to widen its
         // SQLite CHECK constraint. SQLite only permits that operation with
         // foreign keys disabled before a transaction begins.
-        if version == 21 || version == 23 || version == 33 || version == 35 {
+        if version == 21 || version == 23 || version == 33 || version == 35 || version == 39 {
             conn.pragma_update(None, "foreign_keys", "OFF")?;
             let result = conn
                 .execute_batch(sql)
@@ -522,6 +522,61 @@ mod tests {
              VALUES ('cs', 'de_dust2', 'competitive', 10, NULL, 'secret');",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn v39_keeps_accounts_and_sessions_names_the_owner_and_keeps_viewers_access() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
+        files.sort();
+        for file in files {
+            let version = migration_version(&file).unwrap();
+            if version >= 39 {
+                continue;
+            }
+            let migration = Migrations::get(&file).unwrap();
+            conn.execute_batch(std::str::from_utf8(&migration.data).unwrap())
+                .unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO users (email, password_hash, role, created_at) VALUES
+                ('first@example.com', 'x', 'admin', '2026-01-01T00:00:00Z'),
+                ('later@example.com', 'x', 'admin', '2026-02-01T00:00:00Z'),
+                ('watcher@example.com', 'x', 'viewer', '2026-03-01T00:00:00Z');
+             INSERT INTO auth_sessions (token_hash, id, user_email, created_at, last_used_at, expires_at, remember)
+             VALUES ('t', 's', 'watcher@example.com', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2099-01-01T00:00:00Z', 1);
+             INSERT INTO game_instances (id, game, name, created_at) VALUES ('i1', 'valheim', 'a', '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let owners: Vec<String> = conn
+            .prepare("SELECT email FROM users WHERE is_owner = 1")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(owners, ["first@example.com"]);
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM auth_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 1, "rebuilding users must not sign anyone out");
+        let granted: Vec<(String, String)> = conn
+            .prepare("SELECT user_email, instance_id FROM user_instance_access")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(granted, [("watcher@example.com".into(), "i1".into())]);
+        conn.execute(
+            "UPDATE users SET role = 'operator' WHERE email = 'watcher@example.com'",
+            [],
+        )
+        .expect("the operator role is accepted");
     }
 
     #[test]

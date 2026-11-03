@@ -22,6 +22,7 @@ pub mod container_instances;
 pub mod game_instances;
 pub mod global_mods;
 mod import;
+pub mod instance_access;
 pub mod instances;
 pub mod jobs;
 pub mod lists;

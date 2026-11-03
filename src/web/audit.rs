@@ -46,7 +46,7 @@ impl AuditKind {
             Self::ProfileUpdated => "profile_updated",
             Self::AccountDisabled => "account_disabled",
             Self::AccountEnabled => "account_enabled",
-            Self::Action => "action",
+            Self::Action => auth_events::ACTION_KIND,
         }
     }
 }

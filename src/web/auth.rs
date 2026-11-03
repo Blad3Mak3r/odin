@@ -108,6 +108,10 @@ pub struct Busy {
 #[error("invalid or missing token")]
 pub struct InvalidBootstrapToken;
 
+#[derive(Debug, thiserror::Error)]
+#[error("this invitation link is invalid or has expired")]
+pub struct InvalidInvitation;
+
 /// What a one-time token printed in the server log unlocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapKind {
@@ -168,6 +172,23 @@ pub fn arm_bootstrap(state: &AppState) -> anyhow::Result<()> {
         state.bootstrap.arm(BootstrapKind::Recovery, token);
     }
     Ok(())
+}
+
+/// A fresh invitation token and the digest to store for it. 32 random bytes,
+/// like a session token: the link is a bearer credential.
+pub fn new_invitation_token() -> (String, String) {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill(&mut bytes);
+    let token = hex(&bytes);
+    let digest = hash_token(&token);
+    (token, digest)
+}
+
+/// Digest under which an invitation token is stored. `None` for input that
+/// cannot be one of ours, so junk never reaches the database.
+pub fn invitation_token_hash(token: &str) -> Option<String> {
+    (token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| hash_token(&token.to_ascii_lowercase()))
 }
 
 pub fn random_token() -> String {
@@ -444,7 +465,12 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 fn is_public(path: &str) -> bool {
     matches!(
         path,
-        "/api/auth/status" | "/api/auth/login" | "/api/auth/setup" | "/api/auth/recover"
+        "/api/auth/status"
+            | "/api/auth/login"
+            | "/api/auth/setup"
+            | "/api/auth/recover"
+            | "/api/auth/invitation"
+            | "/api/auth/invitation/peek"
     )
 }
 
@@ -1001,6 +1027,13 @@ mod tests {
 
     /// The router plus its state, with a random setup token armed.
     fn app_state(public: Option<&str>) -> (Router, AppState) {
+        app_state_with_mail(public, None)
+    }
+
+    fn app_state_with_mail(
+        public: Option<&str>,
+        mail: Option<crate::mail::Mailer>,
+    ) -> (Router, AppState) {
         let dir = std::env::temp_dir().join(format!(
             "odin-auth-test-{}-{}",
             std::process::id(),
@@ -1013,7 +1046,9 @@ mod tests {
         };
         let db = Arc::new(Db::open(&paths).unwrap());
         let public = public.map(|raw| crate::config::PublicOrigin::parse(raw).unwrap());
-        let state = AppState::new(paths, db).with_public_origin(public);
+        let state = AppState::new(paths, db)
+            .with_public_origin(public)
+            .with_mail(mail);
         state.bootstrap.arm(BootstrapKind::Setup, setup_token());
         (crate::web::router::build_app(state.clone()), state)
     }
@@ -2897,5 +2932,332 @@ mod tests {
             ip("10.0.0.9")
         );
         assert_eq!(resolve_client_ip(&trusted, None, &headers, None), None);
+    }
+
+    fn recording_mailer() -> (Arc<crate::mail::RecordingSender>, crate::mail::Mailer) {
+        let sender = Arc::new(crate::mail::RecordingSender::default());
+        let mailer = crate::mail::Mailer::with_sender(
+            sender.clone(),
+            "Odin <odin@example.com>".parse().unwrap(),
+        );
+        (sender, mailer)
+    }
+
+    async fn admin_cookie(app: &Router) -> String {
+        let (_, cookie, _) = call(
+            app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        cookie.unwrap()
+    }
+
+    fn invite_body(email: &str) -> Option<serde_json::Value> {
+        Some(json!({ "email": email, "role": "viewer", "instance_ids": [] }))
+    }
+
+    #[tokio::test]
+    async fn an_invited_user_chooses_a_password_through_the_emailed_link() {
+        let (sender, mailer) = recording_mailer();
+        let (app, _) = app_state_with_mail(Some("https://odin.example.com"), Some(mailer));
+        let admin = admin_cookie(&app).await;
+
+        let (status, _, created) = call(
+            &app,
+            "POST",
+            "/api/users",
+            Some(&admin),
+            invite_body("ada@example.com"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{created}");
+        assert_eq!(created["invitation_delivery"], "sent");
+        assert!(created["invitation_expires_at"].is_string());
+        assert_eq!(created["must_change_password"], false);
+        {
+            let sent = sender.sent.lock().unwrap();
+            assert_eq!(sent.len(), 1);
+            assert!(sent[0].contains("To: ada@example.com"));
+            assert!(sent[0].contains("https://odin.example.com/accept-invite#token"));
+        }
+        let token = sender.last_token();
+
+        // Nobody can sign in with the placeholder password.
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/login",
+            None,
+            login_creds("ada@example.com", ""),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK);
+
+        let (status, _, info) = call(
+            &app,
+            "POST",
+            "/api/auth/invitation/peek",
+            None,
+            Some(json!({ "token": token })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(info["email"], "ada@example.com");
+
+        // A password the policy refuses must not use the link up.
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/invitation",
+            None,
+            Some(json!({ "token": token, "password": "password" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, cookie, user) = call(
+            &app,
+            "POST",
+            "/api/auth/invitation",
+            None,
+            Some(json!({ "token": token, "password": pw("ada") })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{user}");
+        assert_eq!(user["email"], "ada@example.com");
+        assert_eq!(user["must_change_password"], false);
+        let cookie = cookie.expect("accepting signs the user in");
+        let (_, _, session) = call(&app, "GET", "/api/auth/status", Some(&cookie), None).await;
+        assert_eq!(session["user"]["email"], "ada@example.com");
+
+        // The link is single use, and the chosen password works.
+        for uri in ["/api/auth/invitation", "/api/auth/invitation/peek"] {
+            let (status, ..) = call(
+                &app,
+                "POST",
+                uri,
+                None,
+                Some(json!({ "token": token, "password": pw("ada2") })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
+        }
+        login_cookie(&app, "ada@example.com", &pw("ada"), false).await;
+
+        let (_, _, listed) = call(&app, "GET", "/api/users", Some(&admin), None).await;
+        let ada = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["email"] == "ada@example.com")
+            .unwrap();
+        assert!(ada["invitation_expires_at"].is_null());
+    }
+
+    #[tokio::test]
+    async fn inviting_needs_mail_and_a_public_url_but_passwords_still_work() {
+        let (_, mailer) = recording_mailer();
+        let setups = [
+            app_state_with_mail(Some("https://odin.example.com"), None),
+            app_state_with_mail(None, Some(mailer)),
+        ];
+        for (app, state) in setups {
+            assert!(!state.invitations_available());
+            let admin = admin_cookie(&app).await;
+            let (status, _, body) = call(
+                &app,
+                "POST",
+                "/api/users",
+                Some(&admin),
+                invite_body("ada@example.com"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            let (_, _, listed) = call(&app, "GET", "/api/users", Some(&admin), None).await;
+            assert_eq!(
+                listed.as_array().unwrap().len(),
+                1,
+                "no account was created"
+            );
+
+            let (status, _, created) = call(
+                &app,
+                "POST",
+                "/api/users",
+                Some(&admin),
+                Some(json!({
+                    "email": "bob@example.com", "password": pw("bob"), "role": "viewer",
+                })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(created["invitation_delivery"].is_null());
+            assert_eq!(created["must_change_password"], true);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_send_keeps_the_account_and_can_be_resent() {
+        let (sender, mailer) = recording_mailer();
+        let (app, _) = app_state_with_mail(Some("https://odin.example.com"), Some(mailer));
+        let admin = admin_cookie(&app).await;
+        sender.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let (status, _, created) = call(
+            &app,
+            "POST",
+            "/api/users",
+            Some(&admin),
+            invite_body("ada@example.com"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(created["invitation_delivery"], "failed");
+        assert!(created["invitation_expires_at"].is_string());
+        assert!(!created.to_string().contains("connection refused"));
+
+        sender
+            .fail
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let (status, _, resent) = call(
+            &app,
+            "POST",
+            "/api/users/ada@example.com/invitation",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(resent["invitation_delivery"], "sent");
+        let first = sender.last_token();
+
+        // Resending replaces the link.
+        call(
+            &app,
+            "POST",
+            "/api/users/ada@example.com/invitation",
+            Some(&admin),
+            None,
+        )
+        .await;
+        let second = sender.last_token();
+        assert_ne!(first, second);
+        let peek = |token: String| {
+            call(
+                &app,
+                "POST",
+                "/api/auth/invitation/peek",
+                None,
+                Some(json!({ "token": token })),
+            )
+        };
+        assert_eq!(peek(first).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(peek(second).await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn only_administrators_resend_and_only_for_pending_invitations() {
+        let (_, mailer) = recording_mailer();
+        let (app, _) = app_state_with_mail(Some("https://odin.example.com"), Some(mailer));
+        let admin = admin_cookie(&app).await;
+        let viewer = new_user(&app, &admin, "v@example.com", "viewer", &[]).await;
+        call(
+            &app,
+            "POST",
+            "/api/users",
+            Some(&admin),
+            invite_body("ada@example.com"),
+        )
+        .await;
+
+        let uri = "/api/users/ada@example.com/invitation";
+        let (status, ..) = call(&app, "POST", uri, Some(&viewer), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, ..) = call(&app, "POST", uri, None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // v@ has a password already, so there is nothing to resend.
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/users/v@example.com/invitation",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // An administrator setting a password ends the invitation.
+        call(
+            &app,
+            "PUT",
+            "/api/users/ada@example.com",
+            Some(&admin),
+            Some(json!({ "password": pw("ada") })),
+        )
+        .await;
+        let (status, ..) = call(&app, "POST", uri, Some(&admin), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wrong_invitation_tokens_are_throttled_and_audited() {
+        let (_, mailer) = recording_mailer();
+        let (app, _) = app_state_with_mail(Some("https://odin.example.com"), Some(mailer));
+        let admin = admin_cookie(&app).await;
+
+        let guess = |token: &str| {
+            call(
+                &app,
+                "POST",
+                "/api/auth/invitation/peek",
+                None,
+                Some(json!({ "token": token })),
+            )
+        };
+        for _ in 0..MAX_FAILURES_PER_PAIR {
+            assert_eq!(guess(&"0".repeat(64)).await.0, StatusCode::FORBIDDEN);
+        }
+        // Junk that cannot be a token counts too, then the lockout applies.
+        assert_eq!(guess("not-a-token").await.0, StatusCode::TOO_MANY_REQUESTS);
+
+        let (_, _, events) =
+            call(&app, "GET", "/api/auth/audit?limit=50", Some(&admin), None).await;
+        let kinds: Vec<&str> = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["kind"].as_str())
+            .collect();
+        assert!(kinds.contains(&"invitation_rejected"), "{kinds:?}");
+        assert!(kinds.contains(&"login_throttled"), "{kinds:?}");
+    }
+
+    #[tokio::test]
+    async fn the_emailed_link_ignores_a_forged_host_header() {
+        let (sender, mailer) = recording_mailer();
+        let (app, _) = app_state_with_mail(Some("https://odin.example.com"), Some(mailer));
+        let admin = admin_cookie(&app).await;
+        let token = admin.split_once('=').unwrap().1;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/users")
+            .header(header::COOKIE, &admin)
+            .header(CSRF_HEADER, csrf_token_for(token))
+            .header(header::HOST, "evil.example")
+            .header(header::ORIGIN, "https://odin.example.com")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                invite_body("ada@example.com").unwrap().to_string(),
+            ))
+            .unwrap();
+        let response = raw(&app, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let sent = sender.sent.lock().unwrap();
+        assert!(sent[0].contains("https://odin.example.com/accept-invite"));
+        assert!(!sent[0].contains("evil.example"));
     }
 }

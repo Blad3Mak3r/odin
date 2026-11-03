@@ -49,6 +49,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/auth/avatar/{email}", get(auth::get_avatar))
         .route("/auth/recover", post(auth::recover))
+        .route("/auth/invitation", post(auth::accept_invitation))
+        .route("/auth/invitation/peek", post(auth::peek_invitation))
         .route("/auth/audit", get(auth::audit_log))
         .route("/auth/sessions", get(auth::list_sessions))
         .route(
@@ -58,6 +60,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/sessions/{id}", delete(auth::revoke_session))
         .route("/users", get(users::list).post(users::create))
         .route("/users/{email}", put(users::update).delete(users::delete))
+        .route("/users/{email}/invitation", post(users::resend_invitation))
         .route(
             "/users/{email}/instances",
             get(users::get_instances).put(users::set_instances),

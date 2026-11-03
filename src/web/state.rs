@@ -5,6 +5,7 @@ use sysinfo::System;
 use crate::activity::ActivityLog;
 use crate::config::{PublicOrigin, TrustedProxies};
 use crate::db::Db;
+use crate::mail::Mailer;
 use crate::odin_update::SystemUpdate;
 use crate::paths::Paths;
 use crate::web::auth::{BootstrapGate, HashGate, LoginThrottle, SessionRegistry};
@@ -34,6 +35,7 @@ pub struct AppState {
     pub public_origin: Option<PublicOrigin>,
     pub trusted_proxies: TrustedProxies,
     pub client_ip_header: Option<axum::http::HeaderName>,
+    pub mail: Option<Arc<Mailer>>,
 }
 
 impl AppState {
@@ -50,6 +52,17 @@ impl AppState {
     pub fn with_public_origin(mut self, origin: Option<PublicOrigin>) -> Self {
         self.public_origin = origin;
         self
+    }
+
+    pub fn with_mail(mut self, mail: Option<Mailer>) -> Self {
+        self.mail = mail.map(Arc::new);
+        self
+    }
+
+    /// Invitations need a mail server to send through and a trusted public
+    /// URL to link to (a request's `Host` header is attacker-controlled).
+    pub fn invitations_available(&self) -> bool {
+        self.mail.is_some() && self.public_origin.is_some()
     }
 
     pub fn new(paths: Paths, db: Arc<Db>) -> Self {
@@ -76,6 +89,7 @@ impl AppState {
             public_origin: None,
             trusted_proxies: TrustedProxies::default(),
             client_ip_header: None,
+            mail: None,
         }
     }
 }

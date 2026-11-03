@@ -9,9 +9,11 @@ use crate::db::instance_access;
 use crate::db::users::{self, Role, User, UserError};
 use crate::web::audit::{self, AuditKind};
 use crate::web::auth::{
-    AuthUser, ClientIp, hash_password, normalize_email, optional_username, validate_password,
+    AuthUser, ClientIp, hash_password, normalize_email, optional_username, random_token,
+    validate_password,
 };
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
+use crate::web::invitations::{self, Delivery, Resent};
 use crate::web::state::AppState;
 
 pub async fn list(
@@ -28,9 +30,12 @@ pub struct CreateUser {
     pub email: String,
     #[serde(default)]
     pub username: Option<String>,
-    pub password: String,
+    /// Left out, the user is invited by email and chooses their own password.
+    #[serde(default)]
+    pub password: Option<String>,
     pub role: Role,
-    /// The new user must replace this password at first sign-in. Defaults to true.
+    /// The new user must replace this password at first sign-in. Defaults to
+    /// true; meaningless for an invitation.
     #[serde(default)]
     pub require_change: Option<bool>,
     /// Instances a viewer or operator can reach from the start.
@@ -38,25 +43,38 @@ pub struct CreateUser {
     pub instance_ids: Vec<String>,
 }
 
+#[derive(Serialize)]
+pub struct CreatedUser {
+    #[serde(flatten)]
+    pub user: User,
+    /// Set when the user was invited: whether the mail server took the message.
+    pub invitation_delivery: Option<Delivery>,
+}
+
 pub async fn create(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
     Extension(ClientIp(ip)): Extension<ClientIp>,
     Json(req): Json<CreateUser>,
-) -> ApiResult<Json<User>> {
+) -> ApiResult<Json<CreatedUser>> {
     auth.require_admin()?;
     let email = normalize_email(&req.email)?;
     let username = optional_username(req.username.as_deref())?;
-    validate_password(
-        &req.password,
-        &[&email, username.as_deref().unwrap_or_default()],
-    )?;
+    let invite = req.password.is_none();
+    match &req.password {
+        Some(password) => {
+            validate_password(password, &[&email, username.as_deref().unwrap_or_default()])?
+        }
+        None => invitations::ensure_available(&state)?,
+    }
     let db = state.db.clone();
-    let must_change = req.require_change.unwrap_or(true);
+    let must_change = !invite && req.require_change.unwrap_or(true);
     let user = state
         .hashing
         .run(move || {
-            let hash = hash_password(&req.password)?;
+            // An invited user has no password yet: store one nobody knows.
+            let password = req.password.unwrap_or_else(random_token);
+            let hash = hash_password(&password)?;
             let user = users::create(
                 &db,
                 &email,
@@ -83,7 +101,52 @@ pub async fn create(
         Some(&role),
     )
     .await;
-    Ok(Json(user))
+    if !invite {
+        return Ok(Json(CreatedUser {
+            user,
+            invitation_delivery: None,
+        }));
+    }
+    let delivery =
+        match invitations::issue_and_send(&state, &auth.user.email, &user.email, ip).await {
+            Ok(delivery) => delivery,
+            Err(err) => {
+                // No link was stored, so the account could never be used.
+                let (db, email) = (state.db.clone(), user.email.clone());
+                run_blocking(move || users::delete(&db, &email)).await?;
+                return Err(err);
+            }
+        };
+    let (db, email) = (state.db.clone(), user.email.clone());
+    let user = run_blocking(move || users::find_by_email(&db, &email))
+        .await?
+        .unwrap_or(user);
+    Ok(Json(CreatedUser {
+        user,
+        invitation_delivery: Some(delivery),
+    }))
+}
+
+/// Mails a fresh link to a user who has not accepted their invitation yet.
+pub async fn resend_invitation(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    Path(email): Path<String>,
+) -> ApiResult<Json<Resent>> {
+    auth.require_admin()?;
+    invitations::ensure_available(&state)?;
+    let email = normalize_email(&email)?;
+    let (db, target) = (state.db.clone(), email.clone());
+    let pending = run_blocking(move || crate::db::password_links::pending(&db, &target)).await?;
+    if !pending {
+        return Err(BadRequest("this account has no pending invitation".into()).into());
+    }
+    let invitation_delivery =
+        invitations::issue_and_send(&state, &auth.user.email, &email, ip).await?;
+    Ok(Json(Resent {
+        invitation_delivery,
+    }))
 }
 
 #[derive(Deserialize)]

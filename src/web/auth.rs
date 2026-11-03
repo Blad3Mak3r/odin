@@ -612,7 +612,7 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
         if auth.user.role == Role::Operator && access::is_config_write(req.method(), &path) {
             req = match access::strip_request_secrets(req).await {
                 Ok(req) => req,
-                Err(response) => return response,
+                Err((status, message)) => return error_response(status, message),
             };
         }
     }

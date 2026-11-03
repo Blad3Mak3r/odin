@@ -8,7 +8,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{Method, StatusCode, header};
-use axum::response::Response;
 
 use crate::db::instance_access::Granted;
 use crate::db::users::Role;
@@ -186,19 +185,10 @@ pub fn strip_secrets(value: &mut serde_json::Value) {
 }
 
 /// Rewrites an operator's configuration request without its secrets.
-pub async fn strip_request_secrets(req: Request) -> Result<Request, Response> {
+pub async fn strip_request_secrets(req: Request) -> Result<Request, (StatusCode, &'static str)> {
     let (mut parts, body) = req.into_parts();
-    let refused = |status: StatusCode, message: &str| {
-        Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                serde_json::json!({ "error": message }).to_string(),
-            ))
-            .unwrap_or_default()
-    };
     let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY_BYTES).await else {
-        return Err(refused(StatusCode::PAYLOAD_TOO_LARGE, "request too large"));
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "request too large"));
     };
     let bytes = match serde_json::from_slice::<serde_json::Value>(&bytes) {
         Ok(mut json) => {

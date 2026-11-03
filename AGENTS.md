@@ -164,11 +164,12 @@ Everything is driven through the root `Makefile`:
 
 Frontend-only commands (from `web/`): `npm run build` (`tsc -b && vite
 build` — this also typechecks), `npm run lint` (`oxlint`, not
-ESLint/Prettier), `npm run dev`.
+ESLint/Prettier), `npm test` (Vitest with happy-dom; tests live next to the
+code as `*.test.tsx`), `npm run dev`.
 
 CI (`.github/workflows/ci.yml`) runs `make check` plus the dashboard lint and
-build on every pull request; it does not run frontend tests (there are none)
-or dependency audits. `codeql.yml`, `release.yml` and `runtime-images.yml`
+build and the dashboard tests (`npm test`, Vitest) on every pull request; it
+does not run dependency audits. `codeql.yml`, `release.yml` and `runtime-images.yml`
 cover code scanning, releases and the runtime images. Validate changes
 proportionally locally instead of running the entire suite by habit:
 

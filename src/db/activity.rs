@@ -50,20 +50,38 @@ pub fn recent(db: &Db, limit: usize) -> Result<Vec<ActivityEvent>> {
     let mut events = Vec::new();
     for row in rows {
         let (id, at, instance, instance_id, game, payload) = row?;
-        let kind = decode_kind(&payload)?;
-        events.push(ActivityEvent {
-            id,
-            at,
-            game: game
-                .unwrap_or_else(|| "valheim".to_string())
-                .parse()
-                .map_err(anyhow::Error::msg)?,
-            instance,
-            instance_id,
-            kind,
-        });
+        // A row this build cannot read (an event kind or game from a newer
+        // version, after a rollback) is skipped: failing here would leave the
+        // whole feed empty.
+        match decode_event(&id, at, instance, instance_id, game, &payload) {
+            Ok(event) => events.push(event),
+            Err(error) => {
+                tracing::warn!(%id, error = %format!("{error:#}"), "skipping unreadable activity event");
+            }
+        }
     }
     Ok(events)
+}
+
+fn decode_event(
+    id: &str,
+    at: DateTime<Utc>,
+    instance: Option<String>,
+    instance_id: Option<String>,
+    game: Option<String>,
+    payload: &str,
+) -> Result<ActivityEvent> {
+    Ok(ActivityEvent {
+        id: id.to_string(),
+        at,
+        game: game
+            .unwrap_or_else(|| "valheim".to_string())
+            .parse()
+            .map_err(anyhow::Error::msg)?,
+        instance,
+        instance_id,
+        kind: decode_kind(payload)?,
+    })
 }
 
 /// Deletes activity events older than `before` and returns how many rows were removed.
@@ -153,6 +171,28 @@ mod tests {
         assert_eq!(events[0].id, "evt-2");
         assert_eq!(events[1].id, "evt-3");
         assert_eq!(events[2].id, "evt-4");
+    }
+
+    #[test]
+    fn events_this_build_cannot_read_are_skipped_instead_of_emptying_the_feed() {
+        let db = temp_db("unreadable");
+        for (id, payload, game) in [
+            ("future", r#"{"kind":"from_a_newer_version"}"#, "valheim"),
+            ("fine", r#"{"kind":"instance_created"}"#, "valheim"),
+        ] {
+            db.conn()
+                .execute(
+                    "INSERT INTO activity_events (id, at, instance, instance_id, game, kind, payload) \
+                     VALUES (?1, ?2, NULL, NULL, ?3, 'x', ?4)",
+                    params![id, chrono::Utc::now(), game, payload],
+                )
+                .unwrap();
+        }
+
+        let events = recent(&db, 10).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, "fine");
     }
 
     #[test]

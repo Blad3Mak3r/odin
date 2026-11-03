@@ -341,6 +341,7 @@ const AUDIT_LABELS: Record<string, string> = {
   profile_updated: 'Profile updated',
   account_disabled: 'Account disabled',
   account_enabled: 'Account enabled',
+  action: 'Change made',
 }
 
 const AUDIT_ALERTS = new Set(['bootstrap_token_failed', 'login_failed', 'login_throttled'])

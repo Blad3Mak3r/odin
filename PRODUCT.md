@@ -45,9 +45,10 @@ capabilities are built in the web API and dashboard.
 - Odin runs on a Linux x86_64 host controlled by the administrator. It
   supports system-wide package installs using `/etc/odin` and `/var/lib/odin`,
   and per-user installs using XDG paths.
-- `odin serve` binds to `127.0.0.1` by default and has no built-in
-  authentication. Remote access belongs behind an SSH tunnel or an
-  administrator-provided authenticated reverse proxy.
+- `odin serve` binds to `127.0.0.1` by default and requires a dashboard
+  login: local accounts with an `admin` or read-only `viewer` role, sessions,
+  and a security log. Remote access still belongs behind an SSH tunnel or an
+  administrator-provided reverse proxy that terminates TLS.
 - Servers are managed as independent instances, scoped by both game and
   name. Instances can share a display name across different games, but never
   share save data, logs, runtime paths, identity, or reserved ports.
@@ -146,5 +147,6 @@ capabilities are built in the web API and dashboard.
 5. State must be trustworthy over convenient. Lifecycle state, resource
    usage, and server capability must reflect live process information and the
    selected driver's actual implementation.
-6. No accounts, no login. Preserve the loopback-by-default, no-auth product
-   posture and do not imply identity or session management in the UI.
+6. Accounts are local and minimal. Preserve the loopback-by-default posture;
+   Odin has no hosted identity, SSO or external account dependency, and
+   viewers never receive secrets.

@@ -29,12 +29,22 @@ pub struct WebhookRow {
     /// first.
     pub event_kinds: Vec<String>,
     pub created_at: DateTime<Utc>,
+    pub last_delivery: Option<Delivery>,
+}
+
+/// The outcome of the latest delivery to a webhook.
+#[derive(Debug, Clone)]
+pub struct Delivery {
+    pub at: DateTime<Utc>,
+    /// `None` when it succeeded; otherwise a short description that never
+    /// contains the webhook URL.
+    pub error: Option<String>,
 }
 
 pub fn list(db: &Db) -> Result<Vec<WebhookRow>> {
     let conn = db.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, url, enabled, event_kinds, created_at FROM webhooks ORDER BY created_at",
+        "SELECT id, url, enabled, event_kinds, created_at, last_delivery_at, last_delivery_error FROM webhooks ORDER BY created_at",
     )?;
     let rows = stmt.query_map([], row_to_webhook)?;
     rows.map(|r| r.map_err(Into::into)).collect()
@@ -43,7 +53,7 @@ pub fn list(db: &Db) -> Result<Vec<WebhookRow>> {
 pub fn get(db: &Db, id: &str) -> Result<Option<WebhookRow>> {
     db.conn()
         .query_row(
-            "SELECT id, url, enabled, event_kinds, created_at FROM webhooks WHERE id = ?1",
+            "SELECT id, url, enabled, event_kinds, created_at, last_delivery_at, last_delivery_error FROM webhooks WHERE id = ?1",
             params![id],
             row_to_webhook,
         )
@@ -65,6 +75,7 @@ pub fn insert(db: &Db, url: &str, event_kinds: &[String]) -> Result<WebhookRow> 
         enabled: true,
         event_kinds: event_kinds.to_vec(),
         created_at,
+        last_delivery: None,
     })
 }
 
@@ -94,14 +105,34 @@ pub fn set_event_kinds(db: &Db, id: &str, event_kinds: &[String]) -> Result<bool
     Ok(changed > 0)
 }
 
+/// Records how the latest delivery to a webhook went. A no-op if the id
+/// doesn't exist.
+pub fn record_delivery(db: &Db, id: &str, error: Option<&str>) -> Result<()> {
+    db.conn().execute(
+        "UPDATE webhooks SET last_delivery_at = ?2, last_delivery_error = ?3 WHERE id = ?1",
+        params![id, Utc::now(), error],
+    )?;
+    Ok(())
+}
+
 fn row_to_webhook(row: &rusqlite::Row) -> rusqlite::Result<WebhookRow> {
     let kinds_json: String = row.get(3)?;
+    let last_delivery = row
+        .get::<_, Option<DateTime<Utc>>>(5)?
+        .map(|at| -> rusqlite::Result<Delivery> {
+            Ok(Delivery {
+                at,
+                error: row.get(6)?,
+            })
+        })
+        .transpose()?;
     Ok(WebhookRow {
         id: row.get(0)?,
         url: row.get(1)?,
         enabled: row.get(2)?,
         event_kinds: serde_json::from_str(&kinds_json).unwrap_or_default(),
         created_at: row.get(4)?,
+        last_delivery,
     })
 }
 
@@ -203,5 +234,23 @@ mod tests {
     fn get_missing_id_is_none() {
         let db = temp_db("missing");
         assert!(get(&db, "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn the_latest_delivery_outcome_is_remembered() {
+        let db = temp_db("delivery");
+        let hook = insert(&db, "https://example.test/hook", &[]).unwrap();
+        assert!(get(&db, &hook.id).unwrap().unwrap().last_delivery.is_none());
+
+        record_delivery(&db, &hook.id, Some("HTTP 404")).unwrap();
+        let failed = get(&db, &hook.id).unwrap().unwrap().last_delivery.unwrap();
+        assert_eq!(failed.error.as_deref(), Some("HTTP 404"));
+
+        record_delivery(&db, &hook.id, None).unwrap();
+        let listed = list(&db).unwrap().remove(0).last_delivery.unwrap();
+        assert!(listed.error.is_none());
+        assert!(listed.at >= failed.at);
+
+        record_delivery(&db, "missing", None).unwrap();
     }
 }

@@ -179,6 +179,7 @@ pub async fn install_shared(
     }
     let paths = state.paths.clone();
     let db = state.db.clone();
+    let activity = state.activity.clone();
     let id = state
         .jobs
         .spawn(JobKindDescr::SharedInstall { game }, move |logger| {
@@ -194,7 +195,9 @@ pub async fn install_shared(
                     game::driver(game).display_name()
                 )));
             }
-            shared_install::install(&paths, game, |line| logger.line(line))
+            shared_install::install(&paths, game, |line| logger.line(line))?;
+            activity.record_for(game, crate::activity::ActivityKind::ServerInstalled, None);
+            Ok(())
         });
     Ok(Json(JobHandle { id }))
 }
@@ -1071,6 +1074,7 @@ pub async fn update_runtime_by_id(
     let db = state.db.clone();
     let game = identity.game;
     let display = game::driver(game).display_name();
+    let activity = state.activity.clone();
     let job = state.jobs.spawn(
         JobKindDescr::RuntimeUpdate {
             game,
@@ -1085,6 +1089,7 @@ pub async fn update_runtime_by_id(
                 .build()?;
             runtime.block_on(dispatch::update(&paths, &db, game, &identity.name))?;
             logger.line("update completed");
+            activity.record_for(game, crate::activity::ActivityKind::ServerInstalled, None);
             Ok(())
         },
     );

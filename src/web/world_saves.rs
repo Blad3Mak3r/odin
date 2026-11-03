@@ -3,6 +3,7 @@
 //! `web::players::PlayerRegistry`'s role, just for a single value per
 //! instance instead of a list.
 
+use crate::lock::LockExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -19,17 +20,12 @@ impl WorldSaveRegistry {
     }
 
     pub fn get(&self, instance: &str) -> Option<DateTime<Utc>> {
-        self.last_saved
-            .lock()
-            .expect("world save registry lock poisoned")
-            .get(instance)
-            .copied()
+        self.last_saved.lock_or_recover().get(instance).copied()
     }
 
     pub fn set(&self, instance: &str, at: DateTime<Utc>) {
         self.last_saved
-            .lock()
-            .expect("world save registry lock poisoned")
+            .lock_or_recover()
             .insert(instance.to_string(), at);
     }
 
@@ -38,9 +34,6 @@ impl WorldSaveRegistry {
     /// stopped instance would keep showing a stale "last saved" time
     /// forever.
     pub fn clear_instance(&self, instance: &str) {
-        self.last_saved
-            .lock()
-            .expect("world save registry lock poisoned")
-            .remove(instance);
+        self.last_saved.lock_or_recover().remove(instance);
     }
 }

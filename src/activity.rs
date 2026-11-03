@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 use crate::game::GameId;
+use crate::lock::LockExt;
 
 const MAX_BUFFERED_EVENTS: usize = 200;
 const BROADCAST_CAPACITY: usize = 256;
@@ -59,12 +60,51 @@ pub enum ActivityKind {
     },
     MapWiped,
     FullWiped,
+    JobFailed {
+        job: String,
+        message: String,
+    },
+    /// An automatic start (crash restart or uptime schedule) that did not
+    /// bring the instance up. Manual starts report their failure to the
+    /// admin who asked for them and are not recorded.
+    StartupFailed {
+        reason: String,
+    },
     PlayerJoined {
         name: String,
     },
     PlayerLeft {
         name: String,
     },
+}
+
+/// Longest failure text kept in an event; what a failure says first is what
+/// matters, and the full text stays in the job log.
+const MAX_FAILURE_TEXT: usize = 1000;
+
+impl ActivityKind {
+    /// A failed background job. The message is cleaned of credentials first,
+    /// because events are stored, shown in the dashboard and sent to webhooks.
+    pub fn job_failed(job: String, message: &str) -> Self {
+        Self::JobFailed {
+            job,
+            message: failure_text(message),
+        }
+    }
+
+    /// A failed automatic start; the reason is cleaned like [`Self::job_failed`].
+    pub fn startup_failed(reason: &str) -> Self {
+        Self::StartupFailed {
+            reason: failure_text(reason),
+        }
+    }
+}
+
+fn failure_text(text: &str) -> String {
+    crate::redact::secrets(text)
+        .chars()
+        .take(MAX_FAILURE_TEXT)
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,11 +179,7 @@ impl ActivityLog {
         };
 
         {
-            let mut buffer = self
-                .inner
-                .buffer
-                .lock()
-                .expect("activity log buffer lock poisoned");
+            let mut buffer = self.inner.buffer.lock_or_recover();
             buffer.push_back(event.clone());
             if buffer.len() > MAX_BUFFERED_EVENTS {
                 buffer.pop_front();
@@ -161,11 +197,7 @@ impl ActivityLog {
     /// this point on, so a client that connects mid-stream still sees
     /// recent context instead of starting from nothing.
     pub fn subscribe(&self) -> (Vec<ActivityEvent>, broadcast::Receiver<ActivityEvent>) {
-        let buffer = self
-            .inner
-            .buffer
-            .lock()
-            .expect("activity log buffer lock poisoned");
+        let buffer = self.inner.buffer.lock_or_recover();
         (
             buffer.iter().cloned().collect(),
             self.inner.sender.subscribe(),
@@ -175,11 +207,7 @@ impl ActivityLog {
     /// Deletes persisted expired events and removes them from the live history.
     pub fn purge_before(&self, before: DateTime<Utc>) -> anyhow::Result<usize> {
         let deleted = crate::db::activity::delete_before(&self.inner.db, before)?;
-        let mut buffer = self
-            .inner
-            .buffer
-            .lock()
-            .expect("activity log buffer lock poisoned");
+        let mut buffer = self.inner.buffer.lock_or_recover();
         buffer.retain(|event| event.at >= before);
         Ok(deleted)
     }
@@ -292,5 +320,27 @@ mod tests {
         let (history, _rx) = log.subscribe();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, "new");
+    }
+
+    #[test]
+    fn failure_events_are_cleaned_and_capped() {
+        let ActivityKind::JobFailed { message, .. } = ActivityKind::job_failed(
+            "backup_create".to_string(),
+            &format!(
+                "upload to https://u:p@s3.example/b failed {}",
+                "x".repeat(5000)
+            ),
+        ) else {
+            panic!("not a job failure");
+        };
+        assert!(message.starts_with("upload to https://***@s3.example/b failed"));
+        assert_eq!(message.chars().count(), MAX_FAILURE_TEXT);
+
+        let ActivityKind::StartupFailed { reason } =
+            ActivityKind::startup_failed("rcon password: hunter2 refused")
+        else {
+            panic!("not a startup failure");
+        };
+        assert_eq!(reason, "rcon password: *** refused");
     }
 }

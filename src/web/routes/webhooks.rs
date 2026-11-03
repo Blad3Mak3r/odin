@@ -23,6 +23,8 @@ const WEBHOOK_EVENT_KINDS: &[&str] = &[
     "backup_created",
     "backup_restored",
     "backup_pruned",
+    "job_failed",
+    "startup_failed",
     "player_joined",
     "player_left",
 ];
@@ -33,6 +35,14 @@ pub struct WebhookView {
     pub enabled: bool,
     pub event_kinds: Vec<String>,
     pub created_at: DateTime<Utc>,
+    pub last_delivery: Option<DeliveryView>,
+}
+
+#[derive(Serialize)]
+pub struct DeliveryView {
+    pub at: DateTime<Utc>,
+    /// `None` when it succeeded.
+    pub error: Option<String>,
 }
 
 impl From<WebhookRow> for WebhookView {
@@ -42,6 +52,10 @@ impl From<WebhookRow> for WebhookView {
             enabled: row.enabled,
             event_kinds: row.event_kinds,
             created_at: row.created_at,
+            last_delivery: row.last_delivery.map(|delivery| DeliveryView {
+                at: delivery.at,
+                error: delivery.error,
+            }),
         }
     }
 }
@@ -133,13 +147,22 @@ pub async fn test_webhook(
         return Err(WebhookError::NotFound(id).into());
     };
 
-    run_blocking(move || {
-        crate::web::webhooks::post(
+    let db = state.db.clone();
+    let hook_id = hook.id.clone();
+    let outcome = run_blocking(move || {
+        let result = crate::web::webhooks::post(
             &hook.url,
             "✅ Test message from Odin — this webhook is working.",
-        )
+        );
+        let reason = result
+            .as_ref()
+            .err()
+            .map(crate::web::webhooks::public_reason);
+        webhooks::record_delivery(&db, &hook_id, reason.as_deref())?;
+        Ok(result)
     })
     .await?;
+    outcome?;
     Ok(StatusCode::NO_CONTENT)
 }
 

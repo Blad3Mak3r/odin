@@ -4,6 +4,8 @@ use axum::{Json, extract::State};
 use chrono::Utc;
 use serde::Serialize;
 
+use crate::lock::LockExt;
+
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 const UPDATE_CHECK_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 const UPDATE_CHECK_KEY: &str = "changelog_update_check";
@@ -54,7 +56,7 @@ pub async fn check_for_updates(
     let db = state.db.clone();
     let lock = state.update_check_lock.clone();
     let result = crate::web::error::run_blocking(move || {
-        let _guard = lock.lock().expect("update check lock poisoned");
+        let _guard = lock.lock_or_recover();
         let remaining = cooldown_remaining(&db)?;
         if remaining > 0 {
             return Ok(UpdateCheckView {

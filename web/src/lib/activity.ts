@@ -14,6 +14,7 @@ import {
   RefreshCcw,
   Square,
   Trash2,
+  TriangleAlert,
   UserMinus,
   UserPlus,
 } from 'lucide-react'
@@ -56,6 +57,10 @@ export function describeActivity(kind: ActivityKind, game: GameId): string {
       return 'Map wiped'
     case 'full_wiped':
       return 'Full wipe completed'
+    case 'job_failed':
+      return `Job ${kind.job.replaceAll('_', ' ')} failed: ${kind.message}`
+    case 'startup_failed':
+      return `Automatic start failed: ${kind.reason}`
     case 'player_joined':
       return `${kind.name} joined`
     case 'player_left':
@@ -84,6 +89,8 @@ export const ACTIVITY_KIND_LABELS: Record<ActivityKind['kind'], string> = {
   backup_pruned: 'Old backup pruned',
   map_wiped: 'Map wiped',
   full_wiped: 'Full wipe completed',
+  job_failed: 'Background job failed',
+  startup_failed: 'Automatic start failed',
   player_joined: 'Player joined',
   player_left: 'Player left',
 }
@@ -106,6 +113,8 @@ export const ACTIVITY_ICONS: Record<ActivityKind['kind'], LucideIcon> = {
   backup_pruned: ArchiveX,
   map_wiped: ArchiveX,
   full_wiped: ArchiveX,
+  job_failed: TriangleAlert,
+  startup_failed: TriangleAlert,
   player_joined: UserPlus,
   player_left: UserMinus,
 }

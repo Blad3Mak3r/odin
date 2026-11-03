@@ -333,6 +333,163 @@ pub(crate) fn replace_from_archive(archive: &Path, destination: &Path) -> Result
 mod tests {
     use super::*;
 
+    /// A temp instance directory with a database that knows `my-server`.
+    fn fixture() -> (Db, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-backup-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Db::open(&Paths {
+            data_dir: dir.clone(),
+            config_dir: dir.clone(),
+        })
+        .unwrap();
+        crate::db::instances::save(
+            &db,
+            &crate::instance::state::InstanceState::new("my-server", 2456),
+        )
+        .unwrap();
+        let instance_dir = dir.join("instance");
+        std::fs::create_dir_all(paths::instance_saves_dir(&instance_dir)).unwrap();
+        (db, instance_dir)
+    }
+
+    fn create(db: &Db, instance_dir: &Path) -> BackupEntry {
+        create_at(
+            db,
+            GameId::Valheim,
+            "my-server",
+            instance_dir,
+            &paths::instance_saves_dir(instance_dir),
+        )
+        .unwrap()
+    }
+
+    fn save_file(instance_dir: &Path) -> std::path::PathBuf {
+        paths::instance_saves_dir(instance_dir).join("world.db")
+    }
+
+    #[test]
+    fn restoring_a_backup_brings_back_the_saved_world_and_snapshots_the_current_one() {
+        let (db, instance_dir) = fixture();
+        std::fs::write(save_file(&instance_dir), "before").unwrap();
+        let backup = create(&db, &instance_dir);
+        std::fs::write(save_file(&instance_dir), "after").unwrap();
+
+        restore_at(
+            &db,
+            GameId::Valheim,
+            "my-server",
+            &instance_dir,
+            &paths::instance_saves_dir(&instance_dir),
+            &backup.id,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(save_file(&instance_dir)).unwrap(),
+            "before"
+        );
+        // The world as it was just before the restore is kept as its own backup.
+        assert_eq!(list(&db, "my-server").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn restoring_an_unknown_backup_leaves_the_world_alone() {
+        let (db, instance_dir) = fixture();
+        std::fs::write(save_file(&instance_dir), "current").unwrap();
+
+        let error = restore_at(
+            &db,
+            GameId::Valheim,
+            "my-server",
+            &instance_dir,
+            &paths::instance_saves_dir(&instance_dir),
+            "20200101T000000Z-missing",
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<BackupError>(),
+            Some(BackupError::NotFound(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(save_file(&instance_dir)).unwrap(),
+            "current"
+        );
+        assert!(list(&db, "my-server").unwrap().is_empty());
+    }
+
+    #[test]
+    fn restoring_a_backup_whose_file_is_gone_is_refused_before_touching_the_world() {
+        let (db, instance_dir) = fixture();
+        std::fs::write(save_file(&instance_dir), "current").unwrap();
+        let backup = create(&db, &instance_dir);
+        std::fs::remove_file(
+            paths::instance_backups_dir(&instance_dir).join(format!("{}.zip", backup.id)),
+        )
+        .unwrap();
+
+        let error = restore_at(
+            &db,
+            GameId::Valheim,
+            "my-server",
+            &instance_dir,
+            &paths::instance_saves_dir(&instance_dir),
+            &backup.id,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<BackupError>(),
+            Some(BackupError::NotFound(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(save_file(&instance_dir)).unwrap(),
+            "current"
+        );
+    }
+
+    #[test]
+    fn deleting_a_backup_removes_its_file_and_record() {
+        let (db, instance_dir) = fixture();
+        let backup = create(&db, &instance_dir);
+        let file = paths::instance_backups_dir(&instance_dir).join(format!("{}.zip", backup.id));
+        assert!(file.is_file());
+
+        delete_at(&db, GameId::Valheim, "my-server", &instance_dir, &backup.id).unwrap();
+
+        assert!(!file.exists());
+        assert!(list(&db, "my-server").unwrap().is_empty());
+        assert!(delete_at(&db, GameId::Valheim, "my-server", &instance_dir, &backup.id).is_err());
+    }
+
+    #[test]
+    fn backups_are_listed_newest_first() {
+        let (db, instance_dir) = fixture();
+        let first = create(&db, &instance_dir);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = create(&db, &instance_dir);
+
+        let ids: Vec<_> = list(&db, "my-server")
+            .unwrap()
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+
+        assert_eq!(ids, vec![second.id, first.id]);
+    }
+
+    #[test]
+    fn a_backup_id_cannot_escape_the_backups_directory() {
+        for id in ["../../etc/passwd", "a/b", "", "a.zip", "x y"] {
+            assert!(validate_backup_id(id).is_err(), "{id:?} should be refused");
+        }
+        assert!(validate_backup_id("20260101T000000Z-1f3a").is_ok());
+    }
+
     #[test]
     fn replace_from_archive_preserves_existing_saves_when_extraction_fails() {
         let dir = std::env::temp_dir().join(format!(

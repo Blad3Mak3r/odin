@@ -1,7 +1,8 @@
 import { Loader2 } from 'lucide-react'
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary'
 
 const DashboardPage = lazy(() =>
   import('@/pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
@@ -48,25 +49,28 @@ function LegacyValheimInstanceRedirect() {
 }
 
 function App() {
+  const { pathname } = useLocation()
   return (
     <AppShell>
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/games" element={<GamesPage />} />
-          <Route path="/games/:game/*" element={<GameDetailPage />} />
-          <Route path="/instances" element={<MultiGameInstancesPage />} />
-          <Route path="/instance/:id/*" element={<ManagedInstanceDetailPage />} />
-          <Route path="/instances/valheim/:name/*" element={<ManagedInstanceDetailPage />} />
-          <Route path="/instances/:game/:name/*" element={<ManagedInstanceDetailPage />} />
-          <Route path="/instances/:name/*" element={<LegacyValheimInstanceRedirect />} />
-          <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/webhooks" element={<WebhooksPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/changelog" element={<ChangelogPage />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </Suspense>
+      <RouteErrorBoundary resetKey={pathname}>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/games" element={<GamesPage />} />
+            <Route path="/games/:game/*" element={<GameDetailPage />} />
+            <Route path="/instances" element={<MultiGameInstancesPage />} />
+            <Route path="/instance/:id/*" element={<ManagedInstanceDetailPage />} />
+            <Route path="/instances/valheim/:name/*" element={<ManagedInstanceDetailPage />} />
+            <Route path="/instances/:game/:name/*" element={<ManagedInstanceDetailPage />} />
+            <Route path="/instances/:name/*" element={<LegacyValheimInstanceRedirect />} />
+            <Route path="/jobs" element={<JobsPage />} />
+            <Route path="/webhooks" element={<WebhooksPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/changelog" element={<ChangelogPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Routes>
+        </Suspense>
+      </RouteErrorBoundary>
     </AppShell>
   )
 }

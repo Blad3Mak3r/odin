@@ -931,7 +931,7 @@ fn format_name(format: Format) -> &'static str {
     }
 }
 
-fn is_sensitive_key(key: &str) -> bool {
+pub(crate) fn is_sensitive_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     key.contains("password")
         || key.contains("secret")

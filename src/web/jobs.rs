@@ -93,6 +93,25 @@ const fn valheim_game() -> GameId {
 }
 
 impl JobKindDescr {
+    /// The instance this job acts on; `None` for work that belongs to no
+    /// instance, such as pulling a runtime image.
+    pub fn instance(&self) -> Option<(GameId, &str)> {
+        match self {
+            Self::RuntimeUpdate { game, instance }
+            | Self::ModUpload { game, instance, .. }
+            | Self::BackupCreate { game, instance }
+            | Self::BackupRestore { game, instance, .. } => Some((*game, instance)),
+            Self::ModAdd { instance, .. }
+            | Self::ModUpdate { instance }
+            | Self::BepInExUpdate { instance, .. }
+            | Self::BepInExInstall { instance, .. } => Some((GameId::Valheim, instance)),
+            Self::MapWipe { instance } | Self::FullWipe { instance } => {
+                Some((GameId::Rust, instance))
+            }
+            Self::ImagePull { .. } | Self::SharedInstall { .. } => None,
+        }
+    }
+
     /// The wire tag (`"kind"` in the serialized form) naming this job type.
     fn tag(&self) -> String {
         encode_kind(self).map(|(tag, _)| tag).unwrap_or_default()

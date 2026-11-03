@@ -50,6 +50,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/sessions/{id}", delete(auth::revoke_session))
         .route("/users", get(users::list).post(users::create))
         .route("/users/{email}", put(users::update).delete(users::delete))
+        .route(
+            "/users/{email}/instances",
+            get(users::get_instances).put(users::set_instances),
+        )
         .route("/version", get(version::get_version))
         .route("/update", post(version::start_system_update))
         .route("/changelog", get(changelog::get_changelog))

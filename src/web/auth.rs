@@ -28,8 +28,10 @@ use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::config::TrustedProxies;
+use crate::db::instance_access;
 use crate::db::users::{self, Role, SessionInfo, SessionOrigin, User};
 use crate::lock::LockExt;
+use crate::web::access::{self, InstanceAccess};
 use crate::web::audit::{self, AuditKind};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
@@ -585,13 +587,36 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
     if auth.user.must_change_password && !allowed_before_password_change(&path) {
         return error_response(StatusCode::FORBIDDEN, "password change required");
     }
+    // Viewers and operators: the same masked reads, limited to the instances
+    // an administrator granted them. See `access` for what operators may change.
     let viewer = auth.user.role != Role::Admin;
-    if viewer && viewer_blocked(&path) {
-        return error_response(StatusCode::FORBIDDEN, "this area is for administrators");
+    let mut reach = InstanceAccess::All;
+    if viewer {
+        if viewer_blocked(&path) {
+            return error_response(StatusCode::FORBIDDEN, access::ADMIN_ONLY);
+        }
+        let (db, email) = (state.db.clone(), auth.user.email.clone());
+        reach = match run_blocking(move || instance_access::granted(&db, &email)).await {
+            Ok(granted) => InstanceAccess::Only(Arc::new(granted)),
+            Err(err) => return err.into_response(),
+        };
+        if let Err((status, message)) = access::authorize(
+            auth.user.role,
+            &reach,
+            req.method(),
+            &path,
+            viewer_may_mutate(&path),
+        ) {
+            return error_response(status, message);
+        }
+        if auth.user.role == Role::Operator && access::is_config_write(req.method(), &path) {
+            req = match access::strip_request_secrets(req).await {
+                Ok(req) => req,
+                Err(response) => return response,
+            };
+        }
     }
-    if !safe && viewer && !viewer_may_mutate(&path) {
-        return error_response(StatusCode::FORBIDDEN, &Forbidden.to_string());
-    }
+    req.extensions_mut().insert(reach);
     let token = session_token(req.headers());
     req.extensions_mut().insert(auth.clone());
     let method = req.method().clone();
@@ -1815,12 +1840,6 @@ mod tests {
         )
         .await;
         let admin = admin.unwrap();
-        let viewer = Some(json!({
-            "email": "v@example.com", "password": pw("user"), "role": "viewer", "require_change": false,
-        }));
-        call(&app, "POST", "/api/users", Some(&admin), viewer).await;
-        let viewer = login_cookie(&app, "v@example.com", &pw("user"), true).await;
-
         let created =
             crate::instance::Instance::create(&state.paths, &state.db, "meadows").unwrap();
         let secret = created.state.password.clone().unwrap();
@@ -1831,6 +1850,12 @@ mod tests {
         )
         .unwrap()
         .id;
+        let viewer = Some(json!({
+            "email": "v@example.com", "password": pw("user"), "role": "viewer",
+            "require_change": false, "instance_ids": [id],
+        }));
+        call(&app, "POST", "/api/users", Some(&admin), viewer).await;
+        let viewer = login_cookie(&app, "v@example.com", &pw("user"), true).await;
         let config = format!("/api/instances/{id}/config");
 
         let (_, _, seen) = call(&app, "GET", &config, Some(&admin), None).await;
@@ -1857,6 +1882,306 @@ mod tests {
         let (_, _, status) = call(&app, "GET", "/api/auth/status", Some(&viewer), None).await;
         assert_ne!(status["csrf_token"], MASK);
         assert_eq!(status["csrf_token"].as_str().unwrap().len(), 64);
+    }
+
+    /// Two Valheim instances, "meadows" and "swamp"; returns their ids.
+    fn two_instances(state: &AppState) -> (String, String) {
+        let mut ids = ["meadows", "swamp"].map(|name| {
+            let created = crate::instance::Instance::create(&state.paths, &state.db, name).unwrap();
+            crate::db::game_instances::ensure_valheim_identity(
+                &state.db,
+                name,
+                created.state.created_at,
+            )
+            .unwrap()
+            .id
+        });
+        (std::mem::take(&mut ids[0]), std::mem::take(&mut ids[1]))
+    }
+
+    async fn new_user(
+        app: &Router,
+        admin: &str,
+        email: &str,
+        role: &str,
+        instance_ids: &[&str],
+    ) -> String {
+        let body = json!({
+            "email": email, "password": pw("user"), "role": role,
+            "require_change": false, "instance_ids": instance_ids,
+        });
+        let (status, ..) = call(app, "POST", "/api/users", Some(admin), Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "creating {email}");
+        login_cookie(app, email, &pw("user"), true).await
+    }
+
+    #[tokio::test]
+    async fn viewers_and_operators_only_reach_the_instances_they_were_granted() {
+        let (app, state) = app_state(None);
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let admin = admin.unwrap();
+        let (meadows, swamp) = two_instances(&state);
+        let viewer = new_user(&app, &admin, "v@example.com", "viewer", &[&meadows]).await;
+        let operator = new_user(&app, &admin, "o@example.com", "operator", &[&meadows]).await;
+
+        for who in [&viewer, &operator] {
+            let (_, _, seen) = call(&app, "GET", "/api/games/instances", Some(who), None).await;
+            let ids: Vec<_> = seen
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(ids, [meadows.as_str()]);
+            let (_, _, seen) =
+                call(&app, "GET", "/api/games/valheim/instances", Some(who), None).await;
+            assert_eq!(seen.as_array().unwrap().len(), 1);
+            let (status, ..) = call(
+                &app,
+                "GET",
+                &format!("/api/instances/{meadows}/config"),
+                Some(who),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            // An instance outside the grant looks like one that does not exist.
+            for (method, path) in [("GET", "config"), ("GET", "logs"), ("POST", "start")] {
+                let (status, ..) = call(
+                    &app,
+                    method,
+                    &format!("/api/instances/{swamp}/{path}"),
+                    Some(who),
+                    None,
+                )
+                .await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+            }
+        }
+        let (_, _, seen) = call(&app, "GET", "/api/games/instances", Some(&admin), None).await;
+        assert_eq!(
+            seen.as_array().unwrap().len(),
+            2,
+            "administrators see everything"
+        );
+
+        // Viewers never change an instance; operators change only their own.
+        let start = format!("/api/instances/{meadows}/tags");
+        let tags = Some(json!({ "tags": ["a"] }));
+        let (status, ..) = call(&app, "PUT", &start, Some(&viewer), tags.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, ..) = call(&app, "PUT", &start, Some(&operator), tags.clone()).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            &format!("/api/instances/{swamp}/tags"),
+            Some(&operator),
+            tags,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // ...and nothing global or sensitive, even on their own instance.
+        for (method, path) in [
+            ("DELETE", format!("/api/instances/{meadows}")),
+            ("PUT", format!("/api/instances/{meadows}/resource-limits")),
+            ("POST", format!("/api/instances/{meadows}/rename")),
+            ("POST", "/api/instances/bulk/mods/update".to_string()),
+            ("POST", "/api/webhooks".to_string()),
+            ("POST", "/api/games/valheim/instances".to_string()),
+            ("GET", "/api/users".to_string()),
+            ("GET", "/api/ark-clusters".to_string()),
+            ("PUT", "/api/users/o@example.com/instances".to_string()),
+        ] {
+            let (status, ..) = call(&app, method, &path, Some(&operator), Some(json!({}))).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
+        }
+        let (status, ..) = call(
+            &app,
+            "POST",
+            "/api/auth/password",
+            Some(&operator),
+            Some(json!({})),
+        )
+        .await;
+        assert_ne!(
+            status,
+            StatusCode::FORBIDDEN,
+            "an operator manages their own account"
+        );
+    }
+
+    #[tokio::test]
+    async fn operators_cannot_change_secrets_through_the_configuration() {
+        let (app, state) = app_state(None);
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let admin = admin.unwrap();
+        let (meadows, _) = two_instances(&state);
+        let operator = new_user(&app, &admin, "o@example.com", "operator", &[&meadows]).await;
+        let config = format!("/api/instances/{meadows}/config");
+        let (_, _, before) = call(&app, "GET", &config, Some(&admin), None).await;
+
+        let edit = Some(json!({ "password": "taken-over", "public": false, "auto_restart": true }));
+        let (status, ..) = call(&app, "PUT", &config, Some(&operator), edit).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (_, _, after) = call(&app, "GET", &config, Some(&admin), None).await;
+        assert_eq!(
+            after["password"], before["password"],
+            "the password is untouched"
+        );
+        assert_eq!(
+            after["auto_restart"], true,
+            "the rest of the edit is applied"
+        );
+    }
+
+    #[tokio::test]
+    async fn administrators_choose_what_each_account_can_see() {
+        let (app, state) = app_state(None);
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let admin = admin.unwrap();
+        let (meadows, swamp) = two_instances(&state);
+        let viewer = new_user(&app, &admin, "v@example.com", "viewer", &[&meadows]).await;
+
+        let grants = "/api/users/v@example.com/instances";
+        let (_, _, seen) = call(&app, "GET", grants, Some(&admin), None).await;
+        assert_eq!(seen["instance_ids"], json!([meadows]));
+        let (status, ..) = call(&app, "GET", grants, Some(&viewer), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            grants,
+            Some(&admin),
+            Some(json!({ "instance_ids": ["nope"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (_, _, seen) = call(&app, "GET", grants, Some(&admin), None).await;
+        assert_eq!(
+            seen["instance_ids"],
+            json!([meadows]),
+            "a refused change changes nothing"
+        );
+
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            grants,
+            Some(&admin),
+            Some(json!({ "instance_ids": [swamp] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, _, seen) = call(&app, "GET", "/api/games/instances", Some(&viewer), None).await;
+        let ids: Vec<_> = seen
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            [swamp.as_str()],
+            "the change applies to the live session"
+        );
+
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/ghost@example.com/instances",
+            Some(&admin),
+            Some(json!({ "instance_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_owner_is_protected_from_other_administrators() {
+        let (app, _) = app_state(None);
+        let (_, owner, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let owner = owner.unwrap();
+        let second = new_user(&app, &owner, "second@example.com", "admin", &[]).await;
+
+        let (_, _, users) = call(&app, "GET", "/api/users", Some(&owner), None).await;
+        let flag = |email: &str| {
+            users
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|u| u["email"] == email)
+                .unwrap()["is_owner"]
+                .clone()
+        };
+        assert_eq!(flag("admin@example.com"), true);
+        assert_eq!(flag("second@example.com"), false);
+
+        let target = "/api/users/admin@example.com";
+        for (method, body) in [
+            ("PUT", json!({ "role": "viewer" })),
+            ("PUT", json!({ "role": "operator" })),
+            ("PUT", json!({ "disabled": true })),
+            ("PUT", json!({ "password": pw("hijack") })),
+            ("DELETE", json!({})),
+        ] {
+            let (status, ..) = call(&app, method, target, Some(&second), Some(body.clone())).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{method} {body}");
+        }
+        // Not even the owner can demote themselves, which would leave none.
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            target,
+            Some(&owner),
+            Some(json!({ "role": "viewer" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        // The owner can still manage everyone else, and their own password.
+        let (status, ..) = call(
+            &app,
+            "PUT",
+            "/api/users/second@example.com",
+            Some(&owner),
+            Some(json!({ "role": "viewer" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let own = Some(json!({ "password": pw("fresh-owner-pass"), "require_change": false }));
+        let (status, ..) = call(&app, "PUT", target, Some(&owner), own).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[test]

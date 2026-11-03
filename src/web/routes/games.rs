@@ -2,7 +2,7 @@
 
 use anyhow::Context;
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use crate::instance::lifecycle::SharedInstallLock;
 use crate::instance::{self, Instance, lifecycle};
 use crate::paths::Paths;
 use crate::podman::{dispatch, shared_install};
+use crate::web::access::InstanceAccess;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::jobs::JobKindDescr;
 use crate::web::routes::mods::JobHandle;
@@ -263,20 +264,23 @@ pub(crate) fn all_instance_views(
 
 pub async fn list_all_instances(
     State(state): State<AppState>,
+    Extension(access): Extension<InstanceAccess>,
 ) -> ApiResult<Json<Vec<ManagedInstanceView>>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let views = run_blocking(move || all_instance_views(&paths, &db)).await?;
+    let mut views = run_blocking(move || all_instance_views(&paths, &db)).await?;
+    views.retain(|view| access.permits_id(&view.identity.id));
     Ok(Json(views))
 }
 
 pub async fn list_instances(
     State(state): State<AppState>,
+    Extension(access): Extension<InstanceAccess>,
     Path(game): Path<GameId>,
 ) -> ApiResult<Json<Vec<ManagedInstanceView>>> {
     let paths = state.paths.clone();
     let db = state.db.clone();
-    let views = run_blocking(move || match game {
+    let mut views = run_blocking(move || match game {
         GameId::Valheim => valheim_views(&paths, &db),
         GameId::Rust => rust_views(&paths, &db),
         GameId::ArkSurvivalAscended | GameId::Palworld | GameId::SevenDaysToDie | GameId::Cs2 => {
@@ -284,6 +288,7 @@ pub async fn list_instances(
         }
     })
     .await?;
+    views.retain(|view| access.permits_id(&view.identity.id));
     Ok(Json(views))
 }
 

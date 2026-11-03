@@ -107,9 +107,7 @@ async fn apply(state: &AppState, scheduled: ScheduledAction) {
             if action == Action::Start {
                 state.activity.record_for(
                     instance.game,
-                    ActivityKind::StartupFailed {
-                        reason: format!("{error:#}"),
-                    },
+                    ActivityKind::startup_failed(&format!("{error:#}")),
                     Some(instance.name),
                 );
             }

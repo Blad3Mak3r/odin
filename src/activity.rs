@@ -78,6 +78,35 @@ pub enum ActivityKind {
     },
 }
 
+/// Longest failure text kept in an event; what a failure says first is what
+/// matters, and the full text stays in the job log.
+const MAX_FAILURE_TEXT: usize = 1000;
+
+impl ActivityKind {
+    /// A failed background job. The message is cleaned of credentials first,
+    /// because events are stored, shown in the dashboard and sent to webhooks.
+    pub fn job_failed(job: String, message: &str) -> Self {
+        Self::JobFailed {
+            job,
+            message: failure_text(message),
+        }
+    }
+
+    /// A failed automatic start; the reason is cleaned like [`Self::job_failed`].
+    pub fn startup_failed(reason: &str) -> Self {
+        Self::StartupFailed {
+            reason: failure_text(reason),
+        }
+    }
+}
+
+fn failure_text(text: &str) -> String {
+    crate::redact::secrets(text)
+        .chars()
+        .take(MAX_FAILURE_TEXT)
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEvent {
     pub id: String,
@@ -291,5 +320,27 @@ mod tests {
         let (history, _rx) = log.subscribe();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].id, "new");
+    }
+
+    #[test]
+    fn failure_events_are_cleaned_and_capped() {
+        let ActivityKind::JobFailed { message, .. } = ActivityKind::job_failed(
+            "backup_create".to_string(),
+            &format!(
+                "upload to https://u:p@s3.example/b failed {}",
+                "x".repeat(5000)
+            ),
+        ) else {
+            panic!("not a job failure");
+        };
+        assert!(message.starts_with("upload to https://***@s3.example/b failed"));
+        assert_eq!(message.chars().count(), MAX_FAILURE_TEXT);
+
+        let ActivityKind::StartupFailed { reason } =
+            ActivityKind::startup_failed("rcon password: hunter2 refused")
+        else {
+            panic!("not a startup failure");
+        };
+        assert_eq!(reason, "rcon password: *** refused");
     }
 }

@@ -305,10 +305,7 @@ impl JobRegistry {
                 let (game, instance) = kind.target();
                 activity.record_for(
                     game,
-                    ActivityKind::JobFailed {
-                        job: kind.tag(),
-                        message: message.clone(),
-                    },
+                    ActivityKind::job_failed(kind.tag(), message),
                     instance.map(str::to_string),
                 );
             }

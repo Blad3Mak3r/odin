@@ -17,6 +17,7 @@ mod odin_update;
 mod paths;
 mod player_events;
 mod podman;
+mod redact;
 mod save_events;
 mod steamcmd;
 mod supervisor;

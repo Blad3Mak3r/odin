@@ -289,9 +289,7 @@ async fn attempt_rust_auto_restart(state: &AppState, name: String) {
             tracing::warn!(instance = %name, game = "rust", %error, "automatic restart failed");
             state.activity.record_for(
                 GameId::Rust,
-                ActivityKind::StartupFailed {
-                    reason: format!("{error:#}"),
-                },
+                ActivityKind::startup_failed(&format!("{error:#}")),
                 Some(name),
             );
         }
@@ -319,9 +317,7 @@ async fn attempt_generic_auto_restart(state: &AppState, game: GameId, name: Stri
             tracing::warn!(instance = %name, %game, %error, "automatic restart failed");
             state.activity.record_for(
                 game,
-                ActivityKind::StartupFailed {
-                    reason: format!("{error:#}"),
-                },
+                ActivityKind::startup_failed(&format!("{error:#}")),
                 Some(name),
             );
         }
@@ -353,12 +349,9 @@ async fn attempt_auto_restart(state: &AppState, name: String) {
             .record(ActivityKind::InstanceAutoRestarted, Some(name)),
         Err(e) => {
             tracing::warn!(instance = %name, error = %e, "automatic restart failed");
-            state.activity.record(
-                ActivityKind::StartupFailed {
-                    reason: format!("{e:#}"),
-                },
-                Some(name),
-            );
+            state
+                .activity
+                .record(ActivityKind::startup_failed(&format!("{e:#}")), Some(name));
         }
     }
 }

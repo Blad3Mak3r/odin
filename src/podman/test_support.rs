@@ -20,6 +20,7 @@ pub(crate) fn write_podman_config(paths: &Paths, socket: &std::path::Path) {
         data_dir: None,
         curseforge: None,
         server: None,
+        smtp: None,
         podman: Some(crate::config::PodmanConfig {
             socket: socket.to_path_buf(),
             runtime_image: Some("example/odin-srv:1".into()),

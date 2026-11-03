@@ -12,6 +12,7 @@ mod http;
 mod instance;
 mod lock;
 mod log_poll;
+mod mail;
 mod mods;
 mod odin_update;
 mod paths;

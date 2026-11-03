@@ -24,6 +24,9 @@ pub struct GlobalConfig {
     /// Optional dashboard settings.
     #[serde(default)]
     pub server: Option<ServerConfig>,
+    /// Optional outgoing mail server, used for user invitations.
+    #[serde(default)]
+    pub smtp: Option<SmtpConfig>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,6 +56,71 @@ pub const TRUSTED_PROXIES_ENV: &str = "ODIN_TRUSTED_PROXIES";
 
 /// Environment variable that overrides `[server].client_ip_header`.
 pub const CLIENT_IP_HEADER_ENV: &str = "ODIN_CLIENT_IP_HEADER";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SmtpConfig {
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Defaults to 587 for `starttls`, 465 for `tls` and 25 for `none`.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// `starttls` (default), `tls` (implicit TLS) or `none`.
+    #[serde(default)]
+    pub security: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Sender of every message, e.g. `Odin <odin@example.com>`.
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+/// Environment variables that override the matching `[smtp]` keys.
+pub const SMTP_HOST_ENV: &str = "ODIN_SMTP_HOST";
+pub const SMTP_PORT_ENV: &str = "ODIN_SMTP_PORT";
+pub const SMTP_SECURITY_ENV: &str = "ODIN_SMTP_SECURITY";
+pub const SMTP_USERNAME_ENV: &str = "ODIN_SMTP_USERNAME";
+pub const SMTP_PASSWORD_ENV: &str = "ODIN_SMTP_PASSWORD";
+pub const SMTP_FROM_ENV: &str = "ODIN_SMTP_FROM";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtpSecurity {
+    StartTls,
+    Tls,
+    None,
+}
+
+impl SmtpSecurity {
+    fn default_port(self) -> u16 {
+        match self {
+            Self::StartTls => 587,
+            Self::Tls => 465,
+            Self::None => 25,
+        }
+    }
+}
+
+/// A validated outgoing mail server.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SmtpSettings {
+    pub host: String,
+    pub port: u16,
+    pub security: SmtpSecurity,
+    pub credentials: Option<(String, String)>,
+    pub from: lettre::message::Mailbox,
+}
+
+impl std::fmt::Debug for SmtpSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SmtpSettings")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("security", &self.security)
+            .field("from", &self.from)
+            .finish_non_exhaustive()
+    }
+}
 
 /// Networks whose `X-Forwarded-For` header is believed, so the client
 /// address behind a reverse proxy is the real one. Loopback always counts.
@@ -296,6 +364,69 @@ impl GlobalConfig {
         }
     }
 
+    /// The outgoing mail server: each `ODIN_SMTP_*` variable wins over the
+    /// matching `[smtp]` key and blank values count as unset. `None` means mail
+    /// is not configured; a partial or invalid setup is an error so a typo
+    /// cannot silently disable or weaken it.
+    pub fn smtp(&self) -> Result<Option<SmtpSettings>> {
+        self.smtp_with(|name| std::env::var(name).ok())
+    }
+
+    fn smtp_with(&self, env: impl Fn(&str) -> Option<String>) -> Result<Option<SmtpSettings>> {
+        let clean = |value: String| Some(value.trim().to_string()).filter(|v| !v.is_empty());
+        let file = self.smtp.clone().unwrap_or_default();
+        let pick =
+            |name: &str, file: Option<String>| env(name).and_then(clean).or(file.and_then(clean));
+        let host = pick(SMTP_HOST_ENV, file.host);
+        let port = pick(SMTP_PORT_ENV, file.port.map(|p| p.to_string()));
+        let security = pick(SMTP_SECURITY_ENV, file.security);
+        let username = pick(SMTP_USERNAME_ENV, file.username);
+        let password = pick(SMTP_PASSWORD_ENV, file.password);
+        let from = pick(SMTP_FROM_ENV, file.from);
+        if [&host, &port, &security, &username, &password, &from]
+            .iter()
+            .all(|value| value.is_none())
+        {
+            return Ok(None);
+        }
+        let host = host.context("smtp host is required (set [smtp].host or ODIN_SMTP_HOST)")?;
+        let from = from
+            .context("smtp from is required (set [smtp].from or ODIN_SMTP_FROM)")?
+            .parse::<lettre::message::Mailbox>()
+            .context("smtp from is not a valid mailbox, e.g. Odin <odin@example.com>")?;
+        let security = match security.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            None | Some("starttls") => SmtpSecurity::StartTls,
+            Some("tls") => SmtpSecurity::Tls,
+            Some("none") => SmtpSecurity::None,
+            Some(other) => bail!("smtp security '{other}' must be starttls, tls or none"),
+        };
+        let port = match port {
+            Some(port) => port
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .with_context(|| format!("smtp port '{port}' is not a valid port"))?,
+            None => security.default_port(),
+        };
+        let credentials = match (username, password) {
+            (Some(username), Some(password)) => Some((username, password)),
+            (None, None) => None,
+            _ => bail!("smtp username and password must be set together"),
+        };
+        if credentials.is_some() && security == SmtpSecurity::None {
+            bail!(
+                "smtp credentials need security starttls or tls; they would be sent in clear text"
+            );
+        }
+        Ok(Some(SmtpSettings {
+            host,
+            port,
+            security,
+            credentials,
+            from,
+        }))
+    }
+
     /// The CurseForge API key: the `CURSE_FORGE_API_KEY` environment
     /// variable wins over `[curseforge].api_key`. Blank values count as unset.
     pub fn curseforge_api_key(&self) -> Option<String> {
@@ -379,6 +510,83 @@ mod tests {
         config.odin_binary = Some(plain.clone());
         assert_eq!(config.odin_binary().unwrap(), plain);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn smtp_from(toml: &str, env: &[(&str, &str)]) -> Result<Option<SmtpSettings>> {
+        let config: GlobalConfig = toml::from_str(toml).unwrap();
+        config.smtp_with(|name| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        })
+    }
+
+    #[test]
+    fn smtp_is_absent_without_any_setting() {
+        assert_eq!(smtp_from("", &[]).unwrap(), None);
+        assert_eq!(smtp_from("[smtp]\nhost = \"  \"\n", &[]).unwrap(), None);
+    }
+
+    #[test]
+    fn smtp_defaults_to_starttls_on_the_submission_port() {
+        let smtp = smtp_from(
+            "[smtp]\nhost = \"mail.example.com\"\nfrom = \"Odin <odin@example.com>\"\n",
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(smtp.host, "mail.example.com");
+        assert_eq!(smtp.port, 587);
+        assert_eq!(smtp.security, SmtpSecurity::StartTls);
+        assert_eq!(smtp.credentials, None);
+        assert_eq!(smtp.from.email.to_string(), "odin@example.com");
+    }
+
+    #[test]
+    fn smtp_environment_overrides_the_file() {
+        let smtp = smtp_from(
+            "[smtp]\nhost = \"file.example.com\"\nfrom = \"odin@example.com\"\nusername = \"u\"\npassword = \"file\"\n",
+            &[
+                (SMTP_HOST_ENV, "env.example.com"),
+                (SMTP_SECURITY_ENV, "TLS"),
+                (SMTP_PASSWORD_ENV, "env"),
+            ],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(smtp.host, "env.example.com");
+        assert_eq!((smtp.security, smtp.port), (SmtpSecurity::Tls, 465));
+        assert_eq!(smtp.credentials, Some(("u".into(), "env".into())));
+    }
+
+    #[test]
+    fn smtp_rejects_partial_or_unsafe_setups() {
+        let base = "[smtp]\nhost = \"mail.example.com\"\nfrom = \"odin@example.com\"\n";
+        assert!(smtp_from("[smtp]\nfrom = \"odin@example.com\"\n", &[]).is_err());
+        assert!(smtp_from("[smtp]\nhost = \"mail.example.com\"\n", &[]).is_err());
+        assert!(smtp_from(&format!("{base}security = \"ssl\"\n"), &[]).is_err());
+        assert!(smtp_from(&format!("{base}port = 0\n"), &[]).is_err());
+        assert!(smtp_from(base, &[(SMTP_PORT_ENV, "abc")]).is_err());
+        assert!(smtp_from(&format!("{base}username = \"u\"\n"), &[]).is_err());
+        assert!(smtp_from(base, &[(SMTP_FROM_ENV, "nope")]).is_err());
+        assert!(
+            smtp_from(
+                &format!("{base}security = \"none\"\nusername = \"u\"\npassword = \"p\"\n"),
+                &[]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn smtp_debug_output_hides_the_password() {
+        let smtp = smtp_from(
+            "[smtp]\nhost = \"h\"\nfrom = \"odin@example.com\"\nusername = \"u\"\npassword = \"hunter2\"\n",
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!format!("{smtp:?}").contains("hunter2"));
     }
 
     #[test]

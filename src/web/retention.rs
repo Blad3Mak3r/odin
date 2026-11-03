@@ -62,3 +62,65 @@ pub fn spawn(state: AppState) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::activity::{ActivityEvent, ActivityKind};
+    use crate::db::Db;
+    use crate::game::GameId;
+    use crate::paths::Paths;
+
+    fn state() -> AppState {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-retention-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            data_dir: dir.clone(),
+            config_dir: dir,
+        };
+        let db = Arc::new(Db::open(&paths).unwrap());
+        AppState::new(paths, db)
+    }
+
+    fn insert_event(state: &AppState, id: &str, age: chrono::Duration) {
+        crate::db::activity::insert(
+            &state.db,
+            &ActivityEvent {
+                id: id.to_string(),
+                at: Utc::now() - age,
+                game: GameId::Valheim,
+                instance: None,
+                instance_id: None,
+                kind: ActivityKind::InstanceCreated,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn expired_activity_is_purged_and_recent_activity_and_audit_events_are_kept() {
+        let seed = state();
+        insert_event(&seed, "old", RETENTION + chrono::Duration::hours(1));
+        insert_event(&seed, "recent", chrono::Duration::hours(1));
+        crate::db::auth_events::insert(&seed.db, "login", Some("admin"), None, None, None).unwrap();
+        // Activity is loaded into memory when the state is built.
+        let state = AppState::new(seed.paths.as_ref().clone(), seed.db.clone());
+
+        run_once(&state);
+
+        let (history, _rx) = state.activity.subscribe();
+        let ids: Vec<_> = history.iter().map(|event| event.id.as_str()).collect();
+        assert_eq!(ids, ["recent"]);
+        assert_eq!(crate::db::activity::recent(&state.db, 10).unwrap().len(), 1);
+        assert_eq!(
+            crate::db::auth_events::recent(&state.db, 10).unwrap().len(),
+            1
+        );
+    }
+}

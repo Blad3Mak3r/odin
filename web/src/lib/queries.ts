@@ -561,7 +561,8 @@ export function useSharedInstall(game: GameId, enabled: boolean) {
 }
 
 export function useArkClusters() {
-  return useQuery({ queryKey: ['ark-clusters'], queryFn: () => api.get<ArkCluster[]>('/ark-clusters') })
+  const isAdmin = useIsAdmin()
+  return useQuery({ queryKey: ['ark-clusters'], queryFn: () => api.get<ArkCluster[]>('/ark-clusters'), enabled: isAdmin })
 }
 
 export function useCreateArkCluster() {
@@ -1401,9 +1402,15 @@ export function useTestWebhook() {
   })
 }
 
-/** Whether the signed-in user is an administrator; viewers cannot read raw configuration. */
+/** Whether the signed-in user is an administrator; viewers and operators cannot read raw configuration. */
 export function useIsAdmin() {
   return useAuthStatus().data?.user?.role === 'admin'
+}
+
+/** Whether the signed-in user may run the instances they can see: administrators and operators. */
+export function useCanOperate() {
+  const role = useAuthStatus().data?.user?.role
+  return role === 'admin' || role === 'operator'
 }
 
 export function useAuthStatus() {
@@ -1475,6 +1482,7 @@ export function useCreateUser() {
       password: string
       role: UserRole
       require_change: boolean
+      instance_ids?: string[]
     }) =>
       api.post<AuthUser>('/users', req),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
@@ -1496,6 +1504,24 @@ export function useUpdateUser() {
     }) =>
       api.put<void>(`/users/${encodeURIComponent(email)}`, req),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+/** The instances a viewer or operator can reach; administrators reach all of them. */
+export function useUserInstances(email: string | null) {
+  return useQuery({
+    queryKey: ['users', email, 'instances'],
+    queryFn: () => api.get<{ instance_ids: string[] }>(`/users/${encodeURIComponent(email ?? '')}/instances`),
+    enabled: email !== null,
+  })
+}
+
+export function useSetUserInstances() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ email, instance_ids }: { email: string; instance_ids: string[] }) =>
+      api.put<void>(`/users/${encodeURIComponent(email)}/instances`, { instance_ids }),
+    onSuccess: (_, { email }) => queryClient.invalidateQueries({ queryKey: ['users', email, 'instances'] }),
   })
 }
 

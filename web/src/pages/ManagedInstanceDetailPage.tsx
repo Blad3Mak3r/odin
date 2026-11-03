@@ -47,6 +47,7 @@ import {
   useInitializeAdvancedConfig,
   useSevenDaysTemplateReview,
   useUpdateAdvancedConfig,
+  useCanOperate,
   useIsAdmin,
   useRawAdvancedConfig,
   useUpdateRawAdvancedConfig,
@@ -321,14 +322,17 @@ function GenericConfigForm({ id, game, config, running, installMode }: { id: str
 
 /// `writes` marks a tab whose controls change the server: viewers see it
 /// with every control disabled, because the API would refuse them anyway.
-function TabPanel({ active, className, children, writes = false }: { active: boolean; className?: string; children: ReactNode; writes?: boolean }) {
+/// Operators may use it too, unless it is `adminOnly`.
+function TabPanel({ active, className, children, writes = false, adminOnly = false }: { active: boolean; className?: string; children: ReactNode; writes?: boolean; adminOnly?: boolean }) {
   const isAdmin = useIsAdmin()
+  const canOperate = useCanOperate()
   if (!active) return null
   const panel = <div className={className}>{children}</div>
-  return writes && !isAdmin ? <fieldset disabled className="min-w-0 border-0 p-0">{panel}</fieldset> : panel
+  return writes && !(adminOnly ? isAdmin : canOperate) ? <fieldset disabled className="min-w-0 border-0 p-0">{panel}</fieldset> : panel
 }
 
 export function ManagedInstanceDetailPage() {
+  const isAdmin = useIsAdmin()
   const { id, game, name, '*': tabPath } = useParams<{ id: string; game: string; name: string; '*': string }>()
   const gameId = isGameId(game) ? game : 'valheim'
   const instanceById = useManagedInstanceById(id ?? '')
@@ -411,7 +415,7 @@ export function ManagedInstanceDetailPage() {
             : genericConfig && (detail.game === 'ark-asa' || detail.game === 'palworld' || detail.game === '7d2d' || detail.game === 'cs2')
               ? <GenericConfigForm key={`${detail.id}-${JSON.stringify(detail.config)}`} id={detail.id} game={detail.game} config={genericConfig} running={detail.running} installMode={detail.install_mode} />
               : <p className="text-sm text-muted-foreground">No editable configuration is available for this game.</p>}
-          {detail.install_mode === 'isolated' && detail.capabilities.shared_install_migration && <SharedInstallMigrationCard instance={detail} />}
+          {isAdmin && detail.install_mode === 'isolated' && detail.capabilities.shared_install_migration && <SharedInstallMigrationCard instance={detail} />}
           <UptimeScheduleCard id={detail.id} />
           {detail.game === 'rust' && <WipeMapCard id={detail.id} name={detail.name} running={detail.running} />}
         </TabPanel>
@@ -436,7 +440,7 @@ export function ManagedInstanceDetailPage() {
           ? <TabPanel active={tab === 'saves'}><Card><CardHeader><CardTitle>Shared ARK save files</CardTitle><CardDescription>Browse this instance’s world files and cluster transfer files from the ARK game page.</CardDescription></CardHeader><CardContent><Link className={buttonVariants({ variant: 'outline' })} to="/games/ark-asa/saves">Open ARK Save files</Link></CardContent></Card></TabPanel>
           : <TabPanel active={tab === 'saves'}><SaveFilesTab id={detail.id} running={detail.running} /></TabPanel>}
         <TabPanel active={tab === 'resources'}><ManagedResourcesTab id={detail.id} running={detail.running} /></TabPanel>
-        <TabPanel writes active={tab === 'limits'}><ResourceLimitsTab id={detail.id} /></TabPanel>
+        <TabPanel writes adminOnly active={tab === 'limits'}><ResourceLimitsTab id={detail.id} /></TabPanel>
         {detail.game === 'valheim' && <TabPanel writes active={tab === 'players'}><PlayersTab id={detail.id} running={detail.running} /></TabPanel>}
       </div>
     </div>

@@ -670,7 +670,7 @@ export interface InstanceDefaults {
   backup_retain_count: number
 }
 
-export type UserRole = 'admin' | 'viewer'
+export type UserRole = 'admin' | 'operator' | 'viewer'
 
 export interface AuthUser {
   email: string
@@ -681,6 +681,8 @@ export interface AuthUser {
   must_change_password: boolean
   disabled: boolean
   last_login_at: string | null
+  /** The administrator created at first-run setup; other administrators cannot change it. */
+  is_owner: boolean
 }
 
 export interface AuditEvent {

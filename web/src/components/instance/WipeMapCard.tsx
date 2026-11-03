@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useJobSocket } from '@/hooks/useJobSocket'
-import { useFullWipeRust, useWipeRustMap } from '@/lib/queries'
+import { useFullWipeRust, useIsAdmin, useWipeRustMap } from '@/lib/queries'
 
 type WipeMode = 'map' | 'full'
 
@@ -25,6 +25,7 @@ export function WipeMapCard({ id, name, running }: { id: string; name: string; r
   const [mode, setMode] = useState<WipeMode>('map')
   const wipeMap = useWipeRustMap()
   const fullWipe = useFullWipeRust()
+  const isAdmin = useIsAdmin()
   const job = useJobSocket(jobId)
   const confirmed = confirmation === name
   const pending = wipeMap.isPending || fullWipe.isPending
@@ -78,7 +79,7 @@ export function WipeMapCard({ id, name, running }: { id: string; name: string; r
             Wipe map
           </Button>
         </div>
-        <div className="flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between">
+        {isAdmin && <div className="flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-1">
             <h3 className="text-sm font-medium">Full Wipe</h3>
             <p className="text-sm text-muted-foreground">
@@ -89,7 +90,7 @@ export function WipeMapCard({ id, name, running }: { id: string; name: string; r
           <Button size="sm" variant="destructive" disabled={running || pending} onClick={() => openDialog('full')}>
             Full wipe
           </Button>
-        </div>
+        </div>}
 
         {jobId && <JobProgress log={job.log} status={job.status} connected={job.connected} />}
 

@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { api } from '@/lib/api-client'
 import { gameLabel } from '@/lib/games'
 import { toastStartFailure } from '@/lib/startFailure'
-import { useIsAdmin, useManagedInstanceAction, useManagedInstanceTransition } from '@/lib/queries'
+import { useCanOperate, useIsAdmin, useManagedInstanceAction, useManagedInstanceTransition } from '@/lib/queries'
 import type { InstanceResources, ManagedInstanceView } from '@/lib/types'
 import { formatBytes } from '@/lib/utils'
 
@@ -121,6 +121,7 @@ function ManagedInstanceRow({
   })
   const navigate = useNavigate()
   const isAdmin = useIsAdmin()
+  const canOperate = useCanOperate()
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
@@ -155,8 +156,8 @@ function ManagedInstanceRow({
       {withButtons && <TableCell className="hidden lg:table-cell">{instance.running && resources.data ? `${resources.data.cpu_percent.toFixed(0)}% · ${formatBytes(resources.data.memory_bytes)}` : '—'}</TableCell>}
       {withButtons && (
         <TableCell className="text-right">
-          <div hidden={!isAdmin} className="flex flex-wrap justify-end gap-2">
-            <ManageInstanceDialog instance={instance} />
+          <div hidden={!canOperate} className="flex flex-wrap justify-end gap-2">
+            {isAdmin && <ManageInstanceDialog instance={instance} />}
             {instance.running ? (
               <div className="flex justify-end gap-2">
                 <Button size="sm" variant="outline" disabled={busy} onClick={() => restart.mutate(action, { onError: (error) => toastStartFailure(error, instance.id, navigate) })}>Restart</Button>

@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { PasswordStrength } from '@/components/PasswordStrength'
+import { gameLabel } from '@/lib/games'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -21,11 +22,14 @@ import {
   useChangePassword,
   useCreateUser,
   useDeleteUser,
+  useManagedInstances,
   useRevokeOtherSessions,
   useRevokeSession,
   useUpdateProfile,
   useSessions,
+  useSetUserInstances,
   useUpdateUser,
+  useUserInstances,
   useUsers,
 } from '@/lib/queries'
 import type { AuditEvent, AuthUser, UserRole } from '@/lib/types'
@@ -341,6 +345,7 @@ const AUDIT_LABELS: Record<string, string> = {
   profile_updated: 'Profile updated',
   account_disabled: 'Account disabled',
   account_enabled: 'Account enabled',
+  instance_access_changed: 'Instance access changed',
   action: 'Change made',
 }
 
@@ -387,6 +392,104 @@ function SecurityLog() {
   )
 }
 
+const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
+  admin: 'Administrators can change anything.',
+  operator:
+    'Operators run the instances they are given: start and stop them, edit settings, mods, backups and players. They cannot delete instances, read secrets or change anything global.',
+  viewer: 'Viewers see the instances they are given, without secrets, and cannot modify anything.',
+}
+
+/** Checkboxes over every instance; `selected` holds instance ids. */
+function InstancePicker({
+  selected,
+  onChange,
+}: {
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const instances = useManagedInstances()
+  if (instances.data?.length === 0) {
+    return <p className="text-sm text-muted-foreground">There are no instances yet.</p>
+  }
+  return (
+    <div className="flex max-h-64 flex-col gap-2 overflow-y-auto">
+      {instances.data?.map((instance) => (
+        <label key={instance.id} className="flex items-center gap-2 text-sm">
+          <Checkbox
+            checked={selected.includes(instance.id)}
+            onCheckedChange={(checked) =>
+              onChange(
+                checked ? [...selected, instance.id] : selected.filter((id) => id !== instance.id),
+              )
+            }
+          />
+          <span className="min-w-0 truncate">{instance.name}</span>
+          <span className="text-xs text-muted-foreground">{gameLabel(instance.game)}</span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function InstanceAccessDialog({ user, onClose }: { user: AuthUser | null; onClose: () => void }) {
+  const granted = useUserInstances(user?.email ?? null)
+  const save = useSetUserInstances()
+  // Unset until an administrator touches a checkbox.
+  const [draft, setDraft] = useState<string[] | null>(null)
+  const selected = draft ?? granted.data?.instance_ids ?? []
+  const name = user?.username ?? user?.email
+
+  const close = () => {
+    setDraft(null)
+    save.reset()
+    onClose()
+  }
+
+  return (
+    <Dialog open={user !== null} onOpenChange={(open) => !open && close()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Instances for {name}</DialogTitle>
+          <DialogDescription>
+            {name} only sees, and as {user?.role === 'operator' ? 'an operator' : 'a viewer'} only works
+            with, the instances ticked here. Changes apply to open sessions right away.
+          </DialogDescription>
+        </DialogHeader>
+        {granted.isError ? (
+          <p role="alert" className="text-sm text-destructive">{granted.error.message}</p>
+        ) : (
+          <InstancePicker selected={selected} onChange={setDraft} />
+        )}
+        {save.error && (
+          <p role="alert" className="text-sm text-destructive">{save.error.message}</p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={close}>
+            Cancel
+          </Button>
+          <Button
+            disabled={save.isPending || draft === null || !user}
+            onClick={() =>
+              user &&
+              save.mutate(
+                { email: user.email, instance_ids: selected },
+                {
+                  onSuccess: () => {
+                    toast.success(`Instance access updated for ${name}`)
+                    close()
+                  },
+                },
+              )
+            }
+          >
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
   const users = useUsers()
   const create = useCreateUser()
@@ -399,18 +502,29 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
   const [role, setRole] = useState<UserRole>('viewer')
   const [requireChange, setRequireChange] = useState(true)
   const [resetting, setResetting] = useState<AuthUser | null>(null)
+  const [choosingInstances, setChoosingInstances] = useState<AuthUser | null>(null)
+  const [newInstanceIds, setNewInstanceIds] = useState<string[]>([])
+  const signedInIsOwner = users.data?.find((user) => user.email === currentUserEmail)?.is_owner
 
   const onError = (e: Error) => toast.error(e.message)
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     create.mutate(
-      { email, username: username.trim() || undefined, password, role, require_change: requireChange },
+      {
+        email,
+        username: username.trim() || undefined,
+        password,
+        role,
+        require_change: requireChange,
+        instance_ids: role === 'admin' ? [] : newInstanceIds,
+      },
       {
         onSuccess: () => {
           setEmail('')
           setUsername('')
           setPassword('')
+          setNewInstanceIds([])
           toast.success(`User ${email} created`)
         },
         onError,
@@ -426,10 +540,16 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
         currentUserEmail={currentUserEmail}
         onClose={() => setResetting(null)}
       />
+      <InstanceAccessDialog
+        key={choosingInstances?.email ?? 'none'}
+        user={choosingInstances}
+        onClose={() => setChoosingInstances(null)}
+      />
       <div className="border-b px-4 py-3">
         <h2 className="text-sm font-medium">Users</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          Administrators can change anything. Viewers can see the dashboard but not modify it.
+          Administrators can change anything. Operators run the instances they are given. Viewers
+          see the instances they are given and cannot modify anything.
         </p>
       </div>
       <div className="divide-y">
@@ -448,24 +568,30 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             </span>
             {user.disabled && <Badge variant="destructive">disabled</Badge>}
             {user.must_change_password && <Badge variant="outline">must change password</Badge>}
-            <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>{user.role}</Badge>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={update.isPending}
-              onClick={() =>
-                update.mutate(
-                  { email: user.email, role: user.role === 'admin' ? 'viewer' : 'admin' },
-                  { onError },
-                )
+            {user.is_owner && <Badge variant="outline">owner</Badge>}
+            <select
+              aria-label={`Role of ${user.username ?? user.email}`}
+              title={user.is_owner ? 'The owner is always an administrator' : undefined}
+              className="h-8 border border-input bg-transparent px-2 text-sm"
+              value={user.role}
+              disabled={user.is_owner || update.isPending}
+              onChange={(e) =>
+                update.mutate({ email: user.email, role: e.target.value as UserRole }, { onError })
               }
             >
-              Make {user.role === 'admin' ? 'viewer' : 'admin'}
-            </Button>
+              <option value="admin">admin</option>
+              <option value="operator">operator</option>
+              <option value="viewer">viewer</option>
+            </select>
+            {user.role !== 'admin' && (
+              <Button variant="outline" size="sm" onClick={() => setChoosingInstances(user)}>
+                Instances
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
-              disabled={user.email === currentUserEmail || update.isPending}
+              disabled={user.is_owner || user.email === currentUserEmail || update.isPending}
               onClick={() =>
                 update.mutate({ email: user.email, disabled: !user.disabled }, { onError })
               }
@@ -475,6 +601,7 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             <Button
               variant="outline"
               size="sm"
+              disabled={user.is_owner && !signedInIsOwner}
               onClick={() => setResetting(user)}
             >
               Reset password
@@ -482,7 +609,7 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             <Button
               variant="outline"
               size="sm"
-              disabled={user.email === currentUserEmail || remove.isPending}
+              disabled={user.is_owner || user.email === currentUserEmail || remove.isPending}
               onClick={async () => {
                 const ok = await confirm({
                   title: `Delete ${user.username ?? user.email}?`,
@@ -542,9 +669,17 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             onChange={(e) => setRole(e.target.value as UserRole)}
           >
             <option value="viewer">viewer</option>
+            <option value="operator">operator</option>
             <option value="admin">admin</option>
           </select>
+          <p className="max-w-xs text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[role]}</p>
         </div>
+        {role !== 'admin' && (
+          <div className="flex w-full flex-col gap-2">
+            <Label>Instances they can see</Label>
+            <InstancePicker selected={newInstanceIds} onChange={setNewInstanceIds} />
+          </div>
+        )}
         <label className="flex w-full items-center gap-2 text-sm">
           <Checkbox checked={requireChange} onCheckedChange={setRequireChange} />
           Require a new password at first sign-in

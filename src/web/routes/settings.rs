@@ -21,6 +21,8 @@ pub struct SettingsView {
     pub instance_defaults: settings::InstanceDefaults,
     pub config_file: String,
     pub podman: PodmanSettingsView,
+    /// Mail and a public URL are set up, so users can be invited by email.
+    pub mail_configured: bool,
 }
 
 #[derive(Serialize)]
@@ -70,6 +72,7 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Setti
         instance_defaults,
         config_file,
         podman: podman_settings(podman).await,
+        mail_configured: state.invitations_available(),
     }))
 }
 

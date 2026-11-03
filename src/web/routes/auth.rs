@@ -13,9 +13,10 @@ use crate::db::auth_events::{self, AuthEvent};
 use crate::db::users::{self, SessionInfo, User, UserError};
 use crate::web::audit::{self, AuditKind};
 use crate::web::auth::{
-    AuthUser, BootstrapKind, ClientIp, InvalidBootstrapToken, InvalidCredentials, authenticate,
-    clear_cookie, hash_password, is_secure, normalize_email, optional_username, random_token,
-    session_origin, start_session, token_hash_of, validate_password, verify_password,
+    AuthUser, BootstrapKind, ClientIp, InvalidBootstrapToken, InvalidCredentials,
+    InvalidInvitation, authenticate, clear_cookie, hash_password, invitation_token_hash, is_secure,
+    normalize_email, optional_username, random_token, session_origin, start_session, token_hash_of,
+    validate_password, verify_password,
 };
 use crate::web::avatar;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
@@ -179,6 +180,112 @@ pub async fn recover(
         AuditKind::RecoveryUsed,
         None,
         Some(&user.email),
+        ip,
+        None,
+    )
+    .await;
+    let origin = session_origin(&headers, ip, true);
+    let cookie = start_session(&state, &user.email, is_secure(&state, &headers), origin).await?;
+    Ok(with_cookie(cookie, Json(user)))
+}
+
+#[derive(Deserialize)]
+pub struct InvitationToken {
+    pub token: String,
+}
+
+/// Throttle bucket for wrong invitation tokens.
+const INVITATION_THROTTLE: &str = "invitation";
+
+/// Finds the account a live invitation token belongs to, counting wrong
+/// guesses against the caller. Every failure looks the same.
+async fn live_invitation(
+    state: &AppState,
+    token: &str,
+    ip: Option<IpAddr>,
+) -> ApiResult<(String, String)> {
+    if let Err(throttled) = state.login_throttle.check(INVITATION_THROTTLE, ip) {
+        audit::record(
+            state,
+            AuditKind::LoginThrottled,
+            None,
+            None,
+            ip,
+            Some("invitation"),
+        )
+        .await;
+        return Err(throttled.into());
+    }
+    let found = match invitation_token_hash(token) {
+        Some(hash) => {
+            let (db, lookup) = (state.db.clone(), hash.clone());
+            run_blocking(move || crate::db::password_links::peek(&db, &lookup))
+                .await?
+                .map(|email| (email, hash))
+        }
+        None => None,
+    };
+    match found {
+        Some(found) => Ok(found),
+        None => {
+            state.login_throttle.record_failure(INVITATION_THROTTLE, ip);
+            audit::record(state, AuditKind::InvitationRejected, None, None, ip, None).await;
+            Err(InvalidInvitation.into())
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct InvitationInfo {
+    pub email: String,
+}
+
+/// Lets the accept-invitation page show whose account the link is for, and
+/// fail early on an expired one, before the user types a password.
+pub async fn peek_invitation(
+    State(state): State<AppState>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    Json(req): Json<InvitationToken>,
+) -> ApiResult<Json<InvitationInfo>> {
+    let (email, _) = live_invitation(&state, &req.token, ip).await?;
+    Ok(Json(InvitationInfo { email }))
+}
+
+#[derive(Deserialize)]
+pub struct AcceptInvitationRequest {
+    pub token: String,
+    pub password: String,
+}
+
+/// Redeems an emailed invitation: the user picks their password and is
+/// signed in. A password the policy refuses does not use the link up.
+pub async fn accept_invitation(
+    State(state): State<AppState>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    headers: HeaderMap,
+    Json(req): Json<AcceptInvitationRequest>,
+) -> ApiResult<Response> {
+    let (email, token_hash) = live_invitation(&state, &req.token, ip).await?;
+    validate_password(&req.password, &[&email])?;
+    let db = state.db.clone();
+    let (user, revoked) = state
+        .hashing
+        .run(move || {
+            let password_hash = hash_password(&req.password)?;
+            let email =
+                crate::db::password_links::consume(&db, &token_hash)?.ok_or(InvalidInvitation)?;
+            let revoked = users::set_password(&db, &email, &password_hash, false)?;
+            users::record_login(&db, &email)?;
+            let user = users::find_by_email(&db, &email)?.ok_or(UserError::NotFound(email))?;
+            Ok((user, revoked))
+        })
+        .await?;
+    state.sessions.revoke(&revoked);
+    audit::record(
+        &state,
+        AuditKind::InvitationAccepted,
+        Some(&user.email),
+        None,
         ip,
         None,
     )

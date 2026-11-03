@@ -24,6 +24,10 @@ pub enum AuditKind {
     AccountDisabled,
     AccountEnabled,
     InstanceAccessChanged,
+    InvitationSent,
+    InvitationFailed,
+    InvitationAccepted,
+    InvitationRejected,
     /// A signed-in user changed something through the API.
     Action,
 }
@@ -48,6 +52,10 @@ impl AuditKind {
             Self::AccountDisabled => "account_disabled",
             Self::AccountEnabled => "account_enabled",
             Self::InstanceAccessChanged => "instance_access_changed",
+            Self::InvitationSent => "invitation_sent",
+            Self::InvitationFailed => "invitation_failed",
+            Self::InvitationAccepted => "invitation_accepted",
+            Self::InvitationRejected => "invitation_rejected",
             Self::Action => auth_events::ACTION_KIND,
         }
     }

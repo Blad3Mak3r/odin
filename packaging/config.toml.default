@@ -38,3 +38,17 @@
 # X-Forwarded-For when set. Behind a Cloudflare Tunnel use CF-Connecting-IP.
 # The ODIN_CLIENT_IP_HEADER environment variable overrides this value.
 # client_ip_header = "CF-Connecting-IP"
+
+# Outgoing mail, used to email new users a link to choose their password.
+# Invitations also need [server].public_url above: the link is built from it.
+# Without this section users are created with a password, as before.
+# Each ODIN_SMTP_HOST / _PORT / _SECURITY / _USERNAME / _PASSWORD / _FROM
+# environment variable overrides its key. This file is readable by root and
+# the odin group only, which is why the password may live here.
+# [smtp]
+# host = "smtp.example.com"
+# port = 587                          # default: 587 starttls, 465 tls, 25 none
+# security = "starttls"               # starttls (default), tls or none
+# username = "odin@example.com"
+# password = ""
+# from = "Odin <odin@example.com>"

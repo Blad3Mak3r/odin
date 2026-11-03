@@ -453,6 +453,39 @@ administrator creates an account or resets someone's password, that account
 must choose a new password at its next sign-in (this can be turned off per
 action).
 
+**Inviting users by email.** When Odin can send mail, leave the password empty
+(the default in that case) when adding a user: they get an email with a link,
+choose their own password on the page it opens and are signed in. The link
+works once and expires after 72 hours; Settings → Users shows who has not
+accepted yet and offers **Resend invitation**, which replaces the old link.
+Setting a password for the account yourself also ends the invitation. This
+needs both a mail server and the dashboard's public address in
+`/etc/odin/config.toml`, because the link is built from `public_url` and never
+from the request's `Host` header:
+
+```toml
+[server]
+public_url = "https://odin.example.com"
+
+[smtp]
+host = "smtp.example.com"
+port = 587                     # default: 587 starttls, 465 tls, 25 none
+security = "starttls"          # starttls (default), tls or none
+username = "odin@example.com"
+password = "..."
+from = "Odin <odin@example.com>"
+```
+
+`ODIN_SMTP_HOST`, `_PORT`, `_SECURITY`, `_USERNAME`, `_PASSWORD` and `_FROM`
+override the matching keys. A partial or invalid `[smtp]` section stops
+`odin serve` at startup, and credentials are refused with `security = "none"`
+because they would travel in clear text. Without `[smtp]` (or without
+`public_url`) the dashboard keeps asking for a password. A failed send never
+loses the account: it is created and the dashboard says the email could not be
+sent, so you can resend once the mail server works. The link carries its token
+in the URL fragment, so it does not reach access logs, and the page removes it
+from the address bar. Invitations are recorded in the security log.
+
 **Lost access?** Create an empty file named `recover-admin` in the data
 directory and restart Odin:
 

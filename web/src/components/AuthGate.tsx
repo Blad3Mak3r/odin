@@ -1,11 +1,14 @@
 import { Loader2 } from 'lucide-react'
 import { type FormEvent, type ReactNode, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { AcceptInvitation } from '@/components/AcceptInvitation'
 import { PasswordStrength } from '@/components/PasswordStrength'
 import { QueryError } from '@/components/QueryError'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ACCEPT_INVITE_PATH } from '@/lib/invitation'
 import { useAuthenticate, useAuthStatus, useChangePassword, useLogout } from '@/lib/queries'
 
 type Mode = 'login' | 'setup' | 'recover'
@@ -205,9 +208,12 @@ function ForcedPasswordChange() {
   )
 }
 
-/** Shows the app only to a signed-in user; otherwise the setup or login form. */
+/** Shows the app only to a signed-in user; otherwise the setup or login form. Invitation links bypass it. */
 export function AuthGate({ children }: { children: ReactNode }) {
   const status = useAuthStatus()
+  const { pathname } = useLocation()
+  // An emailed invitation link works whoever, if anyone, is signed in.
+  if (pathname === ACCEPT_INVITE_PATH) return <AcceptInvitation />
   if (status.isLoading) {
     return (
       <div className="flex min-h-svh items-center justify-center">

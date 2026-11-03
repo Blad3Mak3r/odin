@@ -25,8 +25,10 @@ import {
   useCreateUser,
   useDeleteUser,
   useManagedInstances,
+  useResendInvitation,
   useRevokeOtherSessions,
   useRevokeSession,
+  useSettings,
   useUpdateProfile,
   useSessions,
   useSetUserInstances,
@@ -348,10 +350,19 @@ const AUDIT_LABELS: Record<string, string> = {
   account_disabled: 'Account disabled',
   account_enabled: 'Account enabled',
   instance_access_changed: 'Instance access changed',
+  invitation_sent: 'Invitation emailed',
+  invitation_failed: 'Invitation email failed',
+  invitation_accepted: 'Invitation accepted',
+  invitation_rejected: 'Invalid invitation link used',
   action: 'Change made',
 }
 
-const AUDIT_ALERTS = new Set(['bootstrap_token_failed', 'login_failed', 'login_throttled'])
+const AUDIT_ALERTS = new Set([
+  'bootstrap_token_failed',
+  'login_failed',
+  'login_throttled',
+  'invitation_rejected',
+])
 
 function auditSummary(event: AuditEvent) {
   const who = [event.actor, event.target && `→ ${event.target}`].filter(Boolean).join(' ')
@@ -492,12 +503,20 @@ function InstanceAccessDialog({ user, onClose }: { user: AuthUser | null; onClos
   )
 }
 
+function invitationExpired(expiresAt: string) {
+  return new Date(expiresAt) < new Date()
+}
+
 function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
   const users = useUsers()
   const create = useCreateUser()
   const update = useUpdateUser()
   const remove = useDeleteUser()
+  const resend = useResendInvitation()
+  const mailConfigured = useSettings().data?.mail_configured ?? false
   const { confirm, dialog } = useConfirmDialog()
+  const [invite, setInvite] = useState(true)
+  const inviting = mailConfigured && invite
   const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -516,18 +535,24 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
       {
         email,
         username: username.trim() || undefined,
-        password,
+        password: inviting ? undefined : password,
         role,
-        require_change: requireChange,
+        require_change: inviting ? undefined : requireChange,
         instance_ids: role === 'admin' ? [] : newInstanceIds,
       },
       {
-        onSuccess: () => {
+        onSuccess: (created) => {
           setEmail('')
           setUsername('')
           setPassword('')
           setNewInstanceIds([])
-          toast.success(`User ${email} created`)
+          if (created.invitation_delivery === 'failed')
+            toast.warning(`User ${email} created, but the invitation email could not be sent`, {
+              description: 'Use "Resend invitation" once the mail server works.',
+            })
+          else if (created.invitation_delivery === 'sent')
+            toast.success(`Invitation sent to ${email}`)
+          else toast.success(`User ${email} created`)
         },
         onError,
       },
@@ -571,6 +596,11 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             </span>
             {user.disabled && <Badge variant="destructive">disabled</Badge>}
             {user.must_change_password && <Badge variant="outline">must change password</Badge>}
+            {user.invitation_expires_at && (
+              <Badge variant="outline">
+                {invitationExpired(user.invitation_expires_at) ? 'invitation expired' : 'invited'}
+              </Badge>
+            )}
             {user.is_owner && <Badge variant="outline">owner</Badge>}
             <select
               aria-label={`Role of ${user.username ?? user.email}`}
@@ -601,6 +631,24 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             >
               {user.disabled ? 'Enable' : 'Disable'}
             </Button>
+            {user.invitation_expires_at && mailConfigured && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={resend.isPending}
+                onClick={() =>
+                  resend.mutate(user.email, {
+                    onSuccess: (result) =>
+                      result.invitation_delivery === 'sent'
+                        ? toast.success(`Invitation sent to ${user.email}`)
+                        : toast.error('The mail server did not accept the invitation'),
+                    onError,
+                  })
+                }
+              >
+                Resend invitation
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -650,19 +698,25 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             onChange={(e) => setUsername(e.target.value)}
           />
         </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="new-user-password">Password</Label>
-          <Input
-            id="new-user-password"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <PasswordStrength password={password} identity={[email, username]} />
-        </div>
+        {inviting ? (
+          <p className="max-w-xs self-center text-xs text-muted-foreground">
+            They will get an email with a link to choose their own password.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="new-user-password">Password</Label>
+            <Input
+              id="new-user-password"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <PasswordStrength password={password} identity={[email, username]} />
+          </div>
+        )}
         <div className="flex flex-col gap-2">
           <Label htmlFor="new-user-role">Role</Label>
           <select
@@ -683,12 +737,20 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
             <InstancePicker selected={newInstanceIds} onChange={setNewInstanceIds} />
           </div>
         )}
-        <label className="flex w-full items-center gap-2 text-sm">
-          <Checkbox checked={requireChange} onCheckedChange={setRequireChange} />
-          Require a new password at first sign-in
-        </label>
+        {mailConfigured && (
+          <label className="flex w-full items-center gap-2 text-sm">
+            <Checkbox checked={invite} onCheckedChange={setInvite} />
+            Email an invitation instead of setting a password
+          </label>
+        )}
+        {!inviting && (
+          <label className="flex w-full items-center gap-2 text-sm">
+            <Checkbox checked={requireChange} onCheckedChange={setRequireChange} />
+            Require a new password at first sign-in
+          </label>
+        )}
         <Button type="submit" disabled={create.isPending}>
-          Add user
+          {inviting ? 'Add and invite' : 'Add user'}
         </Button>
       </form>
     </section>

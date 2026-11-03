@@ -168,6 +168,7 @@ mod tests {
             data_dir: None,
             curseforge: None,
             server: None,
+            smtp: None,
             podman: Some(crate::config::PodmanConfig {
                 socket,
                 runtime_image: None,

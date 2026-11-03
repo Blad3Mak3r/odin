@@ -632,6 +632,8 @@ export interface SettingsView {
   instance_defaults: InstanceDefaults
   config_file: string
   podman: PodmanSettingsView
+  /** Mail and a public URL are set up, so users can be invited by email. */
+  mail_configured: boolean
 }
 
 export type RuntimeImageRole = 'base' | 'proton'
@@ -685,6 +687,15 @@ export interface AuthUser {
   is_owner: boolean
   /** When the profile picture was set; null when there is none. */
   avatar_updated_at: string | null
+  /** Set until an invited user chooses a password: when the emailed link stops working (it may already have). */
+  invitation_expires_at: string | null
+}
+
+export type InvitationDelivery = 'sent' | 'failed'
+
+export interface CreatedUser extends AuthUser {
+  /** Set when the user was invited: whether the mail server took the message. */
+  invitation_delivery: InvitationDelivery | null
 }
 
 export interface AuditEvent {

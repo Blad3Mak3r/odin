@@ -18,7 +18,7 @@ use crate::mods::config::ConfigFileError;
 use crate::mods::curseforge::CurseForgeError;
 use crate::mods::nexus::NexusError;
 use crate::web::auth::{
-    Busy, Forbidden, InvalidBootstrapToken, InvalidCredentials, TooManyAttempts,
+    Busy, Forbidden, InvalidBootstrapToken, InvalidCredentials, InvalidInvitation, TooManyAttempts,
 };
 use crate::web::routes::saves::SaveFileError;
 
@@ -111,6 +111,7 @@ fn classify(err: &anyhow::Error) -> StatusCode {
     }
     if err.downcast_ref::<Forbidden>().is_some()
         || err.downcast_ref::<InvalidBootstrapToken>().is_some()
+        || err.downcast_ref::<InvalidInvitation>().is_some()
     {
         return StatusCode::FORBIDDEN;
     }

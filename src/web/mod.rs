@@ -10,6 +10,7 @@ mod avatar;
 mod backup_scheduler;
 mod error;
 mod image_monitor;
+mod invitations;
 pub mod jobs;
 mod log_tail;
 mod password_policy;
@@ -65,7 +66,14 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     let client_ip_header = config
         .client_ip_header()
         .context("invalid dashboard client_ip_header")?;
+    let mail = config
+        .smtp()
+        .context("invalid [smtp] mail settings")?
+        .map(|smtp| crate::mail::Mailer::smtp(&smtp).map(|mailer| (smtp.host, mailer)))
+        .transpose()?;
+    let mail_host = mail.as_ref().map(|(host, _)| host.clone());
     let state = AppState::new(paths, db)
+        .with_mail(mail.map(|(_, mailer)| mailer))
         .with_client_ip_header(client_ip_header)
         .with_public_origin(public_origin)
         .with_trusted_proxies(trusted_proxies);
@@ -87,6 +95,14 @@ pub async fn serve(paths: Paths, addr: SocketAddr) -> Result<()> {
     println!("Odin dashboard listening on http://{addr}");
     if let Some(public) = &state.public_origin {
         println!("Public URL: {}", public.origin);
+    }
+    match (&mail_host, &state.public_origin) {
+        (Some(host), Some(_)) => println!("Email: invitations enabled via {host}"),
+        (Some(_), None) => tracing::warn!(
+            "[smtp] is configured but [server].public_url is not; invitations stay disabled \
+             because email links need a trusted address"
+        ),
+        _ => {}
     }
     if let Some(ip) = local_network_ip() {
         println!("Network: http://{ip}:{}", addr.port());

@@ -12,6 +12,8 @@ import type {
   AuthSession,
   AuthStatus,
   AuthUser,
+  CreatedUser,
+  InvitationDelivery,
   UserRole,
   ArkCluster,
   AdvancedConfigChange,
@@ -1448,6 +1450,27 @@ export function useAuthenticate(mode: 'login' | 'setup' | 'recover') {
   })
 }
 
+/** Who an emailed invitation link is for; fails when it is invalid, used or expired. */
+export function useInvitationPeek(token: string | null) {
+  return useQuery({
+    queryKey: ['invitation', token],
+    queryFn: () => api.post<{ email: string }>('/auth/invitation/peek', { token }),
+    enabled: token !== null,
+    retry: false,
+    staleTime: Infinity,
+  })
+}
+
+/** Redeems an invitation link: sets the password and signs the user in. */
+export function useAcceptInvitation() {
+  const reset = useResetSession()
+  return useMutation({
+    mutationFn: (req: { token: string; password: string }) =>
+      api.post<AuthUser>('/auth/invitation', req),
+    onSuccess: reset,
+  })
+}
+
 export function useLogout() {
   const reset = useResetSession()
   return useMutation({
@@ -1479,12 +1502,23 @@ export function useCreateUser() {
     mutationFn: (req: {
       email: string
       username?: string
-      password: string
+      /** Left out, the user is invited by email and chooses their own password. */
+      password?: string
       role: UserRole
-      require_change: boolean
+      require_change?: boolean
       instance_ids?: string[]
-    }) =>
-      api.post<AuthUser>('/users', req),
+    }) => api.post<CreatedUser>('/users', req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+export function useResendInvitation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (email: string) =>
+      api.post<{ invitation_delivery: InvitationDelivery }>(
+        `/users/${encodeURIComponent(email)}/invitation`,
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   })
 }

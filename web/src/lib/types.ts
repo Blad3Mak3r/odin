@@ -683,6 +683,8 @@ export interface AuthUser {
   last_login_at: string | null
   /** The administrator created at first-run setup; other administrators cannot change it. */
   is_owner: boolean
+  /** When the profile picture was set; null when there is none. */
+  avatar_updated_at: string | null
 }
 
 export interface AuditEvent {

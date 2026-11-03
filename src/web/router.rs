@@ -3,6 +3,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{any, delete, get, post, put};
 use tower_http::trace::TraceLayer;
 
+use crate::web::avatar;
 use crate::web::routes::{
     ark_clusters, auth, backups, bepinex, bulk, changelog, config_files, curseforge, doctor,
     events, games, instances, jobs, lists, mods, nexus, palworld, players, resource_limits,
@@ -40,6 +41,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/password", post(auth::change_password))
         .route("/auth/profile", put(auth::update_profile))
+        .route(
+            "/auth/avatar",
+            post(auth::upload_avatar)
+                .delete(auth::delete_avatar)
+                .layer(DefaultBodyLimit::max(avatar::MAX_UPLOAD_BYTES + 64 * 1024)),
+        )
+        .route("/auth/avatar/{email}", get(auth::get_avatar))
         .route("/auth/recover", post(auth::recover))
         .route("/auth/audit", get(auth::audit_log))
         .route("/auth/sessions", get(auth::list_sessions))

@@ -60,7 +60,7 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         // 0021 replaces the parent identity table in order to widen its
         // SQLite CHECK constraint. SQLite only permits that operation with
         // foreign keys disabled before a transaction begins.
-        if version == 21 || version == 23 || version == 33 || version == 35 || version == 39 {
+        if version == 21 || version == 23 || version == 33 || version == 35 || version == 40 {
             conn.pragma_update(None, "foreign_keys", "OFF")?;
             let result = conn
                 .execute_batch(sql)
@@ -525,13 +525,13 @@ mod tests {
     }
 
     #[test]
-    fn v39_keeps_accounts_and_sessions_names_the_owner_and_keeps_viewers_access() {
+    fn v40_keeps_accounts_and_sessions_names_the_owner_and_keeps_viewers_access() {
         let mut conn = Connection::open_in_memory().unwrap();
         let mut files: Vec<String> = Migrations::iter().map(|file| file.to_string()).collect();
         files.sort();
         for file in files {
             let version = migration_version(&file).unwrap();
-            if version >= 39 {
+            if version >= 40 {
                 continue;
             }
             let migration = Migrations::get(&file).unwrap();
@@ -546,6 +546,7 @@ mod tests {
                 ('watcher@example.com', 'x', 'viewer', '2026-03-01T00:00:00Z');
              INSERT INTO auth_sessions (token_hash, id, user_email, created_at, last_used_at, expires_at, remember)
              VALUES ('t', 's', 'watcher@example.com', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2099-01-01T00:00:00Z', 1);
+             INSERT INTO user_avatars (user_email, webp, updated_at) VALUES ('watcher@example.com', x'0102', '2026-03-02T00:00:00Z');
              INSERT INTO game_instances (id, game, name, created_at) VALUES ('i1', 'valheim', 'a', '2026-01-01T00:00:00Z');",
         )
         .unwrap();
@@ -564,6 +565,13 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM auth_sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(sessions, 1, "rebuilding users must not sign anyone out");
+        let avatars: i64 = conn
+            .query_row("SELECT COUNT(*) FROM user_avatars", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            avatars, 1,
+            "rebuilding users must not drop profile pictures"
+        );
         let granted: Vec<(String, String)> = conn
             .prepare("SELECT user_email, instance_id FROM user_instance_access")
             .unwrap()

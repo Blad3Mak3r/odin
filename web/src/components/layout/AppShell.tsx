@@ -16,6 +16,7 @@ import { NavLink } from 'react-router-dom'
 import { ActivityFeedPanel } from '@/components/ActivityFeedPanel'
 import { Button } from '@/components/ui/button'
 import { UpdateBanner } from '@/components/UpdateBanner'
+import { UserAvatar } from '@/components/UserAvatar'
 import { useLiveSocket } from '@/hooks/useLiveSocket'
 import { useAuthStatus, useLogout } from '@/lib/queries'
 import { cn } from '@/lib/utils'
@@ -86,31 +87,49 @@ function SidebarNav({
           </NavLink>
         ))}
       </nav>
-      <div className="mt-auto flex items-center gap-2 px-3 py-3">
+      <div className="mt-auto flex flex-col gap-2 border-t p-3">
         {user && (
-          <div className="mr-auto min-w-0">
-            <p className="truncate text-sm font-medium">{user.username ?? user.email}</p>
-            <p className="text-xs text-muted-foreground">{user.role}</p>
+          <div className="flex items-center gap-1">
+            <NavLink
+              to="/settings"
+              onClick={onNavigate}
+              title="Account settings"
+              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md p-1.5 transition-colors hover:bg-sidebar-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            >
+              <UserAvatar user={user} />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium leading-tight">
+                  {user.username ?? user.email}
+                </p>
+                <p className="text-xs capitalize text-muted-foreground">{user.role}</p>
+              </div>
+            </NavLink>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0"
+              aria-label="Sign out"
+              title="Sign out"
+              disabled={logout.isPending}
+              onClick={() => logout.mutate()}
+            >
+              <LogOut className="size-4" />
+            </Button>
           </div>
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Sign out"
-          disabled={logout.isPending}
-          onClick={() => logout.mutate()}
-        >
-          <LogOut className="size-4" />
-        </Button>
-        <ThemeToggle />
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Open activity feed"
-          onClick={onOpenActivity}
-        >
-          <Bell className="size-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            aria-label="Open activity feed"
+            title="Activity"
+            onClick={onOpenActivity}
+          >
+            <Bell className="size-4" />
+          </Button>
+        </div>
       </div>
     </>
   )

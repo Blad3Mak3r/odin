@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/dialog'
 import { PasswordStrength } from '@/components/PasswordStrength'
 import { gameLabel } from '@/lib/games'
+import { ProfilePicture } from '@/components/ProfilePicture'
+import { UserAvatar } from '@/components/UserAvatar'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -555,6 +557,7 @@ function UsersPanel({ currentUserEmail }: { currentUserEmail: string }) {
       <div className="divide-y">
         {users.data?.map((user) => (
           <div key={user.email} className="flex flex-wrap items-center gap-2 px-4 py-3">
+            <UserAvatar user={user} />
             <span className="mr-auto min-w-0">
               <span className="block truncate font-medium">{user.username ?? user.email}</span>
               {user.username && (
@@ -697,6 +700,7 @@ export function AccountSettings() {
   if (!user) return null
   return (
     <>
+      <ProfilePicture user={user} />
       <ProfileForm key={`${user.email}:${user.username}`} user={user} />
       <ChangePasswordForm user={user} />
       <SessionsPanel />

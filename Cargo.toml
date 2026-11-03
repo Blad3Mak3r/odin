@@ -47,6 +47,7 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 async-stream = "0.3"
 regex = "1"
 rusqlite = { version = "0.40", features = ["bundled", "chrono", "uuid", "fallible_uint"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 sha2 = "0.11"
 argon2 = "0.6"
 libc = "0.2"

@@ -4,7 +4,7 @@
 use std::net::IpAddr;
 
 use axum::Json;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Extension, Multipart, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,7 @@ use crate::web::auth::{
     clear_cookie, hash_password, is_secure, normalize_email, optional_username, random_token,
     session_origin, start_session, token_hash_of, validate_password, verify_password,
 };
+use crate::web::avatar;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -340,6 +341,100 @@ pub async fn update_profile(
     )
     .await;
     Ok(Json(user))
+}
+
+/// Replaces the signed-in account's profile picture. The upload (multipart
+/// field `file`) is cropped, shrunk and re-encoded as WebP before it is stored.
+pub async fn upload_avatar(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    mut multipart: Multipart,
+) -> ApiResult<Json<User>> {
+    let mut upload = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| BadRequest(format!("invalid upload: {e}")))?
+    {
+        if field.name() == Some("file") {
+            upload = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| BadRequest(format!("invalid upload: {e}")))?,
+            );
+            break;
+        }
+    }
+    let upload = upload.ok_or_else(|| BadRequest("missing 'file' field".into()))?;
+    if upload.len() > avatar::MAX_UPLOAD_BYTES {
+        return Err(BadRequest("the image is too large (5 MiB maximum)".into()).into());
+    }
+    let (db, email) = (state.db.clone(), auth.user.email.clone());
+    let user = run_blocking(move || {
+        let webp = avatar::encode_avatar(&upload)?;
+        users::set_avatar(&db, &email, &webp)?;
+        users::find_by_email(&db, &email)?.ok_or_else(|| UserError::NotFound(email).into())
+    })
+    .await?;
+    audit::record(
+        &state,
+        AuditKind::ProfileUpdated,
+        Some(&auth.user.email),
+        Some(&user.email),
+        ip,
+        Some("avatar"),
+    )
+    .await;
+    Ok(Json(user))
+}
+
+pub async fn delete_avatar(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+) -> ApiResult<Json<User>> {
+    let (db, email) = (state.db.clone(), auth.user.email.clone());
+    let user = run_blocking(move || {
+        users::delete_avatar(&db, &email)?;
+        users::find_by_email(&db, &email)?.ok_or_else(|| UserError::NotFound(email).into())
+    })
+    .await?;
+    audit::record(
+        &state,
+        AuditKind::ProfileUpdated,
+        Some(&auth.user.email),
+        Some(&user.email),
+        ip,
+        Some("avatar removed"),
+    )
+    .await;
+    Ok(Json(user))
+}
+
+/// Serves an account's profile picture. The dashboard puts `avatar_updated_at`
+/// in the URL, so a given URL never changes content and can be cached for good.
+pub async fn get_avatar(
+    State(state): State<AppState>,
+    Path(email): Path<String>,
+) -> ApiResult<Response> {
+    let db = state.db.clone();
+    let stored = run_blocking(move || users::get_avatar(&db, &email)).await?;
+    let Some((webp, _)) = stored else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/webp"),
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable",
+            ),
+        ],
+        webp,
+    )
+        .into_response())
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {

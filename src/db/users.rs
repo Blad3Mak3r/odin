@@ -88,6 +88,9 @@ pub struct User {
     /// The administrator created at first-run setup; protected from the
     /// other administrators.
     pub is_owner: bool,
+    /// Set while the user has been invited but not yet chosen a password: when
+    /// the emailed link stops working (it may already have).
+    pub invitation_expires_at: Option<DateTime<Utc>>,
 }
 
 /// A user together with the stored password hash, for login only.
@@ -131,6 +134,7 @@ pub fn create_first_admin(
         last_login_at: None,
         avatar_updated_at: None,
         is_owner: true,
+        invitation_expires_at: None,
     })
 }
 
@@ -166,6 +170,7 @@ pub fn create(
             last_login_at: None,
             avatar_updated_at: None,
             is_owner: false,
+            invitation_expires_at: None,
         }),
         Err(rusqlite::Error::SqliteFailure(err, Some(message)))
             if err.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -263,6 +268,11 @@ pub fn set_password(
     let hashes = session_hashes(&conn, email, None)?;
     conn.execute(
         "DELETE FROM auth_sessions WHERE user_email = ?1",
+        params![email],
+    )?;
+    // The account has a password now; an old invitation must not replace it.
+    conn.execute(
+        "DELETE FROM password_links WHERE user_email = ?1",
         params![email],
     )?;
     Ok(hashes)
@@ -627,8 +637,9 @@ fn admin_count(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
 const USER_COLUMNS: &str = "users.email, users.username, users.role, users.created_at, \
      users.must_change_password, users.disabled, users.last_login_at, \
      (SELECT updated_at FROM user_avatars WHERE user_email = users.email), \
-     users.is_owner";
-const USER_COLUMN_COUNT: usize = 9;
+     users.is_owner, \
+     (SELECT expires_at FROM password_links WHERE user_email = users.email)";
+const USER_COLUMN_COUNT: usize = 10;
 
 fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
     let role: String = row.get(2)?;
@@ -642,5 +653,6 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         last_login_at: row.get(6)?,
         avatar_updated_at: row.get(7)?,
         is_owner: row.get(8)?,
+        invitation_expires_at: row.get(9)?,
     })
 }

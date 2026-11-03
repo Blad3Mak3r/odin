@@ -4,6 +4,23 @@ All notable changes to Odin are documented in this file.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-03
+
+### What's Changed
+- Report failures through webhooks and the activity feed, audit API changes, and harden against panics by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/186
+- Skip unreadable activity events instead of emptying the feed by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/187
+- Mask credentials in job and startup failure events by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/188
+- Log when a poisoned lock is recovered by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/189
+- Report a repeatedly failing job once until it succeeds by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/190
+- Give API change entries their own cap in the security log by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/191
+- Show whether the last message to each webhook was delivered by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/192
+- Add Vitest and cover the route error boundary by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/193
+- feat(web): add profile pictures and a sidebar account card row by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/195
+- feat: operator role, per-instance access and owner protection by @Blad3Mak3r in https://github.com/Blad3Mak3r/odin/pull/196
+
+
+**Full Changelog**: https://github.com/Blad3Mak3r/odin/compare/v0.21.1...v0.22.0
+
 ## [0.21.1] - 2026-11-01
 
 ### What's Changed

@@ -403,11 +403,22 @@ someone with access to the host can claim the dashboard; until the account
 exists, every other API route answers 401. Afterwards the API requires a
 session cookie (`HttpOnly`, `SameSite=Strict`). Accounts are keyed by a unique
 email address and may also have a unique username; sign in with either.
-Administrators manage users under Settings; the `viewer` role is read-only and
-never sees secrets: raw native configuration files, the 7 Days to Die template
-review and mod configuration files are refused, and every password, key or
-token value in the JSON a viewer receives (an RCON or server password, say) is
-replaced by `********`.
+Administrators manage users under Settings. There are three roles:
+`admin` changes anything; `operator` runs the instances it was given (start,
+stop and restart, settings, mods, backups, players, save files) but never
+deletes, renames or clones an instance, changes its resource limits or backup
+storage credentials, or touches anything global such as users, webhooks,
+settings or bulk actions; `viewer` is read-only. Operators and viewers see
+only the instances an administrator ticked for them (Settings → Users →
+Instances; an instance outside the list behaves as if it did not exist, in
+the API, the job list and the live event feed), and neither ever sees
+secrets: raw native configuration files, the 7 Days to Die template review
+and mod configuration files are refused, every password, key or token value
+in the JSON they receive (an RCON or server password, say) is replaced by
+`********`, and an operator's configuration edits drop any password or key
+they contain instead of applying it. Accounts that existed before this
+feature keep their current access: existing viewers were granted every
+existing instance.
 Passwords are stored as Argon2id hashes, must be 8-128 characters, and are
 refused when they are very common, a simple repeat or run, or built from the
 account's own email or username; the forms show a strength meter as you type. Odin speaks plain HTTP: `odin serve`
@@ -429,12 +440,15 @@ Each account can edit its own email (which needs its password) and username
 under Settings. Administrators can disable an account, which signs it out and
 blocks new sign-ins until it is enabled again, and see when each account last
 signed in. The last enabled administrator can be neither disabled, demoted nor
-deleted. Viewers get a read-only dashboard: write controls are hidden or
-disabled, and the API refuses their changes in any case.
+deleted. The **owner**, the administrator created at first-run setup (on
+older installs, the oldest administrator), is additionally protected from the
+other administrators: it cannot be demoted, disabled or deleted, and only the
+owner can reset its password. Viewers get a read-only dashboard: write controls
+are hidden or disabled, and the API refuses their changes in any case.
 
 Administrators also get a **Security log** in Settings: sign-ins and failures,
 blocked attempts, wrong setup or recovery tokens, password changes and resets,
-and user or role changes, kept for 90 days and not visible to viewers. When an
+and user, role or instance-access changes, kept for 90 days and visible to administrators only. When an
 administrator creates an account or resets someone's password, that account
 must choose a new password at its next sign-in (this can be turned off per
 action).

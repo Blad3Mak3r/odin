@@ -5,7 +5,7 @@ import { GameIcon } from '@/components/GameIcon'
 import { ManageInstanceDialog } from '@/components/instance/ManageInstanceDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useIsAdmin, useManagedInstanceAction, useManagedInstanceTransition, useManagedResources, useUpdateRuntime } from '@/lib/queries'
+import { useCanOperate, useIsAdmin, useManagedInstanceAction, useManagedInstanceTransition, useManagedResources, useUpdateRuntime } from '@/lib/queries'
 import { gameLabel } from '@/lib/games'
 import { toastStartFailure } from '@/lib/startFailure'
 import type { ManagedInstanceView } from '@/lib/types'
@@ -13,6 +13,7 @@ import type { ManagedInstanceView } from '@/lib/types'
 export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceView }) {
   const navigate = useNavigate()
   const isAdmin = useIsAdmin()
+  const canOperate = useCanOperate()
   const start = useManagedInstanceAction('start')
   const stop = useManagedInstanceAction('stop')
   const restart = useManagedInstanceAction('restart')
@@ -51,7 +52,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
           {instance.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}
         </div>
 
-        <div hidden={!isAdmin} className="flex flex-wrap items-center gap-2">
+        <div hidden={!canOperate} className="flex flex-wrap items-center gap-2">
           {instance.running && instance.install_mode !== 'shared' ? (
             <Button
               size="sm"
@@ -98,7 +99,7 @@ export function ManagedInstanceHeader({ instance }: { instance: ManagedInstanceV
               Start
             </Button>
           )}
-          <ManageInstanceDialog instance={instance} onNavigate={navigate} />
+          {isAdmin && <ManageInstanceDialog instance={instance} onNavigate={navigate} />}
         </div>
       </div>
 

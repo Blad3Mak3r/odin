@@ -31,6 +31,12 @@ pub enum UserError {
     UsernameTaken(String),
     #[error("at least one administrator must remain")]
     LastAdmin,
+    #[error(
+        "the owner account cannot be demoted, disabled or deleted, and only the owner can reset its password"
+    )]
+    Owner,
+    #[error("instance '{0}' does not exist")]
+    UnknownInstance(String),
     #[error("initial setup has already been completed")]
     SetupDone,
 }
@@ -39,6 +45,9 @@ pub enum UserError {
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Admin,
+    /// Runs the instances it was granted, without touching anything global
+    /// or sensitive.
+    Operator,
     Viewer,
 }
 
@@ -46,15 +55,16 @@ impl Role {
     fn as_str(self) -> &'static str {
         match self {
             Role::Admin => "admin",
+            Role::Operator => "operator",
             Role::Viewer => "viewer",
         }
     }
 
     fn parse(value: &str) -> Self {
-        if value == "admin" {
-            Role::Admin
-        } else {
-            Role::Viewer
+        match value {
+            "admin" => Role::Admin,
+            "operator" => Role::Operator,
+            _ => Role::Viewer,
         }
     }
 }
@@ -75,6 +85,9 @@ pub struct User {
     /// When the profile picture was last set; `None` means there is none.
     /// The dashboard uses it as the image URL's cache-busting version.
     pub avatar_updated_at: Option<DateTime<Utc>>,
+    /// The administrator created at first-run setup; protected from the
+    /// other administrators.
+    pub is_owner: bool,
 }
 
 /// A user together with the stored password hash, for login only.
@@ -101,8 +114,8 @@ pub fn create_first_admin(
 ) -> Result<User> {
     let now = Utc::now();
     let inserted = db.conn().execute(
-        "INSERT INTO users (email, username, password_hash, role, created_at) \
-         SELECT ?1, ?2, ?3, 'admin', ?4 WHERE NOT EXISTS (SELECT 1 FROM users)",
+        "INSERT INTO users (email, username, password_hash, role, created_at, is_owner) \
+         SELECT ?1, ?2, ?3, 'admin', ?4, 1 WHERE NOT EXISTS (SELECT 1 FROM users)",
         params![email, username, password_hash, now],
     )?;
     if inserted == 0 {
@@ -117,6 +130,7 @@ pub fn create_first_admin(
         disabled: false,
         last_login_at: None,
         avatar_updated_at: None,
+        is_owner: true,
     })
 }
 
@@ -151,6 +165,7 @@ pub fn create(
             disabled: false,
             last_login_at: None,
             avatar_updated_at: None,
+            is_owner: false,
         }),
         Err(rusqlite::Error::SqliteFailure(err, Some(message)))
             if err.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -212,6 +227,9 @@ pub fn set_role(db: &Db, email: &str, role: Role) -> Result<()> {
     let Some((current, disabled)) = current else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
+    if role != Role::Admin && is_owner(&conn, email)? {
+        return Err(UserError::Owner.into());
+    }
     if Role::parse(&current) == Role::Admin
         && !disabled
         && role != Role::Admin
@@ -257,6 +275,9 @@ pub fn delete(db: &Db, email: &str) -> Result<Vec<String>> {
     let Some((role, disabled)) = role_and_state(&conn, email)? else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
+    if is_owner(&conn, email)? {
+        return Err(UserError::Owner.into());
+    }
     if Role::parse(&role) == Role::Admin && !disabled && admin_count(&conn)? <= 1 {
         return Err(UserError::LastAdmin.into());
     }
@@ -273,6 +294,9 @@ pub fn set_disabled(db: &Db, email: &str, disabled: bool) -> Result<Vec<String>>
     let Some((role, was_disabled)) = role_and_state(&conn, email)? else {
         return Err(UserError::NotFound(email.to_string()).into());
     };
+    if disabled && is_owner(&conn, email)? {
+        return Err(UserError::Owner.into());
+    }
     if disabled && Role::parse(&role) == Role::Admin && !was_disabled && admin_count(&conn)? <= 1 {
         return Err(UserError::LastAdmin.into());
     }
@@ -511,6 +535,12 @@ pub fn list_sessions(db: &Db, user_email: &str) -> Result<Vec<SessionInfo>> {
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
 
+/// Token hashes of every session of a user, so live streams opened under
+/// the old permissions can be closed.
+pub fn session_token_hashes(db: &Db, user_email: &str) -> Result<Vec<String>> {
+    session_hashes(&db.conn(), user_email, None).map_err(Into::into)
+}
+
 /// Deletes one of the user's sessions by its public id; returns its token
 /// hash so live streams can be closed, or `None` if it is not theirs.
 pub fn delete_session_by_id(db: &Db, user_email: &str, id: &str) -> Result<Option<String>> {
@@ -574,6 +604,16 @@ fn role_and_state(
     .optional()
 }
 
+fn is_owner(conn: &rusqlite::Connection, email: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT is_owner FROM users WHERE email = ?1",
+        params![email],
+        |r| r.get(0),
+    )
+    .optional()
+    .map(|owner| owner.unwrap_or(false))
+}
+
 fn admin_count(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0",
@@ -586,8 +626,9 @@ fn admin_count(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
 /// is a subquery so the image BLOB itself is never loaded.
 const USER_COLUMNS: &str = "users.email, users.username, users.role, users.created_at, \
      users.must_change_password, users.disabled, users.last_login_at, \
-     (SELECT updated_at FROM user_avatars WHERE user_email = users.email)";
-const USER_COLUMN_COUNT: usize = 8;
+     (SELECT updated_at FROM user_avatars WHERE user_email = users.email), \
+     users.is_owner";
+const USER_COLUMN_COUNT: usize = 9;
 
 fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
     let role: String = row.get(2)?;
@@ -600,5 +641,6 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         disabled: row.get(5)?,
         last_login_at: row.get(6)?,
         avatar_updated_at: row.get(7)?,
+        is_owner: row.get(8)?,
     })
 }

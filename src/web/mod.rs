@@ -3,6 +3,7 @@
 //! is synchronous — this module (and `commands::serve`) is the only place
 //! async/tokio is used.
 
+mod access;
 mod audit;
 mod auth;
 mod avatar;

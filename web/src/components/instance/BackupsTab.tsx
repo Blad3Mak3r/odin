@@ -29,6 +29,7 @@ import {
   useBackupStorage,
   useCreateBackup,
   useDeleteBackup,
+  useIsAdmin,
   useRestoreBackup,
   useSetBackupSchedule,
   useSetBackupStorage,
@@ -38,6 +39,7 @@ import { formatBytes, formatRelativeTime } from '@/lib/utils'
 
 export function BackupsTab({ id, name, running, game = 'valheim' }: { id: string; name: string; running: boolean; game?: GameId }) {
   const backups = useBackups(id)
+  const isAdmin = useIsAdmin()
   const createBackup = useCreateBackup()
   const restoreBackup = useRestoreBackup()
   const deleteBackup = useDeleteBackup()
@@ -99,7 +101,7 @@ export function BackupsTab({ id, name, running, game = 'valheim' }: { id: string
 
       {(game === 'rust' || game === '7d2d') && <p className="text-sm text-muted-foreground">{game === '7d2d' ? '7 Days to Die' : 'Rust'} backups require a stopped server. Scheduled backups wait until it stops.</p>}
       <BackupScheduleSection id={id} />
-      <RemoteBackupStorageSection id={id} />
+      {isAdmin && <RemoteBackupStorageSection id={id} />}
 
       {running && (
         <p className="text-xs text-muted-foreground">

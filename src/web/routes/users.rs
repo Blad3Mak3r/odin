@@ -3,9 +3,10 @@
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::db::users::{self, Role, User};
+use crate::db::instance_access;
+use crate::db::users::{self, Role, User, UserError};
 use crate::web::audit::{self, AuditKind};
 use crate::web::auth::{
     AuthUser, ClientIp, hash_password, normalize_email, optional_username, validate_password,
@@ -32,6 +33,9 @@ pub struct CreateUser {
     /// The new user must replace this password at first sign-in. Defaults to true.
     #[serde(default)]
     pub require_change: Option<bool>,
+    /// Instances a viewer or operator can reach from the start.
+    #[serde(default)]
+    pub instance_ids: Vec<String>,
 }
 
 pub async fn create(
@@ -53,14 +57,20 @@ pub async fn create(
         .hashing
         .run(move || {
             let hash = hash_password(&req.password)?;
-            users::create(
+            let user = users::create(
                 &db,
                 &email,
                 username.as_deref(),
                 &hash,
                 req.role,
                 must_change,
-            )
+            )?;
+            if let Err(err) = instance_access::replace(&db, &user.email, &req.instance_ids) {
+                // An account must not exist half-configured.
+                users::delete(&db, &user.email)?;
+                return Err(err);
+            }
+            Ok(user)
         })
         .await?;
     let role = format!("{:?}", user.role).to_lowercase();
@@ -114,8 +124,17 @@ pub async fn update(
         .hashing
         .run(move || {
             let mut revoked = Vec::new();
+            // Only the owner may reset the owner's password.
+            if req.password.is_some()
+                && !own_account
+                && users::find_by_email(&db, &target)?.is_some_and(|user| user.is_owner)
+            {
+                return Err(UserError::Owner.into());
+            }
             if let Some(role) = req.role {
                 users::set_role(&db, &target, role)?;
+                // Streams opened under the old role must reconnect under the new one.
+                revoked.extend(users::session_token_hashes(&db, &target)?);
             }
             if let Some(disabled) = req.disabled {
                 revoked.extend(users::set_disabled(&db, &target, disabled)?);
@@ -182,6 +201,59 @@ pub async fn delete(
         AuditKind::UserDeleted,
         Some(&auth.user.email),
         Some(&email),
+        ip,
+        None,
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InstanceGrants {
+    pub instance_ids: Vec<String>,
+}
+
+/// The instances a viewer or operator may reach. Administrators reach all
+/// of them whatever is stored here.
+pub async fn get_instances(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Path(email): Path<String>,
+) -> ApiResult<Json<InstanceGrants>> {
+    auth.require_admin()?;
+    let db = state.db.clone();
+    let instance_ids = run_blocking(move || {
+        let user = users::find_by_email(&db, &email)?.ok_or(UserError::NotFound(email))?;
+        instance_access::instance_ids(&db, &user.email)
+    })
+    .await?;
+    Ok(Json(InstanceGrants { instance_ids }))
+}
+
+pub async fn set_instances(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    Path(email): Path<String>,
+    Json(req): Json<InstanceGrants>,
+) -> ApiResult<StatusCode> {
+    auth.require_admin()?;
+    let db = state.db.clone();
+    let (user, revoked) = run_blocking(move || {
+        let user = users::find_by_email(&db, &email)?.ok_or(UserError::NotFound(email))?;
+        instance_access::replace(&db, &user.email, &req.instance_ids)?;
+        let revoked = users::session_token_hashes(&db, &user.email)?;
+        Ok((user, revoked))
+    })
+    .await?;
+    // Open event streams were filtered by the old grants; closing them makes
+    // the dashboard reconnect with the new ones.
+    state.sessions.revoke(&revoked);
+    audit::record(
+        &state,
+        AuditKind::InstanceAccessChanged,
+        Some(&auth.user.email),
+        Some(&user.email),
         ip,
         None,
     )

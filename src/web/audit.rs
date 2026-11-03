@@ -23,6 +23,7 @@ pub enum AuditKind {
     ProfileUpdated,
     AccountDisabled,
     AccountEnabled,
+    InstanceAccessChanged,
     /// A signed-in user changed something through the API.
     Action,
 }
@@ -46,6 +47,7 @@ impl AuditKind {
             Self::ProfileUpdated => "profile_updated",
             Self::AccountDisabled => "account_disabled",
             Self::AccountEnabled => "account_enabled",
+            Self::InstanceAccessChanged => "instance_access_changed",
             Self::Action => auth_events::ACTION_KIND,
         }
     }

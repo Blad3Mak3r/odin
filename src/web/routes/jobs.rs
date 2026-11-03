@@ -2,25 +2,44 @@ use std::convert::Infallible;
 
 use async_stream::stream;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
 use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::web::jobs::{JobEvent, JobSnapshot, JobSummary};
+use crate::web::access::InstanceAccess;
+use crate::web::jobs::{JobEvent, JobKindDescr, JobSnapshot, JobSummary};
 use crate::web::state::AppState;
 
-pub async fn list_jobs(State(state): State<AppState>) -> Json<Vec<JobSummary>> {
-    Json(state.jobs.list())
+/// Whether the caller may see a job: those on an instance only when they
+/// may see that instance.
+fn visible(access: &InstanceAccess, kind: &JobKindDescr) -> bool {
+    kind.instance()
+        .is_none_or(|(game, name)| access.permits_name(game, name))
+}
+
+pub async fn list_jobs(
+    State(state): State<AppState>,
+    Extension(access): Extension<InstanceAccess>,
+) -> Json<Vec<JobSummary>> {
+    let mut jobs = state.jobs.list();
+    jobs.retain(|job| visible(&access, &job.kind));
+    Json(jobs)
 }
 
 pub async fn get_job(
     State(state): State<AppState>,
+    Extension(access): Extension<InstanceAccess>,
     Path(id): Path<String>,
 ) -> Result<Json<JobSnapshot>, StatusCode> {
-    state.jobs.get(&id).map(Json).ok_or(StatusCode::NOT_FOUND)
+    state
+        .jobs
+        .get(&id)
+        .filter(|job| visible(&access, &job.kind))
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 #[derive(Serialize)]
@@ -39,8 +58,16 @@ enum WireEvent<'a> {
 
 pub async fn job_sse(
     State(state): State<AppState>,
+    Extension(access): Extension<InstanceAccess>,
     Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
+    if !state
+        .jobs
+        .get(&id)
+        .is_some_and(|job| visible(&access, &job.kind))
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let Some((log, status, rx)) = state.jobs.subscribe(&id) else {
         return Err(StatusCode::NOT_FOUND);
     };

@@ -102,6 +102,7 @@ fn classify(err: &anyhow::Error) -> StatusCode {
     }
     match err.downcast_ref::<UserError>() {
         Some(UserError::NotFound(_)) => return StatusCode::NOT_FOUND,
+        Some(UserError::UnknownInstance(_)) => return StatusCode::BAD_REQUEST,
         Some(_) => return StatusCode::CONFLICT,
         None => {}
     }

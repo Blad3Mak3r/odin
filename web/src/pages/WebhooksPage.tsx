@@ -22,6 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useConfirmDialog } from '@/components/ConfirmDialog'
 import { ACTIVITY_KIND_LABELS } from '@/lib/activity'
+import { formatRelativeTime } from '@/lib/utils'
 import {
   useCreateWebhook,
   useDeleteWebhook,
@@ -31,7 +32,7 @@ import {
   useUpdateWebhook,
   useWebhooks,
 } from '@/lib/queries'
-import type { ActivityKind, WebhookView } from '@/lib/types'
+import type { ActivityKind, WebhookDelivery, WebhookView } from '@/lib/types'
 
 const ACTIVITY_KINDS = Object.keys(ACTIVITY_KIND_LABELS) as ActivityKind['kind'][]
 
@@ -70,6 +71,21 @@ export function WebhooksPage() {
       </div>
     </div>
   )
+}
+
+function DeliveryStatus({ delivery }: { delivery: WebhookDelivery | null }) {
+  if (!delivery) {
+    return <p className="text-xs text-muted-foreground">No messages sent yet</p>
+  }
+  const when = formatRelativeTime(delivery.at)
+  if (delivery.error) {
+    return (
+      <p className="text-xs text-destructive">
+        Last message failed ({delivery.error}) · {when}
+      </p>
+    )
+  }
+  return <p className="text-xs text-muted-foreground">Last message delivered · {when}</p>
 }
 
 function WebhookRow({ webhook }: { webhook: WebhookView }) {
@@ -123,6 +139,7 @@ function WebhookRow({ webhook }: { webhook: WebhookView }) {
           ))
         )}
       </div>
+      <DeliveryStatus delivery={webhook.last_delivery} />
       <div hidden={!isAdmin} className="flex justify-end gap-2">
         <EditWebhookDialog webhook={webhook} />
         <Button size="sm" variant="outline" disabled={testWebhook.isPending} onClick={handleTest}>

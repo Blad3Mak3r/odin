@@ -1393,8 +1393,11 @@ export function useSetWebhookEnabled() {
 }
 
 export function useTestWebhook() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => api.post<void>(`/webhooks/${id}/test`),
+    // The test records its outcome on the webhook, success or failure.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['webhooks'] }),
   })
 }
 

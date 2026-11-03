@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::activity::{ActivityEvent, ActivityKind};
+use crate::db::Db;
 use crate::db::webhooks as db_webhooks;
 use crate::web::state::AppState;
 
@@ -52,7 +53,12 @@ async fn forward(state: &AppState, event: ActivityEvent) {
         }
         // One task per delivery, so a slow or failing destination retrying
         // in the background never delays the others or the next event.
-        tokio::spawn(deliver(hook.url.clone(), content.clone()));
+        tokio::spawn(deliver(
+            state.db.clone(),
+            hook.id.clone(),
+            hook.url.clone(),
+            content.clone(),
+        ));
     }
 }
 
@@ -66,30 +72,53 @@ const RETRY_DELAYS: [Duration; 3] = [
 
 const POST_TIMEOUT: Duration = Duration::from_secs(10);
 
-async fn deliver(url: String, content: String) {
-    deliver_with(&url, &content, &RETRY_DELAYS).await;
+async fn deliver(db: std::sync::Arc<Db>, id: String, url: String, content: String) {
+    let outcome = deliver_with(&url, &content, &RETRY_DELAYS).await;
+    if let Err(reason) = &outcome {
+        tracing::warn!(webhook = %id, %reason, "webhook delivery failed");
+    }
+    let recorded = tokio::task::spawn_blocking(move || {
+        db_webhooks::record_delivery(&db, &id, outcome.err().as_deref())
+    })
+    .await;
+    match recorded {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(%error, "failed to record webhook delivery"),
+        Err(error) => tracing::warn!(%error, "webhook delivery record task panicked"),
+    }
 }
 
-async fn deliver_with(url: &str, content: &str, delays: &[Duration]) {
+/// Posts `content`, retrying transient failures after each of `delays`.
+/// The error says what went wrong without the URL, which is the webhook's
+/// secret.
+async fn deliver_with(url: &str, content: &str, delays: &[Duration]) -> Result<(), String> {
     let mut retries = delays.iter();
     loop {
         let (post_url, post_content) = (url.to_string(), content.to_string());
         let error = match tokio::task::spawn_blocking(move || post(&post_url, &post_content)).await
         {
-            Ok(Ok(())) => return,
+            Ok(Ok(())) => return Ok(()),
             Ok(Err(e)) => e,
-            Err(e) => {
-                tracing::warn!(error = %e, "webhook post task panicked");
-                return;
-            }
+            Err(_) => return Err("delivery task panicked".to_string()),
         };
         match retries.next() {
             Some(delay) if is_transient(&error) => tokio::time::sleep(*delay).await,
-            _ => {
-                tracing::warn!(error = %error, "webhook delivery failed");
-                return;
-            }
+            _ => return Err(public_reason(&error)),
         }
+    }
+}
+
+/// A short description of a failed post that never includes the URL, which
+/// `reqwest` would otherwise put in its message.
+pub(crate) fn public_reason(error: &anyhow::Error) -> String {
+    match error.downcast_ref::<reqwest::Error>() {
+        Some(e) => match e.status() {
+            Some(status) => format!("HTTP {}", status.as_u16()),
+            None if e.is_timeout() => "timed out".to_string(),
+            None if e.is_connect() => "could not connect".to_string(),
+            None => "request failed".to_string(),
+        },
+        None => "request failed".to_string(),
     }
 }
 
@@ -285,7 +314,7 @@ mod tests {
     async fn a_server_error_is_retried_until_it_succeeds() {
         let (url, count) = serve(&[500, 429, 204]);
 
-        deliver_with(&url, "hello", &NO_WAIT).await;
+        assert_eq!(deliver_with(&url, "hello", &NO_WAIT).await, Ok(()));
 
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
@@ -294,7 +323,10 @@ mod tests {
     async fn a_client_error_is_not_retried() {
         let (url, count) = serve(&[404, 204]);
 
-        deliver_with(&url, "hello", &NO_WAIT).await;
+        assert_eq!(
+            deliver_with(&url, "hello", &NO_WAIT).await,
+            Err("HTTP 404".to_string())
+        );
 
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
@@ -303,10 +335,54 @@ mod tests {
     async fn retries_stop_after_the_budget_is_spent() {
         let (url, count) = serve(&[503, 503, 503, 503, 503]);
 
-        deliver_with(&url, "hello", &NO_WAIT).await;
+        assert_eq!(
+            deliver_with(&url, "hello", &NO_WAIT).await,
+            Err("HTTP 503".to_string())
+        );
 
         // The first attempt plus one retry per delay.
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn the_outcome_of_a_delivery_is_recorded_without_the_url() {
+        let dir = std::env::temp_dir().join(format!(
+            "odin-webhook-delivery-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = std::sync::Arc::new(
+            Db::open(&crate::paths::Paths {
+                data_dir: dir.clone(),
+                config_dir: dir,
+            })
+            .unwrap(),
+        );
+        let (url, _count) = serve(&[404, 204]);
+        let hook = db_webhooks::insert(&db, &url, &[]).unwrap();
+
+        deliver(
+            db.clone(),
+            hook.id.clone(),
+            url.clone(),
+            "hello".to_string(),
+        )
+        .await;
+        let failed = db_webhooks::get(&db, &hook.id)
+            .unwrap()
+            .unwrap()
+            .last_delivery;
+        let error = failed.unwrap().error.unwrap();
+        assert_eq!(error, "HTTP 404");
+        assert!(!error.contains(&url));
+
+        deliver(db.clone(), hook.id.clone(), url, "hello".to_string()).await;
+        let delivered = db_webhooks::get(&db, &hook.id)
+            .unwrap()
+            .unwrap()
+            .last_delivery;
+        assert!(delivered.unwrap().error.is_none());
     }
 
     #[test]

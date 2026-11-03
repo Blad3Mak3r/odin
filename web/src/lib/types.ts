@@ -613,11 +613,18 @@ export interface BulkBepInExResult {
   error: string | null
 }
 
+export interface WebhookDelivery {
+  at: string
+  // null when it succeeded
+  error: string | null
+}
+
 export interface WebhookView {
   id: string
   enabled: boolean
   event_kinds: ActivityKind['kind'][]
   created_at: string
+  last_delivery: WebhookDelivery | null
 }
 
 export interface SettingsView {

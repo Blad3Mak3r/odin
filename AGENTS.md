@@ -166,8 +166,11 @@ Frontend-only commands (from `web/`): `npm run build` (`tsc -b && vite
 build` — this also typechecks), `npm run lint` (`oxlint`, not
 ESLint/Prettier), `npm run dev`.
 
-There is no CI configured in this repo. Validate changes proportionally
-instead of running the entire suite by habit:
+CI (`.github/workflows/ci.yml`) runs `make check` plus the dashboard lint and
+build on every pull request; it does not run frontend tests (there are none)
+or dependency audits. `codeql.yml`, `release.yml` and `runtime-images.yml`
+cover code scanning, releases and the runtime images. Validate changes
+proportionally locally instead of running the entire suite by habit:
 
 - Test and lint only the affected Rust module(s), test target(s), or frontend
   package first. For Rust, prefer targeted `cargo test <filter>` invocations

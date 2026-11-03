@@ -9,21 +9,29 @@ increasingly only supported interface — new capability belongs in the web
 API (`src/web/routes/`) plus dashboard UI (`web/src/`), not the CLI. See
 [AGENTS.md](AGENTS.md) for the repo's conventions and workflow.
 
+> **Status note.** This roadmap was written when Odin was a Valheim-only
+> manager with no login. Since then the dashboard gained local accounts
+> (`admin` and read-only `viewer`) and Odin manages six games. Shipped from
+> this list: instance rename (1.1), the persisted job history (2.1),
+> scheduled backups (2.2), crash auto-restart (2.3), webhooks (2.4), bulk
+> operations (2.5), resource history export (2.6, export only), fleet
+> search and tags (3.1) and the save file browser (3.6). References below to
+> `InstancesPage.tsx` and `InstanceHeader.tsx` predate the current dashboard
+> layout. The remaining items are still open and should be re-scoped against
+> the multi-game model before being picked up.
+
 ## Ground rules
 
 Two constraints shape every item below and should not be relitigated per
 feature:
 
-- **No accounts, no login.** `PRODUCT.md` documents this as a deliberate
-  product decision: `odin serve` has zero auth middleware, and reaching it
-  remotely is the admin's own job (SSH tunnel / reverse proxy). Nothing
-  here proposes a dashboard login or RBAC/session UI. The one auth-adjacent
-  idea that fits is an optional API token for *outbound* integrations
-  (webhooks) — never inbound dashboard authentication.
-- **Valheim-specific, not multi-game.** SteamCMD, BepInEx, and Thunderstore
-  are all Valheim-specific integrations. Nothing here proposes generalizing
-  the instance model to other dedicated servers — the goal is to go deeper
-  on what already exists, not broader.
+- **Local accounts only.** `PRODUCT.md` keeps Odin self-contained: local
+  `admin` and `viewer` accounts, no hosted identity or SSO. Remote access is
+  still the admin's job (SSH tunnel / reverse proxy with TLS).
+- **Multi-game.** Game-neutral API, service and UI first, with small
+  game-specific adapters (see `docs/game-server-implementation.md`). Items
+  written for Valheim below should be generalized where another game has
+  the same capability.
 
 Every item is scoped to be its own PR, consistent with this repo's
 "work on a branch, commit incrementally" workflow.

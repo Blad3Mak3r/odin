@@ -14,6 +14,7 @@ use tokio::sync::broadcast;
 use crate::db::Db;
 use crate::game::GameId;
 use crate::instance::InstanceError;
+use crate::lock::LockExt;
 use crate::podman::ContainerStats;
 use crate::web::players::PlayerInfo;
 
@@ -215,10 +216,7 @@ impl RuntimeRegistry {
         name: &str,
         transition: InstanceTransition,
     ) -> Result<InstanceTransitionGuard, InstanceError> {
-        let mut transitions = self
-            .transitions
-            .lock()
-            .expect("runtime transitions lock poisoned");
+        let mut transitions = self.transitions.lock_or_recover();
         let key = GameInstanceKey::new(game, name);
         if transitions.contains_key(&key) {
             return Err(InstanceError::TransitionInProgress(name.to_string()));
@@ -243,10 +241,7 @@ impl RuntimeRegistry {
         GameInstanceTransitions,
         broadcast::Receiver<GameInstanceTransitions>,
     ) {
-        let transitions = self
-            .transitions
-            .lock()
-            .expect("runtime transitions lock poisoned");
+        let transitions = self.transitions.lock_or_recover();
         (
             game_transition_snapshot(&transitions),
             self.transition_events.subscribe(),
@@ -254,7 +249,7 @@ impl RuntimeRegistry {
     }
 
     pub fn push_host_sample(&self, snapshot: HostSnapshot) {
-        let mut host = self.host.lock().expect("runtime host lock poisoned");
+        let mut host = self.host.lock_or_recover();
         push_capped(
             &mut host.history,
             ResourceSample {
@@ -267,16 +262,12 @@ impl RuntimeRegistry {
     }
 
     pub fn host_snapshot(&self) -> HostSnapshot {
-        self.host
-            .lock()
-            .expect("runtime host lock poisoned")
-            .current
+        self.host.lock_or_recover().current
     }
 
     pub fn host_history(&self) -> Vec<ResourceSample> {
         self.host
-            .lock()
-            .expect("runtime host lock poisoned")
+            .lock_or_recover()
             .history
             .iter()
             .copied()
@@ -288,8 +279,7 @@ impl RuntimeRegistry {
     pub fn container_cpu_percent(&self, container: &str, stats: &ContainerStats) -> f32 {
         let previous = self
             .cpu_readings
-            .lock()
-            .expect("cpu readings lock poisoned")
+            .lock_or_recover()
             .insert(container.to_owned(), (stats.cpu_nano, stats.system_nano));
         match previous {
             Some((cpu_nano, system_nano))
@@ -306,10 +296,7 @@ impl RuntimeRegistry {
     /// Drops a stopped container's previous reading so a later start begins
     /// from a fresh baseline.
     pub fn forget_container_cpu(&self, container: &str) {
-        self.cpu_readings
-            .lock()
-            .expect("cpu readings lock poisoned")
-            .remove(container);
+        self.cpu_readings.lock_or_recover().remove(container);
     }
 
     /// Updates one game instance's cached snapshot; returns `true` if
@@ -320,10 +307,7 @@ impl RuntimeRegistry {
         name: &str,
         snapshot: InstanceSnapshot,
     ) -> bool {
-        let mut instances = self
-            .instances
-            .lock()
-            .expect("runtime instances lock poisoned");
+        let mut instances = self.instances.lock_or_recover();
         let entry = instances
             .entry(GameInstanceKey::new(game, name))
             .or_default();
@@ -348,8 +332,7 @@ impl RuntimeRegistry {
 
     pub fn game_instance_snapshot(&self, game: GameId, name: &str) -> InstanceSnapshot {
         self.instances
-            .lock()
-            .expect("runtime instances lock poisoned")
+            .lock_or_recover()
             .get(&GameInstanceKey::new(game, name))
             .map(|s| s.current)
             .unwrap_or_default()
@@ -361,8 +344,7 @@ impl RuntimeRegistry {
 
     pub fn game_instance_history(&self, game: GameId, name: &str) -> Vec<ResourceSample> {
         self.instances
-            .lock()
-            .expect("runtime instances lock poisoned")
+            .lock_or_recover()
             .get(&GameInstanceKey::new(game, name))
             .map(|s| s.history.iter().copied().collect())
             .unwrap_or_default()
@@ -370,8 +352,7 @@ impl RuntimeRegistry {
 
     pub fn remove_game_instance(&self, game: GameId, name: &str) {
         self.instances
-            .lock()
-            .expect("runtime instances lock poisoned")
+            .lock_or_recover()
             .remove(&GameInstanceKey::new(game, name));
     }
 
@@ -382,10 +363,7 @@ impl RuntimeRegistry {
         cooldown: chrono::Duration,
     ) -> bool {
         let now = Utc::now();
-        let mut attempts = self
-            .auto_restart_attempts
-            .lock()
-            .expect("runtime auto-restart lock poisoned");
+        let mut attempts = self.auto_restart_attempts.lock_or_recover();
         let key = GameInstanceKey::new(game, name);
         match attempts.get(&key) {
             Some(last) if now - *last < cooldown => false,
@@ -402,10 +380,7 @@ impl RuntimeRegistry {
     /// every instance sampled in the same tick.
     pub fn should_persist_now(&self) -> bool {
         let now = Utc::now();
-        let mut last = self
-            .last_persisted_at
-            .lock()
-            .expect("runtime last-persisted lock poisoned");
+        let mut last = self.last_persisted_at.lock_or_recover();
         match *last {
             Some(prev) if now - prev < PERSIST_INTERVAL => false,
             _ => {
@@ -477,11 +452,7 @@ pub struct InstanceTransitionGuard {
 
 impl Drop for InstanceTransitionGuard {
     fn drop(&mut self) {
-        let mut transitions = self
-            .runtime
-            .transitions
-            .lock()
-            .expect("runtime transitions lock poisoned");
+        let mut transitions = self.runtime.transitions.lock_or_recover();
         transitions.remove(&GameInstanceKey::new(self.game, &self.name));
         let _ = self
             .runtime

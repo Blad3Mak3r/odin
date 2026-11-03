@@ -1,5 +1,5 @@
 [Unit]
-Description=Odin Valheim server manager dashboard
+Description=Odin game server manager dashboard
 After=network-online.target
 Wants=network-online.target
 

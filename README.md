@@ -489,6 +489,9 @@ trusted_proxies = ["172.16.0.0/12"]   # addresses or CIDR ranges
 `ODIN_TRUSTED_PROXIES` (comma-separated) overrides it, and an invalid entry
 stops `odin serve` at startup.
 
+Ready-to-use Caddy and nginx configurations, including the settings for live
+logs and event streams, are in [docs/reverse-proxy.md](docs/reverse-proxy.md).
+
 **Behind a Cloudflare Tunnel.** `cloudflared` connects from the same machine,
 so loopback is already trusted. Set the public address and the header Cloudflare
 fills with the visitor's address, and keep Odin bound to `127.0.0.1`:

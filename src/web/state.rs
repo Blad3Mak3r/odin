@@ -54,7 +54,7 @@ impl AppState {
 
     pub fn new(paths: Paths, db: Arc<Db>) -> Self {
         let activity = ActivityLog::load(db.clone());
-        let jobs = JobRegistry::load(db.clone());
+        let jobs = JobRegistry::load(db.clone()).with_activity(activity.clone());
         let runtime = RuntimeRegistry::new(db.clone());
         let login_throttle = LoginThrottle::with_db(db.clone());
         Self {

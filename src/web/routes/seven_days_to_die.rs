@@ -132,6 +132,7 @@ pub async fn upload_mod(
     let job_name = name.clone();
     let id = state.jobs.spawn(
         crate::web::jobs::JobKindDescr::ModUpload {
+            game: GameId::SevenDaysToDie,
             instance: name.clone(),
             name: info.display_name.clone(),
         },

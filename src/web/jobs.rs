@@ -6,7 +6,7 @@
 //! history (in particular, whether a job actually succeeded) survives an
 //! `odin serve` restart.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -15,9 +15,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::activity::{ActivityKind, ActivityLog};
 use crate::db::Db;
 use crate::db::jobs as db_jobs;
 use crate::game::{GameId, RuntimeImage};
+use crate::lock::LockExt;
 
 pub type JobId = String;
 
@@ -51,6 +53,8 @@ pub enum JobKindDescr {
         instance: String,
     },
     ModUpload {
+        #[serde(default = "valheim_game")]
+        game: GameId,
         instance: String,
         name: String,
     },
@@ -86,6 +90,41 @@ pub enum JobKindDescr {
 
 const fn valheim_game() -> GameId {
     GameId::Valheim
+}
+
+impl JobKindDescr {
+    /// The wire tag (`"kind"` in the serialized form) naming this job type.
+    fn tag(&self) -> String {
+        encode_kind(self).map(|(tag, _)| tag).unwrap_or_default()
+    }
+
+    /// Identifies "the same job again": its type and what it acts on, but not
+    /// details that change between runs such as a backup id.
+    fn alert_key(&self) -> String {
+        let (game, instance) = self.target();
+        format!("{}:{game}:{}", self.tag(), instance.unwrap_or_default())
+    }
+
+    /// The game and instance a job acts on, to attribute its activity
+    /// events. Jobs that predate the multi-game model carry no game and are
+    /// Valheim's, matching their `serde` defaults.
+    fn target(&self) -> (GameId, Option<&str>) {
+        match self {
+            Self::RuntimeUpdate { game, instance }
+            | Self::BackupCreate { game, instance }
+            | Self::BackupRestore { game, instance, .. }
+            | Self::ModUpload { game, instance, .. } => (*game, Some(instance)),
+            Self::SharedInstall { game } => (*game, None),
+            Self::MapWipe { instance } | Self::FullWipe { instance } => {
+                (GameId::Rust, Some(instance))
+            }
+            Self::ModAdd { instance, .. }
+            | Self::ModUpdate { instance }
+            | Self::BepInExUpdate { instance, .. }
+            | Self::BepInExInstall { instance, .. } => (GameId::Valheim, Some(instance)),
+            Self::ImagePull { .. } => (GameId::Valheim, None),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +175,13 @@ struct JobRecord {
 pub struct JobRegistry {
     jobs: Arc<Mutex<HashMap<JobId, JobRecord>>>,
     db: Arc<Db>,
+    /// Where a failed job is reported, so webhooks and the activity feed see
+    /// it without every job having to remember to.
+    activity: Option<ActivityLog>,
+    /// Jobs whose latest run failed and was already reported, by
+    /// [`JobKindDescr::alert_key`]. A job that keeps failing (an hourly
+    /// backup, say) is reported once, not on every run, until it succeeds.
+    failing: Arc<Mutex<HashSet<String>>>,
 }
 
 /// Handed to a running job's closure so it can report progress lines.
@@ -203,7 +249,16 @@ impl JobRegistry {
         Self {
             jobs: Arc::new(Mutex::new(jobs)),
             db,
+            activity: None,
+            failing: Arc::default(),
         }
+    }
+
+    /// Reports every job that ends `failed` to `activity` as a `JobFailed`
+    /// event.
+    pub fn with_activity(mut self, activity: ActivityLog) -> Self {
+        self.activity = Some(activity);
+        self
     }
 
     /// Spawns `work` onto the blocking thread pool and returns immediately
@@ -217,7 +272,7 @@ impl JobRegistry {
         let started_at = Utc::now();
         let (sender, _receiver) = broadcast::channel(BROADCAST_CAPACITY);
         {
-            let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+            let mut jobs = self.jobs.lock_or_recover();
             jobs.insert(
                 id.clone(),
                 JobRecord {
@@ -258,15 +313,42 @@ impl JobRegistry {
                     message: format!("{e:#}"),
                 },
             };
+            registry.report_outcome(&kind, &status);
             registry.set_status(&job_id, status);
         });
 
         id
     }
 
+    /// Reports the first failure of a job, then stays quiet until it succeeds
+    /// again so a job that fails on every run does not flood webhooks.
+    fn report_outcome(&self, kind: &JobKindDescr, status: &JobStatus) {
+        let key = kind.alert_key();
+        match status {
+            JobStatus::Succeeded => {
+                self.failing.lock_or_recover().remove(&key);
+            }
+            JobStatus::Failed { message } => {
+                let Some(activity) = &self.activity else {
+                    return;
+                };
+                if !self.failing.lock_or_recover().insert(key) {
+                    return;
+                }
+                let (game, instance) = kind.target();
+                activity.record_for(
+                    game,
+                    ActivityKind::job_failed(kind.tag(), message),
+                    instance.map(str::to_string),
+                );
+            }
+            JobStatus::Queued | JobStatus::Running => {}
+        }
+    }
+
     fn push_line(&self, id: &str, line: String) {
         let log = {
-            let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+            let mut jobs = self.jobs.lock_or_recover();
             let Some(record) = jobs.get_mut(id) else {
                 return;
             };
@@ -284,7 +366,7 @@ impl JobRegistry {
 
     fn set_status(&self, id: &str, status: JobStatus) {
         {
-            let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+            let mut jobs = self.jobs.lock_or_recover();
             let Some(record) = jobs.get_mut(id) else {
                 return;
             };
@@ -299,12 +381,12 @@ impl JobRegistry {
     }
 
     pub fn get(&self, id: &str) -> Option<JobSnapshot> {
-        let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let jobs = self.jobs.lock_or_recover();
         jobs.get(id).map(|r| snapshot(id, r))
     }
 
     pub fn list(&self) -> Vec<JobSummary> {
-        let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let jobs = self.jobs.lock_or_recover();
         let mut summaries: Vec<JobSummary> = jobs.iter().map(|(id, r)| summary(id, r)).collect();
         summaries.sort_by_key(|s| std::cmp::Reverse(s.started_at));
         summaries
@@ -316,7 +398,7 @@ impl JobRegistry {
         &self,
         id: &str,
     ) -> Option<(Vec<String>, JobStatus, broadcast::Receiver<JobEvent>)> {
-        let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let jobs = self.jobs.lock_or_recover();
         jobs.get(id)
             .map(|r| (r.log.clone(), r.status.clone(), r.sender.subscribe()))
     }
@@ -324,7 +406,7 @@ impl JobRegistry {
     /// Deletes persisted expired terminal jobs and removes them from live history.
     pub fn purge_before(&self, before: DateTime<Utc>) -> Result<usize> {
         let deleted_ids = db_jobs::delete_finished_before(&self.db, before)?;
-        let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let mut jobs = self.jobs.lock_or_recover();
         jobs.retain(|id, _| !deleted_ids.contains(id));
         Ok(deleted_ids.len())
     }
@@ -426,6 +508,97 @@ mod tests {
         let snapshot = registry.get(&id).unwrap();
         assert!(matches!(snapshot.status, JobStatus::Succeeded));
         assert_eq!(snapshot.log, vec!["working".to_string()]);
+    }
+
+    async fn finished(registry: &JobRegistry, id: &str) {
+        for _ in 0..100 {
+            if !matches!(
+                registry.get(id).unwrap().status,
+                JobStatus::Queued | JobStatus::Running
+            ) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_job_is_reported_to_the_activity_feed_and_a_successful_one_is_not() {
+        let db = temp_db("activity");
+        let activity = ActivityLog::load(db.clone());
+        let registry = JobRegistry::load(db).with_activity(activity.clone());
+        let kind = || JobKindDescr::BackupCreate {
+            game: GameId::Palworld,
+            instance: "pals".into(),
+        };
+
+        let ok = registry.spawn(kind(), |_logger| Ok(()));
+        finished(&registry, &ok).await;
+        assert!(activity.subscribe().0.is_empty());
+
+        let failed = registry.spawn(kind(), |_logger| anyhow::bail!("disk full"));
+        finished(&registry, &failed).await;
+
+        let (history, _rx) = activity.subscribe();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].game, GameId::Palworld);
+        assert_eq!(history[0].instance.as_deref(), Some("pals"));
+        assert!(matches!(
+            &history[0].kind,
+            ActivityKind::JobFailed { job, message }
+                if job == "backup_create" && message == "disk full"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_job_that_keeps_failing_is_reported_once_until_it_succeeds() {
+        let db = temp_db("throttle");
+        let activity = ActivityLog::load(db.clone());
+        let registry = JobRegistry::load(db).with_activity(activity.clone());
+        let backup = |instance: &str| JobKindDescr::BackupCreate {
+            game: GameId::Palworld,
+            instance: instance.into(),
+        };
+        let reported = || activity.subscribe().0.len();
+
+        for _ in 0..3 {
+            let id = registry.spawn(backup("pals"), |_logger| anyhow::bail!("disk full"));
+            finished(&registry, &id).await;
+        }
+        assert_eq!(reported(), 1, "repeated failures are reported once");
+
+        let other = registry.spawn(backup("other"), |_logger| anyhow::bail!("disk full"));
+        finished(&registry, &other).await;
+        assert_eq!(reported(), 2, "another instance has its own report");
+
+        let ok = registry.spawn(backup("pals"), |_logger| Ok(()));
+        finished(&registry, &ok).await;
+        let failed = registry.spawn(backup("pals"), |_logger| anyhow::bail!("disk full"));
+        finished(&registry, &failed).await;
+        assert_eq!(reported(), 3, "a failure after a success is reported again");
+    }
+
+    #[test]
+    fn a_job_is_attributed_to_the_game_it_acts_on() {
+        let upload = JobKindDescr::ModUpload {
+            game: GameId::SevenDaysToDie,
+            instance: "undead".into(),
+            name: "mod".into(),
+        };
+        assert_eq!(upload.target(), (GameId::SevenDaysToDie, Some("undead")));
+        let wipe = JobKindDescr::MapWipe {
+            instance: "rusty".into(),
+        };
+        assert_eq!(wipe.target(), (GameId::Rust, Some("rusty")));
+        let install = JobKindDescr::SharedInstall { game: GameId::Cs2 };
+        assert_eq!(install.target(), (GameId::Cs2, None));
+    }
+
+    #[test]
+    fn a_stored_mod_upload_without_a_game_is_valheims() {
+        let kind: JobKindDescr =
+            serde_json::from_str(r#"{"kind":"mod_upload","instance":"a","name":"b"}"#).unwrap();
+        assert_eq!(kind.target(), (GameId::Valheim, Some("a")));
     }
 
     #[tokio::test]

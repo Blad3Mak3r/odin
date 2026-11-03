@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use crate::activity::ActivityLog;
+use crate::lock::LockExt;
 use crate::web::players::PlayerRegistry;
 use crate::web::world_saves::WorldSaveRegistry;
 
@@ -42,8 +43,7 @@ impl LogTailRegistry {
     /// nothing until `tail_and_broadcast` is spawned for it.
     pub fn sender_for(&self, name: &str) -> broadcast::Sender<String> {
         self.channels
-            .lock()
-            .expect("log tail registry lock poisoned")
+            .lock_or_recover()
             .entry(name.to_string())
             .or_insert_with(|| broadcast::channel(BROADCAST_CAPACITY).0)
             .clone()

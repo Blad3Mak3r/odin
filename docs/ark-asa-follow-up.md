@@ -23,13 +23,15 @@ without re-discovering the design decisions.
 
 ## Remaining implementation work
 
-### 1. Complete runtime-image update monitoring
+### 1. Runtime-image update monitoring
 
-Manual image pulls and local-image application are implemented, but the
-planned registry monitor is not.
+Implemented: manual image pulls, local-image application and the registry
+monitor (`src/web/image_monitor.rs`, `POST /settings/runtime-images/check`).
+Only the optional `runtime_images.auto_pull` setting (item 4 below) is
+outstanding. The original plan, for reference:
 
-Implement it as a small background worker under `src/web/`, following the
-patterns in `src/web/uptime_scheduler.rs`:
+A small background worker under `src/web/`, following the patterns in
+`src/web/uptime_scheduler.rs`:
 
 1. Every six hours, and on an explicit dashboard request, check only the
    moving default references `ghcr.io/blad3mak3r/odin-srv:base` and

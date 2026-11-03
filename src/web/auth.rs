@@ -29,6 +29,8 @@ use tokio::sync::watch;
 
 use crate::config::TrustedProxies;
 use crate::db::users::{self, Role, SessionInfo, SessionOrigin, User};
+use crate::lock::LockExt;
+use crate::web::audit::{self, AuditKind};
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -121,27 +123,22 @@ pub struct BootstrapGate(Arc<Mutex<Option<(BootstrapKind, String)>>>);
 
 impl BootstrapGate {
     pub fn arm(&self, kind: BootstrapKind, token: String) {
-        *self.0.lock().expect("bootstrap gate lock poisoned") = Some((kind, token));
+        *self.0.lock_or_recover() = Some((kind, token));
     }
 
     pub fn kind(&self) -> Option<BootstrapKind> {
-        self.0
-            .lock()
-            .expect("bootstrap gate lock poisoned")
-            .as_ref()
-            .map(|(kind, _)| *kind)
+        self.0.lock_or_recover().as_ref().map(|(kind, _)| *kind)
     }
 
     pub fn matches(&self, kind: BootstrapKind, given: &str) -> bool {
         self.0
-            .lock()
-            .expect("bootstrap gate lock poisoned")
+            .lock_or_recover()
             .as_ref()
             .is_some_and(|(k, token)| *k == kind && constant_time_eq(token, given.trim()))
     }
 
     pub fn disarm(&self) {
-        *self.0.lock().expect("bootstrap gate lock poisoned") = None;
+        *self.0.lock_or_recover() = None;
     }
 }
 
@@ -184,7 +181,7 @@ pub struct SessionRegistry(Arc<Mutex<HashMap<String, watch::Sender<bool>>>>);
 
 impl SessionRegistry {
     fn watch(&self, token_hash: &str) -> watch::Receiver<bool> {
-        let mut map = self.0.lock().expect("session registry lock poisoned");
+        let mut map = self.0.lock_or_recover();
         map.retain(|_, tx| tx.receiver_count() > 0);
         map.entry(token_hash.to_string())
             .or_insert_with(|| watch::channel(false).0)
@@ -193,7 +190,7 @@ impl SessionRegistry {
 
     /// Signals every stream of the given sessions to end.
     pub fn revoke(&self, token_hashes: &[String]) {
-        let mut map = self.0.lock().expect("session registry lock poisoned");
+        let mut map = self.0.lock_or_recover();
         for hash in token_hashes {
             if let Some(tx) = map.remove(hash) {
                 tx.send_replace(true);
@@ -597,7 +594,26 @@ pub async fn require_auth(State(state): State<AppState>, mut req: Request, next:
     }
     let token = session_token(req.headers());
     req.extensions_mut().insert(auth.clone());
+    let method = req.method().clone();
     let mut response = next.run(req).await;
+    // Account changes under /api/auth and /api/users are audited by their
+    // own handlers, with more detail than the route.
+    if !safe && !path.starts_with("/api/auth/") && !path.starts_with("/api/users") {
+        let (state, actor) = (state.clone(), auth.user.email.clone());
+        let target = format!("{method} {path}");
+        let detail = format!("status {}", response.status().as_u16());
+        tokio::spawn(async move {
+            audit::record(
+                &state,
+                AuditKind::Action,
+                Some(&actor),
+                Some(&target),
+                ip,
+                Some(&detail),
+            )
+            .await;
+        });
+    }
     if auth.refreshed
         && auth.session.remember
         && !response.headers().contains_key(header::SET_COOKIE)
@@ -854,7 +870,7 @@ impl LoginThrottle {
 
     pub fn check(&self, username: &str, ip: Option<IpAddr>) -> Result<(), TooManyAttempts> {
         let now = Utc::now();
-        let counters = self.counters.lock().expect("login throttle lock poisoned");
+        let counters = self.counters.lock_or_recover();
         let retry_after = Self::keys(username, ip)
             .iter()
             .filter_map(|(key, max)| {
@@ -873,7 +889,7 @@ impl LoginThrottle {
         let now = Utc::now();
         let mut writes = Vec::new();
         {
-            let mut counters = self.counters.lock().expect("login throttle lock poisoned");
+            let mut counters = self.counters.lock_or_recover();
             if counters.len() >= MAX_TRACKED_KEYS {
                 counters.retain(|_, (_, at)| now - *at < lockout());
             }
@@ -899,7 +915,7 @@ impl LoginThrottle {
         let keys = Self::keys(username, ip);
         let mut writes = Vec::new();
         {
-            let mut counters = self.counters.lock().expect("login throttle lock poisoned");
+            let mut counters = self.counters.lock_or_recover();
             for (key, _) in &keys[..2] {
                 if counters.remove(key).is_some() {
                     writes.push(ThrottleWrite::Delete(key.clone()));
@@ -1744,6 +1760,47 @@ mod tests {
         let viewer = login_cookie(&app, "w@example.com", &pw("user"), true).await;
         let (status, ..) = call(&app, "GET", "/api/auth/audit", Some(&viewer), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn changes_made_through_the_api_are_audited_and_reads_are_not() {
+        let app = app();
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let admin = admin.unwrap();
+
+        call(&app, "GET", "/api/webhooks", Some(&admin), None).await;
+        let (status, ..) = call(&app, "DELETE", "/api/webhooks/missing", Some(&admin), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        // The entry is written in the background, after the response.
+        let mut actions = Vec::new();
+        for _ in 0..50 {
+            let (_, _, log) =
+                call(&app, "GET", "/api/auth/audit?limit=50", Some(&admin), None).await;
+            actions = log
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["kind"] == "action")
+                .cloned()
+                .collect();
+            if !actions.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert_eq!(actions.len(), 1, "only the change is recorded: {actions:?}");
+        assert_eq!(actions[0]["actor"], "admin@example.com");
+        assert_eq!(actions[0]["target"], "DELETE /api/webhooks/missing");
+        assert_eq!(actions[0]["detail"], "status 204");
     }
 
     #[tokio::test]

@@ -164,10 +164,14 @@ Everything is driven through the root `Makefile`:
 
 Frontend-only commands (from `web/`): `npm run build` (`tsc -b && vite
 build` — this also typechecks), `npm run lint` (`oxlint`, not
-ESLint/Prettier), `npm run dev`.
+ESLint/Prettier), `npm test` (Vitest with happy-dom; tests live next to the
+code as `*.test.tsx`), `npm run dev`.
 
-There is no CI configured in this repo. Validate changes proportionally
-instead of running the entire suite by habit:
+CI (`.github/workflows/ci.yml`) runs `make check` plus the dashboard lint and
+build and the dashboard tests (`npm test`, Vitest) on every pull request; it
+does not run dependency audits. `codeql.yml`, `release.yml` and `runtime-images.yml`
+cover code scanning, releases and the runtime images. Validate changes
+proportionally locally instead of running the entire suite by habit:
 
 - Test and lint only the affected Rust module(s), test target(s), or frontend
   package first. For Rust, prefer targeted `cargo test <filter>` invocations

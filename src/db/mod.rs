@@ -41,6 +41,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+use crate::lock::LockExt;
 use crate::paths::Paths;
 
 pub struct Db {
@@ -74,7 +75,7 @@ impl Db {
     }
 
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("database connection lock poisoned")
+        self.conn.lock_or_recover()
     }
 }
 

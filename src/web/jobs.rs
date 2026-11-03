@@ -6,7 +6,7 @@
 //! history (in particular, whether a job actually succeeded) survives an
 //! `odin serve` restart.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -98,6 +98,13 @@ impl JobKindDescr {
         encode_kind(self).map(|(tag, _)| tag).unwrap_or_default()
     }
 
+    /// Identifies "the same job again": its type and what it acts on, but not
+    /// details that change between runs such as a backup id.
+    fn alert_key(&self) -> String {
+        let (game, instance) = self.target();
+        format!("{}:{game}:{}", self.tag(), instance.unwrap_or_default())
+    }
+
     /// The game and instance a job acts on, to attribute its activity
     /// events. Jobs that predate the multi-game model carry no game and are
     /// Valheim's, matching their `serde` defaults.
@@ -171,6 +178,10 @@ pub struct JobRegistry {
     /// Where a failed job is reported, so webhooks and the activity feed see
     /// it without every job having to remember to.
     activity: Option<ActivityLog>,
+    /// Jobs whose latest run failed and was already reported, by
+    /// [`JobKindDescr::alert_key`]. A job that keeps failing (an hourly
+    /// backup, say) is reported once, not on every run, until it succeeds.
+    failing: Arc<Mutex<HashSet<String>>>,
 }
 
 /// Handed to a running job's closure so it can report progress lines.
@@ -239,6 +250,7 @@ impl JobRegistry {
             jobs: Arc::new(Mutex::new(jobs)),
             db,
             activity: None,
+            failing: Arc::default(),
         }
     }
 
@@ -301,7 +313,28 @@ impl JobRegistry {
                     message: format!("{e:#}"),
                 },
             };
-            if let (JobStatus::Failed { message }, Some(activity)) = (&status, &registry.activity) {
+            registry.report_outcome(&kind, &status);
+            registry.set_status(&job_id, status);
+        });
+
+        id
+    }
+
+    /// Reports the first failure of a job, then stays quiet until it succeeds
+    /// again so a job that fails on every run does not flood webhooks.
+    fn report_outcome(&self, kind: &JobKindDescr, status: &JobStatus) {
+        let key = kind.alert_key();
+        match status {
+            JobStatus::Succeeded => {
+                self.failing.lock_or_recover().remove(&key);
+            }
+            JobStatus::Failed { message } => {
+                let Some(activity) = &self.activity else {
+                    return;
+                };
+                if !self.failing.lock_or_recover().insert(key) {
+                    return;
+                }
                 let (game, instance) = kind.target();
                 activity.record_for(
                     game,
@@ -309,10 +342,8 @@ impl JobRegistry {
                     instance.map(str::to_string),
                 );
             }
-            registry.set_status(&job_id, status);
-        });
-
-        id
+            JobStatus::Queued | JobStatus::Running => {}
+        }
     }
 
     fn push_line(&self, id: &str, line: String) {
@@ -517,6 +548,34 @@ mod tests {
             ActivityKind::JobFailed { job, message }
                 if job == "backup_create" && message == "disk full"
         ));
+    }
+
+    #[tokio::test]
+    async fn a_job_that_keeps_failing_is_reported_once_until_it_succeeds() {
+        let db = temp_db("throttle");
+        let activity = ActivityLog::load(db.clone());
+        let registry = JobRegistry::load(db).with_activity(activity.clone());
+        let backup = |instance: &str| JobKindDescr::BackupCreate {
+            game: GameId::Palworld,
+            instance: instance.into(),
+        };
+        let reported = || activity.subscribe().0.len();
+
+        for _ in 0..3 {
+            let id = registry.spawn(backup("pals"), |_logger| anyhow::bail!("disk full"));
+            finished(&registry, &id).await;
+        }
+        assert_eq!(reported(), 1, "repeated failures are reported once");
+
+        let other = registry.spawn(backup("other"), |_logger| anyhow::bail!("disk full"));
+        finished(&registry, &other).await;
+        assert_eq!(reported(), 2, "another instance has its own report");
+
+        let ok = registry.spawn(backup("pals"), |_logger| Ok(()));
+        finished(&registry, &ok).await;
+        let failed = registry.spawn(backup("pals"), |_logger| anyhow::bail!("disk full"));
+        finished(&registry, &failed).await;
+        assert_eq!(reported(), 3, "a failure after a success is reported again");
     }
 
     #[test]

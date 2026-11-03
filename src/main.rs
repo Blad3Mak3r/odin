@@ -10,6 +10,7 @@ mod doctor;
 mod game;
 mod http;
 mod instance;
+mod lock;
 mod log_poll;
 mod mods;
 mod odin_update;

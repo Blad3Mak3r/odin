@@ -37,6 +37,7 @@ use crate::db::Db;
 use crate::db::game_instances;
 use crate::game::GameId;
 use crate::instance;
+use crate::lock::LockExt;
 use crate::paths::Paths;
 use crate::podman::dispatch;
 use crate::podman::lifecycle::StopReason;
@@ -410,11 +411,7 @@ struct TelemetryTick {
 }
 
 fn run_telemetry_tick(state: &AppState) -> TelemetryTick {
-    state
-        .resources
-        .lock()
-        .expect("resources lock poisoned")
-        .refresh_all();
+    state.resources.lock_or_recover().refresh_all();
 
     let host = compute_host_snapshot(state);
     state.runtime.push_host_sample(host);

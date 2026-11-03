@@ -29,6 +29,7 @@ use tokio::sync::watch;
 
 use crate::config::TrustedProxies;
 use crate::db::users::{self, Role, SessionInfo, SessionOrigin, User};
+use crate::lock::LockExt;
 use crate::web::error::{ApiResult, BadRequest, run_blocking};
 use crate::web::state::AppState;
 
@@ -121,27 +122,22 @@ pub struct BootstrapGate(Arc<Mutex<Option<(BootstrapKind, String)>>>);
 
 impl BootstrapGate {
     pub fn arm(&self, kind: BootstrapKind, token: String) {
-        *self.0.lock().expect("bootstrap gate lock poisoned") = Some((kind, token));
+        *self.0.lock_or_recover() = Some((kind, token));
     }
 
     pub fn kind(&self) -> Option<BootstrapKind> {
-        self.0
-            .lock()
-            .expect("bootstrap gate lock poisoned")
-            .as_ref()
-            .map(|(kind, _)| *kind)
+        self.0.lock_or_recover().as_ref().map(|(kind, _)| *kind)
     }
 
     pub fn matches(&self, kind: BootstrapKind, given: &str) -> bool {
         self.0
-            .lock()
-            .expect("bootstrap gate lock poisoned")
+            .lock_or_recover()
             .as_ref()
             .is_some_and(|(k, token)| *k == kind && constant_time_eq(token, given.trim()))
     }
 
     pub fn disarm(&self) {
-        *self.0.lock().expect("bootstrap gate lock poisoned") = None;
+        *self.0.lock_or_recover() = None;
     }
 }
 
@@ -184,7 +180,7 @@ pub struct SessionRegistry(Arc<Mutex<HashMap<String, watch::Sender<bool>>>>);
 
 impl SessionRegistry {
     fn watch(&self, token_hash: &str) -> watch::Receiver<bool> {
-        let mut map = self.0.lock().expect("session registry lock poisoned");
+        let mut map = self.0.lock_or_recover();
         map.retain(|_, tx| tx.receiver_count() > 0);
         map.entry(token_hash.to_string())
             .or_insert_with(|| watch::channel(false).0)
@@ -193,7 +189,7 @@ impl SessionRegistry {
 
     /// Signals every stream of the given sessions to end.
     pub fn revoke(&self, token_hashes: &[String]) {
-        let mut map = self.0.lock().expect("session registry lock poisoned");
+        let mut map = self.0.lock_or_recover();
         for hash in token_hashes {
             if let Some(tx) = map.remove(hash) {
                 tx.send_replace(true);
@@ -854,7 +850,7 @@ impl LoginThrottle {
 
     pub fn check(&self, username: &str, ip: Option<IpAddr>) -> Result<(), TooManyAttempts> {
         let now = Utc::now();
-        let counters = self.counters.lock().expect("login throttle lock poisoned");
+        let counters = self.counters.lock_or_recover();
         let retry_after = Self::keys(username, ip)
             .iter()
             .filter_map(|(key, max)| {
@@ -873,7 +869,7 @@ impl LoginThrottle {
         let now = Utc::now();
         let mut writes = Vec::new();
         {
-            let mut counters = self.counters.lock().expect("login throttle lock poisoned");
+            let mut counters = self.counters.lock_or_recover();
             if counters.len() >= MAX_TRACKED_KEYS {
                 counters.retain(|_, (_, at)| now - *at < lockout());
             }
@@ -899,7 +895,7 @@ impl LoginThrottle {
         let keys = Self::keys(username, ip);
         let mut writes = Vec::new();
         {
-            let mut counters = self.counters.lock().expect("login throttle lock poisoned");
+            let mut counters = self.counters.lock_or_recover();
             for (key, _) in &keys[..2] {
                 if counters.remove(key).is_some() {
                     writes.push(ThrottleWrite::Delete(key.clone()));

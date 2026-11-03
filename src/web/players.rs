@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 
 use crate::activity::ActivityKind;
+use crate::lock::LockExt;
 use crate::player_events::{PlayerEvent, PlayerEventParser};
 
 pub use crate::player_events::PlayerInfo;
@@ -45,8 +46,7 @@ impl PlayerRegistry {
 
     pub fn snapshot(&self, instance: &str) -> Vec<PlayerInfo> {
         self.instances
-            .lock()
-            .expect("players registry lock poisoned")
+            .lock_or_recover()
             .get(instance)
             .map(|players| players.iter().map(|p| p.info.clone()).collect())
             .unwrap_or_default()
@@ -56,19 +56,13 @@ impl PlayerRegistry {
     /// (it stopped running, or was deleted) — otherwise a crashed server
     /// would show its last-known player list as still connected forever.
     pub fn clear_instance(&self, instance: &str) {
-        self.instances
-            .lock()
-            .expect("players registry lock poisoned")
-            .remove(instance);
+        self.instances.lock_or_recover().remove(instance);
         if let Some(db) = &self.db
             && let Err(error) = crate::db::player_sessions::close_active(db, instance, Utc::now())
         {
             tracing::warn!(%error, %instance, "failed to close active player sessions");
         }
-        self.parsers
-            .lock()
-            .expect("player parsers lock poisoned")
-            .remove(instance);
+        self.parsers.lock_or_recover().remove(instance);
     }
 
     /// Recognizes a join/leave in a `console.log` line (see
@@ -77,8 +71,7 @@ impl PlayerRegistry {
     pub fn apply_line(&self, instance: &str, line: &str) -> Option<ActivityKind> {
         let event = self
             .parsers
-            .lock()
-            .expect("player parsers lock poisoned")
+            .lock_or_recover()
             .entry(instance.to_string())
             .or_default()
             .parse_line(line)?;
@@ -86,10 +79,7 @@ impl PlayerRegistry {
     }
 
     fn apply(&self, instance: &str, event: PlayerEvent) -> Option<ActivityKind> {
-        let mut instances = self
-            .instances
-            .lock()
-            .expect("players registry lock poisoned");
+        let mut instances = self.instances.lock_or_recover();
         let players = instances.entry(instance.to_string()).or_default();
         match event {
             PlayerEvent::Joined { peer, name } => {

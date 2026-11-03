@@ -19,6 +19,7 @@ use crate::activity::{ActivityKind, ActivityLog};
 use crate::db::Db;
 use crate::db::jobs as db_jobs;
 use crate::game::{GameId, RuntimeImage};
+use crate::lock::LockExt;
 
 pub type JobId = String;
 
@@ -259,7 +260,7 @@ impl JobRegistry {
         let started_at = Utc::now();
         let (sender, _receiver) = broadcast::channel(BROADCAST_CAPACITY);
         {
-            let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+            let mut jobs = self.jobs.lock_or_recover();
             jobs.insert(
                 id.clone(),
                 JobRecord {
@@ -319,7 +320,7 @@ impl JobRegistry {
 
     fn push_line(&self, id: &str, line: String) {
         let log = {
-            let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+            let mut jobs = self.jobs.lock_or_recover();
             let Some(record) = jobs.get_mut(id) else {
                 return;
             };
@@ -337,7 +338,7 @@ impl JobRegistry {
 
     fn set_status(&self, id: &str, status: JobStatus) {
         {
-            let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+            let mut jobs = self.jobs.lock_or_recover();
             let Some(record) = jobs.get_mut(id) else {
                 return;
             };
@@ -352,12 +353,12 @@ impl JobRegistry {
     }
 
     pub fn get(&self, id: &str) -> Option<JobSnapshot> {
-        let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let jobs = self.jobs.lock_or_recover();
         jobs.get(id).map(|r| snapshot(id, r))
     }
 
     pub fn list(&self) -> Vec<JobSummary> {
-        let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let jobs = self.jobs.lock_or_recover();
         let mut summaries: Vec<JobSummary> = jobs.iter().map(|(id, r)| summary(id, r)).collect();
         summaries.sort_by_key(|s| std::cmp::Reverse(s.started_at));
         summaries
@@ -369,7 +370,7 @@ impl JobRegistry {
         &self,
         id: &str,
     ) -> Option<(Vec<String>, JobStatus, broadcast::Receiver<JobEvent>)> {
-        let jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let jobs = self.jobs.lock_or_recover();
         jobs.get(id)
             .map(|r| (r.log.clone(), r.status.clone(), r.sender.subscribe()))
     }
@@ -377,7 +378,7 @@ impl JobRegistry {
     /// Deletes persisted expired terminal jobs and removes them from live history.
     pub fn purge_before(&self, before: DateTime<Utc>) -> Result<usize> {
         let deleted_ids = db_jobs::delete_finished_before(&self.db, before)?;
-        let mut jobs = self.jobs.lock().expect("jobs registry lock poisoned");
+        let mut jobs = self.jobs.lock_or_recover();
         jobs.retain(|id, _| !deleted_ids.contains(id));
         Ok(deleted_ids.len())
     }

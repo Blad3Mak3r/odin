@@ -11,6 +11,7 @@ use sysinfo::Disks;
 use crate::db::game_instances::GameInstanceIdentity;
 use crate::db::resource_samples::{self, ResourceSampleRow};
 use crate::instance::Instance;
+use crate::lock::LockExt;
 use crate::web::error::{ApiResult, run_blocking};
 use crate::web::runtime::{HostSnapshot, InstanceSnapshot, ResourceSample};
 use crate::web::state::AppState;
@@ -143,7 +144,7 @@ pub(crate) fn csv_response(filename: &str, rows: &[ResourceSampleRow]) -> Respon
 /// per-instance/tmux state.
 pub(crate) fn compute_host_snapshot(state: &AppState) -> HostSnapshot {
     let (cpu_percent, memory_total_bytes, memory_used_bytes) = {
-        let system = state.resources.lock().expect("resources lock poisoned");
+        let system = state.resources.lock_or_recover();
         (
             system.global_cpu_usage(),
             system.total_memory(),

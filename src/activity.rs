@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::db::Db;
 use crate::game::GameId;
+use crate::lock::LockExt;
 
 const MAX_BUFFERED_EVENTS: usize = 200;
 const BROADCAST_CAPACITY: usize = 256;
@@ -149,11 +150,7 @@ impl ActivityLog {
         };
 
         {
-            let mut buffer = self
-                .inner
-                .buffer
-                .lock()
-                .expect("activity log buffer lock poisoned");
+            let mut buffer = self.inner.buffer.lock_or_recover();
             buffer.push_back(event.clone());
             if buffer.len() > MAX_BUFFERED_EVENTS {
                 buffer.pop_front();
@@ -171,11 +168,7 @@ impl ActivityLog {
     /// this point on, so a client that connects mid-stream still sees
     /// recent context instead of starting from nothing.
     pub fn subscribe(&self) -> (Vec<ActivityEvent>, broadcast::Receiver<ActivityEvent>) {
-        let buffer = self
-            .inner
-            .buffer
-            .lock()
-            .expect("activity log buffer lock poisoned");
+        let buffer = self.inner.buffer.lock_or_recover();
         (
             buffer.iter().cloned().collect(),
             self.inner.sender.subscribe(),
@@ -185,11 +178,7 @@ impl ActivityLog {
     /// Deletes persisted expired events and removes them from the live history.
     pub fn purge_before(&self, before: DateTime<Utc>) -> anyhow::Result<usize> {
         let deleted = crate::db::activity::delete_before(&self.inner.db, before)?;
-        let mut buffer = self
-            .inner
-            .buffer
-            .lock()
-            .expect("activity log buffer lock poisoned");
+        let mut buffer = self.inner.buffer.lock_or_recover();
         buffer.retain(|event| event.at >= before);
         Ok(deleted)
     }

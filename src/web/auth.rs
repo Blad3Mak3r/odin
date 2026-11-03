@@ -543,7 +543,7 @@ async fn mask_json_response(response: Response) -> Response {
 fn viewer_may_mutate(path: &str) -> bool {
     matches!(
         path,
-        "/api/auth/logout" | "/api/auth/password" | "/api/auth/profile"
+        "/api/auth/logout" | "/api/auth/password" | "/api/auth/profile" | "/api/auth/avatar"
     ) || path.starts_with("/api/auth/sessions")
 }
 
@@ -2026,6 +2026,132 @@ mod tests {
 
     async fn raw(app: &Router, req: Request<Body>) -> Response {
         app.clone().oneshot(req).await.unwrap()
+    }
+
+    async fn upload_avatar(
+        app: &Router,
+        cookie: &str,
+        file: Vec<u8>,
+    ) -> (StatusCode, serde_json::Value) {
+        let boundary = "avatar-test-boundary";
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"me.png\"\r\nContent-Type: image/png\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend(file);
+        body.extend(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let token = cookie.split_once('=').unwrap().1;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/auth/avatar")
+            .header(header::COOKIE, cookie)
+            .header(CSRF_HEADER, csrf_token_for(token))
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+        let response = raw(app, req).await;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    fn sample_png() -> Vec<u8> {
+        let image = image::RgbaImage::from_fn(600, 300, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 90, 255])
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[tokio::test]
+    async fn accounts_manage_their_own_profile_picture() {
+        let app = app();
+        let (_, admin, _) = call(
+            &app,
+            "POST",
+            "/api/auth/setup",
+            None,
+            creds("admin", &pw("admin")),
+        )
+        .await;
+        let admin = admin.unwrap();
+        let body = Some(json!({
+            "email": "sam@example.com", "username": "sam", "password": pw("user"),
+            "role": "viewer", "require_change": false,
+        }));
+        let (status, ..) = call(&app, "POST", "/api/users", Some(&admin), body).await;
+        assert_eq!(status, StatusCode::OK);
+        let sam = login_cookie(&app, "sam", &pw("user"), true).await;
+
+        let (_, _, me) = call(&app, "GET", "/api/auth/status", Some(&sam), None).await;
+        assert!(me["user"]["avatar_updated_at"].is_null());
+        let (status, ..) = call(
+            &app,
+            "GET",
+            "/api/auth/avatar/sam@example.com",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // A viewer may set their own picture; it is stored as a 192px WebP.
+        let (status, user) = upload_avatar(&app, &sam, sample_png()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(user["avatar_updated_at"].is_string());
+        let (_, _, listed) = call(&app, "GET", "/api/users", Some(&admin), None).await;
+        let listed = listed.as_array().unwrap();
+        assert!(
+            listed
+                .iter()
+                .any(|u| u["email"] == "sam@example.com" && u["avatar_updated_at"].is_string())
+        );
+
+        let req = Request::builder()
+            .uri("/api/auth/avatar/sam@example.com")
+            .header(header::COOKIE, &admin)
+            .body(Body::empty())
+            .unwrap();
+        let response = raw(&app, req).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/webp");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let decoded =
+            image::load_from_memory_with_format(&bytes, image::ImageFormat::WebP).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (192, 192));
+
+        // Anything that is not an image is refused and leaves the picture alone.
+        let (status, _) = upload_avatar(&app, &sam, b"not an image".to_vec()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Removing it clears the version and the image.
+        let (status, _, user) = call(&app, "DELETE", "/api/auth/avatar", Some(&sam), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(user["avatar_updated_at"].is_null());
+        let (status, ..) = call(
+            &app,
+            "GET",
+            "/api/auth/avatar/sam@example.com",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // The picture needs a session.
+        let (status, ..) = call(&app, "GET", "/api/auth/avatar/sam@example.com", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

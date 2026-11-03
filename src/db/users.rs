@@ -72,6 +72,9 @@ pub struct User {
     /// Cannot sign in; its sessions are gone.
     pub disabled: bool,
     pub last_login_at: Option<DateTime<Utc>>,
+    /// When the profile picture was last set; `None` means there is none.
+    /// The dashboard uses it as the image URL's cache-busting version.
+    pub avatar_updated_at: Option<DateTime<Utc>>,
 }
 
 /// A user together with the stored password hash, for login only.
@@ -113,6 +116,7 @@ pub fn create_first_admin(
         must_change_password: false,
         disabled: false,
         last_login_at: None,
+        avatar_updated_at: None,
     })
 }
 
@@ -146,6 +150,7 @@ pub fn create(
             must_change_password,
             disabled: false,
             last_login_at: None,
+            avatar_updated_at: None,
         }),
         Err(rusqlite::Error::SqliteFailure(err, Some(message)))
             if err.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -164,13 +169,15 @@ pub fn create(
 pub fn find_credentials(db: &Db, login: &str) -> Result<Option<UserCredentials>> {
     db.conn()
         .query_row(
-            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at, password_hash FROM users \
-             WHERE email = ?1 OR username = ?1",
+            &format!(
+                "SELECT {USER_COLUMNS}, password_hash FROM users \
+                 WHERE email = ?1 OR username = ?1"
+            ),
             params![login],
             |row| {
                 Ok(UserCredentials {
                     user: row_to_user(row)?,
-                    password_hash: row.get(7)?,
+                    password_hash: row.get(USER_COLUMN_COUNT)?,
                 })
             },
         )
@@ -191,9 +198,9 @@ pub fn password_hash(db: &Db, email: &str) -> Result<Option<String>> {
 
 pub fn list(db: &Db) -> Result<Vec<User>> {
     let conn = db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {USER_COLUMNS} FROM users ORDER BY COALESCE(username, email) COLLATE NOCASE"
+    ))?;
     let rows = stmt.query_map([], row_to_user)?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
@@ -320,6 +327,46 @@ pub fn set_email(db: &Db, email: &str, new_email: &str) -> Result<()> {
     }
 }
 
+/// Stores `webp` as the user's profile picture, replacing any previous one,
+/// and returns the version stamp now shown in `User::avatar_updated_at`.
+pub fn set_avatar(db: &Db, email: &str, webp: &[u8]) -> Result<DateTime<Utc>> {
+    let now = Utc::now();
+    let result = db.conn().execute(
+        "INSERT INTO user_avatars (user_email, webp, updated_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(user_email) DO UPDATE SET webp = excluded.webp, updated_at = excluded.updated_at",
+        params![email, webp, now],
+    );
+    match result {
+        Ok(_) => Ok(now),
+        Err(rusqlite::Error::SqliteFailure(err, _))
+            if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            Err(UserError::NotFound(email.to_string()).into())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// The user's profile picture (WebP bytes) and when it was set.
+pub fn get_avatar(db: &Db, email: &str) -> Result<Option<(Vec<u8>, DateTime<Utc>)>> {
+    db.conn()
+        .query_row(
+            "SELECT webp, updated_at FROM user_avatars WHERE user_email = ?1",
+            params![email],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn delete_avatar(db: &Db, email: &str) -> Result<()> {
+    db.conn().execute(
+        "DELETE FROM user_avatars WHERE user_email = ?1",
+        params![email],
+    )?;
+    Ok(())
+}
+
 pub fn record_login(db: &Db, email: &str) -> Result<()> {
     db.conn().execute(
         "UPDATE users SET last_login_at = ?2 WHERE email = ?1",
@@ -331,8 +378,7 @@ pub fn record_login(db: &Db, email: &str) -> Result<()> {
 pub fn find_by_email(db: &Db, email: &str) -> Result<Option<User>> {
     db.conn()
         .query_row(
-            "SELECT email, username, role, created_at, must_change_password, disabled, last_login_at \
-             FROM users WHERE email = ?1",
+            &format!("SELECT {USER_COLUMNS} FROM users WHERE email = ?1"),
             params![email],
             row_to_user,
         )
@@ -426,12 +472,12 @@ pub fn user_for_session(db: &Db, token_hash: &str) -> Result<Option<(User, Sessi
     db.conn()
         .query_row(
             &format!(
-                "SELECT u.email, u.username, u.role, u.created_at, u.must_change_password, u.disabled, u.last_login_at, {SESSION_COLUMNS} \
-                 FROM auth_sessions s JOIN users u ON u.email = s.user_email \
-                 WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.disabled = 0"
+                "SELECT {USER_COLUMNS}, {SESSION_COLUMNS} \
+                 FROM auth_sessions s JOIN users ON users.email = s.user_email \
+                 WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND users.disabled = 0"
             ),
             params![token_hash, Utc::now()],
-            |row| Ok((row_to_user(row)?, row_to_session(row, 7)?)),
+            |row| Ok((row_to_user(row)?, row_to_session(row, USER_COLUMN_COUNT)?)),
         )
         .optional()
         .map_err(Into::into)
@@ -536,6 +582,13 @@ fn admin_count(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
     )
 }
 
+/// The columns `row_to_user` reads, selected from `users`. The avatar column
+/// is a subquery so the image BLOB itself is never loaded.
+const USER_COLUMNS: &str = "users.email, users.username, users.role, users.created_at, \
+     users.must_change_password, users.disabled, users.last_login_at, \
+     (SELECT updated_at FROM user_avatars WHERE user_email = users.email)";
+const USER_COLUMN_COUNT: usize = 8;
+
 fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
     let role: String = row.get(2)?;
     Ok(User {
@@ -546,5 +599,6 @@ fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         must_change_password: row.get(4)?,
         disabled: row.get(5)?,
         last_login_at: row.get(6)?,
+        avatar_updated_at: row.get(7)?,
     })
 }

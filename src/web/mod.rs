@@ -5,6 +5,7 @@
 
 mod audit;
 mod auth;
+mod avatar;
 mod backup_scheduler;
 mod error;
 mod image_monitor;
